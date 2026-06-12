@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/showtail-logo.png" alt="Showtail logo — a Cavalier King Charles Spaniel beside the word Showtail, with a dotted trail of prompt, edit, code, and document icons" width="520">
+  <img src="assets/showtail-logo.png?v=2" alt="Showtail logo — a Cavalier King Charles Spaniel beside the word Showtail, with a dotted trail of prompt, edit, code, and document icons" width="520">
 </p>
 
 <p align="center"><em>Show your work.</em></p>
