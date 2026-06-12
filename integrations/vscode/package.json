@@ -2,7 +2,7 @@
   "name": "showtail",
   "displayName": "Showtail",
   "description": "Show your work: capture your GitHub Copilot prompts and edits into a local provenance trail.",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "publisher": "Tingsters",
   "license": "Apache-2.0",
   "repository": {
@@ -21,8 +21,14 @@
         "id": "showtail.chat",
         "name": "showtail",
         "fullName": "Showtail",
-        "description": "Ask Copilot and record your prompt in your Showtail trail",
-        "isSticky": true
+        "description": "Record your prompt and drive Showtail (report, verify, status, trace)",
+        "isSticky": true,
+        "commands": [
+          { "name": "report", "description": "Generate the Showtail report for your educator" },
+          { "name": "verify", "description": "Check that your trail is complete and consistent" },
+          { "name": "status", "description": "Show whether Showtail capture is active" },
+          { "name": "trace", "description": "Show the provenance trail for a file (pass the path)" }
+        ]
       }
     ],
     "commands": [

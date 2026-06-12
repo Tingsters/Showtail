@@ -24,7 +24,7 @@ describe('artifacts', () => {
     const { dir, paths } = await initProject();
     try {
       writeFileSync(join(dir, 'essay.md'), '# My Essay\nFirst draft.');
-      const artifact = await addArtifact(paths, { filePath: 'essay.md' });
+      const { artifact } = await addArtifact(paths, { filePath: 'essay.md' });
       expect(artifact.path).toBe('essay.md');
       expect(artifact.sha256).toMatch(/^[a-f0-9]{64}$/);
       expect(Number.isNaN(Date.parse(artifact.timestamp))).toBe(false);
@@ -38,13 +38,27 @@ describe('artifacts', () => {
     try {
       const file = join(dir, 'essay.md');
       writeFileSync(file, 'draft one');
-      const first = await addArtifact(paths, { filePath: 'essay.md' });
+      const { artifact: first } = await addArtifact(paths, { filePath: 'essay.md' });
       writeFileSync(file, 'draft two — revised');
-      const second = await addArtifact(paths, { filePath: 'essay.md' });
+      const { artifact: second } = await addArtifact(paths, { filePath: 'essay.md' });
 
       const history = artifactsForPath(paths, 'essay.md');
       expect(history.length).toBe(2);
       expect(first.sha256).not.toBe(second.sha256);
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('recording unchanged content twice is deduped to one record', async () => {
+    const { dir, paths } = await initProject();
+    try {
+      writeFileSync(join(dir, 'essay.md'), 'same content');
+      const a = await addArtifact(paths, { filePath: 'essay.md' });
+      const b = await addArtifact(paths, { filePath: 'essay.md' });
+      expect(a.created).toBe(true);
+      expect(b.created).toBe(false);
+      expect(artifactsForPath(paths, 'essay.md').length).toBe(1);
     } finally {
       cleanup(dir);
     }

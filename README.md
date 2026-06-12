@@ -218,16 +218,21 @@ code --install-extension Tingsters.showtail
 
 How capture works (Copilot is more closed than Claude Code, so the design differs):
 
+- **Code with native Copilot as usual** (agent mode, inline, chat). The
+  **`.github/copilot-instructions.md`** teaches Copilot to log your prompt, decisions, and
+  reflections in your voice via the CLI — the analog of the Claude Code skill.
 - **Edits are captured automatically** — the VS Code extension snapshots every file you save
   as an artifact (tagged `github-copilot`). This is the always-on backbone and needs no habit
   change.
-- **Prompts are captured when you ask through `@showtail`** in Copilot Chat: type
-  `@showtail <your question>` and your prompt is recorded verbatim, then answered by Copilot's
-  model. (Copilot does not expose prompts typed into *native* chat to any third party — that's
-  a privacy boundary of Copilot's, not a Showtail limitation. Your edits are still captured, so
-  the work history is never lost.)
-- **`.github/copilot-instructions.md`** teaches Copilot to log decisions and reflections in
-  your voice — the analog of the Claude Code skill.
+- **`@showtail` is your Showtail control surface in chat** — not a coding agent. Use it to
+  record a prompt verbatim (`@showtail <your question>`) and to drive Showtail without leaving
+  the editor: `@showtail /report`, `/verify`, `/status`, `/trace <file>`. For hands-on file
+  edits, use native Copilot — your saved edits are captured regardless.
+
+> Copilot does not expose prompts typed into *native* chat to any third party — that's a
+> privacy boundary of Copilot's, not a Showtail limitation. The instructions ask Copilot to log
+> your prompt, and `@showtail` captures it verbatim when you ask through it; either way your
+> **edits are always captured on save**, so the work history is never lost.
 
 ### Following a student across both tools
 

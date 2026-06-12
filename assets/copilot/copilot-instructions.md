@@ -9,16 +9,19 @@ Everything is stored locally under `.showtail/`. Never send it anywhere.
 
 ## How capture works here
 
-- The **Showtail VS Code extension** automatically snapshots every file that is saved, so the
-  edit history is recorded no matter how a change was made.
-- Prompts are captured **when the student asks through `@showtail`** in chat. Encourage the
-  student to ask via `@showtail` so their prompts become part of their trail.
+- **Do the coding normally** — you are the agent; create and edit files as usual.
+- The **Showtail VS Code extension** automatically snapshots every file that is **saved**, so
+  the edit history is recorded no matter how a change was made. **Do NOT run
+  `showtail artifact add` yourself — that would double-record the same file.**
 
 ## What you should do
 
-When you help with this project, record the **judgment moments** in the **student's voice**,
-using the `showtail` CLI (always tag the tool):
+Record the student's **prompts** and **judgment moments** with the `showtail` CLI (always tag
+`--tool github-copilot`). Do not snapshot files — the extension does that.
 
+- At the **start of a task**, log the student's request in their own words:
+  `showtail log --type prompt --text "<the student's request>" --tool github-copilot`
+  (If they asked through `@showtail` in chat, it is already logged — don't log it twice.)
 - A real choice the student made, and their reasoning:
   `showtail log --type decision --text "I used a dictionary so lookups stay O(1)." --files src/store.py --tool github-copilot`
 - The student's understanding, in their words (capture these — they matter most):
@@ -26,11 +29,7 @@ using the `showtail` CLI (always tag the tool):
 - An outside source they used:
   `showtail log --type source --text "Used the week 3 notes on hashing." --tool github-copilot`
 - A test/validation they ran and what it showed:
-  `showtail log --type test --text "Ran the edge-case suite; empty input failed until I added a guard." --files tests/test_x.py --tool github-copilot`
-
-If you are in agent mode and the student's prompt was not asked through `@showtail`, also log it
-so it isn't lost:
-`showtail log --type prompt --text "<the student's request, in their words>" --tool github-copilot`
+  `showtail log --type test --text "Ran the edge-case suite; empty input failed until I added a guard." --tool github-copilot`
 
 ## Principles
 
@@ -41,4 +40,5 @@ so it isn't lost:
 - **The student is the author.** Showtail documents their process; it does not replace it.
 
 When the work block is done, offer to run `showtail report` (the report for the educator) and
-`showtail verify` (checks the trail is consistent).
+`showtail verify` (checks the trail is consistent). The student can also run these from chat
+with `@showtail /report` and `@showtail /verify`.

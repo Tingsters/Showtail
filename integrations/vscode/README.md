@@ -8,13 +8,15 @@ tools.
 ## What it does
 
 - **Snapshots files on save** as artifacts (tagged `github-copilot`) — automatic, no action
-  needed.
-- **`@showtail` chat** — ask Copilot through `@showtail <your question>` and your prompt is
-  recorded verbatim, then answered by Copilot's model.
+  needed, no matter which tool made the change.
+- **`@showtail` — a Showtail control surface in chat** (not a coding agent). Record a prompt
+  verbatim with `@showtail <your question>`, or drive Showtail without leaving the editor:
+  `@showtail /report`, `/verify`, `/status`, `/trace <file>`.
 - **Commands**: `Showtail: Generate Report`, `Showtail: Status`.
 
-It works alongside `.github/copilot-instructions.md` (written by `showtail copilot install`),
-which teaches Copilot to record decisions and reflections in your voice.
+Code with **native Copilot** as usual — `.github/copilot-instructions.md` (written by
+`showtail copilot install`) teaches it to log your prompt, decisions, and reflections in your
+voice, and the extension captures every save. Use `@showtail` for the Showtail commands.
 
 ## Requirements
 

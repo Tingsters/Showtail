@@ -22,15 +22,27 @@ export interface AddArtifactInput {
   tool?: Tool;
 }
 
+/** The result of recording an artifact. */
+export interface AddArtifactResult {
+  artifact: Artifact;
+  /**
+   * False when an identical snapshot already existed for this path (same hash
+   * as the latest record) — nothing was written. This is what keeps a save
+   * from being recorded twice when both the editor extension and the agent
+   * try to snapshot the same unchanged file.
+   */
+  created: boolean;
+}
+
 /**
- * Record a snapshot (hash + metadata) of a file. Artifacts are append-only:
- * recording the same path again adds a new record, building a hash history
- * over time rather than overwriting the previous one.
+ * Record a snapshot (hash + metadata) of a file. Artifacts build a hash history
+ * over time, but recording the *same* content as the latest snapshot is a no-op
+ * (deduped) — so repeated saves and double-captures don't pile up duplicates.
  */
 export async function addArtifact(
   paths: ShowtailPaths,
   input: AddArtifactInput,
-): Promise<Artifact> {
+): Promise<AddArtifactResult> {
   const repoPath = toRepoRelative(paths.root, input.filePath);
   const absPath = join(paths.root, repoPath);
   if (!existsSync(absPath)) {
@@ -41,6 +53,15 @@ export async function addArtifact(
 
   const config = readConfig(paths);
   const sha256 = await sha256OfFile(absPath);
+
+  // Dedupe: if the most recent snapshot of this path has the same hash, the
+  // file hasn't changed since — don't record it again.
+  const history = artifactsForPath(paths, repoPath);
+  const latest = history[history.length - 1];
+  if (latest && latest.sha256 === sha256) {
+    return { artifact: latest, created: false };
+  }
+
   const gitCommit = await maybeCurrentCommit(paths.root, config.settings.git);
 
   const artifact: Artifact = {
@@ -57,7 +78,7 @@ export async function addArtifact(
   const all = readArtifacts(paths);
   all.push(artifact);
   writeArtifacts(paths, all);
-  return artifact;
+  return { artifact, created: true };
 }
 
 /** All artifact records for a given repo-relative path, oldest first. */

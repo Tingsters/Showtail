@@ -45,7 +45,10 @@ describe('cross-tool attribution', () => {
       await runInit({ cwd: dir });
       const paths = pathsForRoot(dir);
       writeFileSync(join(dir, 'a.txt'), 'x');
-      const art = await addArtifact(paths, { filePath: 'a.txt', tool: 'github-copilot' });
+      const { artifact: art } = await addArtifact(paths, {
+        filePath: 'a.txt',
+        tool: 'github-copilot',
+      });
       expect(art.tool).toBe('github-copilot');
     } finally {
       cleanup(dir);

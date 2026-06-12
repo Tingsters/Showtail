@@ -35,12 +35,19 @@ export async function runArtifactAdd(
 
   const tool = options.tool as Tool | undefined;
 
-  const artifact = await addArtifact(paths, {
+  const { artifact, created } = await addArtifact(paths, {
     filePath: file,
     sessionId: session.id,
     eventIds,
     tool,
   });
+
+  if (!created) {
+    console.log(
+      `No change since the last snapshot of ${artifact.path} — not re-recorded.`,
+    );
+    return;
+  }
 
   // Add a matching timeline event referencing the file.
   await logEvent(paths, {

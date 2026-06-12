@@ -1,7 +1,7 @@
 {
   "name": "showtail",
   "description": "Show your work with Showtail: auto-capture prompts, edits, decisions, and reflections into a local provenance trail while pairing with Claude.",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "homepage": "https://github.com/Tingsters/Showtail",
   "repository": "https://github.com/Tingsters/Showtail",
   "license": "Apache-2.0",

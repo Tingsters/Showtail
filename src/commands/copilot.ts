@@ -46,9 +46,8 @@ export async function runCopilotInstall(options: CopilotInstallOptions): Promise
   }
 
   console.log('');
-  console.log(
-    'Then in VS Code, ask Copilot through `@showtail` so your prompts are recorded.',
-  );
+  console.log('Then just code with Copilot as usual — your saved edits are captured');
+  console.log('automatically. Use `@showtail /report` or `/verify` in chat anytime.');
 }
 
 export interface CopilotUninstallOptions {

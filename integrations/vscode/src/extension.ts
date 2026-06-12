@@ -46,36 +46,76 @@ export function activate(context: vscode.ExtensionContext): void {
   registerCommands(context);
 }
 
-/** `@showtail <prompt>` — log the prompt, then answer via the Copilot model. */
+/**
+ * `@showtail` — the Showtail control surface in chat. It is NOT a coding agent
+ * (use native Copilot for that — your edits are captured on save). It:
+ *   - `/report` `/verify` `/status` `/trace <file>` — run those Showtail commands
+ *   - plain text — records your prompt verbatim and gives a quick answer
+ */
 function registerChatParticipant(context: vscode.ExtensionContext): void {
   const handler: vscode.ChatRequestHandler = async (request, _ctx, stream, token) => {
     const cwd = folderFor(undefined);
-    if (cwd && request.prompt.trim().length > 0) {
+    if (!cwd) {
+      stream.markdown('Open a folder to use Showtail.');
+      return;
+    }
+
+    // Slash commands map straight to the CLI and show the output in chat.
+    if (request.command === 'report') {
+      stream.progress('Generating your Showtail report…');
+      const out = await runShowtail(['report'], cwd);
+      const m = out?.match(/Wrote report:\s*(.+)/);
+      stream.markdown(
+        m
+          ? `Report written to \`${m[1].trim()}\`.`
+          : 'Could not generate a report. Run `showtail init` in this project first.',
+      );
+      return;
+    }
+    if (request.command === 'verify' || request.command === 'status') {
+      const args = request.command === 'verify' ? ['verify'] : ['copilot', 'status'];
+      const out = await runShowtail(args, cwd);
+      stream.markdown('```\n' + (out ?? 'showtail was not found on your PATH.').trim() + '\n```');
+      return;
+    }
+    if (request.command === 'trace') {
+      const file = request.prompt.trim();
+      if (!file) {
+        stream.markdown('Pass a file path, e.g. `@showtail /trace src/app.ts`.');
+        return;
+      }
+      const out = await runShowtail(['trace', file], cwd);
+      stream.markdown('```\n' + (out ?? 'No trail found.').trim() + '\n```');
+      return;
+    }
+
+    // Plain text: record the prompt verbatim, then give a quick answer.
+    if (request.prompt.trim().length > 0) {
       await runShowtail(
         ['log', '--type', 'prompt', '--text', request.prompt, '--tool', 'github-copilot'],
         cwd,
       );
+      stream.markdown('_Recorded your prompt in your Showtail trail._\n\n');
     }
 
     try {
-      const [model] = await vscode.lm.selectChatModels({ vendor: 'copilot' });
-      if (!model) {
-        stream.markdown(
-          'No Copilot model is available, but your prompt was recorded in your Showtail trail.',
-        );
-        return;
-      }
-      const messages = [vscode.LanguageModelChatMessage.User(request.prompt)];
-      const response = await model.sendRequest(messages, {}, token);
-      for await (const chunk of response.text) {
-        stream.markdown(chunk);
+      const model =
+        request.model ?? (await vscode.lm.selectChatModels({ vendor: 'copilot' }))[0];
+      if (model) {
+        const messages = [vscode.LanguageModelChatMessage.User(request.prompt)];
+        const response = await model.sendRequest(messages, {}, token);
+        for await (const chunk of response.text) {
+          stream.markdown(chunk);
+        }
       }
     } catch (err) {
       output.appendLine(`model request failed: ${(err as Error).message}`);
-      stream.markdown(
-        'I could not reach the model just now, but your prompt was recorded in Showtail.',
-      );
     }
+
+    stream.markdown(
+      '\n\n_For hands-on file edits, use Copilot agent mode — your saved edits are captured ' +
+        'automatically. Try `@showtail /report` or `/verify` anytime._',
+    );
   };
 
   const participant = vscode.chat.createChatParticipant('showtail.chat', handler);
