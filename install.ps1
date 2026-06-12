@@ -2,16 +2,16 @@
 # Downloads the standalone showtail.exe from the latest GitHub Release.
 # No runtime (Node/Bun) required.
 #
-#   irm https://raw.githubusercontent.com/your-org/showtail/main/install.ps1 | iex
+#   irm https://raw.githubusercontent.com/Tingsters/Showtail/main/install.ps1 | iex
 #
 # Environment overrides:
-#   $env:SHOWTAIL_REPO     "owner/repo"        (default: your-org/showtail)
+#   $env:SHOWTAIL_REPO     "owner/repo"        (default: Tingsters/Showtail)
 #   $env:SHOWTAIL_VERSION  "v0.1.0" or "latest" (default: latest)
 #   $env:SHOWTAIL_BIN_DIR  install directory    (default: $HOME\.showtail\bin)
 
 $ErrorActionPreference = 'Stop'
 
-$repo = if ($env:SHOWTAIL_REPO) { $env:SHOWTAIL_REPO } else { 'your-org/showtail' }
+$repo = if ($env:SHOWTAIL_REPO) { $env:SHOWTAIL_REPO } else { 'Tingsters/Showtail' }
 $version = if ($env:SHOWTAIL_VERSION) { $env:SHOWTAIL_VERSION } else { 'latest' }
 $binDir = if ($env:SHOWTAIL_BIN_DIR) { $env:SHOWTAIL_BIN_DIR } else { Join-Path $HOME '.showtail\bin' }
 

@@ -4,16 +4,16 @@
 # Downloads the standalone `showtail` binary from the latest GitHub Release.
 # No runtime (Node/Bun) required.
 #
-#   curl -fsSL https://raw.githubusercontent.com/your-org/showtail/main/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/Tingsters/Showtail/main/install.sh | bash
 #
 # Environment overrides:
-#   SHOWTAIL_REPO     "owner/repo"        (default: your-org/showtail)
+#   SHOWTAIL_REPO     "owner/repo"        (default: Tingsters/Showtail)
 #   SHOWTAIL_VERSION  "v0.1.0" or "latest" (default: latest)
 #   SHOWTAIL_BIN_DIR  install directory    (default: $HOME/.showtail/bin)
 
 set -euo pipefail
 
-REPO="${SHOWTAIL_REPO:-your-org/showtail}"
+REPO="${SHOWTAIL_REPO:-Tingsters/Showtail}"
 VERSION="${SHOWTAIL_VERSION:-latest}"
 BIN_DIR="${SHOWTAIL_BIN_DIR:-$HOME/.showtail/bin}"
 

@@ -52,13 +52,13 @@ These scripts download a standalone `showtail` binary from the latest GitHub Rel
 **macOS / Linux:**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/your-org/showtail/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Tingsters/Showtail/main/install.sh | bash
 ```
 
 **Windows (PowerShell):**
 
 ```powershell
-irm https://raw.githubusercontent.com/your-org/showtail/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/Tingsters/Showtail/main/install.ps1 | iex
 ```
 
 ### Option 2 — With Bun
@@ -66,8 +66,8 @@ irm https://raw.githubusercontent.com/your-org/showtail/main/install.ps1 | iex
 If you already use [Bun](https://bun.sh):
 
 ```bash
-git clone https://github.com/your-org/showtail.git
-cd showtail
+git clone https://github.com/Tingsters/Showtail.git
+cd Showtail
 bun install
 bun run src/cli.ts --help
 # build your own standalone binary:
@@ -78,8 +78,6 @@ bun run build      # -> dist/showtail
 
 Clone the repo and run the CLI directly with Bun (`bun run src/cli.ts <command>`), or build a
 binary with `bun run build` and put `dist/showtail` on your `PATH`.
-
-> Replace `your-org` in the URLs above with the actual GitHub org/repo once published.
 
 ---
 
