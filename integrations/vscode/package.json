@@ -1,8 +1,8 @@
-{
+﻿{
   "name": "showtail",
   "displayName": "Showtail",
   "description": "Show your work: capture your GitHub Copilot prompts and edits into a local provenance trail.",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "publisher": "Tingsters",
   "license": "Apache-2.0",
   "repository": {

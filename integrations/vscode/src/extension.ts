@@ -50,11 +50,14 @@ export function activate(context: vscode.ExtensionContext): void {
 }
 
 /**
- * On first activation in a Showtail project, set up the Copilot instructions
- * (`.github/copilot-instructions.md`) automatically — so opening the project in
- * VS Code is all the student needs to do. We only do this once per workspace
- * (tracked in workspaceState) so we never fight a later manual uninstall, and
- * only when a `.showtail/` folder exists and the instructions aren't there yet.
+ * Keep the Copilot instructions (`.github/copilot-instructions.md`) set up and
+ * current, so opening the project in VS Code is all the student needs to do:
+ *   - if the instructions are already present, refresh them to the latest
+ *     (a no-op when already current — `showtail copilot install` only rewrites
+ *     on change), so updates ship automatically on the next open;
+ *   - if they're absent, install them the first time only (tracked in
+ *     workspaceState) so we never fight a later manual `copilot uninstall`.
+ * Only acts inside a `.showtail/` project.
  */
 async function maybeAutoInstallCopilot(context: vscode.ExtensionContext): Promise<void> {
   const cwd = folderFor(undefined);
@@ -62,14 +65,19 @@ async function maybeAutoInstallCopilot(context: vscode.ExtensionContext): Promis
   if (!existsSync(join(cwd, '.showtail'))) return; // not a Showtail project
 
   const KEY = 'showtail.autoInstalledCopilot';
-  if (context.workspaceState.get<boolean>(KEY)) return; // already handled here
-
-  // Sentinel: our path-specific instructions file. If present, it's set up.
+  // Sentinel: our path-specific instructions file. If present, it's installed.
   const sentinel = join(cwd, '.github', 'instructions', 'showtail.instructions.md');
+
   if (existsSync(sentinel)) {
+    // Installed already — refresh to the latest (no-op if unchanged).
+    await runShowtail(['copilot', 'install', '--no-extension'], cwd);
     await context.workspaceState.update(KEY, true);
+    output.appendLine('Showtail Copilot instructions are up to date.');
     return;
   }
+
+  // Absent: only auto-install the first time, to respect a manual uninstall.
+  if (context.workspaceState.get<boolean>(KEY)) return;
 
   const out = await runShowtail(['copilot', 'install', '--no-extension'], cwd);
   await context.workspaceState.update(KEY, true);

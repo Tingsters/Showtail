@@ -34,9 +34,13 @@ export function resolveCopilotTarget(cwd: string = process.cwd()): CopilotTarget
   };
 }
 
-/** The Showtail block, wrapped in markers, for copilot-instructions.md. */
+/**
+ * The Showtail block, wrapped in markers, for copilot-instructions.md.
+ * Ends exactly at the end marker (no trailing newline) so it round-trips
+ * cleanly through replaceBetween without growing the file on each refresh.
+ */
 function showtailBlock(): string {
-  return `${MARKER_START}\n${COPILOT_INSTRUCTIONS.trimEnd()}\n${MARKER_END}\n`;
+  return `${MARKER_START}\n${COPILOT_INSTRUCTIONS.trimEnd()}\n${MARKER_END}`;
 }
 
 /**
@@ -53,15 +57,38 @@ export function writeCopilotInstructions(target: CopilotTarget): void {
     if (current.includes(MARKER_START) && current.includes(MARKER_END)) {
       next = replaceBetween(current, block);
     } else {
-      next = current.trimEnd() + '\n\n' + block;
+      next = current.trimEnd() + '\n\n' + block + '\n';
     }
   } else {
-    next = block;
+    next = block + '\n';
   }
-  writeFileSync(target.instructionsFile, next, 'utf8');
+  writeIfChanged(target.instructionsFile, next);
 
   mkdirSync(dirname(target.pathInstructionsFile), { recursive: true });
-  writeFileSync(target.pathInstructionsFile, SHOWTAIL_PATH_INSTRUCTIONS, 'utf8');
+  writeIfChanged(target.pathInstructionsFile, SHOWTAIL_PATH_INSTRUCTIONS);
+}
+
+/**
+ * Write only when the content differs — so re-running install to refresh stale
+ * instructions is a true no-op when they're already current (no file churn, no
+ * editor "changed on disk" noise).
+ */
+function writeIfChanged(file: string, content: string): void {
+  if (existsSync(file) && readFileSync(file, 'utf8') === content) return;
+  writeFileSync(file, content, 'utf8');
+}
+
+/**
+ * True when the installed instructions already match the current (embedded)
+ * versions — i.e. nothing to refresh.
+ */
+export function copilotUpToDate(target: CopilotTarget): boolean {
+  if (!existsSync(target.pathInstructionsFile)) return false;
+  if (readFileSync(target.pathInstructionsFile, 'utf8') !== SHOWTAIL_PATH_INSTRUCTIONS) {
+    return false;
+  }
+  if (!existsSync(target.instructionsFile)) return false;
+  return readFileSync(target.instructionsFile, 'utf8').includes(showtailBlock().trim());
 }
 
 /** Remove the Showtail section and our path-specific file. */

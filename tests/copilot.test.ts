@@ -1,10 +1,10 @@
 import { describe, expect, test } from 'bun:test';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import {
   COPILOT_INSTRUCTIONS,
   SHOWTAIL_PATH_INSTRUCTIONS,
   copilotInstalled,
+  copilotUpToDate,
   removeCopilotInstructions,
   resolveCopilotTarget,
   writeCopilotInstructions,
@@ -84,6 +84,45 @@ describe('copilot integration', () => {
       await runCopilotUninstall({ cwd: dir });
       expect(existsSync(target.instructionsFile)).toBe(false);
       expect(copilotInstalled(target)).toBe(false);
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('refresh replaces a stale Showtail block with the current instructions', () => {
+    const dir = makeTempDir();
+    try {
+      const target = resolveCopilotTarget(dir);
+      mkdirSync(target.githubDir, { recursive: true });
+      // Simulate an outdated installed block.
+      writeFileSync(
+        target.instructionsFile,
+        '<!-- showtail:start -->\nOLD CONTENT\n<!-- showtail:end -->\n',
+        'utf8',
+      );
+      writeCopilotInstructions(target);
+      const content = readFileSync(target.instructionsFile, 'utf8');
+      expect(content).not.toContain('OLD CONTENT');
+      expect(content).toContain('EVERY prompt');
+      expect(copilotUpToDate(target)).toBe(true);
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('copilotUpToDate is false before install, true after, and a no-op write keeps mtime', () => {
+    const dir = makeTempDir();
+    try {
+      const target = resolveCopilotTarget(dir);
+      expect(copilotUpToDate(target)).toBe(false);
+      writeCopilotInstructions(target);
+      expect(copilotUpToDate(target)).toBe(true);
+
+      // A refresh when already current must not rewrite the file.
+      const before = statSync(target.instructionsFile).mtimeMs;
+      writeCopilotInstructions(target);
+      const after = statSync(target.instructionsFile).mtimeMs;
+      expect(after).toBe(before);
     } finally {
       cleanup(dir);
     }
