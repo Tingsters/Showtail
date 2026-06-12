@@ -16,7 +16,7 @@ import {
 import { runHook, type HookEvent } from './commands/hook.ts';
 import { eventTypeList } from './core/schema.ts';
 
-const VERSION = '0.3.2';
+const VERSION = '0.3.3';
 
 /** Wrap a command action so errors print a clean message and set exit code 1. */
 function action<A extends unknown[]>(fn: (...args: A) => Promise<unknown>) {

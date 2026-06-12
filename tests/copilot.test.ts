@@ -93,4 +93,11 @@ describe('copilot integration', () => {
     expect(COPILOT_INSTRUCTIONS).toContain('Showtail');
     expect(SHOWTAIL_PATH_INSTRUCTIONS).toContain('applyTo:');
   });
+
+  test('instructions tell Copilot to log every prompt (incl. brainstorming)', () => {
+    expect(COPILOT_INSTRUCTIONS).toContain('EVERY prompt');
+    expect(COPILOT_INSTRUCTIONS).toContain('Brainstorming');
+    expect(SHOWTAIL_PATH_INSTRUCTIONS.toLowerCase()).toContain('every');
+    expect(SHOWTAIL_PATH_INSTRUCTIONS.toLowerCase()).toContain('brainstorm');
+  });
 });

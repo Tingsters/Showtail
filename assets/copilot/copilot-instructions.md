@@ -19,8 +19,11 @@ Everything is stored locally under `.showtail/`. Never send it anywhere.
 Record the student's **prompts** and **judgment moments** with the `showtail` CLI (always tag
 `--tool github-copilot`). Do not snapshot files — the extension does that.
 
-- At the **start of a task**, log the student's request in their own words:
-  `showtail log --type prompt --text "<the student's request>" --tool github-copilot`
+- **Log EVERY prompt the student sends you — not only ones that lead to code.** Brainstorming,
+  planning, "what are my options", conceptual questions, debugging chatter, and dead ends all
+  count: they are the student's thinking and effort, which is exactly what Showtail is for.
+  Before you answer a message, log it in the student's own words:
+  `showtail log --type prompt --text "<the student's message, verbatim or lightly trimmed>" --tool github-copilot`
   (If they asked through `@showtail` in chat, it is already logged — don't log it twice.)
 - A real choice the student made, and their reasoning:
   `showtail log --type decision --text "I used a dictionary so lookups stay O(1)." --files src/store.py --tool github-copilot`
