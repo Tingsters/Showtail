@@ -7,6 +7,8 @@ import { runArtifactAdd } from './commands/artifact.ts';
 import { runTrace } from './commands/trace.ts';
 import { runReport } from './commands/report.ts';
 import { runVerify } from './commands/verify.ts';
+import { runSkillInstall, runSkillUninstall } from './commands/skill.ts';
+import { runHook, type HookEvent } from './commands/hook.ts';
 import { eventTypeList } from './core/schema.ts';
 
 const VERSION = '0.1.0';
@@ -105,5 +107,51 @@ program
       if (!ok) process.exitCode = 1;
     }),
   );
+
+const skill = program
+  .command('skill')
+  .description('Manage the Showtail Claude Code skill and auto-capture hooks.');
+
+skill
+  .command('install')
+  .description('Install the Showtail skill into Claude Code (optionally with hooks).')
+  .option('--user', 'install for your user (all projects: ~/.claude)')
+  .option('--project', 'install for this project only (./.claude) [default]')
+  .option('--with-hooks', 'also enable auto-capture of prompts and edits')
+  .option('--force', 'overwrite an existing skill without prompting')
+  .action(
+    action(
+      async (opts: {
+        user?: boolean;
+        project?: boolean;
+        withHooks?: boolean;
+        force?: boolean;
+      }) =>
+        runSkillInstall({
+          user: opts.user,
+          project: opts.project,
+          hooks: opts.withHooks,
+          force: opts.force,
+        }),
+    ),
+  );
+
+skill
+  .command('uninstall')
+  .description('Remove the Showtail skill and any hooks it installed.')
+  .option('--user', 'remove from your user scope (~/.claude)')
+  .option('--project', 'remove from this project (./.claude) [default]')
+  .action(
+    action(async (opts: { user?: boolean }) => runSkillUninstall({ user: opts.user })),
+  );
+
+// Internal: invoked by Claude Code hooks (reads the hook JSON from stdin).
+// Hidden from the main help; advanced users can still discover it.
+program
+  .command('hook <event>', { hidden: true })
+  .description(
+    'Internal: handle a Claude Code hook event (session-start, user-prompt, post-edit, stop).',
+  )
+  .action(action(async (event: string) => runHook(event as HookEvent)));
 
 program.parseAsync(process.argv);

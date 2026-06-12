@@ -143,6 +143,57 @@ the current git commit hash (if your project is a git repo), and `actor: "studen
 
 ---
 
+## Claude Code integration
+
+If you pair with [Claude Code](https://claude.com/claude-code), Showtail can build your trail
+for you. Install the bundled **skill** (and, optionally, **auto-capture hooks**):
+
+```bash
+# in your project (creates ./.claude/skills/showtail/ and, with hooks, ./.claude/settings.json)
+showtail skill install --project --with-hooks
+
+# or for all your projects:
+showtail skill install --user --with-hooks
+```
+
+What you get:
+
+- **A skill** that teaches Claude *when* to log the judgment moments — decisions, reflections,
+  sources, tests — and to snapshot notable files, start sessions, and run `report`/`verify`.
+  Claude loads it automatically in a Showtail project, or you can invoke it with `/showtail`.
+- **Hooks** (only with `--with-hooks`) that deterministically capture the rest:
+
+  | When | Showtail does |
+  | --- | --- |
+  | You submit a prompt | logs it as a `prompt` event |
+  | Claude edits/writes a file | snapshots that file as an `artifact` |
+  | A session starts | ensures a work session exists |
+
+Then just work. At the end, `showtail report` gives your educator the full picture.
+
+### Install via the Claude Code plugin (alternative)
+
+```text
+/plugin marketplace add Tingsters/Showtail
+/plugin install showtail
+```
+
+The plugin bundles the same skill and hooks.
+
+### Privacy with hooks
+
+⚠️ While hooks are active, **every prompt you submit and every file Claude edits is logged
+locally** to `.showtail/`. This is the point — it's your "show your work" trail — but be aware:
+
+- Nothing is ever sent anywhere; there are **no external calls** and no telemetry.
+- The trail may be committed to your repo, so **don't put secrets in prompts** while capturing.
+- Review anytime with `showtail report`; turn capture off with
+  `showtail skill uninstall` (add `--user` if you installed at user scope).
+- Hooks are **opt-in** — a plain `showtail skill install` (no `--with-hooks`) installs only the
+  skill and changes no settings.
+
+---
+
 ## Example classroom workflow
 
 1. **Teacher** asks students to use Showtail for a project and to commit `.showtail/`.
@@ -250,7 +301,8 @@ bun run build       # compile a standalone binary to dist/showtail
 
 Showtail's MVP is a local CLI, with a clean core that's meant to grow:
 
-- **Claude Code skill** — let an AI coding agent log prompts/decisions/artifacts as you pair.
+- ✅ **Claude Code skill** — log prompts/decisions/artifacts as you pair (see
+  [Claude Code integration](#claude-code-integration)).
 - **VS Code extension** — capture the trail inline while you edit.
 - **GitHub Action** — verify a submission's trail automatically in CI.
 - **Signed provenance records** — cryptographically signed events for stronger guarantees.

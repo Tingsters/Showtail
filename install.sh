@@ -9,13 +9,15 @@
 # Environment overrides:
 #   SHOWTAIL_REPO     "owner/repo"        (default: Tingsters/Showtail)
 #   SHOWTAIL_VERSION  "v0.1.0" or "latest" (default: latest)
-#   SHOWTAIL_BIN_DIR  install directory    (default: $HOME/.showtail/bin)
+#   SHOWTAIL_BIN_DIR  install directory    (default: $HOME/.local/bin)
 
 set -euo pipefail
 
 REPO="${SHOWTAIL_REPO:-Tingsters/Showtail}"
 VERSION="${SHOWTAIL_VERSION:-latest}"
-BIN_DIR="${SHOWTAIL_BIN_DIR:-$HOME/.showtail/bin}"
+# NOTE: must NOT be a ".showtail" directory — that name is Showtail's per-project
+# data folder, so installing the binary there would make $HOME look like a project.
+BIN_DIR="${SHOWTAIL_BIN_DIR:-$HOME/.local/bin}"
 
 err() { echo "error: $*" >&2; exit 1; }
 
