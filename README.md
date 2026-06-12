@@ -208,12 +208,17 @@ Showtail also captures **GitHub Copilot** work — into the *same* `.showtail/` 
 student can switch between Claude Code and Copilot and the professor sees one coherent story.
 
 ```bash
-# in your project: writes .github/copilot-instructions.md (+ a path-specific file)
-showtail copilot install
-
-# then install the VS Code extension (one-click) that does the capturing:
+# install the VS Code extension (one-click) that does the capturing:
 code --install-extension Tingsters.showtail
 #   (or grab the .vsix from the GitHub Releases page)
+```
+
+Open your project in VS Code and the extension **sets up the Copilot instructions
+automatically** (it writes `.github/copilot-instructions.md` the first time it sees a
+`.showtail/` folder). You can also do it explicitly — handy outside VS Code — with:
+
+```bash
+showtail copilot install
 ```
 
 How capture works (Copilot is more closed than Claude Code, so the design differs):

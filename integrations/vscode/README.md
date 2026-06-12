@@ -7,6 +7,9 @@ tools.
 
 ## What it does
 
+- **Sets up Copilot instructions automatically** — the first time you open a project that has
+  a `.showtail/` folder, it writes `.github/copilot-instructions.md` for you (once per
+  workspace; it won't fight a later `showtail copilot uninstall`).
 - **Snapshots files on save** as artifacts (tagged `github-copilot`) — automatic, no action
   needed, no matter which tool made the change.
 - **`@showtail` — a Showtail control surface in chat** (not a coding agent). Record a prompt

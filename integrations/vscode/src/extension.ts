@@ -1,5 +1,7 @@
 import * as vscode from 'vscode';
 import { execFile } from 'node:child_process';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
 import { promisify } from 'node:util';
 
 const execFileAsync = promisify(execFile);
@@ -44,6 +46,39 @@ export function activate(context: vscode.ExtensionContext): void {
   registerChatParticipant(context);
   registerSaveCapture(context);
   registerCommands(context);
+  void maybeAutoInstallCopilot(context);
+}
+
+/**
+ * On first activation in a Showtail project, set up the Copilot instructions
+ * (`.github/copilot-instructions.md`) automatically — so opening the project in
+ * VS Code is all the student needs to do. We only do this once per workspace
+ * (tracked in workspaceState) so we never fight a later manual uninstall, and
+ * only when a `.showtail/` folder exists and the instructions aren't there yet.
+ */
+async function maybeAutoInstallCopilot(context: vscode.ExtensionContext): Promise<void> {
+  const cwd = folderFor(undefined);
+  if (!cwd) return;
+  if (!existsSync(join(cwd, '.showtail'))) return; // not a Showtail project
+
+  const KEY = 'showtail.autoInstalledCopilot';
+  if (context.workspaceState.get<boolean>(KEY)) return; // already handled here
+
+  // Sentinel: our path-specific instructions file. If present, it's set up.
+  const sentinel = join(cwd, '.github', 'instructions', 'showtail.instructions.md');
+  if (existsSync(sentinel)) {
+    await context.workspaceState.update(KEY, true);
+    return;
+  }
+
+  const out = await runShowtail(['copilot', 'install', '--no-extension'], cwd);
+  await context.workspaceState.update(KEY, true);
+  if (out !== undefined) {
+    output.appendLine('Auto-installed Showtail Copilot instructions in .github/.');
+    vscode.window.showInformationMessage(
+      'Showtail set up Copilot instructions for this project (.github/copilot-instructions.md).',
+    );
+  }
 }
 
 /**
