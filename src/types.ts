@@ -22,6 +22,22 @@ export type EventType = (typeof EVENT_TYPES)[number];
 /** Who created an event. The MVP only records the student. */
 export type Actor = 'student';
 
+/**
+ * Which tool the work flowed through when an event was recorded. This is what
+ * lets a single trail span Claude Code and GitHub Copilot and lets a professor
+ * follow a student switching between them. Kept as a plain string union so new
+ * tools can be added without breaking older trails.
+ */
+export const TOOLS = ['claude-code', 'github-copilot', 'cli'] as const;
+export type Tool = (typeof TOOLS)[number];
+
+/** Human-friendly label for a tool (falls back to the raw value). */
+export const TOOL_LABELS: Record<string, string> = {
+  'claude-code': 'Claude Code',
+  'github-copilot': 'GitHub Copilot',
+  cli: 'CLI',
+};
+
 /** A single recorded event in a work session. One JSONL line = one Event. */
 export interface Event {
   /** Short unique id, e.g. "evt_lqz3k8_a1b2". */
@@ -38,6 +54,8 @@ export interface Event {
   tags?: string[];
   /** Git commit hash at the time of the event, if the project is a git repo. */
   gitCommit?: string;
+  /** Which tool the work flowed through (claude-code, github-copilot, cli). */
+  tool?: Tool;
   /** Who recorded it. Always "student" in the MVP. */
   actor: Actor;
 }
@@ -56,6 +74,8 @@ export interface Artifact {
   gitCommit?: string;
   /** The session this artifact was captured in, if any. */
   sessionId?: string;
+  /** Which tool the work flowed through when this snapshot was taken. */
+  tool?: Tool;
   /** Related event ids the student chose to link. */
   eventIds?: string[];
 }
@@ -70,6 +90,8 @@ export interface Session {
   file: string;
   /** Optional short label the student gave the session. */
   label?: string;
+  /** Which tool opened this session, if known. */
+  tool?: Tool;
 }
 
 /** The project-level configuration written at `init` time. */
@@ -91,6 +113,24 @@ export interface State {
   currentSessionId: string | null;
 }
 
+/** How many events were recorded through a given tool. */
+export interface ToolUsage {
+  tool: Tool;
+  events: number;
+}
+
+/**
+ * A contiguous block of activity through one tool. Consecutive same-tool events
+ * collapse into one block, so the list of blocks reads as the student's path
+ * through their tools — and each boundary is a switch a professor can follow.
+ */
+export interface ToolBlock {
+  tool: Tool;
+  from: string;
+  to: string;
+  count: number;
+}
+
 /** The structured (JSON) form of a generated report. */
 export interface ReportData {
   project: string | null;
@@ -100,6 +140,10 @@ export interface ReportData {
     events: number;
     artifacts: number;
   };
+  /** Per-tool event totals. */
+  tools: ToolUsage[];
+  /** Chronological blocks of tool usage; boundaries are tool switches. */
+  toolTimeline: ToolBlock[];
   timeline: TimelineEntry[];
   prompts: Event[];
   decisions: Event[];
@@ -116,4 +160,6 @@ export interface TimelineEntry {
   kind: 'session_start' | EventType;
   text: string;
   sessionId: string;
+  /** Which tool the entry came through (undefined for session starts). */
+  tool?: Tool;
 }

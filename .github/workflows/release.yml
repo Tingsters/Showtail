@@ -31,6 +31,13 @@ jobs:
       - name: Build all binaries
         run: bash scripts/build-all.sh
 
+      - name: Build VS Code extension (VSIX)
+        run: |
+          cd integrations/vscode
+          bun install
+          bun run package
+          cp showtail-*.vsix ../../dist/
+
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
@@ -39,4 +46,5 @@ jobs:
             dist/showtail-darwin-x64
             dist/showtail-darwin-arm64
             dist/showtail-windows-x64.exe
+            dist/showtail-*.vsix
           generate_release_notes: true

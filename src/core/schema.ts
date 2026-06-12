@@ -54,6 +54,11 @@ export function validateEvent(value: unknown): ValidationIssue[] {
   if (e.tags !== undefined && !isStringArray(e.tags)) {
     issues.push({ field: 'tags', message: 'tags must be an array of strings' });
   }
+  // `tool` is forward-compatible: any string is accepted so older/newer trails
+  // and new tools never fail validation.
+  if (e.tool !== undefined && typeof e.tool !== 'string') {
+    issues.push({ field: 'tool', message: 'tool must be a string' });
+  }
   return issues;
 }
 

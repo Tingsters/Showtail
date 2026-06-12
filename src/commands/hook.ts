@@ -71,7 +71,7 @@ async function handleUserPrompt(
   if (!payload) return;
   const text = extractPrompt(payload);
   if (!text) return;
-  await logEvent(paths, { type: 'prompt', text, tags: ['claude-code'] });
+  await logEvent(paths, { type: 'prompt', text, tool: 'claude-code' });
   // Print nothing: this path must not add anything to Claude's context.
 }
 
@@ -83,7 +83,7 @@ async function handlePostEdit(
   for (const file of extractEditedFiles(payload)) {
     if (isInternalPath(file)) continue;
     try {
-      await addArtifact(paths, { filePath: file });
+      await addArtifact(paths, { filePath: file, tool: 'claude-code' });
     } catch {
       // File may have been moved/deleted by now — skip it quietly.
     }

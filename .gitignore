@@ -4,6 +4,9 @@ node_modules/
 # Build output (compiled binaries)
 dist/
 
+# VS Code extension package
+*.vsix
+
 # Bun
 bun.lockb
 

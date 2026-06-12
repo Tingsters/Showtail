@@ -1,4 +1,14 @@
-import type { Artifact, Event, ReportData, Session, TimelineEntry } from '../types.ts';
+import type {
+  Artifact,
+  Event,
+  ReportData,
+  Session,
+  TimelineEntry,
+  Tool,
+  ToolBlock,
+  ToolUsage,
+} from '../types.ts';
+import { TOOL_LABELS } from '../types.ts';
 import { readAllEventsWithSession } from './events.ts';
 import {
   readArtifacts,
@@ -19,6 +29,15 @@ const TYPE_LABELS: Record<string, string> = {
   artifact: 'Artifact',
 };
 
+/** The tool an event flowed through (defaults to "cli" for older/manual events). */
+function toolOf(event: Event): Tool {
+  return (event.tool as Tool) ?? 'cli';
+}
+
+function toolLabel(tool: Tool): string {
+  return TOOL_LABELS[tool] ?? tool;
+}
+
 /** Build the structured report data from everything recorded in the project. */
 export function buildReportData(paths: ShowtailPaths): ReportData {
   const config = readConfig(paths);
@@ -28,7 +47,7 @@ export function buildReportData(paths: ShowtailPaths): ReportData {
 
   const byType = (type: Event['type']): Event[] => events.filter((e) => e.type === type);
 
-  const timeline = buildTimeline(sessions, paths);
+  const sorted = sortByTime(events);
 
   return {
     project: config.project ?? null,
@@ -38,15 +57,53 @@ export function buildReportData(paths: ShowtailPaths): ReportData {
       events: events.length,
       artifacts: artifacts.length,
     },
-    timeline,
+    tools: buildToolUsage(events),
+    toolTimeline: buildToolBlocks(sorted),
+    timeline: buildTimeline(sessions, paths),
     prompts: byType('prompt'),
     decisions: byType('decision'),
     artifactsCreated: artifacts,
     tests: byType('test'),
     reflections: byType('reflection'),
     sources: byType('source'),
-    authorship: buildAuthorshipStatement(config.project),
+    authorship: buildAuthorshipStatement(config.project, buildToolUsage(events)),
   };
+}
+
+function sortByTime(events: Event[]): Event[] {
+  return [...events].sort((a, b) => a.timestamp.localeCompare(b.timestamp));
+}
+
+/** Count events per tool, busiest first. */
+function buildToolUsage(events: Event[]): ToolUsage[] {
+  const counts = new Map<Tool, number>();
+  for (const e of events) {
+    const t = toolOf(e);
+    counts.set(t, (counts.get(t) ?? 0) + 1);
+  }
+  return [...counts.entries()]
+    .map(([tool, count]) => ({ tool, events: count }))
+    .sort((a, b) => b.events - a.events);
+}
+
+/**
+ * Collapse a time-ordered event stream into contiguous tool blocks. Each
+ * boundary between blocks is a moment the student switched tools — which is
+ * exactly what a professor needs to follow.
+ */
+export function buildToolBlocks(sortedEvents: Event[]): ToolBlock[] {
+  const blocks: ToolBlock[] = [];
+  for (const e of sortedEvents) {
+    const tool = toolOf(e);
+    const last = blocks[blocks.length - 1];
+    if (last && last.tool === tool) {
+      last.to = e.timestamp;
+      last.count += 1;
+    } else {
+      blocks.push({ tool, from: e.timestamp, to: e.timestamp, count: 1 });
+    }
+  }
+  return blocks;
 }
 
 function buildTimeline(sessions: Session[], paths: ShowtailPaths): TimelineEntry[] {
@@ -57,6 +114,7 @@ function buildTimeline(sessions: Session[], paths: ShowtailPaths): TimelineEntry
       kind: event.type,
       text: event.text,
       sessionId,
+      tool: toolOf(event),
     });
   }
   for (const session of sessions) {
@@ -67,19 +125,35 @@ function buildTimeline(sessions: Session[], paths: ShowtailPaths): TimelineEntry
         ? `Started session "${session.label}"`
         : 'Started a work session',
       sessionId: session.id,
+      tool: session.tool,
     });
   }
   entries.sort((a, b) => a.timestamp.localeCompare(b.timestamp));
   return entries;
 }
 
-function buildAuthorshipStatement(project?: string): string {
+function buildAuthorshipStatement(
+  project: string | undefined,
+  tools: ToolUsage[],
+): string {
   const name = project ? `"${project}"` : 'this project';
+  const toolList =
+    tools.length > 0
+      ? ' I worked through ' +
+        joinAnd(tools.map((t) => toolLabel(t.tool))) +
+        ', and this trail records each.'
+      : '';
   return (
     `I recorded this trail while working on ${name}. It shows the prompts I used, ` +
     `the decisions I made, the sources I drew on, the tests I ran, and my own ` +
-    `reflections. The work and understanding represented here are my own.`
+    `reflections.${toolList} The work and understanding represented here are my own.`
   );
+}
+
+function joinAnd(items: string[]): string {
+  if (items.length <= 1) return items.join('');
+  if (items.length === 2) return `${items[0]} and ${items[1]}`;
+  return `${items.slice(0, -1).join(', ')}, and ${items[items.length - 1]}`;
 }
 
 /** Render a report as student- and educator-friendly Markdown. */
@@ -95,6 +169,29 @@ export function renderMarkdown(data: ReportData): string {
     '',
   );
 
+  // Tools used — up front so a reviewer can see, at a glance, which tools the
+  // student used and when they switched between them.
+  lines.push('## Tools used', '');
+  if (data.tools.length === 0) {
+    lines.push('_No tool activity recorded._', '');
+  } else {
+    for (const t of data.tools) {
+      lines.push(`- **${toolLabel(t.tool)}** — ${t.events} event(s)`);
+    }
+    lines.push('');
+    if (data.toolTimeline.length > 1) {
+      lines.push('Tool timeline (each arrow is a switch):', '');
+      for (const b of data.toolTimeline) {
+        const span =
+          b.from === b.to
+            ? formatDate(b.from)
+            : `${formatDate(b.from)} → ${formatDate(b.to)}`;
+        lines.push(`- **${toolLabel(b.tool)}** · ${span} · ${b.count} event(s)`);
+      }
+      lines.push('');
+    }
+  }
+
   // Timeline
   lines.push('## Project timeline', '');
   if (data.timeline.length === 0) {
@@ -105,7 +202,10 @@ export function renderMarkdown(data: ReportData): string {
         entry.kind === 'session_start'
           ? 'Session'
           : (TYPE_LABELS[entry.kind] ?? entry.kind);
-      lines.push(`- \`${formatDate(entry.timestamp)}\` **${label}** — ${entry.text}`);
+      const badge = entry.tool ? ` \`${toolLabel(entry.tool)}\`` : '';
+      lines.push(
+        `- \`${formatDate(entry.timestamp)}\`${badge} **${label}** — ${entry.text}`,
+      );
     }
     lines.push('');
   }
@@ -121,9 +221,10 @@ export function renderMarkdown(data: ReportData): string {
     lines.push('_No artifacts recorded._', '');
   } else {
     for (const a of data.artifactsCreated) {
+      const via = a.tool ? `, via ${toolLabel(a.tool as Tool)}` : '';
       lines.push(
         `- **${a.path}** — \`${shortHash(a.sha256)}\` ` +
-          `(${formatDate(a.timestamp)}${a.gitCommit ? `, commit \`${shortHash(a.gitCommit)}\`` : ''})`,
+          `(${formatDate(a.timestamp)}${a.gitCommit ? `, commit \`${shortHash(a.gitCommit)}\`` : ''}${via})`,
       );
     }
     lines.push('');
@@ -154,6 +255,7 @@ function section(
 
 function bullet(e: Event): string {
   const meta: string[] = [formatDate(e.timestamp)];
+  meta.push(toolLabel(toolOf(e)));
   if (e.files && e.files.length > 0) meta.push(`files: ${e.files.join(', ')}`);
   if (e.tags && e.tags.length > 0) meta.push(`tags: ${e.tags.join(', ')}`);
   return `- ${e.text}  \n  _(${meta.join(' · ')})_`;

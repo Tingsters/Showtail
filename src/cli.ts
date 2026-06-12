@@ -8,6 +8,11 @@ import { runTrace } from './commands/trace.ts';
 import { runReport } from './commands/report.ts';
 import { runVerify } from './commands/verify.ts';
 import { runSkillInstall, runSkillStatus, runSkillUninstall } from './commands/skill.ts';
+import {
+  runCopilotInstall,
+  runCopilotStatus,
+  runCopilotUninstall,
+} from './commands/copilot.ts';
 import { runHook, type HookEvent } from './commands/hook.ts';
 import { eventTypeList } from './core/schema.ts';
 
@@ -56,6 +61,7 @@ program
   .option('-x, --text <text>', 'the content (or pipe it via stdin)')
   .option('-f, --files <files>', 'comma-separated related files')
   .option('--tags <tags>', 'comma-separated tags')
+  .option('--tool <tool>', 'tool this came through (claude-code, github-copilot, cli)')
   .option('-s, --session <id>', 'log to a specific session id')
   .action(
     action(
@@ -64,6 +70,7 @@ program
         text?: string;
         files?: string;
         tags?: string;
+        tool?: string;
         session?: string;
       }) => runLog(opts),
     ),
@@ -78,9 +85,11 @@ artifact
   .description('Record a file: its SHA-256 hash, time, and git commit if available.')
   .option('-s, --session <id>', 'attach to a specific session id')
   .option('-e, --events <ids>', 'comma-separated related event ids')
+  .option('--tool <tool>', 'tool this came through (claude-code, github-copilot, cli)')
   .action(
-    action(async (file: string, opts: { session?: string; events?: string }) =>
-      runArtifactAdd(file, opts),
+    action(
+      async (file: string, opts: { session?: string; events?: string; tool?: string }) =>
+        runArtifactAdd(file, opts),
     ),
   );
 
@@ -155,6 +164,32 @@ skill
   .action(
     action(async (opts: { user?: boolean }) => runSkillUninstall({ user: opts.user })),
   );
+
+const copilot = program
+  .command('copilot')
+  .description(
+    'Manage the Showtail GitHub Copilot integration (instructions + extension).',
+  );
+
+copilot
+  .command('install')
+  .description('Write the repo Copilot instructions and point to the VS Code extension.')
+  .option('--no-extension', 'skip the VS Code extension guidance')
+  .action(
+    action(async (opts: { extension?: boolean }) =>
+      runCopilotInstall({ extension: opts.extension }),
+    ),
+  );
+
+copilot
+  .command('status')
+  .description('Report whether the Copilot instructions are installed for this project.')
+  .action(action(async () => runCopilotStatus()));
+
+copilot
+  .command('uninstall')
+  .description('Remove the Showtail Copilot instructions from this project.')
+  .action(action(async () => runCopilotUninstall()));
 
 // Internal: invoked by Claude Code hooks (reads the hook JSON from stdin).
 // Hidden from the main help; advanced users can still discover it.

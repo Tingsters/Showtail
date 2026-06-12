@@ -202,6 +202,51 @@ locally** to `.showtail/`. This is the point — it's your "show your work" trai
 
 ---
 
+## GitHub Copilot integration
+
+Showtail also captures **GitHub Copilot** work — into the *same* `.showtail/` trail, so a
+student can switch between Claude Code and Copilot and the professor sees one coherent story.
+
+```bash
+# in your project: writes .github/copilot-instructions.md (+ a path-specific file)
+showtail copilot install
+
+# then install the VS Code extension (one-click) that does the capturing:
+code --install-extension Tingsters.showtail
+#   (or grab the .vsix from the GitHub Releases page)
+```
+
+How capture works (Copilot is more closed than Claude Code, so the design differs):
+
+- **Edits are captured automatically** — the VS Code extension snapshots every file you save
+  as an artifact (tagged `github-copilot`). This is the always-on backbone and needs no habit
+  change.
+- **Prompts are captured when you ask through `@showtail`** in Copilot Chat: type
+  `@showtail <your question>` and your prompt is recorded verbatim, then answered by Copilot's
+  model. (Copilot does not expose prompts typed into *native* chat to any third party — that's
+  a privacy boundary of Copilot's, not a Showtail limitation. Your edits are still captured, so
+  the work history is never lost.)
+- **`.github/copilot-instructions.md`** teaches Copilot to log decisions and reflections in
+  your voice — the analog of the Claude Code skill.
+
+### Following a student across both tools
+
+Every event records which `tool` it came through, so `showtail report` shows a **Tools used**
+section with the exact switch sequence, and badges each timeline entry:
+
+```text
+## Tools used
+- GitHub Copilot — 3 event(s)
+- Claude Code — 2 event(s)
+
+Tool timeline (each arrow is a switch):
+- GitHub Copilot · 14:02 → 14:10 · 2 event(s)
+- Claude Code · 14:10 → 14:18 · 2 event(s)
+- GitHub Copilot · 14:25 · 1 event(s)
+```
+
+---
+
 ## Example classroom workflow
 
 1. **Teacher** asks students to use Showtail for a project and to commit `.showtail/`.
@@ -311,7 +356,8 @@ Showtail's MVP is a local CLI, with a clean core that's meant to grow:
 
 - ✅ **Claude Code skill** — log prompts/decisions/artifacts as you pair (see
   [Claude Code integration](#claude-code-integration)).
-- **VS Code extension** — capture the trail inline while you edit.
+- ✅ **GitHub Copilot + VS Code extension** — capture Copilot prompts and edits, with one
+  cross-tool report (see [GitHub Copilot integration](#github-copilot-integration)).
 - **GitHub Action** — verify a submission's trail automatically in CI.
 - **Signed provenance records** — cryptographically signed events for stronger guarantees.
 - **Educator dashboard** — review many students' trails at a glance.

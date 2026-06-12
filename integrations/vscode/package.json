@@ -1,0 +1,61 @@
+{
+  "name": "showtail",
+  "displayName": "Showtail",
+  "description": "Show your work: capture your GitHub Copilot prompts and edits into a local provenance trail.",
+  "version": "0.2.1",
+  "publisher": "Tingsters",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Tingsters/Showtail"
+  },
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": ["Education", "Other"],
+  "main": "./dist/extension.js",
+  "activationEvents": ["onStartupFinished"],
+  "contributes": {
+    "chatParticipants": [
+      {
+        "id": "showtail.chat",
+        "name": "showtail",
+        "fullName": "Showtail",
+        "description": "Ask Copilot and record your prompt in your Showtail trail",
+        "isSticky": true
+      }
+    ],
+    "commands": [
+      { "command": "showtail.report", "title": "Showtail: Generate Report" },
+      { "command": "showtail.status", "title": "Showtail: Status" }
+    ],
+    "configuration": {
+      "title": "Showtail",
+      "properties": {
+        "showtail.binaryPath": {
+          "type": "string",
+          "default": "showtail",
+          "description": "Path to the showtail CLI (on PATH by default)."
+        },
+        "showtail.captureOnSave": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically snapshot files as artifacts when you save them."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "node esbuild.js",
+    "watch": "node esbuild.js --watch",
+    "typecheck": "tsc --noEmit",
+    "package": "node esbuild.js --production && vsce package --no-dependencies"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/vscode": "^1.90.0",
+    "@vscode/vsce": "^3.0.0",
+    "esbuild": "^0.23.0",
+    "typescript": "^5.5.0"
+  }
+}

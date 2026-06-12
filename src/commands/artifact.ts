@@ -1,3 +1,4 @@
+import type { Tool } from '../types.ts';
 import { addArtifact } from '../core/artifacts.ts';
 import { logEvent, resolveOrStartSession } from '../core/events.ts';
 import { requirePaths } from '../core/storage.ts';
@@ -6,6 +7,7 @@ export interface ArtifactAddOptions {
   session?: string;
   /** Comma-separated related event ids. */
   events?: string;
+  tool?: string;
   cwd?: string;
 }
 
@@ -31,10 +33,13 @@ export async function runArtifactAdd(
   const session = resolveOrStartSession(paths, options.session);
   const eventIds = splitList(options.events);
 
+  const tool = options.tool as Tool | undefined;
+
   const artifact = await addArtifact(paths, {
     filePath: file,
     sessionId: session.id,
     eventIds,
+    tool,
   });
 
   // Add a matching timeline event referencing the file.
@@ -42,6 +47,7 @@ export async function runArtifactAdd(
     type: 'artifact',
     text: `Recorded artifact ${artifact.path} (sha256 ${artifact.sha256.slice(0, 10)})`,
     files: [artifact.path],
+    tool,
     sessionId: session.id,
   });
 

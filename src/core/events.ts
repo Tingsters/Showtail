@@ -1,4 +1,4 @@
-import type { Event, EventType, Session } from '../types.ts';
+import type { Event, EventType, Session, Tool } from '../types.ts';
 import { maybeCurrentCommit } from './git.ts';
 import { makeId } from './ids.ts';
 import {
@@ -21,6 +21,8 @@ export interface NewEventInput {
   text: string;
   files?: string[];
   tags?: string[];
+  /** Which tool the work flowed through. Defaults to "cli". */
+  tool?: Tool;
   /** Force a specific session; otherwise the current/started session is used. */
   sessionId?: string;
 }
@@ -44,6 +46,7 @@ export async function logEvent(
     timestamp: new Date().toISOString(),
     type: input.type,
     text: input.text,
+    tool: input.tool ?? 'cli',
     actor: 'student',
   };
   if (input.files && input.files.length > 0) event.files = input.files;

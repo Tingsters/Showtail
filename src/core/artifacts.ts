@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
-import type { Artifact } from '../types.ts';
+import type { Artifact, Tool } from '../types.ts';
 import { maybeCurrentCommit } from './git.ts';
 import { sha256OfFile } from './hash.ts';
 import { makeId } from './ids.ts';
@@ -18,6 +18,8 @@ export interface AddArtifactInput {
   filePath: string;
   sessionId?: string;
   eventIds?: string[];
+  /** Which tool the work flowed through when this snapshot was taken. */
+  tool?: Tool;
 }
 
 /**
@@ -49,6 +51,7 @@ export async function addArtifact(
   };
   if (gitCommit) artifact.gitCommit = gitCommit;
   if (input.sessionId) artifact.sessionId = input.sessionId;
+  if (input.tool) artifact.tool = input.tool;
   if (input.eventIds && input.eventIds.length > 0) artifact.eventIds = input.eventIds;
 
   const all = readArtifacts(paths);

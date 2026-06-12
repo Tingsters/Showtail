@@ -1,3 +1,4 @@
+import type { Tool } from '../types.ts';
 import { logEvent } from '../core/events.ts';
 import { eventTypeList, isEventType } from '../core/schema.ts';
 import { requirePaths, toRepoRelative } from '../core/storage.ts';
@@ -7,6 +8,7 @@ export interface LogOptions {
   text?: string;
   files?: string;
   tags?: string;
+  tool?: string;
   session?: string;
   cwd?: string;
 }
@@ -62,6 +64,7 @@ export async function runLog(options: LogOptions): Promise<void> {
     text,
     files,
     tags,
+    tool: options.tool as Tool | undefined,
     sessionId: options.session,
   });
 
