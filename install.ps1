@@ -34,13 +34,25 @@ Invoke-WebRequest -Uri $url -OutFile $target -UseBasicParsing
 
 Write-Host "Installed to: $target"
 
-# Add to the user's PATH if it isn't already there.
+# Persist to the user's PATH for future terminals (if not already there).
 $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
-if ($userPath -notlike "*$binDir*") {
+if (($userPath -split ';') -notcontains $binDir) {
   [Environment]::SetEnvironmentVariable('Path', "$binDir;$userPath", 'User')
-  Write-Host ''
   Write-Host "Added $binDir to your user PATH."
-  Write-Host 'Open a new terminal, then run: showtail --help'
-} else {
+}
+
+# Also update THIS session so `showtail` works immediately. When the installer is
+# run the documented way (`irm ... | iex`) this executes in your current shell, so
+# the command is usable right away without opening a new terminal.
+if (($env:Path -split ';') -notcontains $binDir) {
+  $env:Path = "$binDir;$env:Path"
+}
+
+Write-Host ''
+if (Get-Command showtail -ErrorAction SilentlyContinue) {
   Write-Host 'Ready! Run: showtail --help'
+} else {
+  # Reached only if the script ran in a child process (e.g. `.\install.ps1`),
+  # whose $env:Path change can't propagate to the parent shell.
+  Write-Host 'Installed. Open a NEW terminal, then run: showtail --help'
 }
