@@ -1,4 +1,4 @@
-﻿{
+{
   "name": "showtail",
   "owner": {
     "name": "Tingsters",
@@ -6,14 +6,14 @@
   },
   "metadata": {
     "description": "Showtail â€” show your work. Claude Code integration that captures a local provenance trail.",
-    "version": "0.3.4"
+    "version": "0.3.5"
   },
   "plugins": [
     {
       "name": "showtail",
       "source": "./assets/claude-code/plugin",
       "description": "Auto-capture prompts, edits, decisions, and reflections into Showtail's local .showtail/ trail while pairing with Claude.",
-      "version": "0.3.4",
+      "version": "0.3.5",
       "homepage": "https://github.com/Tingsters/Showtail"
     }
   ]

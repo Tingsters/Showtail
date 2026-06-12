@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env bun
+#!/usr/bin/env bun
 import { Command } from 'commander';
 import { runInit } from './commands/init.ts';
 import { runStart } from './commands/start.ts';
@@ -16,7 +16,7 @@ import {
 import { runHook, type HookEvent } from './commands/hook.ts';
 import { eventTypeList } from './core/schema.ts';
 
-const VERSION = '0.3.4';
+const VERSION = '0.3.5';
 
 /** Wrap a command action so errors print a clean message and set exit code 1. */
 function action<A extends unknown[]>(fn: (...args: A) => Promise<unknown>) {
