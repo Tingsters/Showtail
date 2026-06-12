@@ -16,7 +16,7 @@ import {
 import { runHook, type HookEvent } from './commands/hook.ts';
 import { eventTypeList } from './core/schema.ts';
 
-const VERSION = '0.3.5';
+const VERSION = '0.3.6';
 
 /** Wrap a command action so errors print a clean message and set exit code 1. */
 function action<A extends unknown[]>(fn: (...args: A) => Promise<unknown>) {
@@ -175,9 +175,10 @@ copilot
   .command('install')
   .description('Write the repo Copilot instructions and point to the VS Code extension.')
   .option('--no-extension', 'skip the VS Code extension guidance')
+  .option('--force', 'overwrite instructions you have edited (take the latest)')
   .action(
-    action(async (opts: { extension?: boolean }) =>
-      runCopilotInstall({ extension: opts.extension }),
+    action(async (opts: { extension?: boolean; force?: boolean }) =>
+      runCopilotInstall({ extension: opts.extension, force: opts.force }),
     ),
   );
 

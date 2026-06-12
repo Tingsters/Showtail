@@ -1,5 +1,5 @@
 import {
-  copilotInstalled,
+  copilotState,
   removeCopilotInstructions,
   resolveCopilotTarget,
   writeCopilotInstructions,
@@ -8,24 +8,44 @@ import {
 export interface CopilotInstallOptions {
   /** Show the VS Code extension install guidance. Defaults to true. */
   extension?: boolean;
+  /** Overwrite even instructions you've edited (take the latest). */
+  force?: boolean;
   cwd?: string;
 }
 
 const MARKETPLACE_ID = 'Tingsters.showtail';
 
 /**
- * Set up the GitHub Copilot integration: write the repo's Copilot custom
- * instructions (the analog of the Claude Code skill) and point the student at
- * the VS Code extension that does the automatic capture.
+ * Set up / refresh the GitHub Copilot integration. Only ever overwrites the
+ * instructions Showtail itself wrote: untouched blocks update to the latest,
+ * your own edits are kept (use --force to take the latest anyway).
  */
 export async function runCopilotInstall(options: CopilotInstallOptions): Promise<void> {
   const target = resolveCopilotTarget(options.cwd);
-  const existed = copilotInstalled(target);
-  writeCopilotInstructions(target);
+  const before = copilotState(target);
+  writeCopilotInstructions(target, { force: options.force });
+  const after = copilotState(target);
 
-  console.log(`${existed ? 'Updated' : 'Installed'} the Showtail Copilot instructions:`);
+  if (!before.installed) {
+    console.log('Installed the Showtail Copilot instructions:');
+  } else if (options.force) {
+    console.log('Reset the Showtail Copilot instructions to the latest:');
+  } else if (after.userEdited) {
+    console.log(
+      'Kept your customized Copilot instructions (Showtail only updates its own):',
+    );
+  } else {
+    console.log('Showtail Copilot instructions are up to date:');
+  }
   console.log(`  ${target.instructionsFile}`);
   console.log(`  ${target.pathInstructionsFile}`);
+
+  if (after.userEdited && after.updateAvailable && !options.force) {
+    console.log('');
+    console.log('  A newer version is available. Your edits were kept — run');
+    console.log('  `showtail copilot install --force` to take the latest instead.');
+  }
+
   console.log('');
   console.log(
     'These teach Copilot to record decisions, reflections, sources, and tests in',
@@ -74,16 +94,29 @@ export interface CopilotStatusOptions {
   cwd?: string;
 }
 
-/** Report whether the Copilot instructions are installed for this project. */
+/** Report whether the Copilot instructions are installed, current, or customized. */
 export async function runCopilotStatus(
   options: CopilotStatusOptions = {},
 ): Promise<void> {
   const target = resolveCopilotTarget(options.cwd);
-  if (copilotInstalled(target)) {
-    console.log('copilot integration: ON');
-    console.log(`  instructions: ${target.instructionsFile}`);
-  } else {
+  const state = copilotState(target);
+
+  if (!state.installed) {
     console.log('copilot integration: OFF');
     console.log('  Run `showtail copilot install` to set it up.');
+    return;
+  }
+
+  console.log('copilot integration: ON');
+  console.log(`  instructions: ${target.instructionsFile}`);
+  if (state.userEdited) {
+    console.log('  state: customized (your edits are kept)');
+  } else {
+    console.log('  state: up to date');
+  }
+  // A stable line the VS Code extension greps to decide whether to nudge.
+  console.log(`  update-available: ${state.updateAvailable ? 'yes' : 'no'}`);
+  if (state.updateAvailable && state.userEdited) {
+    console.log('  Run `showtail copilot install --force` to take the latest.');
   }
 }

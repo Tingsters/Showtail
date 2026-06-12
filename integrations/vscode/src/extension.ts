@@ -69,10 +69,12 @@ async function maybeAutoInstallCopilot(context: vscode.ExtensionContext): Promis
   const sentinel = join(cwd, '.github', 'instructions', 'showtail.instructions.md');
 
   if (existsSync(sentinel)) {
-    // Installed already — refresh to the latest (no-op if unchanged).
+    // Installed already — refresh untouched blocks to the latest (edit-aware:
+    // a block you've customized is kept, not overwritten).
     await runShowtail(['copilot', 'install', '--no-extension'], cwd);
     await context.workspaceState.update(KEY, true);
-    output.appendLine('Showtail Copilot instructions are up to date.');
+    output.appendLine('Showtail Copilot instructions checked (untouched blocks refreshed).');
+    await maybeNotifyUpdate(context, cwd);
     return;
   }
 
@@ -86,6 +88,36 @@ async function maybeAutoInstallCopilot(context: vscode.ExtensionContext): Promis
     vscode.window.showInformationMessage(
       'Showtail set up Copilot instructions for this project (.github/copilot-instructions.md).',
     );
+  }
+}
+
+/**
+ * When the instructions were customized AND a newer Showtail version exists,
+ * nudge once (per update episode) — never overwriting the user's edits.
+ */
+async function maybeNotifyUpdate(context: vscode.ExtensionContext, cwd: string): Promise<void> {
+  const NOTIFY_KEY = 'showtail.copilotUpdateNotified';
+  const status = await runShowtail(['copilot', 'status'], cwd);
+  const updateAvailable = !!status && /update-available:\s*yes/.test(status);
+
+  if (!updateAvailable) {
+    if (context.workspaceState.get<boolean>(NOTIFY_KEY)) {
+      await context.workspaceState.update(NOTIFY_KEY, false); // reset for next time
+    }
+    return;
+  }
+  if (context.workspaceState.get<boolean>(NOTIFY_KEY)) return; // already nudged this episode
+  await context.workspaceState.update(NOTIFY_KEY, true);
+
+  const choice = await vscode.window.showInformationMessage(
+    'Showtail: a newer version of the Copilot instructions is available. Your edits were kept.',
+    'Apply update',
+    'Keep mine',
+  );
+  if (choice === 'Apply update') {
+    await runShowtail(['copilot', 'install', '--no-extension', '--force'], cwd);
+    await context.workspaceState.update(NOTIFY_KEY, false);
+    output.appendLine('Applied the latest Showtail Copilot instructions.');
   }
 }
 

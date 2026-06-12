@@ -3,14 +3,75 @@ import { dirname, join } from 'node:path';
 // Single source of truth: committed under assets/ AND embedded into the binary.
 import COPILOT_INSTRUCTIONS from '../../assets/copilot/copilot-instructions.md' with { type: 'text' };
 import SHOWTAIL_PATH_INSTRUCTIONS from '../../assets/copilot/showtail.instructions.md' with { type: 'text' };
+import { sha256OfString } from './hash.ts';
 import { findRoot } from './storage.ts';
 
 export { COPILOT_INSTRUCTIONS, SHOWTAIL_PATH_INSTRUCTIONS };
 
-// Markers let us own a section of a possibly user-authored copilot-instructions.md
-// without clobbering anything else in it.
-const MARKER_START = '<!-- showtail:start -->';
+// A managed block is delimited by markers; the START marker carries a short
+// fingerprint of the exact text Showtail wrote, so we can tell an untouched
+// (possibly old) block from one a human edited — and only ever overwrite our
+// own content. Anything outside the markers is the user's and is never touched.
 const MARKER_END = '<!-- showtail:end -->';
+const START_RE = /<!-- showtail:start(?: sha=([0-9a-f]+))? -->/;
+
+/** Short content fingerprint stamped into the start marker. */
+function shortHash(text: string): string {
+  return sha256OfString(text.trim()).slice(0, 12);
+}
+
+function blockFor(body: string): string {
+  const inner = body.trim();
+  return `<!-- showtail:start sha=${shortHash(inner)} -->\n${inner}\n${MARKER_END}`;
+}
+
+interface ParsedBlock {
+  inner: string;
+  /** The stamped fingerprint, or undefined for a legacy (pre-fingerprint) block. */
+  sha: string | undefined;
+  startIndex: number;
+  endIndex: number;
+}
+
+function parseBlock(content: string): ParsedBlock | null {
+  const m = START_RE.exec(content);
+  if (!m || m.index === undefined) return null;
+  const startEnd = m.index + m[0].length;
+  const endIdx = content.indexOf(MARKER_END, startEnd);
+  if (endIdx === -1) return null;
+  return {
+    inner: content.slice(startEnd, endIdx).trim(),
+    sha: m[1],
+    startIndex: m.index,
+    endIndex: endIdx + MARKER_END.length,
+  };
+}
+
+type BlockClass = 'uptodate' | 'stale' | 'edited';
+
+function classify(parsed: ParsedBlock, latestBody: string): BlockClass {
+  const latest = latestBody.trim();
+  if (parsed.sha === undefined) {
+    // Legacy block with no fingerprint: pre-fingerprint Showtail always
+    // overwrote it, so no respected edit can exist — treat as untouched.
+    return parsed.inner === latest ? 'uptodate' : 'stale';
+  }
+  if (shortHash(parsed.inner) !== parsed.sha) return 'edited';
+  return parsed.inner === latest ? 'uptodate' : 'stale';
+}
+
+// --- YAML frontmatter handling for showtail.instructions.md ----------------
+// Copilot requires frontmatter at the very top, so it sits OUTSIDE the managed
+// block as a small preamble; the body is what Showtail manages/fingerprints.
+
+function splitFrontmatter(text: string): { preamble: string; body: string } {
+  const m = text.match(/^---\n[\s\S]*?\n---\n/);
+  if (m) return { preamble: m[0].trimEnd(), body: text.slice(m[0].length).trim() };
+  return { preamble: '', body: text.trim() };
+}
+
+const PATH_FM = splitFrontmatter(SHOWTAIL_PATH_INSTRUCTIONS).preamble;
+const PATH_BODY = splitFrontmatter(SHOWTAIL_PATH_INSTRUCTIONS).body;
 
 export interface CopilotTarget {
   /** Project root (the folder that holds .github/). */
@@ -34,71 +95,136 @@ export function resolveCopilotTarget(cwd: string = process.cwd()): CopilotTarget
   };
 }
 
-/**
- * The Showtail block, wrapped in markers, for copilot-instructions.md.
- * Ends exactly at the end marker (no trailing newline) so it round-trips
- * cleanly through replaceBetween without growing the file on each refresh.
- */
-function showtailBlock(): string {
-  return `${MARKER_START}\n${COPILOT_INSTRUCTIONS.trimEnd()}\n${MARKER_END}`;
+export interface WriteOptions {
+  /** Overwrite even a user-edited block (take the latest). */
+  force?: boolean;
 }
 
 /**
- * Insert or refresh the Showtail section in copilot-instructions.md without
- * disturbing any other content, and write our own path-specific file.
+ * Install or refresh the Showtail instructions. Only ever overwrites content
+ * Showtail itself wrote: untouched blocks update to the latest, user-edited
+ * blocks are left alone (unless `force`), and anything outside the block is
+ * always preserved.
  */
-export function writeCopilotInstructions(target: CopilotTarget): void {
+export function writeCopilotInstructions(
+  target: CopilotTarget,
+  options: WriteOptions = {},
+): void {
+  const force = options.force ?? false;
   mkdirSync(target.githubDir, { recursive: true });
+  applyManagedBlock(target.instructionsFile, COPILOT_INSTRUCTIONS, '', force);
+  mkdirSync(dirname(target.pathInstructionsFile), { recursive: true });
+  applyManagedBlock(target.pathInstructionsFile, PATH_BODY, PATH_FM, force);
+}
 
-  const block = showtailBlock();
+function applyManagedBlock(
+  file: string,
+  latestBody: string,
+  preamble: string,
+  force: boolean,
+): void {
+  const block = blockFor(latestBody);
   let next: string;
-  if (existsSync(target.instructionsFile)) {
-    const current = readFileSync(target.instructionsFile, 'utf8');
-    if (current.includes(MARKER_START) && current.includes(MARKER_END)) {
-      next = replaceBetween(current, block);
+
+  if (!existsSync(file)) {
+    next = preamble ? `${preamble}\n\n${block}\n` : `${block}\n`;
+  } else {
+    const current = readFileSync(file, 'utf8');
+    const parsed = parseBlock(current);
+    if (parsed) {
+      const cls = classify(parsed, latestBody);
+      // Keep user edits (and skip no-op updates) unless forced.
+      next =
+        !force && (cls === 'edited' || cls === 'uptodate')
+          ? current
+          : current.slice(0, parsed.startIndex) + block + current.slice(parsed.endIndex);
+    } else if (preamble) {
+      // Markerless path file: migrate the old wholesale content to block form;
+      // otherwise it's the user's own file — respect it.
+      const legacy = `${preamble}\n\n${latestBody.trim()}`.trim();
+      next =
+        current.trim() === legacy || current.trim() === latestBody.trim()
+          ? `${preamble}\n\n${block}\n`
+          : current;
     } else {
+      // A pre-existing user copilot-instructions.md without our block: append it.
       next = current.trimEnd() + '\n\n' + block + '\n';
     }
-  } else {
-    next = block + '\n';
   }
-  writeIfChanged(target.instructionsFile, next);
 
-  mkdirSync(dirname(target.pathInstructionsFile), { recursive: true });
-  writeIfChanged(target.pathInstructionsFile, SHOWTAIL_PATH_INSTRUCTIONS);
+  writeIfChanged(file, next);
 }
 
-/**
- * Write only when the content differs — so re-running install to refresh stale
- * instructions is a true no-op when they're already current (no file churn, no
- * editor "changed on disk" noise).
- */
+/** Write only when content differs (no churn / no editor "changed on disk"). */
 function writeIfChanged(file: string, content: string): void {
   if (existsSync(file) && readFileSync(file, 'utf8') === content) return;
   writeFileSync(file, content, 'utf8');
 }
 
-/**
- * True when the installed instructions already match the current (embedded)
- * versions — i.e. nothing to refresh.
- */
-export function copilotUpToDate(target: CopilotTarget): boolean {
-  if (!existsSync(target.pathInstructionsFile)) return false;
-  if (readFileSync(target.pathInstructionsFile, 'utf8') !== SHOWTAIL_PATH_INSTRUCTIONS) {
-    return false;
-  }
-  if (!existsSync(target.instructionsFile)) return false;
-  return readFileSync(target.instructionsFile, 'utf8').includes(showtailBlock().trim());
+export interface CopilotState {
+  installed: boolean;
+  /** All managed blocks are present and current (nothing for Showtail to do). */
+  upToDate: boolean;
+  /** At least one block was hand-edited (Showtail leaves it alone). */
+  userEdited: boolean;
+  /** A newer Showtail version exists than what the user forked from / has. */
+  updateAvailable: boolean;
 }
 
-/** Remove the Showtail section and our path-specific file. */
+/** Inspect the installed instructions and classify them for status/refresh. */
+export function copilotState(target: CopilotTarget): CopilotState {
+  const entries: Array<[string, string]> = [
+    [target.instructionsFile, COPILOT_INSTRUCTIONS],
+    [target.pathInstructionsFile, PATH_BODY],
+  ];
+  let installed = false;
+  let userEdited = false;
+  let updateAvailable = false;
+  let allCurrent = true;
+
+  for (const [file, body] of entries) {
+    if (!existsSync(file)) {
+      allCurrent = false;
+      continue;
+    }
+    const parsed = parseBlock(readFileSync(file, 'utf8'));
+    if (!parsed) {
+      allCurrent = false;
+      continue;
+    }
+    installed = true;
+    const cls = classify(parsed, body);
+    if (cls === 'edited') {
+      userEdited = true;
+      allCurrent = false;
+      // The stamp is the version they forked from; an update exists only if a
+      // newer one has shipped since.
+      if (parsed.sha !== shortHash(body)) updateAvailable = true;
+    } else if (cls === 'stale') {
+      allCurrent = false;
+      updateAvailable = true;
+    }
+  }
+
+  return { installed, upToDate: installed && allCurrent, userEdited, updateAvailable };
+}
+
+/** True when the installed instructions are present and current. */
+export function copilotUpToDate(target: CopilotTarget): boolean {
+  return copilotState(target).upToDate;
+}
+
+/** Remove the Showtail block and our path-specific file. */
 export function removeCopilotInstructions(target: CopilotTarget): boolean {
   let touched = false;
 
   if (existsSync(target.instructionsFile)) {
     const current = readFileSync(target.instructionsFile, 'utf8');
-    if (current.includes(MARKER_START)) {
-      const stripped = replaceBetween(current, '')
+    const parsed = parseBlock(current);
+    if (parsed) {
+      const stripped = (
+        current.slice(0, parsed.startIndex) + current.slice(parsed.endIndex)
+      )
         .replace(/\n{3,}/g, '\n\n')
         .trim();
       if (stripped.length === 0) {
@@ -121,17 +247,7 @@ export function removeCopilotInstructions(target: CopilotTarget): boolean {
 export function copilotInstalled(target: CopilotTarget): boolean {
   if (existsSync(target.pathInstructionsFile)) return true;
   if (existsSync(target.instructionsFile)) {
-    return readFileSync(target.instructionsFile, 'utf8').includes(MARKER_START);
+    return START_RE.test(readFileSync(target.instructionsFile, 'utf8'));
   }
   return false;
-}
-
-/** Replace the marked region (inclusive) with `replacement`. */
-function replaceBetween(content: string, replacement: string): string {
-  const start = content.indexOf(MARKER_START);
-  const end = content.indexOf(MARKER_END);
-  if (start === -1 || end === -1) return content;
-  const before = content.slice(0, start);
-  const after = content.slice(end + MARKER_END.length);
-  return before + replacement + after;
 }

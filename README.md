@@ -239,6 +239,20 @@ How capture works (Copilot is more closed than Claude Code, so the design differ
 > your prompt, and `@showtail` captures it verbatim when you ask through it; either way your
 > **edits are always captured on save**, so the work history is never lost.
 
+### Customizing the instructions
+
+The instruction files are yours to edit — Showtail only ever overwrites the text **it wrote
+itself**. Each Showtail-managed block carries a fingerprint, so on the next open:
+
+- a block you **haven't touched** is auto-refreshed to the latest (it just stays current);
+- a block you **have edited** is left exactly as you wrote it. `showtail copilot status` will
+  say `customized`, and if a newer version shipped you'll get a one-time "update available"
+  nudge — never an overwrite. Run `showtail copilot install --force` to take the latest.
+
+Add your own rules **outside** the Showtail markers (always preserved) or, cleanest of all, in
+your own `.github/instructions/your-rules.instructions.md` — Copilot reads every instructions
+file, and Showtail never touches yours.
+
 ### Following a student across both tools
 
 Every event records which `tool` it came through, so `showtail report` shows a **Tools used**
