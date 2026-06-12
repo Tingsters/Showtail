@@ -1,0 +1,17 @@
+# Dependencies
+node_modules/
+
+# Build output (compiled binaries)
+dist/
+
+# Bun
+bun.lockb
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+*.log
+
+# NOTE: .showtail/ is intentionally NOT ignored.
+# Showtail's whole purpose is a reviewable, committable "show your work" trail.
+# See the Privacy section of the README before committing it for sensitive work.

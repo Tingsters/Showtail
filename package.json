@@ -1,0 +1,45 @@
+{
+  "name": "showtail",
+  "version": "0.1.0",
+  "description": "Show your work: capture prompts, edits, decisions, artifacts, and reflections into a verifiable, repo-local provenance trail educators can review.",
+  "type": "module",
+  "license": "Apache-2.0",
+  "bin": {
+    "showtail": "./src/cli.ts"
+  },
+  "files": [
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "dev": "bun run src/cli.ts",
+    "start": "bun run src/cli.ts",
+    "test": "bun test",
+    "typecheck": "bun x tsc --noEmit",
+    "format": "bun x prettier --write \"src/**/*.ts\" \"tests/**/*.ts\"",
+    "format:check": "bun x prettier --check \"src/**/*.ts\" \"tests/**/*.ts\"",
+    "build": "bun build --compile ./src/cli.ts --outfile dist/showtail",
+    "build:all": "bash scripts/build-all.sh"
+  },
+  "keywords": [
+    "education",
+    "provenance",
+    "show-your-work",
+    "academic-integrity",
+    "cli",
+    "learning"
+  ],
+  "dependencies": {
+    "commander": "^12.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "bun-types": "^1.1.0",
+    "prettier": "^3.3.0",
+    "typescript": "^5.5.0"
+  },
+  "engines": {
+    "bun": ">=1.1.0"
+  }
+}

@@ -1,0 +1,6 @@
+node_modules/
+dist/
+.showtail/
+bun.lock
+bun.lockb
+*.md
