@@ -1,69 +1,84 @@
 ---
 name: showtail
-description: Capture your work trail with Showtail while pairing with Claude. Log decisions, reflections, sources, tests, and artifacts, and generate or verify the report. Use when working in a project that has a .showtail/ folder, or when the user mentions Showtail or wants to "show their work".
+description: Help a student show THEIR work with Showtail while pairing with Claude. Record the student's prompts, decisions, reflections, sources, tests, and artifacts into a local trail, and generate or verify the report. Use when working in a project that has a .showtail/ folder, or when the user mentions Showtail or wants to "show their work".
 allowed-tools: Bash(showtail *)
 ---
 
-# Showtail: show your work
+# Showtail: help the student show THEIR work
 
-[Showtail](https://github.com/Tingsters/Showtail) records a local, reviewable trail of **how**
-a student built their project — the prompts they used, the decisions they made, the sources
-they drew on, the tests they ran, the files they changed, and what they learned. It is a
-positive "show your work" tool. It is **not** AI-detection and **not** surveillance.
+[Showtail](https://github.com/Tingsters/Showtail) records a local, reviewable trail of **how
+the student built their project** — their prompts, their decisions, their understanding, the
+sources they used, the tests they ran, the files they changed. It is the **student's** record
+of **their own** learning. It is **not** a log of what you (Claude) did, and **not**
+AI-detection.
 
 Everything is stored locally under `.showtail/`. Never send it anywhere.
 
-## Your job in a Showtail project
+## 0. Check the capture mode first
 
-When you are helping in a project that has a `.showtail/` folder (or the user asks to start
-showing their work), help build an honest provenance trail as you pair with the student.
+Run this once at the start and follow what it says:
 
-**If hooks are installed**, prompts and file edits are already captured automatically — so
-focus on the *judgment* events below rather than re-logging prompts or every edit.
+```bash
+showtail skill status
+```
 
-### 1. Make sure a session is running
+- **`auto-capture: ON`** — hooks already record every student prompt and every file edit
+  automatically. **Do NOT log prompts or file snapshots yourself** (you'd duplicate them).
+  Focus only on the judgment events in step 2.
+- **`auto-capture: OFF`** — nothing is recording automatically. In addition to step 2, you
+  must also:
+  - log the student's request, **in their own words**, at the start of each task:
+    `showtail log --type prompt --text "<what the student actually asked>"`
+  - snapshot each file you create or change: `showtail artifact add <path>`
 
-- If there is no `.showtail/` folder yet, tell the student they can run `showtail init` first.
-- Otherwise ensure a session exists: `showtail start` (safe to run at the start of a work block).
+## 1. Make sure a session exists
 
-### 2. Log the meaningful moments (use the student's own framing)
+- If there is no `.showtail/` folder yet, have the student run `showtail init` **inside their
+  project folder** — not their home directory (initializing in `~` makes every folder look
+  like one project).
+- Then ensure a session: `showtail start`.
 
-Run these as they genuinely happen — don't fabricate or pad the trail:
+## 2. Record the trail — in the STUDENT'S voice
 
-- A real design choice was made and you discussed trade-offs:
-  `showtail log --type decision --text "Chose X over Y because ..." --files path/to/file`
-- The student expresses understanding in their own words:
-  `showtail log --type reflection --text "I now understand how ..."`
-- An outside source was used (notes, docs, a classmate):
+The report goes to an educator to show the **student's** thinking. Phrase every event the way
+the **student** would say it, about what **they** decided, learned, or did. Do **not** narrate
+your own implementation steps, and do **not** add meta-commentary about Showtail itself.
+
+Log these only when they genuinely happen (don't pad):
+
+- **decision** — a real choice the student made, and their reasoning:
+  `showtail log --type decision --text "I used a dictionary so name lookups stay O(1)." --files src/store.py`
+  (Not: "Created a project to demonstrate Showtail.")
+- **reflection** — the student's understanding, in their words. When you explain something and
+  they get it, or they articulate what they learned, capture it — **these matter most, don't
+  skip them**: `showtail log --type reflection --text "I understand how recursion unwinds the call stack now."`
+- **source** — outside material the student drew on:
   `showtail log --type source --text "Used the week 3 lecture notes on tokenizers."`
-- Tests or validation were run:
-  `showtail log --type test --text "Added edge-case tests; all passing." --files tests/x.test.ts`
+- **test** — validation the student ran and what it showed:
+  `showtail log --type test --text "Ran the edge-case tests; the empty-input case failed until I added a guard." --files tests/test_greet.py`
 
-### 3. Snapshot notable files
+## 3. Wrap up
 
-When you create or substantially change an important file, record it:
-`showtail artifact add path/to/file`
-
-### 4. Wrap up
-
-At the end of a work block, offer to:
-- `showtail report` — generate the Markdown report for the educator
-- `showtail verify` — confirm the trail is complete and consistent
+Offer to run `showtail report` (the Markdown report for the educator) and `showtail verify`
+(checks the trail is complete and consistent).
 
 ## Principles
 
-- **Honesty over volume.** A short, truthful trail beats a padded one. Capture decisions and
-  understanding, not busywork.
-- **Privacy.** Only log project-relevant content. Never log secrets, passwords, tokens, or
-  private personal information — the trail may be committed to the student's repo.
-- **Stay out of the way.** Logging is a quick side action; keep helping with the actual work.
+- **The student's voice, not yours.** Capture their decisions and understanding, not a
+  play-by-play of what you did.
+- **Reflections are the point.** Actively capture what the student understands — a trail with
+  no reflections fails its purpose.
+- **Honesty over volume.** A short, truthful trail beats a padded one.
+- **Privacy.** Never log secrets, tokens, or personal information — the trail may be committed
+  to the student's repo.
 - **The student is the author.** Showtail documents their process; it does not replace it.
 
 ## Command reference
 
 | Command | What it does |
 |---|---|
-| `showtail init` | Create the `.showtail/` folder |
+| `showtail skill status` | Report whether auto-capture hooks are active |
+| `showtail init` | Create the `.showtail/` folder (run in the project folder) |
 | `showtail start` | Begin a work session |
 | `showtail log --type <type> --text "..." [--files a,b] [--tags x,y]` | Record one event |
 | `showtail artifact add <file>` | Snapshot a file (SHA-256 + git commit) |

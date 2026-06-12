@@ -170,3 +170,30 @@ export function removeSkill(target: SkillTarget): boolean {
   rmSync(target.skillDir, { recursive: true, force: true });
   return true;
 }
+
+/** Does this settings.json contain our auto-capture hooks? */
+export function hooksInstalledAt(settingsFile: string): boolean {
+  if (!existsSync(settingsFile)) return false;
+  try {
+    const settings = readJson<Record<string, unknown>>(settingsFile);
+    const hooks = settings.hooks as HookEvents | undefined;
+    if (!hooks || typeof hooks !== 'object') return false;
+    return Object.values(hooks).some(
+      (groups) => Array.isArray(groups) && groups.some(isOurGroup),
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Whether Showtail's auto-capture hooks are active for work in `cwd` — true if
+ * they're installed at either project or user scope. The skill uses this (via
+ * `showtail skill status`) to decide whether to capture prompts/edits manually.
+ */
+export function autoCaptureActive(cwd: string = process.cwd()): boolean {
+  return (
+    hooksInstalledAt(resolveTarget('project', cwd).settingsFile) ||
+    hooksInstalledAt(resolveTarget('user', cwd).settingsFile)
+  );
+}

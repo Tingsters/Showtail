@@ -146,28 +146,35 @@ the current git commit hash (if your project is a git repo), and `actor: "studen
 ## Claude Code integration
 
 If you pair with [Claude Code](https://claude.com/claude-code), Showtail can build your trail
-for you. Install the bundled **skill** (and, optionally, **auto-capture hooks**):
+for you. Install the bundled **skill** — auto-capture **hooks are included by default**:
 
 ```bash
-# in your project (creates ./.claude/skills/showtail/ and, with hooks, ./.claude/settings.json)
-showtail skill install --project --with-hooks
+# in your project (creates ./.claude/skills/showtail/ and ./.claude/settings.json)
+showtail skill install --project
 
 # or for all your projects:
-showtail skill install --user --with-hooks
+showtail skill install --user
+
+# skill only, no settings changes (the skill then captures manually):
+showtail skill install --project --no-hooks
 ```
 
 What you get:
 
-- **A skill** that teaches Claude *when* to log the judgment moments — decisions, reflections,
-  sources, tests — and to snapshot notable files, start sessions, and run `report`/`verify`.
-  Claude loads it automatically in a Showtail project, or you can invoke it with `/showtail`.
-- **Hooks** (only with `--with-hooks`) that deterministically capture the rest:
+- **A skill** that teaches Claude to record the trail *in the student's voice* — the
+  decisions they made, what they understood (reflections), the sources and tests — and to
+  start sessions and run `report`/`verify`. Claude loads it automatically in a Showtail
+  project, or you can invoke it with `/showtail`.
+- **Hooks** (on by default; `--no-hooks` to skip) that deterministically capture the rest:
 
   | When | Showtail does |
   | --- | --- |
   | You submit a prompt | logs it as a `prompt` event |
   | Claude edits/writes a file | snapshots that file as an `artifact` |
   | A session starts | ensures a work session exists |
+
+  When hooks are skipped, the skill checks `showtail skill status` and logs prompts and file
+  snapshots itself, so prompts are still captured (just model-driven rather than guaranteed).
 
 Then just work. At the end, `showtail report` gives your educator the full picture.
 
@@ -189,8 +196,9 @@ locally** to `.showtail/`. This is the point — it's your "show your work" trai
 - The trail may be committed to your repo, so **don't put secrets in prompts** while capturing.
 - Review anytime with `showtail report`; turn capture off with
   `showtail skill uninstall` (add `--user` if you installed at user scope).
-- Hooks are **opt-in** — a plain `showtail skill install` (no `--with-hooks`) installs only the
-  skill and changes no settings.
+- Auto-capture is **on by default**. To install the skill without touching any settings, use
+  `showtail skill install --no-hooks` — the skill still captures prompts itself, but won't add
+  hooks to your `settings.json`.
 
 ---
 

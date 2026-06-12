@@ -1,4 +1,6 @@
 import { existsSync, mkdirSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { resolve } from 'node:path';
 import type { Config } from '../types.ts';
 import { isGitRepo } from '../core/git.ts';
 import {
@@ -28,6 +30,16 @@ export async function runInit(options: InitOptions = {}): Promise<void> {
     console.log('Showtail is already set up here (.showtail/config.json exists).');
     console.log('Run `showtail start` to begin a work session.');
     return;
+  }
+
+  // Guard against initializing in the home directory: that would make every
+  // folder under your home look like this one project (commands walk up to the
+  // nearest .showtail/). Warn, but still proceed if that's truly intended.
+  if (resolve(root) === resolve(homedir())) {
+    console.log('Warning: initializing Showtail in your HOME directory.');
+    console.log('  Work in any subfolder would then be recorded into this one trail.');
+    console.log('  Prefer running `showtail init` inside your actual project folder.');
+    console.log('');
   }
 
   // Create the directory tree.

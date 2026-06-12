@@ -7,7 +7,7 @@ import { runArtifactAdd } from './commands/artifact.ts';
 import { runTrace } from './commands/trace.ts';
 import { runReport } from './commands/report.ts';
 import { runVerify } from './commands/verify.ts';
-import { runSkillInstall, runSkillUninstall } from './commands/skill.ts';
+import { runSkillInstall, runSkillStatus, runSkillUninstall } from './commands/skill.ts';
 import { runHook, type HookEvent } from './commands/hook.ts';
 import { eventTypeList } from './core/schema.ts';
 
@@ -114,27 +114,38 @@ const skill = program
 
 skill
   .command('install')
-  .description('Install the Showtail skill into Claude Code (optionally with hooks).')
+  .description(
+    'Install the Showtail skill into Claude Code (auto-capture hooks on by default).',
+  )
   .option('--user', 'install for your user (all projects: ~/.claude)')
   .option('--project', 'install for this project only (./.claude) [default]')
-  .option('--with-hooks', 'also enable auto-capture of prompts and edits')
+  .option(
+    '--no-hooks',
+    'skip the auto-capture hooks (the skill captures manually instead)',
+  )
+  .option('--with-hooks', 'deprecated: hooks are installed by default')
   .option('--force', 'overwrite an existing skill without prompting')
   .action(
     action(
       async (opts: {
         user?: boolean;
         project?: boolean;
-        withHooks?: boolean;
+        hooks?: boolean;
         force?: boolean;
       }) =>
         runSkillInstall({
           user: opts.user,
           project: opts.project,
-          hooks: opts.withHooks,
+          hooks: opts.hooks,
           force: opts.force,
         }),
     ),
   );
+
+skill
+  .command('status')
+  .description('Report whether the auto-capture hooks are active (used by the skill).')
+  .action(action(async () => runSkillStatus()));
 
 skill
   .command('uninstall')

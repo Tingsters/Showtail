@@ -3,6 +3,8 @@ import { existsSync, readFileSync } from 'node:fs';
 import {
   HOOK_EVENTS,
   SKILL_MD,
+  autoCaptureActive,
+  hooksInstalledAt,
   installHooks,
   mergeHooks,
   removeSkill,
@@ -98,28 +100,42 @@ describe('skill assets + install', () => {
     }
   });
 
-  test('full install command writes skill and (with hooks) settings', async () => {
-    const dir = makeTempDir();
-    try {
-      await runSkillInstall({ project: true, hooks: true, cwd: dir });
-      const target = resolveTarget('project', dir);
-      expect(existsSync(target.skillFile)).toBe(true);
-      expect(existsSync(target.settingsFile)).toBe(true);
-
-      await runSkillUninstall({ cwd: dir });
-      expect(existsSync(target.skillDir)).toBe(false);
-    } finally {
-      cleanup(dir);
-    }
-  });
-
-  test('install without hooks leaves settings.json untouched', async () => {
+  test('install enables hooks by default and writes skill + settings', async () => {
     const dir = makeTempDir();
     try {
       await runSkillInstall({ project: true, cwd: dir });
       const target = resolveTarget('project', dir);
       expect(existsSync(target.skillFile)).toBe(true);
+      expect(hooksInstalledAt(target.settingsFile)).toBe(true);
+
+      await runSkillUninstall({ cwd: dir });
+      expect(existsSync(target.skillDir)).toBe(false);
+      expect(hooksInstalledAt(target.settingsFile)).toBe(false);
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('install --no-hooks leaves settings.json untouched', async () => {
+    const dir = makeTempDir();
+    try {
+      await runSkillInstall({ project: true, hooks: false, cwd: dir });
+      const target = resolveTarget('project', dir);
+      expect(existsSync(target.skillFile)).toBe(true);
       expect(existsSync(target.settingsFile)).toBe(false);
+      expect(hooksInstalledAt(target.settingsFile)).toBe(false);
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('autoCaptureActive reflects project-scope hooks', () => {
+    const dir = makeTempDir();
+    try {
+      // Installing project hooks must flip detection to true regardless of any
+      // ambient user-scope state.
+      installHooks(resolveTarget('project', dir));
+      expect(autoCaptureActive(dir)).toBe(true);
     } finally {
       cleanup(dir);
     }

@@ -124,4 +124,17 @@ describe('hook command (end-to-end via stdin)', () => {
       cleanup(dir);
     }
   });
+
+  test('skill status reports ON once project hooks are installed', () => {
+    const dir = makeTempDir();
+    try {
+      initProject(dir);
+      run(dir, ['skill', 'install', '--project']); // hooks on by default
+      const r = run(dir, ['skill', 'status']);
+      expect(r.code).toBe(0);
+      expect(r.stdout).toContain('auto-capture: ON');
+    } finally {
+      cleanup(dir);
+    }
+  });
 });
