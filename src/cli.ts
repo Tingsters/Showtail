@@ -14,10 +14,10 @@ import {
   runCopilotUninstall,
 } from './commands/copilot.ts';
 import { runHook, type HookEvent } from './commands/hook.ts';
-import { runImportChatgpt } from './commands/import.ts';
+import { runImportChatgpt, runImportChatgptExport } from './commands/import.ts';
 import { eventTypeList } from './core/schema.ts';
 
-const VERSION = '0.4.0';
+const VERSION = '0.4.1';
 
 /** Wrap a command action so errors print a clean message and set exit code 1. */
 function action<A extends unknown[]>(fn: (...args: A) => Promise<unknown>) {
@@ -212,6 +212,41 @@ importCmd
         runImportChatgpt(shareUrl, {
           withResponses: opts.withResponses,
           file: opts.file,
+          session: opts.session,
+        }),
+    ),
+  );
+
+importCmd
+  .command('chatgpt-export <file>')
+  .description(
+    'Import conversations from a ChatGPT data export (zip or conversations.json).',
+  )
+  .option('--match <text>', 'only conversations whose title contains <text>')
+  .option('--since <date>', 'only conversations on/after <date> (e.g. 2026-06-01)')
+  .option('--all', 'import every conversation in the export')
+  .option('--list', 'list the conversations without importing')
+  .option('--with-responses', "also log ChatGPT's responses (not just your prompts)")
+  .option('-s, --session <id>', 'import into a specific session id')
+  .action(
+    action(
+      async (
+        file: string,
+        opts: {
+          match?: string;
+          since?: string;
+          all?: boolean;
+          list?: boolean;
+          withResponses?: boolean;
+          session?: string;
+        },
+      ) =>
+        runImportChatgptExport(file, {
+          match: opts.match,
+          since: opts.since,
+          all: opts.all,
+          list: opts.list,
+          withResponses: opts.withResponses,
           session: opts.session,
         }),
     ),

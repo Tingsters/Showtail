@@ -294,6 +294,23 @@ in Claude Code*). Options:
 Re-importing the same link is safe — already-imported messages are skipped (deduped by message
 id).
 
+### Bulk import from a data export
+
+For many conversations at once, use the official export (ChatGPT → Settings → Data Controls →
+Export — it's emailed as a zip). Point Showtail at the zip (or the `conversations.json` inside):
+
+```bash
+showtail import chatgpt-export export.zip --list          # preview every conversation
+showtail import chatgpt-export export.zip --match parser  # import ones whose title matches
+showtail import chatgpt-export export.zip --since 2026-06-01   # or by date
+showtail import chatgpt-export export.zip --all           # import everything
+```
+
+Since an export is your *entire* history, importing needs a `--match`/`--since` filter or an
+explicit `--all` (use `--list` to see what's there first). It dedupes against anything you
+already imported (including via share links) by message id, and is the **durable** path — the
+export is plain, stable JSON, unlike the share-page format.
+
 **Privacy:** a share link makes that conversation **public** on OpenAI's servers. Create it,
 import it, then delete the link. The import itself stays local like everything else in Showtail.
 

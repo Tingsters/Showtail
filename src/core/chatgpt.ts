@@ -16,6 +16,8 @@ export interface ParsedMessage {
 export interface ParsedConversation {
   id?: string;
   title: string;
+  /** Conversation create time (epoch seconds), when present. */
+  createTime?: number;
   messages: ParsedMessage[];
 }
 
@@ -93,11 +95,18 @@ async function decodeChunks(chunks: string[]): Promise<unknown> {
   return result?.value ?? result;
 }
 
-/** Navigate the decoded React Router payload to the conversation, robustly. */
+/** Navigate the decoded React Router (share-page) payload to the conversation. */
 export function extractConversation(decoded: unknown): ParsedConversation | null {
   const data = findConversationData(decoded);
-  if (!data) return null;
+  return data ? conversationFromData(data) : null;
+}
 
+/**
+ * Turn one conversation object (from a share page or a data export) into a
+ * normalized conversation. Handles both the share `linear_conversation` array
+ * and the export `mapping` graph.
+ */
+export function conversationFromData(data: any): ParsedConversation {
   const nodes: unknown[] = Array.isArray(data.linear_conversation)
     ? data.linear_conversation
     : data.mapping
@@ -125,11 +134,36 @@ export function extractConversation(decoded: unknown): ParsedConversation | null
   }
 
   return {
-    id: typeof data.conversation_id === 'string' ? data.conversation_id : undefined,
+    id:
+      typeof data.conversation_id === 'string'
+        ? data.conversation_id
+        : typeof data.id === 'string'
+          ? data.id
+          : undefined,
     title:
       typeof data.title === 'string' && data.title ? data.title : 'ChatGPT conversation',
+    createTime: typeof data.create_time === 'number' ? data.create_time : undefined,
     messages,
   };
+}
+
+/**
+ * Parse a ChatGPT data export's `conversations.json` (an array of conversation
+ * objects) into normalized conversations (those with at least one message).
+ */
+export function parseExportJson(text: string): ParsedConversation[] {
+  let arr: unknown;
+  try {
+    arr = JSON.parse(text);
+  } catch (err) {
+    throw new Error(`conversations.json is not valid JSON: ${(err as Error).message}`);
+  }
+  if (!Array.isArray(arr)) {
+    throw new Error(
+      'Expected conversations.json to be an array of conversations (the ChatGPT export format).',
+    );
+  }
+  return arr.map((c) => conversationFromData(c)).filter((c) => c.messages.length > 0);
 }
 
 /** Find the `serverResponse.data` object holding the conversation, by shape (route-key agnostic). */
