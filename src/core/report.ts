@@ -61,6 +61,7 @@ export function buildReportData(paths: ShowtailPaths): ReportData {
     toolTimeline: buildToolBlocks(sorted),
     timeline: buildTimeline(sessions, paths),
     prompts: byType('prompt'),
+    importedChatgpt: events.filter((e) => toolOf(e) === 'chatgpt'),
     decisions: byType('decision'),
     artifactsCreated: artifacts,
     tests: byType('test'),
@@ -211,6 +212,13 @@ export function renderMarkdown(data: ReportData): string {
   }
 
   section(lines, 'Prompts used', data.prompts, (e) => bullet(e));
+
+  // Imported ChatGPT work, grouped so the student can skim what an import added
+  // (a paste backup records prompts here for review) without hunting the timeline.
+  if (data.importedChatgpt.length > 0) {
+    section(lines, 'Imported from ChatGPT', data.importedChatgpt, (e) => bullet(e));
+  }
+
   section(lines, 'Major decisions', data.decisions, (e) => bullet(e));
   section(lines, 'Sources used', data.sources, (e) => bullet(e));
   section(lines, 'Tests & validation', data.tests, (e) => bullet(e));

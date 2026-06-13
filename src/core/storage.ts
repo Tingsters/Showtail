@@ -98,6 +98,13 @@ export function appendJsonl(file: string, value: unknown): void {
   appendFileSync(file, JSON.stringify(value) + '\n', 'utf8');
 }
 
+/** Overwrite a JSONL file with the given objects (one JSON line each). */
+export function writeJsonl(file: string, values: unknown[]): void {
+  mkdirSync(dirname(file), { recursive: true });
+  const body = values.map((v) => JSON.stringify(v)).join('\n');
+  writeFileSync(file, body.length > 0 ? body + '\n' : '', 'utf8');
+}
+
 /** Read a JSONL file into objects. Empty/whitespace lines are skipped. */
 export function readJsonl<T>(file: string): T[] {
   if (!existsSync(file)) return [];

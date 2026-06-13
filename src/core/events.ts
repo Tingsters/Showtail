@@ -8,6 +8,7 @@ import {
   readSessions,
   readState,
   sessionFile,
+  writeJsonl,
   writeSessions,
   writeState,
   type ShowtailPaths,
@@ -27,6 +28,8 @@ export interface NewEventInput {
   timestamp?: string;
   /** Stable external id for idempotent imports (e.g. a ChatGPT message id). */
   sourceId?: string;
+  /** Groups events from one import run so the whole batch can be undone together. */
+  batchId?: string;
   /** Force a specific session; otherwise the current/started session is used. */
   sessionId?: string;
 }
@@ -60,6 +63,7 @@ export async function logEvent(
   if (input.files && input.files.length > 0) event.files = input.files;
   if (input.tags && input.tags.length > 0) event.tags = input.tags;
   if (input.sourceId) event.sourceId = input.sourceId;
+  if (input.batchId) event.batchId = input.batchId;
   if (gitCommit) event.gitCommit = gitCommit;
 
   appendJsonl(sessionFile(paths, session.id), event);
@@ -114,6 +118,37 @@ export function importedSourceIds(paths: ShowtailPaths): Set<string> {
     if (e.sourceId) ids.add(e.sourceId);
   }
   return ids;
+}
+
+/**
+ * The id of the most recent import batch, in write order (the last event that
+ * carries a `batchId`). This is "the import you just did", which is what
+ * `showtail import undo` removes.
+ */
+export function latestBatchId(paths: ShowtailPaths): string | undefined {
+  let latest: string | undefined;
+  for (const e of readAllEvents(paths)) {
+    if (e.batchId) latest = e.batchId;
+  }
+  return latest;
+}
+
+/**
+ * Remove every event tagged with `batchId` (rewriting each affected session
+ * log) and return how many were removed. Used to undo an import in one step.
+ */
+export function removeEventsByBatch(paths: ShowtailPaths, batchId: string): number {
+  let removed = 0;
+  for (const session of readSessions(paths)) {
+    const file = sessionFile(paths, session.id);
+    const events = readJsonl<Event>(file);
+    const kept = events.filter((e) => e.batchId !== batchId);
+    if (kept.length !== events.length) {
+      removed += events.length - kept.length;
+      writeJsonl(file, kept);
+    }
+  }
+  return removed;
 }
 
 /** Read every event across every session, in session-index order. */

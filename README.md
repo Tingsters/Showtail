@@ -288,13 +288,40 @@ in Claude Code*). Options:
 
 - `--with-responses` — also log ChatGPT's answers (`ai_output`); off by default to keep the trail
   about your work.
-- `--file <saved-page.html>` — import from a saved page instead of fetching (handy offline, or if
-  the share format changes).
+- `--file <path>` — import from a saved share page **or** a saved transcript instead of fetching
+  (handy offline, or if the share format changes).
 
 Re-importing the same link is safe — already-imported messages are skipped (deduped by message
 id).
 
-Import is **deliberate and per-conversation by design** — you share and import exactly the
+### If the share link doesn't work
+
+Sometimes a link won't do — your school blocks public share links, you'd rather not make a
+conversation public, or the fetch is blocked. As a backup, **paste the conversation** instead:
+
+```bash
+showtail import chatgpt --paste        # then paste the conversation and press Ctrl-D (Ctrl-Z↵ on Windows)
+# or from a file you saved:
+showtail import chatgpt --file my-chat.txt
+```
+
+You don't need to clean anything up — paste the whole thing, buttons and all. Showtail strips
+ChatGPT's interface bits (`Thought for 12s`, `Edit`, attachment chips) and records **your
+prompts**. It then prints them back so you can **skim** that they're yours; if a stray line isn't,
+undo the whole import in one step:
+
+```bash
+showtail import undo
+```
+
+Because raw paste can't always tell your words from ChatGPT's, **responses are only captured when
+the copy includes `You said:` / `ChatGPT said:` markers** — otherwise everything is recorded as
+your prompts (we never guess from writing style; Showtail is not an AI-detector). Add
+`--date 2026-06-10` to place the conversation on the timeline, since a paste carries no timestamps.
+Imported prompts appear under **"Imported from ChatGPT"** in your report. The share link is still
+the best path when you can use it — it captures responses and exact times automatically.
+
+Import is **deliberate and per-conversation by design** — you share or paste exactly the
 conversations you choose. Showtail does not read your full ChatGPT history.
 
 **Privacy:** a share link makes that conversation **public** on OpenAI's servers. Create it,

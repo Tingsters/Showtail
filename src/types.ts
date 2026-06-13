@@ -59,6 +59,8 @@ export interface Event {
   tool?: Tool;
   /** Stable id from an external source (e.g. a ChatGPT message id) for idempotent imports. */
   sourceId?: string;
+  /** Groups events written by a single import run, so one paste can be undone as a batch. */
+  batchId?: string;
   /** Who recorded it. Always "student" in the MVP. */
   actor: Actor;
 }
@@ -149,6 +151,8 @@ export interface ReportData {
   toolTimeline: ToolBlock[];
   timeline: TimelineEntry[];
   prompts: Event[];
+  /** Events imported from ChatGPT, grouped so a student can review them in one place. */
+  importedChatgpt: Event[];
   decisions: Event[];
   artifactsCreated: Artifact[];
   tests: Event[];
