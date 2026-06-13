@@ -15,6 +15,7 @@ import {
 } from './commands/copilot.ts';
 import { runHook, type HookEvent } from './commands/hook.ts';
 import { runImportChatgpt, runImportUndo } from './commands/import.ts';
+import { runImportClaudeCode } from './commands/importClaude.ts';
 import { eventTypeList } from './core/schema.ts';
 
 const VERSION = '0.6.0';
@@ -225,6 +226,36 @@ importCmd
           paste: opts.paste,
           file: opts.file,
           date: opts.date,
+          session: opts.session,
+        }),
+    ),
+  );
+
+importCmd
+  .command('claude-code [target]')
+  .description(
+    'Import an existing Claude Code session transcript from disk into your trail.\n' +
+      'With no target, imports the most recent session for this project; --list shows all.',
+  )
+  .option('--list', "list this project's Claude Code transcripts and exit")
+  .option('--with-responses', "also log Claude's text responses (not just your prompts)")
+  .option('--file <path>', 'import a specific transcript .jsonl by path')
+  .option('-s, --session <id>', 'import into a specific Showtail session id')
+  .action(
+    action(
+      async (
+        target: string | undefined,
+        opts: {
+          list?: boolean;
+          withResponses?: boolean;
+          file?: string;
+          session?: string;
+        },
+      ) =>
+        runImportClaudeCode(target, {
+          list: opts.list,
+          withResponses: opts.withResponses,
+          file: opts.file,
           session: opts.session,
         }),
     ),
