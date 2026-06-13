@@ -271,6 +271,34 @@ Tool timeline (each arrow is a switch):
 
 ---
 
+## ChatGPT integration
+
+Students on a free/low ChatGPT tier can pull their conversations into the same trail. ChatGPT
+can't run on your machine, so this is **import-based**: in ChatGPT, click **Share** on a
+conversation, then:
+
+```bash
+showtail import chatgpt https://chatgpt.com/share/<id>
+```
+
+Showtail fetches the shared page, logs your **prompts** as `prompt` events tagged `chatgpt`, and
+stamps each with its **original** time — so an end-of-session import still lands in the right
+place on the cross-tool timeline (e.g. *brainstormed in ChatGPT → built with Copilot → debugged
+in Claude Code*). Options:
+
+- `--with-responses` — also log ChatGPT's answers (`ai_output`); off by default to keep the trail
+  about your work.
+- `--file <saved-page.html>` — import from a saved page instead of fetching (handy offline, or if
+  the share format changes).
+
+Re-importing the same link is safe — already-imported messages are skipped (deduped by message
+id).
+
+**Privacy:** a share link makes that conversation **public** on OpenAI's servers. Create it,
+import it, then delete the link. The import itself stays local like everything else in Showtail.
+
+---
+
 ## Example classroom workflow
 
 1. **Teacher** asks students to use Showtail for a project and to commit `.showtail/`.
@@ -382,6 +410,8 @@ Showtail's MVP is a local CLI, with a clean core that's meant to grow:
   [Claude Code integration](#claude-code-integration)).
 - ✅ **GitHub Copilot + VS Code extension** — capture Copilot prompts and edits, with one
   cross-tool report (see [GitHub Copilot integration](#github-copilot-integration)).
+- ✅ **ChatGPT** — import conversations from a share link into the same trail (see
+  [ChatGPT integration](#chatgpt-integration)).
 - **GitHub Action** — verify a submission's trail automatically in CI.
 - **Signed provenance records** — cryptographically signed events for stronger guarantees.
 - **Educator dashboard** — review many students' trails at a glance.

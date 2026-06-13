@@ -23,6 +23,10 @@ export interface NewEventInput {
   tags?: string[];
   /** Which tool the work flowed through. Defaults to "cli". */
   tool?: Tool;
+  /** Override the timestamp (for imports of past activity). Defaults to now. */
+  timestamp?: string;
+  /** Stable external id for idempotent imports (e.g. a ChatGPT message id). */
+  sourceId?: string;
   /** Force a specific session; otherwise the current/started session is used. */
   sessionId?: string;
 }
@@ -39,11 +43,15 @@ export async function logEvent(
   const session = resolveOrStartSession(paths, input.sessionId);
 
   const config = readConfig(paths);
-  const gitCommit = await maybeCurrentCommit(paths.root, config.settings.git);
+  // Imported (back-dated) events don't get a git commit — a past message's
+  // commit isn't meaningful; only live events capture the current commit.
+  const gitCommit = input.timestamp
+    ? undefined
+    : await maybeCurrentCommit(paths.root, config.settings.git);
 
   const event: Event = {
     id: makeId('evt'),
-    timestamp: new Date().toISOString(),
+    timestamp: input.timestamp ?? new Date().toISOString(),
     type: input.type,
     text: input.text,
     tool: input.tool ?? 'cli',
@@ -51,6 +59,7 @@ export async function logEvent(
   };
   if (input.files && input.files.length > 0) event.files = input.files;
   if (input.tags && input.tags.length > 0) event.tags = input.tags;
+  if (input.sourceId) event.sourceId = input.sourceId;
   if (gitCommit) event.gitCommit = gitCommit;
 
   appendJsonl(sessionFile(paths, session.id), event);
@@ -96,6 +105,15 @@ export function resolveOrStartSession(
 /** Read all events for a single session. */
 export function readSessionEvents(paths: ShowtailPaths, sessionId: string): Event[] {
   return readJsonl<Event>(sessionFile(paths, sessionId));
+}
+
+/** The set of external source ids already imported (for idempotent imports). */
+export function importedSourceIds(paths: ShowtailPaths): Set<string> {
+  const ids = new Set<string>();
+  for (const e of readAllEvents(paths)) {
+    if (e.sourceId) ids.add(e.sourceId);
+  }
+  return ids;
 }
 
 /** Read every event across every session, in session-index order. */

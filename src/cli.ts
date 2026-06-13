@@ -14,9 +14,10 @@ import {
   runCopilotUninstall,
 } from './commands/copilot.ts';
 import { runHook, type HookEvent } from './commands/hook.ts';
+import { runImportChatgpt } from './commands/import.ts';
 import { eventTypeList } from './core/schema.ts';
 
-const VERSION = '0.3.6';
+const VERSION = '0.4.0';
 
 /** Wrap a command action so errors print a clean message and set exit code 1. */
 function action<A extends unknown[]>(fn: (...args: A) => Promise<unknown>) {
@@ -191,6 +192,30 @@ copilot
   .command('uninstall')
   .description('Remove the Showtail Copilot instructions from this project.')
   .action(action(async () => runCopilotUninstall()));
+
+const importCmd = program
+  .command('import')
+  .description('Import work done in other AI tools into your trail.');
+
+importCmd
+  .command('chatgpt [share-url]')
+  .description('Import a ChatGPT conversation from a share link (or a saved page).')
+  .option('--with-responses', "also log ChatGPT's responses (not just your prompts)")
+  .option('--file <path>', 'parse a saved share page instead of fetching a URL')
+  .option('-s, --session <id>', 'import into a specific session id')
+  .action(
+    action(
+      async (
+        shareUrl: string | undefined,
+        opts: { withResponses?: boolean; file?: string; session?: string },
+      ) =>
+        runImportChatgpt(shareUrl, {
+          withResponses: opts.withResponses,
+          file: opts.file,
+          session: opts.session,
+        }),
+    ),
+  );
 
 // Internal: invoked by Claude Code hooks (reads the hook JSON from stdin).
 // Hidden from the main help; advanced users can still discover it.

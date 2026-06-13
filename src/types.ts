@@ -28,13 +28,14 @@ export type Actor = 'student';
  * follow a student switching between them. Kept as a plain string union so new
  * tools can be added without breaking older trails.
  */
-export const TOOLS = ['claude-code', 'github-copilot', 'cli'] as const;
+export const TOOLS = ['claude-code', 'github-copilot', 'chatgpt', 'cli'] as const;
 export type Tool = (typeof TOOLS)[number];
 
 /** Human-friendly label for a tool (falls back to the raw value). */
 export const TOOL_LABELS: Record<string, string> = {
   'claude-code': 'Claude Code',
   'github-copilot': 'GitHub Copilot',
+  chatgpt: 'ChatGPT',
   cli: 'CLI',
 };
 
@@ -54,8 +55,10 @@ export interface Event {
   tags?: string[];
   /** Git commit hash at the time of the event, if the project is a git repo. */
   gitCommit?: string;
-  /** Which tool the work flowed through (claude-code, github-copilot, cli). */
+  /** Which tool the work flowed through (claude-code, github-copilot, chatgpt, cli). */
   tool?: Tool;
+  /** Stable id from an external source (e.g. a ChatGPT message id) for idempotent imports. */
+  sourceId?: string;
   /** Who recorded it. Always "student" in the MVP. */
   actor: Actor;
 }
