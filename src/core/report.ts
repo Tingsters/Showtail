@@ -246,6 +246,158 @@ export function renderMarkdown(data: ReportData): string {
   return lines.join('\n');
 }
 
+/**
+ * Render a report as a standalone HTML document. The HTML is a rendering of the
+ * exact same Markdown returned by `renderMarkdown`, so the Markdown stays the
+ * single source of truth and the two views can never drift apart.
+ */
+export function renderHtml(data: ReportData): string {
+  const title = data.project ? `Showtail Report — ${data.project}` : 'Showtail Report';
+  const body = markdownToHtml(renderMarkdown(data));
+  return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>${escapeHtml(title)}</title>
+<style>
+  :root { color-scheme: light dark; }
+  body {
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    line-height: 1.6;
+    color: #1b1b1f;
+    background: #fbfbfd;
+    max-width: 52rem;
+    margin: 0 auto;
+    padding: 2.5rem 1.5rem 4rem;
+  }
+  h1 { font-size: 1.9rem; margin: 0 0 0.25rem; }
+  h2 {
+    font-size: 1.25rem;
+    margin: 2.25rem 0 0.75rem;
+    padding-bottom: 0.3rem;
+    border-bottom: 1px solid #e3e3e8;
+  }
+  ul { padding-left: 1.25rem; }
+  li { margin: 0.35rem 0; }
+  p { margin: 0.6rem 0; }
+  code {
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 0.85em;
+    background: #ecedf1;
+    padding: 0.1rem 0.35rem;
+    border-radius: 0.25rem;
+  }
+  em { color: #6b6b76; font-style: normal; font-size: 0.9em; }
+  blockquote {
+    margin: 0.75rem 0;
+    padding: 0.75rem 1rem;
+    border-left: 4px solid #b7b7c2;
+    background: #f1f1f5;
+    color: #3a3a42;
+    border-radius: 0 0.25rem 0.25rem 0;
+  }
+  @media (prefers-color-scheme: dark) {
+    body { color: #e4e4ea; background: #18181b; }
+    h2 { border-bottom-color: #34343a; }
+    code { background: #2a2a30; }
+    em { color: #a0a0aa; }
+    blockquote { background: #242429; border-left-color: #4a4a52; color: #cfcfd6; }
+  }
+</style>
+</head>
+<body>
+${body}
+</body>
+</html>
+`;
+}
+
+/** Escape the five characters that are unsafe in HTML text/attribute content. */
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+/**
+ * Convert the small Markdown subset that `renderMarkdown` emits into HTML.
+ * Deliberately minimal (no dependency): headings, unordered lists, blockquotes,
+ * paragraphs, and inline bold/italic/code. Source text is HTML-escaped *before*
+ * inline formatting is applied, so embedded `<script>` is neutralized; the usual
+ * Markdown ambiguity (a literal `_` or `**` inside user text) is acceptable here.
+ */
+export function markdownToHtml(md: string): string {
+  const out: string[] = [];
+  const lines = md.split('\n');
+  let listItems: string[] | null = null;
+  let quoteLines: string[] | null = null;
+
+  const flushList = () => {
+    if (listItems) {
+      out.push('<ul>', ...listItems, '</ul>');
+      listItems = null;
+    }
+  };
+  const flushQuote = () => {
+    if (quoteLines) {
+      out.push(`<blockquote>${quoteLines.join('<br>')}</blockquote>`);
+      quoteLines = null;
+    }
+  };
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i] ?? '';
+
+    if (line.startsWith('## ')) {
+      flushList();
+      flushQuote();
+      out.push(`<h2>${inline(line.slice(3))}</h2>`);
+    } else if (line.startsWith('# ')) {
+      flushList();
+      flushQuote();
+      out.push(`<h1>${inline(line.slice(2))}</h1>`);
+    } else if (line.startsWith('> ')) {
+      flushList();
+      (quoteLines ??= []).push(inline(line.slice(2)));
+    } else if (line.startsWith('- ')) {
+      flushQuote();
+      listItems ??= [];
+      // A bullet may carry an indented continuation line (the metadata), joined
+      // to the item with a `<br>` to mirror the Markdown hard line break.
+      let item = inline(line.slice(2).replace(/\s+$/, ''));
+      let next = lines[i + 1];
+      while (next !== undefined && /^\s{2,}\S/.test(next)) {
+        item += `<br>${inline(next.trim())}`;
+        i++;
+        next = lines[i + 1];
+      }
+      listItems.push(`<li>${item}</li>`);
+    } else if (line.trim() === '') {
+      flushList();
+      flushQuote();
+    } else {
+      flushList();
+      flushQuote();
+      out.push(`<p>${inline(line)}</p>`);
+    }
+  }
+  flushList();
+  flushQuote();
+  return out.join('\n');
+}
+
+/** Escape a single line, then apply inline `**bold**`, `_italic_`, `` `code` ``. */
+function inline(text: string): string {
+  return escapeHtml(text)
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+    .replace(/(^|[\s(])_([^_]+)_(?=$|[\s.,)])/g, '$1<em>$2</em>');
+}
+
 function section(
   lines: string[],
   heading: string,

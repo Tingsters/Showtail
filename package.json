@@ -1,6 +1,6 @@
 {
   "name": "showtail",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "Show your work: capture prompts, edits, decisions, artifacts, and reflections into a verifiable, repo-local provenance trail educators can review.",
   "type": "module",
   "license": "Apache-2.0",

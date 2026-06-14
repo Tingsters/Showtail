@@ -1,5 +1,5 @@
 import { join } from 'node:path';
-import { buildReportData, renderMarkdown } from '../core/report.ts';
+import { buildReportData, renderHtml, renderMarkdown } from '../core/report.ts';
 import { requirePaths, writeJson } from '../core/storage.ts';
 import { writeFileSync, mkdirSync } from 'node:fs';
 
@@ -15,7 +15,9 @@ function fileStamp(iso: string): string {
 
 /**
  * Generate a report under `.showtail/reports/` and print where it was written.
- * Markdown by default; `--format json` writes the structured data instead.
+ * HTML by default (easy for an educator to open in a browser); the Markdown it
+ * is rendered from is written alongside it as the source of truth. `--format md`
+ * writes Markdown only, and `--format json` writes the structured data instead.
  */
 export async function runReport(options: ReportOptions): Promise<void> {
   const paths = requirePaths(options.cwd);
@@ -31,9 +33,20 @@ export async function runReport(options: ReportOptions): Promise<void> {
     return;
   }
 
-  const out = join(paths.reportsDir, `report-${stamp}.md`);
-  writeFileSync(out, renderMarkdown(data) + '\n', 'utf8');
-  console.log(`Wrote report: ${out}`);
+  // The Markdown is always written: on its own for `--format md`, and as the
+  // source the HTML is rendered from otherwise.
+  const mdOut = join(paths.reportsDir, `report-${stamp}.md`);
+  writeFileSync(mdOut, renderMarkdown(data) + '\n', 'utf8');
+
+  if (options.format === 'md') {
+    console.log(`Wrote report: ${mdOut}`);
+  } else {
+    const htmlOut = join(paths.reportsDir, `report-${stamp}.html`);
+    writeFileSync(htmlOut, renderHtml(data), 'utf8');
+    console.log(`Wrote report: ${htmlOut}`);
+    console.log(`Markdown source: ${mdOut}`);
+  }
+
   console.log('');
   console.log(
     `Summary: ${data.summary.sessions} session(s), ${data.summary.events} event(s), ` +

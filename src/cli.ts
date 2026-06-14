@@ -17,7 +17,7 @@ import { runHook, type HookEvent } from './commands/hook.ts';
 import { runImportChatgpt, runImportUndo } from './commands/import.ts';
 import { eventTypeList } from './core/schema.ts';
 
-const VERSION = '0.5.0';
+const VERSION = '0.6.0';
 
 /** Wrap a command action so errors print a clean message and set exit code 1. */
 function action<A extends unknown[]>(fn: (...args: A) => Promise<unknown>) {
@@ -105,7 +105,7 @@ program
 program
   .command('report')
   .description('Generate a report summarizing your work trail.')
-  .option('--format <format>', 'output format: md (default) or json', 'md')
+  .option('--format <format>', 'output format: html (default), md, or json', 'html')
   .action(action(async (opts: { format?: string }) => runReport(opts)));
 
 program

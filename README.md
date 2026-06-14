@@ -106,7 +106,8 @@ showtail artifact add src/parser.ts
 showtail trace src/parser.ts
 
 # 6. Generate a report for your educator
-showtail report                 # Markdown in .showtail/reports/
+showtail report                 # HTML (+ Markdown source) in .showtail/reports/
+showtail report --format md     # Markdown only
 showtail report --format json   # machine-readable version
 
 # 7. Check everything is consistent before you submit
@@ -337,8 +338,9 @@ import it, then delete the link. The import itself stays local like everything e
    records artifacts for key files.
 4. Before submitting, the student runs `showtail report` and `showtail verify`, then commits
    everything (including `.showtail/`) to their repo.
-5. **Teacher** opens `.showtail/reports/report-*.md` to review the trail, and can run
-   `showtail verify` and `showtail trace <file>` to inspect any file's history.
+5. **Teacher** opens `.showtail/reports/report-*.html` in a browser to review the trail
+   (the `.md` source sits alongside it), and can run `showtail verify` and
+   `showtail trace <file>` to inspect any file's history.
 
 The goal isn't to catch anyone — it's to make the *process* visible and to give students a
 structured way to demonstrate genuine understanding.
@@ -347,7 +349,7 @@ structured way to demonstrate genuine understanding.
 
 ## Example report
 
-A generated `.showtail/reports/report-*.md` looks like this:
+A generated report (the HTML is rendered from this Markdown source) looks like this:
 
 ```markdown
 # Showtail Report — Demo Project
@@ -411,7 +413,8 @@ shared into your log text. If a project is sensitive, you can add `.showtail/` t
   artifacts/
     index.json               # append-only history of file snapshots (hashes)
   reports/
-    report-<timestamp>.md    # generated reports
+    report-<timestamp>.html  # generated report (default; open in a browser)
+    report-<timestamp>.md    # Markdown source the HTML is rendered from
     report-<timestamp>.json
 ```
 

@@ -4,7 +4,12 @@ import { join } from 'node:path';
 import { runInit } from '../src/commands/init.ts';
 import { addArtifact } from '../src/core/artifacts.ts';
 import { logEvent } from '../src/core/events.ts';
-import { buildReportData, renderMarkdown } from '../src/core/report.ts';
+import {
+  buildReportData,
+  markdownToHtml,
+  renderHtml,
+  renderMarkdown,
+} from '../src/core/report.ts';
 import { startSession } from '../src/core/sessions.ts';
 import { pathsForRoot } from '../src/core/storage.ts';
 import { cleanup, makeTempDir } from './helpers.ts';
@@ -67,5 +72,71 @@ describe('report', () => {
     } finally {
       cleanup(dir);
     }
+  });
+
+  test('renders a standalone HTML document from the same data', async () => {
+    const dir = makeTempDir();
+    try {
+      await runInit({ cwd: dir, project: 'Parser Project' });
+      const paths = pathsForRoot(dir);
+      startSession(paths);
+      await logEvent(paths, { type: 'prompt', text: 'How do I structure this parser?' });
+
+      const html = renderHtml(buildReportData(paths));
+      expect(html.toLowerCase().startsWith('<!doctype html')).toBe(true);
+      expect(html).toContain('<html');
+      expect(html).toContain('Showtail Report — Parser Project');
+      expect(html).toContain('How do I structure this parser?');
+      expect(html).toContain('<h2>');
+      // Authorship statement renders as a blockquote.
+      expect(html).toContain('<blockquote>');
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('HTML escapes user-supplied text', async () => {
+    const dir = makeTempDir();
+    try {
+      await runInit({ cwd: dir, project: 'XSS Project' });
+      const paths = pathsForRoot(dir);
+      startSession(paths);
+      await logEvent(paths, {
+        type: 'prompt',
+        text: '<script>alert(1)</script> tom & jerry',
+      });
+
+      const html = renderHtml(buildReportData(paths));
+      expect(html).not.toContain('<script>alert(1)</script>');
+      expect(html).toContain('&lt;script&gt;alert(1)&lt;/script&gt;');
+      expect(html).toContain('tom &amp; jerry');
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('empty project still renders a valid HTML document', async () => {
+    const dir = makeTempDir();
+    try {
+      await runInit({ cwd: dir });
+      const paths = pathsForRoot(dir);
+      const html = renderHtml(buildReportData(paths));
+      expect(html.toLowerCase().startsWith('<!doctype html')).toBe(true);
+      expect(html).toContain('<h1>Showtail Report</h1>');
+      expect(html).toContain('No activity recorded yet.');
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('markdownToHtml converts the supported Markdown subset', () => {
+    expect(markdownToHtml('## Heading')).toContain('<h2>Heading</h2>');
+    expect(markdownToHtml('# Title')).toContain('<h1>Title</h1>');
+    expect(markdownToHtml('- one\n- two')).toContain('<ul>');
+    expect(markdownToHtml('- one')).toContain('<li>one</li>');
+    expect(markdownToHtml('a **bold** word')).toContain('<strong>bold</strong>');
+    expect(markdownToHtml('a `code` word')).toContain('<code>code</code>');
+    expect(markdownToHtml('_quiet_')).toContain('<em>quiet</em>');
+    expect(markdownToHtml('> a quote')).toContain('<blockquote>a quote</blockquote>');
   });
 });
