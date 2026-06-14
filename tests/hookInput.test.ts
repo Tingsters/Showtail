@@ -1,5 +1,9 @@
 import { describe, expect, test } from 'bun:test';
-import { extractEditedFiles, extractPrompt } from '../src/core/hookInput.ts';
+import {
+  extractApplyPatchFiles,
+  extractEditedFiles,
+  extractPrompt,
+} from '../src/core/hookInput.ts';
 
 describe('hookInput', () => {
   test('extractPrompt returns trimmed prompt text', () => {
@@ -31,5 +35,52 @@ describe('hookInput', () => {
   test('extractEditedFiles returns empty when nothing matches', () => {
     expect(extractEditedFiles({})).toEqual([]);
     expect(extractEditedFiles({ tool_input: {} })).toEqual([]);
+  });
+
+  describe('extractApplyPatchFiles (Codex)', () => {
+    test('parses Add/Update/Move headers from the patch envelope', () => {
+      const input =
+        '*** Begin Patch\n' +
+        '*** Add File: src/new.ts\n' +
+        '+export const a = 1;\n' +
+        '*** Update File: src/old.ts\n' +
+        '@@\n-x\n+y\n' +
+        '*** Move File: src/moved.ts\n' +
+        '*** End Patch';
+      expect(extractApplyPatchFiles({ tool_input: { input } })).toEqual([
+        'src/new.ts',
+        'src/old.ts',
+        'src/moved.ts',
+      ]);
+    });
+
+    test('skips Delete File headers', () => {
+      const input =
+        '*** Begin Patch\n*** Delete File: gone.ts\n*** Update File: kept.ts\n*** End Patch';
+      expect(extractApplyPatchFiles({ tool_input: { input } })).toEqual(['kept.ts']);
+    });
+
+    test('also reads the patch field and a structured changes map, de-duping', () => {
+      expect(
+        extractApplyPatchFiles({ tool_input: { patch: '*** Update File: a.ts\n' } }),
+      ).toEqual(['a.ts']);
+      expect(
+        extractApplyPatchFiles({ tool_input: { changes: { 'a.ts': {}, 'b.ts': {} } } }),
+      ).toEqual(['a.ts', 'b.ts']);
+      // input + changes referencing the same file collapses to one entry.
+      expect(
+        extractApplyPatchFiles({
+          tool_input: { input: '*** Update File: a.ts\n', changes: { 'a.ts': {} } },
+        }),
+      ).toEqual(['a.ts']);
+    });
+
+    test('returns empty when nothing matches', () => {
+      expect(extractApplyPatchFiles({})).toEqual([]);
+      expect(extractApplyPatchFiles({ tool_input: {} })).toEqual([]);
+      expect(
+        extractApplyPatchFiles({ tool_input: { input: 'no headers here' } }),
+      ).toEqual([]);
+    });
   });
 });

@@ -5,27 +5,15 @@ import { dirname, join } from 'node:path';
 // assets/ AND embedded into the compiled binary via this text import, so
 // `showtail skill install` is fully self-contained (no files to ship).
 import SKILL_MD from '../../assets/claude-code/plugin/skills/showtail/SKILL.md' with { type: 'text' };
+import {
+  hasOurHooks,
+  mergeHookEvents,
+  unmergeHookEvents,
+  type HookEvents,
+} from './hookMerge.ts';
 import { findRoot, readJson, writeJson } from './storage.ts';
 
 export { SKILL_MD };
-
-/** A single Claude Code hook command entry. */
-interface HookCommand {
-  type: 'command';
-  command: string;
-}
-
-/** A matcher group: optional `matcher` plus the commands to run. */
-interface HookGroup {
-  matcher?: string;
-  hooks: HookCommand[];
-}
-
-/** Map of hook event name -> matcher groups. */
-type HookEvents = Record<string, HookGroup[]>;
-
-/** Marker used to recognize (and cleanly remove) the hooks we install. */
-const HOOK_MARKER = 'showtail hook';
 
 /**
  * The canonical hook configuration. This is the single source of truth for
@@ -93,58 +81,17 @@ export function writeSkill(target: SkillTarget): string {
   return target.skillFile;
 }
 
-/** Is this matcher group one that we installed? */
-function isOurGroup(group: unknown): boolean {
-  if (!group || typeof group !== 'object') return false;
-  const hooks = (group as HookGroup).hooks;
-  if (!Array.isArray(hooks)) return false;
-  return hooks.some(
-    (h) => typeof h?.command === 'string' && h.command.includes(HOOK_MARKER),
-  );
-}
-
 /**
  * Merge our hooks into a settings.json object, idempotently and without
  * clobbering the user's existing hooks. Returns the updated object.
  */
 export function mergeHooks(settings: Record<string, unknown>): Record<string, unknown> {
-  const next = { ...settings };
-  const hooks: HookEvents =
-    next.hooks && typeof next.hooks === 'object' ? { ...(next.hooks as HookEvents) } : {};
-
-  for (const [event, groups] of Object.entries(HOOK_EVENTS)) {
-    const existing = Array.isArray(hooks[event]) ? hooks[event]! : [];
-    // Drop any prior Showtail entries so re-running install never duplicates.
-    const preserved = existing.filter((g) => !isOurGroup(g));
-    hooks[event] = [...preserved, ...groups];
-  }
-
-  next.hooks = hooks;
-  return next;
+  return mergeHookEvents(settings, HOOK_EVENTS);
 }
 
 /** Remove only our hooks from a settings.json object. Returns it updated. */
 export function unmergeHooks(settings: Record<string, unknown>): Record<string, unknown> {
-  const next = { ...settings };
-  if (!next.hooks || typeof next.hooks !== 'object') return next;
-  const hooks: HookEvents = { ...(next.hooks as HookEvents) };
-
-  for (const event of Object.keys(hooks)) {
-    const groups = Array.isArray(hooks[event]) ? hooks[event]! : [];
-    const kept = groups.filter((g) => !isOurGroup(g));
-    if (kept.length === 0) {
-      delete hooks[event];
-    } else {
-      hooks[event] = kept;
-    }
-  }
-
-  if (Object.keys(hooks).length === 0) {
-    delete next.hooks;
-  } else {
-    next.hooks = hooks;
-  }
-  return next;
+  return unmergeHookEvents(settings);
 }
 
 /** Install (or refresh) the hook config in the target's settings.json. */
@@ -175,12 +122,7 @@ export function removeSkill(target: SkillTarget): boolean {
 export function hooksInstalledAt(settingsFile: string): boolean {
   if (!existsSync(settingsFile)) return false;
   try {
-    const settings = readJson<Record<string, unknown>>(settingsFile);
-    const hooks = settings.hooks as HookEvents | undefined;
-    if (!hooks || typeof hooks !== 'object') return false;
-    return Object.values(hooks).some(
-      (groups) => Array.isArray(groups) && groups.some(isOurGroup),
-    );
+    return hasOurHooks(readJson<Record<string, unknown>>(settingsFile));
   } catch {
     return false;
   }

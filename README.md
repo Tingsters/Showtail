@@ -272,6 +272,68 @@ Tool timeline (each arrow is a switch):
 
 ---
 
+## OpenAI Codex integration
+
+If you pair with [Codex](https://developers.openai.com/codex), Showtail captures that work
+into the *same* `.showtail/` trail. Codex is close to Claude Code — it has lifecycle hooks and
+reads project instructions from `AGENTS.md` — so the integration mirrors the Claude Code one:
+
+```bash
+# in your project (writes ./AGENTS.md + ./.codex/hooks.json, and offers to enable hooks)
+showtail codex install --project
+
+# or for all your projects:
+showtail codex install --user
+
+# instructions only, no hooks (AGENTS.md then captures manually):
+showtail codex install --project --no-hooks
+```
+
+What you get:
+
+- **Instructions in `AGENTS.md`** — a fingerprinted, Showtail-managed block (your own text in
+  `AGENTS.md` is never touched) that teaches Codex to record the trail *in the student's voice*:
+  decisions, reflections, sources, and tests, all tagged `codex`. Codex reads `AGENTS.md`
+  automatically.
+- **Auto-capture hooks** (on by default; `--no-hooks` to skip) in `.codex/hooks.json`:
+
+  | When | Showtail does |
+  | --- | --- |
+  | You submit a prompt | logs it as a `prompt` event |
+  | Codex edits a file (`apply_patch`) | snapshots that file as an `artifact` |
+  | A session starts | ensures a work session exists |
+
+### Enabling Codex hooks
+
+Codex only fires lifecycle hooks when `features.hooks = true` is set in its `config.toml`. So
+during `showtail codex install`, Showtail **asks before turning it on** (default Yes) and edits
+`config.toml` surgically — it sets only that one key and never disturbs your other settings:
+
+```toml
+[features]
+hooks = true
+```
+
+Pass `--yes` to enable it without the prompt (handy in scripts), or answer `n` and set it
+yourself later. Check or change state anytime:
+
+```bash
+showtail codex status      # instructions + auto-capture state
+showtail codex uninstall   # removes the AGENTS.md block and hooks (leaves config.toml alone)
+```
+
+> **Note on edits:** Codex applies file changes through its `apply_patch` tool, which Showtail
+> parses to snapshot the touched files. Edits Codex makes by running raw `shell` commands
+> (e.g. `sed`) aren't visible to the hook and won't be auto-snapshotted — record those with
+> `showtail artifact add <file> --tool codex` if you want them in the trail. As with the other
+> integrations, **everything stays local** — no telemetry, no external calls.
+
+The instructions block is yours to customize: edit inside the Showtail markers and
+`showtail codex status` will report `customized` and never overwrite your edits (run
+`showtail codex install --force` to take the latest).
+
+---
+
 ## ChatGPT integration
 
 Students on a free/low ChatGPT tier can pull their conversations into the same trail. ChatGPT
@@ -445,6 +507,8 @@ Showtail's MVP is a local CLI, with a clean core that's meant to grow:
   cross-tool report (see [GitHub Copilot integration](#github-copilot-integration)).
 - ✅ **ChatGPT** — import conversations from a share link into the same trail (see
   [ChatGPT integration](#chatgpt-integration)).
+- ✅ **OpenAI Codex** — capture Codex prompts and edits via AGENTS.md + hooks, in the same
+  cross-tool report (see [OpenAI Codex integration](#openai-codex-integration)).
 - **GitHub Action** — verify a submission's trail automatically in CI.
 - **Signed provenance records** — cryptographically signed events for stronger guarantees.
 - **Educator dashboard** — review many students' trails at a glance.

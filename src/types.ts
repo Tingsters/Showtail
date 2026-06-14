@@ -28,7 +28,13 @@ export type Actor = 'student';
  * follow a student switching between them. Kept as a plain string union so new
  * tools can be added without breaking older trails.
  */
-export const TOOLS = ['claude-code', 'github-copilot', 'chatgpt', 'cli'] as const;
+export const TOOLS = [
+  'claude-code',
+  'github-copilot',
+  'chatgpt',
+  'codex',
+  'cli',
+] as const;
 export type Tool = (typeof TOOLS)[number];
 
 /** Human-friendly label for a tool (falls back to the raw value). */
@@ -36,6 +42,7 @@ export const TOOL_LABELS: Record<string, string> = {
   'claude-code': 'Claude Code',
   'github-copilot': 'GitHub Copilot',
   chatgpt: 'ChatGPT',
+  codex: 'OpenAI Codex',
   cli: 'CLI',
 };
 

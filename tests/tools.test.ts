@@ -60,11 +60,13 @@ describe('cross-tool attribution', () => {
       evt('claude-code', '2026-06-12T10:00:00.000Z'),
       evt('claude-code', '2026-06-12T10:05:00.000Z'),
       evt('github-copilot', '2026-06-12T10:10:00.000Z'),
+      evt('codex', '2026-06-12T10:15:00.000Z'),
       evt('claude-code', '2026-06-12T10:20:00.000Z'),
     ]);
     expect(blocks.map((b) => b.tool)).toEqual([
       'claude-code',
       'github-copilot',
+      'codex',
       'claude-code',
     ]);
     expect(blocks[0]!.count).toBe(2);
@@ -79,16 +81,19 @@ describe('cross-tool attribution', () => {
       const paths = pathsForRoot(dir);
       await logEvent(paths, { type: 'prompt', text: 'q1', tool: 'github-copilot' });
       await logEvent(paths, { type: 'decision', text: 'd1', tool: 'claude-code' });
+      await logEvent(paths, { type: 'prompt', text: 'q2', tool: 'codex' });
 
       const data = buildReportData(paths);
       const tools = data.tools.map((t) => t.tool).sort();
       expect(tools).toContain('claude-code');
       expect(tools).toContain('github-copilot');
+      expect(tools).toContain('codex');
 
       const md = renderMarkdown(data);
       expect(md).toContain('## Tools used');
       expect(md).toContain('GitHub Copilot');
       expect(md).toContain('Claude Code');
+      expect(md).toContain('OpenAI Codex');
     } finally {
       cleanup(dir);
     }

@@ -69,3 +69,48 @@ export function extractEditedFiles(payload: HookPayload): string[] {
   // De-dupe while preserving order.
   return [...new Set(out)];
 }
+
+// Matches the file headers in an apply_patch envelope, e.g.
+//   *** Add File: src/foo.ts
+//   *** Update File: src/foo.ts
+//   *** Move File: src/old.ts
+// We capture Add/Update/Move (the file exists after the patch) and skip Delete.
+const APPLY_PATCH_FILE_RE = /^\*\*\* (?:Add|Update|Move) File: (.+)$/gm;
+
+/**
+ * Extract the file path(s) Codex's `apply_patch` tool touched. Codex has no
+ * Edit/Write tool; it edits via an apply-patch envelope whose text lives in the
+ * tool input. We tolerate several shapes for where that text/paths sit:
+ *  - `tool_input.input` / `tool_input.patch`: the raw envelope text;
+ *  - `tool_input.changes`: an object keyed by path;
+ *  - `tool_input.file_path`: a plain path (defensive).
+ * Deleted files are skipped (they no longer exist to snapshot).
+ */
+export function extractApplyPatchFiles(payload: HookPayload): string[] {
+  const input = payload.tool_input;
+  if (!input || typeof input !== 'object') return [];
+  const obj = input as Record<string, unknown>;
+  const out: string[] = [];
+
+  for (const key of ['input', 'patch'] as const) {
+    const text = obj[key];
+    if (typeof text !== 'string') continue;
+    for (const m of text.matchAll(APPLY_PATCH_FILE_RE)) {
+      const path = m[1]?.trim();
+      if (path) out.push(path);
+    }
+  }
+
+  const changes = obj.changes;
+  if (changes && typeof changes === 'object' && !Array.isArray(changes)) {
+    for (const path of Object.keys(changes)) {
+      if (path.length > 0) out.push(path);
+    }
+  }
+
+  const single = obj.file_path;
+  if (typeof single === 'string' && single.length > 0) out.push(single);
+
+  // De-dupe while preserving order.
+  return [...new Set(out)];
+}

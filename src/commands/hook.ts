@@ -2,6 +2,7 @@ import { existsSync } from 'node:fs';
 import { addArtifact } from '../core/artifacts.ts';
 import { logEvent } from '../core/events.ts';
 import {
+  extractApplyPatchFiles,
   extractEditedFiles,
   extractPrompt,
   readHookPayload,
@@ -9,22 +10,26 @@ import {
 } from '../core/hookInput.ts';
 import { currentSession, startSession } from '../core/sessions.ts';
 import { findRoot, pathsForRoot, type ShowtailPaths } from '../core/storage.ts';
+import type { Tool } from '../types.ts';
 
 export type HookEvent = 'session-start' | 'user-prompt' | 'post-edit' | 'stop';
 
 export interface HookOptions {
   cwd?: string;
+  /** Which tool fired the hook (defaults to claude-code). Codex passes 'codex'. */
+  tool?: Tool;
 }
 
-/** Don't snapshot Showtail/Claude's own bookkeeping files. */
+/** Don't snapshot Showtail/Claude/Codex's own bookkeeping files. */
 function isInternalPath(p: string): boolean {
-  return /(^|[\\/])\.(showtail|claude)([\\/]|$)/.test(p);
+  return /(^|[\\/])\.(showtail|claude|codex)([\\/]|$)/.test(p);
 }
 
 /**
- * Handle one Claude Code hook event. This is intentionally bulletproof: any
- * problem (no project, malformed input, missing file) results in a silent
- * no-op with exit code 0, so a student's Claude session is never interrupted.
+ * Handle one hook event (from Claude Code or Codex). This is intentionally
+ * bulletproof: any problem (no project, malformed input, missing file) results
+ * in a silent no-op with exit code 0, so a student's session is never
+ * interrupted.
  */
 export async function runHook(
   event: HookEvent,
@@ -33,6 +38,7 @@ export async function runHook(
   try {
     const payload = await readHookPayload();
     const cwd = payload?.cwd ?? options.cwd ?? process.cwd();
+    const tool: Tool = options.tool ?? 'claude-code';
 
     const root = findRoot(cwd);
     if (!root) return; // Not a Showtail project — nothing to do.
@@ -43,9 +49,9 @@ export async function runHook(
       case 'session-start':
         return handleSessionStart(paths);
       case 'user-prompt':
-        return await handleUserPrompt(paths, payload);
+        return await handleUserPrompt(paths, payload, tool);
       case 'post-edit':
-        return await handlePostEdit(paths, payload);
+        return await handlePostEdit(paths, payload, tool);
       case 'stop':
         return; // Reserved for a future, opt-in reflection nudge. No-op for now.
     }
@@ -67,23 +73,28 @@ function handleSessionStart(paths: ShowtailPaths): void {
 async function handleUserPrompt(
   paths: ShowtailPaths,
   payload: HookPayload | null,
+  tool: Tool,
 ): Promise<void> {
   if (!payload) return;
   const text = extractPrompt(payload);
   if (!text) return;
-  await logEvent(paths, { type: 'prompt', text, tool: 'claude-code' });
-  // Print nothing: this path must not add anything to Claude's context.
+  await logEvent(paths, { type: 'prompt', text, tool });
+  // Print nothing: this path must not add anything to the session's context.
 }
 
 async function handlePostEdit(
   paths: ShowtailPaths,
   payload: HookPayload | null,
+  tool: Tool,
 ): Promise<void> {
   if (!payload) return;
-  for (const file of extractEditedFiles(payload)) {
+  // Codex edits via apply_patch; Claude via Edit/Write/MultiEdit.
+  const files =
+    tool === 'codex' ? extractApplyPatchFiles(payload) : extractEditedFiles(payload);
+  for (const file of files) {
     if (isInternalPath(file)) continue;
     try {
-      await addArtifact(paths, { filePath: file, tool: 'claude-code' });
+      await addArtifact(paths, { filePath: file, tool });
     } catch {
       // File may have been moved/deleted by now — skip it quietly.
     }

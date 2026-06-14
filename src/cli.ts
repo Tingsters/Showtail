@@ -13,10 +13,12 @@ import {
   runCopilotStatus,
   runCopilotUninstall,
 } from './commands/copilot.ts';
+import { runCodexInstall, runCodexStatus, runCodexUninstall } from './commands/codex.ts';
 import { runHook, type HookEvent } from './commands/hook.ts';
 import { runImportChatgpt, runImportUndo } from './commands/import.ts';
 import { runImportClaudeCode } from './commands/importClaude.ts';
 import { eventTypeList } from './core/schema.ts';
+import type { Tool } from './types.ts';
 
 const VERSION = '0.6.0';
 
@@ -194,6 +196,58 @@ copilot
   .description('Remove the Showtail Copilot instructions from this project.')
   .action(action(async () => runCopilotUninstall()));
 
+const codex = program
+  .command('codex')
+  .description(
+    'Manage the Showtail OpenAI Codex integration (AGENTS.md instructions + hooks).',
+  );
+
+codex
+  .command('install')
+  .description(
+    'Install the Codex AGENTS.md instructions and auto-capture hooks (on by default).',
+  )
+  .option('--user', 'install for your user (all projects: ~/.codex)')
+  .option('--project', 'install for this project only (./.codex, ./AGENTS.md) [default]')
+  .option(
+    '--no-hooks',
+    'skip the auto-capture hooks (AGENTS.md captures manually instead)',
+  )
+  .option('--yes', 'enable Codex hooks in config.toml without prompting')
+  .option('--force', 'overwrite instructions you have edited (take the latest)')
+  .action(
+    action(
+      async (opts: {
+        user?: boolean;
+        project?: boolean;
+        hooks?: boolean;
+        yes?: boolean;
+        force?: boolean;
+      }) =>
+        runCodexInstall({
+          user: opts.user,
+          project: opts.project,
+          hooks: opts.hooks,
+          yes: opts.yes,
+          force: opts.force,
+        }),
+    ),
+  );
+
+codex
+  .command('status')
+  .description('Report whether the Codex integration is installed and capturing.')
+  .action(action(async () => runCodexStatus()));
+
+codex
+  .command('uninstall')
+  .description('Remove the Showtail Codex instructions and any hooks it installed.')
+  .option('--user', 'remove from your user scope (~/.codex)')
+  .option('--project', 'remove from this project (./.codex, ./AGENTS.md) [default]')
+  .action(
+    action(async (opts: { user?: boolean }) => runCodexUninstall({ user: opts.user })),
+  );
+
 const importCmd = program
   .command('import')
   .description('Import work done in other AI tools into your trail.');
@@ -271,8 +325,13 @@ importCmd
 program
   .command('hook <event>', { hidden: true })
   .description(
-    'Internal: handle a Claude Code hook event (session-start, user-prompt, post-edit, stop).',
+    'Internal: handle a hook event (session-start, user-prompt, post-edit, stop).',
   )
-  .action(action(async (event: string) => runHook(event as HookEvent)));
+  .option('--tool <tool>', 'which tool fired the hook (claude-code [default] or codex)')
+  .action(
+    action(async (event: string, opts: { tool?: string }) =>
+      runHook(event as HookEvent, { tool: opts.tool as Tool | undefined }),
+    ),
+  );
 
 program.parseAsync(process.argv);

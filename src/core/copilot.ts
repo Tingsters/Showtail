@@ -3,73 +3,21 @@ import { dirname, join } from 'node:path';
 // Single source of truth: committed under assets/ AND embedded into the binary.
 import COPILOT_INSTRUCTIONS from '../../assets/copilot/copilot-instructions.md' with { type: 'text' };
 import SHOWTAIL_PATH_INSTRUCTIONS from '../../assets/copilot/showtail.instructions.md' with { type: 'text' };
-import { sha256OfString } from './hash.ts';
+import {
+  applyManagedBlock,
+  classify,
+  parseBlock,
+  shortHash,
+  splitFrontmatter,
+  START_RE,
+} from './managedBlock.ts';
 import { findRoot } from './storage.ts';
 
 export { COPILOT_INSTRUCTIONS, SHOWTAIL_PATH_INSTRUCTIONS };
 
-// A managed block is delimited by markers; the START marker carries a short
-// fingerprint of the exact text Showtail wrote, so we can tell an untouched
-// (possibly old) block from one a human edited — and only ever overwrite our
-// own content. Anything outside the markers is the user's and is never touched.
-const MARKER_END = '<!-- showtail:end -->';
-const START_RE = /<!-- showtail:start(?: sha=([0-9a-f]+))? -->/;
-
-/** Short content fingerprint stamped into the start marker. */
-function shortHash(text: string): string {
-  return sha256OfString(text.trim()).slice(0, 12);
-}
-
-function blockFor(body: string): string {
-  const inner = body.trim();
-  return `<!-- showtail:start sha=${shortHash(inner)} -->\n${inner}\n${MARKER_END}`;
-}
-
-interface ParsedBlock {
-  inner: string;
-  /** The stamped fingerprint, or undefined for a legacy (pre-fingerprint) block. */
-  sha: string | undefined;
-  startIndex: number;
-  endIndex: number;
-}
-
-function parseBlock(content: string): ParsedBlock | null {
-  const m = START_RE.exec(content);
-  if (!m || m.index === undefined) return null;
-  const startEnd = m.index + m[0].length;
-  const endIdx = content.indexOf(MARKER_END, startEnd);
-  if (endIdx === -1) return null;
-  return {
-    inner: content.slice(startEnd, endIdx).trim(),
-    sha: m[1],
-    startIndex: m.index,
-    endIndex: endIdx + MARKER_END.length,
-  };
-}
-
-type BlockClass = 'uptodate' | 'stale' | 'edited';
-
-function classify(parsed: ParsedBlock, latestBody: string): BlockClass {
-  const latest = latestBody.trim();
-  if (parsed.sha === undefined) {
-    // Legacy block with no fingerprint: pre-fingerprint Showtail always
-    // overwrote it, so no respected edit can exist — treat as untouched.
-    return parsed.inner === latest ? 'uptodate' : 'stale';
-  }
-  if (shortHash(parsed.inner) !== parsed.sha) return 'edited';
-  return parsed.inner === latest ? 'uptodate' : 'stale';
-}
-
-// --- YAML frontmatter handling for showtail.instructions.md ----------------
-// Copilot requires frontmatter at the very top, so it sits OUTSIDE the managed
-// block as a small preamble; the body is what Showtail manages/fingerprints.
-
-function splitFrontmatter(text: string): { preamble: string; body: string } {
-  const m = text.match(/^---\n[\s\S]*?\n---\n/);
-  if (m) return { preamble: m[0].trimEnd(), body: text.slice(m[0].length).trim() };
-  return { preamble: '', body: text.trim() };
-}
-
+// Copilot requires frontmatter at the very top of the path-specific file, so it
+// sits OUTSIDE the managed block as a small preamble; the body is what Showtail
+// manages/fingerprints.
 const PATH_FM = splitFrontmatter(SHOWTAIL_PATH_INSTRUCTIONS).preamble;
 const PATH_BODY = splitFrontmatter(SHOWTAIL_PATH_INSTRUCTIONS).body;
 
@@ -115,50 +63,6 @@ export function writeCopilotInstructions(
   applyManagedBlock(target.instructionsFile, COPILOT_INSTRUCTIONS, '', force);
   mkdirSync(dirname(target.pathInstructionsFile), { recursive: true });
   applyManagedBlock(target.pathInstructionsFile, PATH_BODY, PATH_FM, force);
-}
-
-function applyManagedBlock(
-  file: string,
-  latestBody: string,
-  preamble: string,
-  force: boolean,
-): void {
-  const block = blockFor(latestBody);
-  let next: string;
-
-  if (!existsSync(file)) {
-    next = preamble ? `${preamble}\n\n${block}\n` : `${block}\n`;
-  } else {
-    const current = readFileSync(file, 'utf8');
-    const parsed = parseBlock(current);
-    if (parsed) {
-      const cls = classify(parsed, latestBody);
-      // Keep user edits (and skip no-op updates) unless forced.
-      next =
-        !force && (cls === 'edited' || cls === 'uptodate')
-          ? current
-          : current.slice(0, parsed.startIndex) + block + current.slice(parsed.endIndex);
-    } else if (preamble) {
-      // Markerless path file: migrate the old wholesale content to block form;
-      // otherwise it's the user's own file — respect it.
-      const legacy = `${preamble}\n\n${latestBody.trim()}`.trim();
-      next =
-        current.trim() === legacy || current.trim() === latestBody.trim()
-          ? `${preamble}\n\n${block}\n`
-          : current;
-    } else {
-      // A pre-existing user copilot-instructions.md without our block: append it.
-      next = current.trimEnd() + '\n\n' + block + '\n';
-    }
-  }
-
-  writeIfChanged(file, next);
-}
-
-/** Write only when content differs (no churn / no editor "changed on disk"). */
-function writeIfChanged(file: string, content: string): void {
-  if (existsSync(file) && readFileSync(file, 'utf8') === content) return;
-  writeFileSync(file, content, 'utf8');
 }
 
 export interface CopilotState {

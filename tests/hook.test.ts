@@ -1,8 +1,15 @@
 import { describe, expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { writeFileSync } from 'node:fs';
+import { readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { cleanup, makeTempDir } from './helpers.ts';
+
+/** Read the structured JSON report `showtail report --format json` wrote. */
+function readJsonReport(dir: string): any {
+  const reportsDir = join(dir, '.showtail', 'reports');
+  const file = readdirSync(reportsDir).find((f) => f.endsWith('.json'));
+  return JSON.parse(readFileSync(join(reportsDir, file!), 'utf8'));
+}
 
 const CLI = join(import.meta.dir, '..', 'src', 'cli.ts');
 
@@ -133,6 +140,44 @@ describe('hook command (end-to-end via stdin)', () => {
       const r = run(dir, ['skill', 'status']);
       expect(r.code).toBe(0);
       expect(r.stdout).toContain('auto-capture: ON');
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('user-prompt --tool codex tags the prompt as codex', () => {
+    const dir = makeTempDir();
+    try {
+      initProject(dir);
+      const payload = JSON.stringify({ cwd: dir, prompt: 'refactor the parser' });
+      const r = run(dir, ['hook', 'user-prompt', '--tool', 'codex'], payload);
+      expect(r.code).toBe(0);
+      run(dir, ['report', '--format', 'json']);
+      const data = readJsonReport(dir);
+      expect(data.prompts[0].tool).toBe('codex');
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('post-edit --tool codex snapshots a file from an apply_patch envelope', () => {
+    const dir = makeTempDir();
+    try {
+      initProject(dir);
+      writeFileSync(join(dir, 'parser.ts'), 'export const x = 1;');
+      const payload = JSON.stringify({
+        cwd: dir,
+        tool_name: 'apply_patch',
+        tool_input: {
+          input: '*** Begin Patch\n*** Update File: parser.ts\n@@\n-1\n+2\n*** End Patch',
+        },
+      });
+      const r = run(dir, ['hook', 'post-edit', '--tool', 'codex'], payload);
+      expect(r.code).toBe(0);
+      const trace = run(dir, ['trace', 'parser.ts', '--format', 'json']);
+      const data = JSON.parse(trace.stdout);
+      expect(data.artifacts.length).toBe(1);
+      expect(data.artifacts[0].tool).toBe('codex');
     } finally {
       cleanup(dir);
     }
