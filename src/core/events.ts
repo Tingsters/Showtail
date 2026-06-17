@@ -1,16 +1,18 @@
-import type { Event, EventType, Session, Tool } from '../types.ts';
+import type { Event, EventType, JournalEntry, Session, Tool } from '../types.ts';
 import { maybeCurrentCommit } from './git.ts';
 import { makeId } from './ids.ts';
+import { readObject, writeObject } from './objects.ts';
+import { redact } from './redact.ts';
 import {
-  appendJsonl,
+  JOURNAL_ENTRY_VERSION,
+  appendJournal,
   readConfig,
-  readJsonl,
+  readJournal,
   readSessions,
   readState,
-  sessionFile,
-  writeJsonl,
+  rewriteJournal,
+  updateState,
   writeSessions,
-  writeState,
   type ShowtailPaths,
 } from './storage.ts';
 import { makeSession } from './sessions.ts';
@@ -30,14 +32,26 @@ export interface NewEventInput {
   sourceId?: string;
   /** Groups events from one import run so the whole batch can be undone together. */
   batchId?: string;
+  /** Links this event to the prompt that opened its turn. */
+  turnId?: string;
   /** Force a specific session; otherwise the current/started session is used. */
   sessionId?: string;
 }
 
+/** A one-line preview kept in the journal so the content stays glanceable. */
+function preview(text: string): string {
+  const oneLine = text.replace(/\s+/g, ' ').trim();
+  return oneLine.length > 140 ? oneLine.slice(0, 139) + '…' : oneLine;
+}
+
 /**
- * Append a new event to a session and return both the event and the session
- * it landed in. If no session is active, one is started automatically so a
- * student never loses a log to a "no session" error.
+ * Append a new event and return both the event and the session it landed in. If
+ * no session is active, one is started automatically so a student never loses a
+ * log to a "no session" error.
+ *
+ * The event's text is scrubbed of secrets/PII, then stored in the content-
+ * addressed object store; only metadata + the object reference go in the
+ * append-only journal.
  */
 export async function logEvent(
   paths: ShowtailPaths,
@@ -52,22 +66,64 @@ export async function logEvent(
     ? undefined
     : await maybeCurrentCommit(paths.root, config.settings.git);
 
-  const event: Event = {
-    id: makeId('evt'),
-    timestamp: input.timestamp ?? new Date().toISOString(),
-    type: input.type,
-    text: input.text,
-    tool: input.tool ?? 'cli',
-    actor: 'student',
-  };
-  if (input.files && input.files.length > 0) event.files = input.files;
-  if (input.tags && input.tags.length > 0) event.tags = input.tags;
-  if (input.sourceId) event.sourceId = input.sourceId;
-  if (input.batchId) event.batchId = input.batchId;
-  if (gitCommit) event.gitCommit = gitCommit;
+  // Scrub before anything touches disk, then hash the *redacted* text.
+  const { text, hits } = redact(input.text, config.settings.redact);
+  const ref = writeObject(paths, text);
 
-  appendJsonl(sessionFile(paths, session.id), event);
-  return { event, session };
+  const timestamp = input.timestamp ?? new Date().toISOString();
+  const id = makeId('evt');
+
+  const entry: JournalEntry = {
+    v: JOURNAL_ENTRY_VERSION,
+    kind: 'event',
+    id,
+    ts: timestamp,
+    type: input.type,
+    tool: input.tool ?? 'cli',
+    conv: session.id,
+    actor: 'student',
+    refs: [ref],
+    textPreview: preview(text),
+    bytes: Buffer.byteLength(text),
+  };
+  if (hits > 0) entry.redacted = hits;
+  if (input.files && input.files.length > 0) entry.files = input.files;
+  if (input.tags && input.tags.length > 0) entry.tags = input.tags;
+  if (input.sourceId) entry.sourceId = input.sourceId;
+  if (input.batchId) entry.batch = input.batchId;
+  if (input.turnId) entry.turn = input.turnId;
+  if (gitCommit) entry.gitCommit = gitCommit;
+
+  appendJournal(paths, entry);
+  return { event: eventFromEntry(paths, entry), session };
+}
+
+/** Reconstruct an in-memory Event from a journal entry, resolving its content. */
+export function eventFromEntry(paths: ShowtailPaths, entry: JournalEntry): Event {
+  const text =
+    (entry.refs && entry.refs.length > 0 ? readObject(paths, entry.refs[0]!) : null) ??
+    entry.textPreview ??
+    '';
+  const event: Event = {
+    id: entry.id,
+    timestamp: entry.ts,
+    type: entry.type as EventType,
+    text,
+    tool: entry.tool ?? 'cli',
+    actor: entry.actor ?? 'student',
+  };
+  if (entry.files && entry.files.length > 0) event.files = entry.files;
+  if (entry.tags && entry.tags.length > 0) event.tags = entry.tags;
+  if (entry.gitCommit) event.gitCommit = entry.gitCommit;
+  if (entry.sourceId) event.sourceId = entry.sourceId;
+  if (entry.batch) event.batchId = entry.batch;
+  if (entry.turn) event.turnId = entry.turn;
+  return event;
+}
+
+/** Journal entries that represent logged events (not artifact file snapshots). */
+function eventEntries(paths: ShowtailPaths): JournalEntry[] {
+  return readJournal(paths).filter((e) => e.kind !== 'artifact');
 }
 
 /**
@@ -102,19 +158,21 @@ export function resolveOrStartSession(
   const session = makeSession();
   sessions.push(session);
   writeSessions(paths, sessions);
-  writeState(paths, { currentSessionId: session.id });
+  updateState(paths, { currentSessionId: session.id, currentPromptId: null });
   return session;
 }
 
 /** Read all events for a single session. */
 export function readSessionEvents(paths: ShowtailPaths, sessionId: string): Event[] {
-  return readJsonl<Event>(sessionFile(paths, sessionId));
+  return eventEntries(paths)
+    .filter((e) => e.conv === sessionId)
+    .map((e) => eventFromEntry(paths, e));
 }
 
 /** The set of external source ids already imported (for idempotent imports). */
 export function importedSourceIds(paths: ShowtailPaths): Set<string> {
   const ids = new Set<string>();
-  for (const e of readAllEvents(paths)) {
+  for (const e of eventEntries(paths)) {
     if (e.sourceId) ids.add(e.sourceId);
   }
   return ids;
@@ -122,59 +180,42 @@ export function importedSourceIds(paths: ShowtailPaths): Set<string> {
 
 /**
  * The id of the most recent import batch, in write order (the last event that
- * carries a `batchId`). This is "the import you just did", which is what
+ * carries a `batch`). This is "the import you just did", which is what
  * `showtail import undo` removes.
  */
 export function latestBatchId(paths: ShowtailPaths): string | undefined {
   let latest: string | undefined;
-  for (const e of readAllEvents(paths)) {
-    if (e.batchId) latest = e.batchId;
+  for (const e of readJournal(paths)) {
+    if (e.batch) latest = e.batch;
   }
   return latest;
 }
 
 /**
- * Remove every event tagged with `batchId` (rewriting each affected session
- * log) and return how many were removed. Used to undo an import in one step.
+ * Remove every journal entry tagged with `batchId` and return how many were
+ * removed. Used to undo an import in one step. (Objects left for a future GC.)
  */
 export function removeEventsByBatch(paths: ShowtailPaths, batchId: string): number {
-  let removed = 0;
-  for (const session of readSessions(paths)) {
-    const file = sessionFile(paths, session.id);
-    const events = readJsonl<Event>(file);
-    const kept = events.filter((e) => e.batchId !== batchId);
-    if (kept.length !== events.length) {
-      removed += events.length - kept.length;
-      writeJsonl(file, kept);
-    }
-  }
-  return removed;
+  return rewriteJournal(paths, (e) => e.batch !== batchId);
 }
 
-/** Read every event across every session, in session-index order. */
+/** Read every event across every session, in journal (write) order. */
 export function readAllEvents(paths: ShowtailPaths): Event[] {
-  const sessions = readSessions(paths);
-  const all: Event[] = [];
-  for (const session of sessions) {
-    all.push(...readSessionEvents(paths, session.id));
-  }
-  return all;
+  return eventEntries(paths).map((e) => eventFromEntry(paths, e));
 }
 
 /**
  * Read every event together with the id of the session it belongs to.
- * Invalid lines are skipped here; `verify` is responsible for reporting them.
+ * Invalid reconstructions are skipped here; `verify` reports raw issues.
  */
 export function readAllEventsWithSession(
   paths: ShowtailPaths,
 ): Array<{ event: Event; sessionId: string }> {
-  const sessions = readSessions(paths);
   const out: Array<{ event: Event; sessionId: string }> = [];
-  for (const session of sessions) {
-    for (const event of readSessionEvents(paths, session.id)) {
-      if (validateEvent(event).length === 0) {
-        out.push({ event, sessionId: session.id });
-      }
+  for (const entry of eventEntries(paths)) {
+    const event = eventFromEntry(paths, entry);
+    if (validateEvent(event).length === 0) {
+      out.push({ event, sessionId: entry.conv ?? '' });
     }
   }
   return out;

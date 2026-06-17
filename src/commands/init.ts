@@ -1,16 +1,29 @@
-import { existsSync, mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { resolve } from 'node:path';
+import { join, resolve } from 'node:path';
 import type { Config } from '../types.ts';
 import { isGitRepo } from '../core/git.ts';
 import {
   CONFIG_VERSION,
   pathsForRoot,
-  writeArtifacts,
   writeJson,
   writeSessions,
   writeState,
 } from '../core/storage.ts';
+
+/**
+ * Mark the whole trail as binary so git never normalizes line endings: the
+ * object store is content-addressed, and an EOL rewrite (common on Windows)
+ * would change bytes and break a file's own hash / the integrity check.
+ */
+const GITATTRIBUTES = `# Showtail stores content-addressed objects; keep bytes byte-exact.
+* -text
+`;
+
+/** Ephemeral/regenerable bits don't belong in version control. */
+const GITIGNORE = `state.json
+reports/
+`;
 
 export interface InitOptions {
   project?: string;
@@ -46,7 +59,8 @@ export async function runInit(options: InitOptions = {}): Promise<void> {
   for (const dir of [
     paths.base,
     paths.sessionsDir,
-    paths.artifactsDir,
+    paths.objectsDir,
+    paths.journalDir,
     paths.reportsDir,
   ]) {
     mkdirSync(dir, { recursive: true });
@@ -55,21 +69,28 @@ export async function runInit(options: InitOptions = {}): Promise<void> {
   const config: Config = {
     version: CONFIG_VERSION,
     createdAt: new Date().toISOString(),
-    settings: { git: await isGitRepo(root) },
+    settings: {
+      git: await isGitRepo(root),
+      captureAiOutput: true,
+      captureCode: true,
+      redact: { enabled: true, secrets: true, pii: true },
+    },
   };
   if (options.project) config.project = options.project;
 
   writeJson(paths.config, config);
-  writeState(paths, { currentSessionId: null });
+  writeState(paths, { currentSessionId: null, currentPromptId: null });
   writeSessions(paths, []);
-  writeArtifacts(paths, []);
+  writeFileSync(join(paths.base, '.gitattributes'), GITATTRIBUTES, 'utf8');
+  writeFileSync(join(paths.base, '.gitignore'), GITIGNORE, 'utf8');
 
   console.log('Created .showtail/ — your work trail lives here.');
   console.log('');
   console.log('  .showtail/');
   console.log('    config.json      project settings');
-  console.log('    sessions/        your work sessions (one .jsonl per session)');
-  console.log('    artifacts/       snapshots (hashes) of files you record');
+  console.log('    sessions/        your work sessions (index of conversations)');
+  console.log('    journal/         append-only log of prompts, AI output, and edits');
+  console.log('    objects/         content (prompts, AI responses, diffs), deduped');
   console.log('    reports/         generated reports for your educator');
   console.log('');
   if (config.settings.git) {

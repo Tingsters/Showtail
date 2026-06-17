@@ -1,16 +1,9 @@
 import { existsSync } from 'node:fs';
 import { checkArtifactHashes } from '../core/artifacts.ts';
+import { eventFromEntry } from '../core/events.ts';
 import { buildReportData, renderMarkdown } from '../core/report.ts';
 import { validateEvent } from '../core/schema.ts';
-import {
-  readJsonl,
-  readSessions,
-  requirePaths,
-  sessionFile,
-  type ShowtailPaths,
-} from '../core/storage.ts';
-import { readConfig } from '../core/storage.ts';
-import type { Session } from '../types.ts';
+import { readConfig, readJournal, requirePaths, type ShowtailPaths } from '../core/storage.ts';
 
 export interface VerifyOptions {
   cwd?: string;
@@ -54,50 +47,37 @@ export async function verifyProject(paths: ShowtailPaths): Promise<VerifyResult>
   }
   checks.push(configCheck);
 
-  // 2. Every session JSONL line parses and has the required fields.
+  // 2. Every journal entry parses and reconstructs into a valid event.
   const eventsCheck: CheckResult = {
-    name: 'session logs are valid JSONL',
+    name: 'journal entries are valid',
     ok: true,
     details: [],
   };
-  let sessions: Session[] = [];
   try {
-    sessions = readSessions(paths);
-  } catch (err) {
-    eventsCheck.ok = false;
-    eventsCheck.details.push(
-      `sessions/index.json could not be read: ${(err as Error).message}`,
-    );
-  }
-  for (const session of sessions) {
-    const file = sessionFile(paths, session.id);
-    if (!existsSync(file)) {
-      // An empty session that never got a log is fine.
-      continue;
-    }
-    let records: unknown[] = [];
-    try {
-      records = readJsonl<unknown>(file);
-    } catch (err) {
-      eventsCheck.ok = false;
-      eventsCheck.details.push(
-        `${session.id}: a line is not valid JSON (${(err as Error).message}).`,
-      );
-      continue;
-    }
-    records.forEach((rec, i) => {
-      const issues = validateEvent(rec);
+    const entries = readJournal(paths);
+    let i = 0;
+    for (const entry of entries) {
+      i += 1;
+      if (entry.kind === 'artifact') {
+        if (!entry.path || !entry.sha256) {
+          eventsCheck.ok = false;
+          eventsCheck.details.push(`entry ${i} (${entry.id}): artifact missing path/sha256.`);
+        }
+        continue;
+      }
+      const issues = validateEvent(eventFromEntry(paths, entry));
       if (issues.length > 0) {
         eventsCheck.ok = false;
         const summary = issues.map((x) => `${x.field}: ${x.message}`).join('; ');
-        eventsCheck.details.push(`${session.id} line ${i + 1}: ${summary}`);
+        eventsCheck.details.push(`entry ${i} (${entry.id}): ${summary}`);
       }
-    });
+    }
+  } catch (err) {
+    eventsCheck.ok = false;
+    eventsCheck.details.push(`journal could not be read: ${(err as Error).message}`);
   }
   if (eventsCheck.ok && eventsCheck.details.length === 0) {
-    eventsCheck.details.push(
-      'All session logs parsed and contained the required fields.',
-    );
+    eventsCheck.details.push('All journal entries parsed and reconstructed correctly.');
   }
   checks.push(eventsCheck);
 

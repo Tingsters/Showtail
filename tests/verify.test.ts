@@ -5,9 +5,14 @@ import { runInit } from '../src/commands/init.ts';
 import { addArtifact } from '../src/core/artifacts.ts';
 import { logEvent } from '../src/core/events.ts';
 import { startSession } from '../src/core/sessions.ts';
-import { pathsForRoot, sessionFile } from '../src/core/storage.ts';
+import { pathsForRoot } from '../src/core/storage.ts';
 import { verifyProject } from '../src/commands/verify.ts';
 import { cleanup, makeTempDir } from './helpers.ts';
+
+/** Path to the first journal segment (events + artifacts now live here). */
+function journalSegment(paths: ReturnType<typeof pathsForRoot>): string {
+  return join(paths.journalDir, '0001.log');
+}
 
 function checkByName(result: Awaited<ReturnType<typeof verifyProject>>, name: string) {
   return result.checks.find((c) => c.name === name)!;
@@ -48,18 +53,18 @@ describe('verify', () => {
     }
   });
 
-  test('a corrupt JSONL line fails the validity check', async () => {
+  test('a corrupt journal line fails the validity check', async () => {
     const dir = makeTempDir();
     try {
       await runInit({ cwd: dir });
       const paths = pathsForRoot(dir);
-      const session = startSession(paths);
-      // Write a broken line directly into the session log.
-      appendFileSync(sessionFile(paths, session.id), 'this is not json\n');
+      startSession(paths);
+      // Write a broken line directly into the journal.
+      appendFileSync(journalSegment(paths), 'this is not json\n');
 
       const result = await verifyProject(paths);
       expect(result.ok).toBe(false);
-      expect(checkByName(result, 'session logs are valid JSONL').ok).toBe(false);
+      expect(checkByName(result, 'journal entries are valid').ok).toBe(false);
     } finally {
       cleanup(dir);
     }
@@ -70,15 +75,15 @@ describe('verify', () => {
     try {
       await runInit({ cwd: dir });
       const paths = pathsForRoot(dir);
-      const session = startSession(paths);
+      startSession(paths);
       appendFileSync(
-        sessionFile(paths, session.id),
+        journalSegment(paths),
         JSON.stringify({ id: 'x', type: 'banana', actor: 'student' }) + '\n',
       );
 
       const result = await verifyProject(paths);
       expect(result.ok).toBe(false);
-      expect(checkByName(result, 'session logs are valid JSONL').ok).toBe(false);
+      expect(checkByName(result, 'journal entries are valid').ok).toBe(false);
     } finally {
       cleanup(dir);
     }

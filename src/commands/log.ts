@@ -10,6 +10,8 @@ export interface LogOptions {
   tags?: string;
   tool?: string;
   session?: string;
+  /** Link this event to a prompt's turn (e.g. an `ai_output` for a prompt). */
+  turn?: string;
   cwd?: string;
 }
 
@@ -66,6 +68,7 @@ export async function runLog(options: LogOptions): Promise<void> {
     tags,
     tool: options.tool as Tool | undefined,
     sessionId: options.session,
+    turnId: options.turn,
   });
 
   console.log(`Logged ${event.type} (${event.id}) to session ${session.id}.`);

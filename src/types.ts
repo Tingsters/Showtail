@@ -70,6 +70,12 @@ export interface Event {
   sourceId?: string;
   /** Groups events written by a single import run, so one paste can be undone as a batch. */
   batchId?: string;
+  /**
+   * Links this event to the prompt that opened its "turn" (one exchange). A turn is
+   * a prompt plus the AI outputs and edits it produced; the report groups by this.
+   * Absent on older trails — the report falls back to timestamp adjacency.
+   */
+  turnId?: string;
   /** Who recorded it. Always "student" in the MVP. */
   actor: Actor;
 }
@@ -92,6 +98,15 @@ export interface Artifact {
   tool?: Tool;
   /** Related event ids the student chose to link. */
   eventIds?: string[];
+  /** The prompt's turn this edit belongs to (see {@link Event.turnId}). */
+  turnId?: string;
+  /**
+   * Object-store address of the AI-suggested code/diff that produced this snapshot,
+   * if captured. The diff text itself lives in `.showtail/objects/`, not inline.
+   */
+  diffHash?: string;
+  /** Number of changed lines in the captured diff (for a quick "~N lines" stat). */
+  diffLines?: number;
 }
 
 /** Metadata about a single work session. */
@@ -108,6 +123,23 @@ export interface Session {
   tool?: Tool;
 }
 
+/**
+ * Controls automatic scrubbing of secrets and personal data from captured
+ * content *before it is stored*. Best-effort safety net, not a guarantee.
+ */
+export interface RedactConfig {
+  /** Master switch. Default on. */
+  enabled?: boolean;
+  /** Provider keys, private keys, tokens, connection strings, passwords. Default on. */
+  secrets?: boolean;
+  /** Email / phone / credit-card / SSN. Default on. */
+  pii?: boolean;
+  /** Extra regex sources (strings) to also redact. */
+  custom?: string[];
+  /** Literal substrings that must never be redacted (e.g. tutorial sample keys). */
+  allow?: string[];
+}
+
 /** The project-level configuration written at `init` time. */
 export interface Config {
   /** Showtail config schema version. */
@@ -119,12 +151,20 @@ export interface Config {
   settings: {
     /** Whether to try to capture git commit hashes. */
     git: boolean;
+    /** Capture AI text responses (Stop hook / imports). Default on. */
+    captureAiOutput?: boolean;
+    /** Capture AI-suggested code/diffs alongside edits. Default on. */
+    captureCode?: boolean;
+    /** Sensitive-data redaction settings (default on). */
+    redact?: RedactConfig;
   };
 }
 
-/** Tracks which session new `log` events flow into. */
+/** Tracks which session new `log` events flow into, and the open turn. */
 export interface State {
   currentSessionId: string | null;
+  /** The prompt event id that opened the current turn, if any. */
+  currentPromptId?: string | null;
 }
 
 /** How many events were recorded through a given tool. */
@@ -169,7 +209,84 @@ export interface ReportData {
   tests: Event[];
   reflections: Event[];
   sources: Event[];
+  /** Prompt-and-AI exchanges, each rendered as a collapsible card. */
+  turns: Turn[];
+  /** How many secrets/PII Showtail scrubbed before storing (0 when none). */
+  redactionCount: number;
   authorship: string;
+}
+
+/** One AI-suggested code change within a turn (diff text resolved for rendering). */
+export interface TurnCodeChange {
+  path: string;
+  /** The suggested diff/new-content, resolved from the object store (if captured). */
+  diff?: string;
+  diffLines?: number;
+  tool?: Tool;
+  timestamp: string;
+}
+
+/**
+ * One exchange: a prompt plus the AI text outputs and code changes it produced.
+ * The unit a reviewer expands in the report.
+ */
+export interface Turn {
+  prompt: Event;
+  aiOutputs: Event[];
+  codeChanges: TurnCodeChange[];
+  tool: Tool;
+}
+
+/**
+ * One line of the append-only journal — the on-disk metadata record for an
+ * event or an artifact. Heavy content (prompt/response text, code diffs) is NOT
+ * stored here; it lives in the content-addressed object store and is referenced
+ * by hash (`refs`, `diffHash`). Kept as a superset of Event + Artifact fields so
+ * a single journal can hold both and so reconstruction stays mechanical.
+ */
+export interface JournalEntry {
+  /** Schema version of this entry, for upgrade-on-read. */
+  v: number;
+  /**
+   * Which record this is: a logged "event" (prompt, ai_output, even an
+   * artifact-type note) or an "artifact" file snapshot. Distinct from `type`
+   * so an artifact-*type* event is not confused with a snapshot. Defaults to
+   * "event" when absent.
+   */
+  kind?: 'event' | 'artifact';
+  /** Event/Artifact id. */
+  id: string;
+  /** ISO-8601 timestamp. */
+  ts: string;
+  /** Event type, or "artifact" for a file snapshot. */
+  type: EventType | 'artifact';
+  tool?: Tool;
+  /** Conversation/session id this entry belongs to. */
+  conv?: string;
+  /** Turn id (the prompt that opened the exchange). */
+  turn?: string;
+  /** Import batch id (retained so a specific import can be removed later). */
+  batch?: string;
+  actor?: Actor;
+  // --- event content (referenced, not inlined) ---
+  /** Object-store addresses for this entry's content (e.g. the event text). */
+  refs?: string[];
+  /** Short, human-glanceable preview of the content (still redacted). */
+  textPreview?: string;
+  /** Byte length of the full content. */
+  bytes?: number;
+  /** How many secrets/PII were scrubbed from this entry's content before storing. */
+  redacted?: number;
+  files?: string[];
+  tags?: string[];
+  gitCommit?: string;
+  sourceId?: string;
+  // --- artifact-specific ---
+  path?: string;
+  sha256?: string;
+  diffHash?: string;
+  diffLines?: number;
+  eventIds?: string[];
 }
 
 /** One chronological entry combining sessions and their events. */

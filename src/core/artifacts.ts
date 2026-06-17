@@ -1,16 +1,22 @@
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
-import type { Artifact, Tool } from '../types.ts';
+import type { Artifact, JournalEntry, Tool } from '../types.ts';
 import { maybeCurrentCommit } from './git.ts';
 import { sha256OfFile } from './hash.ts';
 import { makeId } from './ids.ts';
+import { writeObject } from './objects.ts';
+import { redact } from './redact.ts';
 import {
-  readArtifacts,
+  JOURNAL_ENTRY_VERSION,
+  appendJournal,
   readConfig,
+  readJournal,
   toRepoRelative,
-  writeArtifacts,
   type ShowtailPaths,
 } from './storage.ts';
+
+/** Cap a single captured diff so one huge edit can't bloat the store. */
+const MAX_DIFF_BYTES = 64 * 1024;
 
 /** Options when recording an artifact. */
 export interface AddArtifactInput {
@@ -20,6 +26,10 @@ export interface AddArtifactInput {
   eventIds?: string[];
   /** Which tool the work flowed through when this snapshot was taken. */
   tool?: Tool;
+  /** The prompt's turn this edit belongs to. */
+  turnId?: string;
+  /** AI-suggested code/diff that produced this snapshot, if captured. */
+  diff?: string;
 }
 
 /** The result of recording an artifact. */
@@ -34,10 +44,43 @@ export interface AddArtifactResult {
   created: boolean;
 }
 
+/** Count the changed lines in a unified diff (else total lines of content). */
+function countDiffLines(diff: string): number {
+  const lines = diff.split('\n');
+  const changed = lines.filter((l) => /^[+-](?![+-])/.test(l)).length;
+  return changed > 0 ? changed : lines.filter((l) => l.length > 0).length;
+}
+
+/** Reconstruct an in-memory Artifact from its journal entry. */
+export function artifactFromEntry(entry: JournalEntry): Artifact {
+  const artifact: Artifact = {
+    id: entry.id,
+    path: entry.path ?? '',
+    sha256: entry.sha256 ?? '',
+    timestamp: entry.ts,
+  };
+  if (entry.gitCommit) artifact.gitCommit = entry.gitCommit;
+  if (entry.conv) artifact.sessionId = entry.conv;
+  if (entry.tool) artifact.tool = entry.tool;
+  if (entry.eventIds && entry.eventIds.length > 0) artifact.eventIds = entry.eventIds;
+  if (entry.turn) artifact.turnId = entry.turn;
+  if (entry.diffHash) artifact.diffHash = entry.diffHash;
+  if (entry.diffLines !== undefined) artifact.diffLines = entry.diffLines;
+  return artifact;
+}
+
+/** Every recorded artifact (file snapshot), oldest first. */
+export function readArtifacts(paths: ShowtailPaths): Artifact[] {
+  return readJournal(paths)
+    .filter((e) => e.kind === 'artifact')
+    .map(artifactFromEntry);
+}
+
 /**
- * Record a snapshot (hash + metadata) of a file. Artifacts build a hash history
- * over time, but recording the *same* content as the latest snapshot is a no-op
- * (deduped) — so repeated saves and double-captures don't pile up duplicates.
+ * Record a snapshot (hash + metadata, and optionally the AI-suggested diff) of a
+ * file. Artifacts build a hash history over time, but recording the *same*
+ * content as the latest snapshot is a no-op (deduped) — so repeated saves and
+ * double-captures don't pile up duplicates.
  */
 export async function addArtifact(
   paths: ShowtailPaths,
@@ -64,21 +107,35 @@ export async function addArtifact(
 
   const gitCommit = await maybeCurrentCommit(paths.root, config.settings.git);
 
-  const artifact: Artifact = {
+  const entry: JournalEntry = {
+    v: JOURNAL_ENTRY_VERSION,
+    kind: 'artifact',
     id: makeId('art'),
+    ts: new Date().toISOString(),
+    type: 'artifact',
+    conv: input.sessionId,
     path: repoPath,
     sha256,
-    timestamp: new Date().toISOString(),
   };
-  if (gitCommit) artifact.gitCommit = gitCommit;
-  if (input.sessionId) artifact.sessionId = input.sessionId;
-  if (input.tool) artifact.tool = input.tool;
-  if (input.eventIds && input.eventIds.length > 0) artifact.eventIds = input.eventIds;
+  if (gitCommit) entry.gitCommit = gitCommit;
+  if (input.tool) entry.tool = input.tool;
+  if (input.eventIds && input.eventIds.length > 0) entry.eventIds = input.eventIds;
+  if (input.turnId) entry.turn = input.turnId;
 
-  const all = readArtifacts(paths);
-  all.push(artifact);
-  writeArtifacts(paths, all);
-  return { artifact, created: true };
+  // Capture the AI-suggested code into the object store (scrubbed, capped).
+  if (input.diff && config.settings.captureCode !== false) {
+    let diff = input.diff;
+    if (Buffer.byteLength(diff) > MAX_DIFF_BYTES) {
+      diff = diff.slice(0, MAX_DIFF_BYTES) + '\n… (diff truncated)';
+    }
+    const { text: cleaned, hits } = redact(diff, config.settings.redact);
+    entry.diffHash = writeObject(paths, cleaned);
+    entry.diffLines = countDiffLines(cleaned);
+    if (hits > 0) entry.redacted = hits;
+  }
+
+  appendJournal(paths, entry);
+  return { artifact: artifactFromEntry(entry), created: true };
 }
 
 /** All artifact records for a given repo-relative path, oldest first. */

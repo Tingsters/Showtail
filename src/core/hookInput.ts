@@ -19,6 +19,8 @@ export interface HookPayload {
   tool_input?: Record<string, unknown>;
   /** SessionStart: "startup" | "resume" | "compact" | ... */
   source?: string;
+  /** Stop: absolute path to the session transcript (Claude Code provides this). */
+  transcript_path?: string;
 }
 
 /** Read all of stdin and parse it as JSON. Returns null if empty/invalid. */
@@ -68,6 +70,63 @@ export function extractEditedFiles(payload: HookPayload): string[] {
   }
   // De-dupe while preserving order.
   return [...new Set(out)];
+}
+
+/** Render a minimal +/- diff from an Edit's old/new strings. */
+function simpleDiff(oldStr: unknown, newStr: unknown): string {
+  const out: string[] = [];
+  if (typeof oldStr === 'string' && oldStr.length > 0) {
+    for (const l of oldStr.split('\n')) out.push('- ' + l);
+  }
+  if (typeof newStr === 'string' && newStr.length > 0) {
+    for (const l of newStr.split('\n')) out.push('+ ' + l);
+  }
+  return out.join('\n');
+}
+
+/**
+ * Extract the AI-suggested code that produced an edit, as a small diff or
+ * snippet, from a PostToolUse payload. Handles Claude's Edit (old→new), Write
+ * (full new content), and MultiEdit (each edit), plus Codex's apply_patch
+ * envelope. Returns undefined when there's nothing to capture.
+ */
+export function extractSuggestedCode(payload: HookPayload): string | undefined {
+  const input = payload.tool_input;
+  if (!input || typeof input !== 'object') return undefined;
+  const obj = input as Record<string, unknown>;
+
+  // Codex apply_patch: the envelope text is already a +/- diff.
+  for (const key of ['input', 'patch'] as const) {
+    if (typeof obj[key] === 'string' && (obj[key] as string).length > 0) {
+      return obj[key] as string;
+    }
+  }
+
+  // MultiEdit: an array of {old_string, new_string}.
+  if (Array.isArray(obj.edits)) {
+    const parts: string[] = [];
+    for (const e of obj.edits) {
+      if (e && typeof e === 'object') {
+        const r = e as Record<string, unknown>;
+        const d = simpleDiff(r.old_string, r.new_string);
+        if (d) parts.push(d);
+      }
+    }
+    return parts.length > 0 ? parts.join('\n') : undefined;
+  }
+
+  // Edit: old_string → new_string.
+  if ('old_string' in obj || 'new_string' in obj) {
+    const d = simpleDiff(obj.old_string, obj.new_string);
+    return d || undefined;
+  }
+
+  // Write: the whole new file content, shown as added lines.
+  if (typeof obj.content === 'string' && obj.content.length > 0) {
+    return simpleDiff(undefined, obj.content);
+  }
+
+  return undefined;
 }
 
 // Matches the file headers in an apply_patch envelope, e.g.

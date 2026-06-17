@@ -3,7 +3,47 @@ import {
   extractApplyPatchFiles,
   extractEditedFiles,
   extractPrompt,
+  extractSuggestedCode,
 } from '../src/core/hookInput.ts';
+
+describe('extractSuggestedCode', () => {
+  test('Edit becomes a +/- diff', () => {
+    const code = extractSuggestedCode({
+      tool_input: { file_path: 'a.ts', old_string: 'const a = 1;', new_string: 'const a = 2;' },
+    });
+    expect(code).toContain('- const a = 1;');
+    expect(code).toContain('+ const a = 2;');
+  });
+
+  test('Write becomes added lines', () => {
+    const code = extractSuggestedCode({ tool_input: { file_path: 'a.ts', content: 'line one\nline two' } });
+    expect(code).toBe('+ line one\n+ line two');
+  });
+
+  test('MultiEdit concatenates each edit', () => {
+    const code = extractSuggestedCode({
+      tool_input: {
+        file_path: 'a.ts',
+        edits: [
+          { old_string: 'x', new_string: 'y' },
+          { old_string: 'p', new_string: 'q' },
+        ],
+      },
+    });
+    expect(code).toContain('- x');
+    expect(code).toContain('+ q');
+  });
+
+  test('Codex apply_patch envelope is passed through', () => {
+    const patch = '*** Update File: a.ts\n@@\n-old\n+new\n';
+    expect(extractSuggestedCode({ tool_input: { input: patch } })).toBe(patch);
+  });
+
+  test('returns undefined when there is nothing to capture', () => {
+    expect(extractSuggestedCode({ tool_input: { file_path: 'a.ts' } })).toBeUndefined();
+    expect(extractSuggestedCode({})).toBeUndefined();
+  });
+});
 
 describe('hookInput', () => {
   test('extractPrompt returns trimmed prompt text', () => {

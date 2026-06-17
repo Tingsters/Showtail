@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -22,6 +22,38 @@ async function runShowtail(args: string[], cwd: string): Promise<string | undefi
     output.appendLine(`showtail ${args.join(' ')} failed: ${(err as Error).message}`);
     return undefined;
   }
+}
+
+/**
+ * Run the showtail CLI, piping `input` to its stdin. Used for content (an AI
+ * reply) that can be too long to pass safely as a command-line argument.
+ */
+function runShowtailStdin(
+  args: string[],
+  cwd: string,
+  input: string,
+): Promise<string | undefined> {
+  return new Promise((resolve) => {
+    try {
+      const cp = spawn(showtailBin(), args, { cwd });
+      let out = '';
+      cp.stdout.on('data', (d) => (out += d.toString()));
+      cp.on('error', (err) => {
+        output.appendLine(`showtail ${args.join(' ')} failed: ${err.message}`);
+        resolve(undefined);
+      });
+      cp.on('close', () => resolve(out));
+      cp.stdin.end(input);
+    } catch (err) {
+      output.appendLine(`showtail ${args.join(' ')} failed: ${(err as Error).message}`);
+      resolve(undefined);
+    }
+  });
+}
+
+/** Pull the logged event id out of `runLog`'s output ("Logged prompt (evt_…)"). */
+function loggedEventId(out: string | undefined): string | undefined {
+  return out?.match(/\((evt_[A-Za-z0-9_]+)\)/)?.[1];
 }
 
 /** The workspace folder a file belongs to (or the first folder as a fallback). */
@@ -165,11 +197,13 @@ function registerChatParticipant(context: vscode.ExtensionContext): void {
     }
 
     // Plain text: record the prompt verbatim, then give a quick answer.
+    let turnId: string | undefined;
     if (request.prompt.trim().length > 0) {
-      await runShowtail(
+      const logged = await runShowtail(
         ['log', '--type', 'prompt', '--text', request.prompt, '--tool', 'github-copilot'],
         cwd,
       );
+      turnId = loggedEventId(logged);
       stream.markdown('_Recorded your prompt in your Showtail trail._\n\n');
     }
 
@@ -179,8 +213,16 @@ function registerChatParticipant(context: vscode.ExtensionContext): void {
       if (model) {
         const messages = [vscode.LanguageModelChatMessage.User(request.prompt)];
         const response = await model.sendRequest(messages, {}, token);
+        let full = '';
         for await (const chunk of response.text) {
           stream.markdown(chunk);
+          full += chunk;
+        }
+        // Capture the model's reply as ai_output, linked to the prompt's turn.
+        if (full.trim().length > 0) {
+          const args = ['log', '--type', 'ai_output', '--tool', 'github-copilot'];
+          if (turnId) args.push('--turn', turnId);
+          await runShowtailStdin(args, cwd, full);
         }
       }
     } catch (err) {

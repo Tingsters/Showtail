@@ -341,6 +341,10 @@ export async function importClaudeTranscript(
     skipped: 0,
   };
 
+  // A user prompt opens a turn; the assistant reply and edits that follow it
+  // link back via this id, so the report groups the imported exchange.
+  let currentTurnId: string | undefined;
+
   for (const msg of transcript.messages) {
     if (msg.role === 'assistant' && !options.withResponses) continue;
     if (seen.has(msg.sourceId)) {
@@ -352,7 +356,7 @@ export async function importClaudeTranscript(
     const type =
       msg.role === 'user' ? 'prompt' : msg.role === 'assistant' ? 'ai_output' : 'artifact';
 
-    await logEvent(paths, {
+    const { event } = await logEvent(paths, {
       type,
       text: msg.text,
       tool: 'claude-code',
@@ -362,7 +366,9 @@ export async function importClaudeTranscript(
       sessionId: options.sessionId,
       files: msg.files,
       tags: ['imported'],
+      turnId: msg.role === 'user' ? undefined : currentTurnId,
     });
+    if (msg.role === 'user') currentTurnId = event.id;
 
     if (msg.role === 'user') result.prompts += 1;
     else if (msg.role === 'assistant') result.responses += 1;

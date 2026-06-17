@@ -21,7 +21,7 @@ import { runImportClaudeCode } from './commands/importClaude.ts';
 import { eventTypeList } from './core/schema.ts';
 import type { Tool } from './types.ts';
 
-const VERSION = '0.6.0';
+const VERSION = '0.7.0';
 
 /** Wrap a command action so errors print a clean message and set exit code 1. */
 function action<A extends unknown[]>(fn: (...args: A) => Promise<unknown>) {
@@ -68,6 +68,7 @@ program
   .option('--tags <tags>', 'comma-separated tags')
   .option('--tool <tool>', 'tool this came through (claude-code, github-copilot, cli)')
   .option('-s, --session <id>', 'log to a specific session id')
+  .option('--turn <id>', "link to a prompt's turn (e.g. an ai_output for a prompt)")
   .action(
     action(
       async (opts: {
@@ -77,6 +78,7 @@ program
         tags?: string;
         tool?: string;
         session?: string;
+        turn?: string;
       }) => runLog(opts),
     ),
   );

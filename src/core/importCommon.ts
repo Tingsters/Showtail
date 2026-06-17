@@ -166,6 +166,9 @@ export async function importConversation(
     skipped: 0,
   };
 
+  // A user prompt opens a turn; the assistant reply links back via this id.
+  let currentTurnId: string | undefined;
+
   for (const msg of conversation.messages) {
     const type =
       msg.role === 'user' ? 'prompt' : msg.role === 'assistant' ? 'ai_output' : null;
@@ -184,7 +187,7 @@ export async function importConversation(
       ? new Date(msg.createTime * 1000).toISOString()
       : undefined;
 
-    await logEvent(paths, {
+    const { event } = await logEvent(paths, {
       type,
       text: msg.text,
       tool,
@@ -192,7 +195,9 @@ export async function importConversation(
       sourceId,
       batchId: options.batchId,
       sessionId: options.sessionId,
+      turnId: type === 'prompt' ? undefined : currentTurnId,
     });
+    if (type === 'prompt') currentTurnId = event.id;
 
     if (type === 'prompt') result.prompts += 1;
     else result.responses += 1;
