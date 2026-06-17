@@ -32,6 +32,7 @@ export const TOOLS = [
   'claude-code',
   'github-copilot',
   'chatgpt',
+  'google-gemini',
   'codex',
   'cli',
 ] as const;
@@ -42,6 +43,7 @@ export const TOOL_LABELS: Record<string, string> = {
   'claude-code': 'Claude Code',
   'github-copilot': 'GitHub Copilot',
   chatgpt: 'ChatGPT',
+  'google-gemini': 'Google Gemini',
   codex: 'OpenAI Codex',
   cli: 'CLI',
 };
@@ -160,6 +162,8 @@ export interface ReportData {
   prompts: Event[];
   /** Events imported from ChatGPT, grouped so a student can review them in one place. */
   importedChatgpt: Event[];
+  /** Events imported from Google Gemini, grouped so a student can review them in one place. */
+  importedGemini: Event[];
   decisions: Event[];
   artifactsCreated: Artifact[];
   tests: Event[];

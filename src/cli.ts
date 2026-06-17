@@ -16,6 +16,7 @@ import {
 import { runCodexInstall, runCodexStatus, runCodexUninstall } from './commands/codex.ts';
 import { runHook, type HookEvent } from './commands/hook.ts';
 import { runImportChatgpt, runImportUndo } from './commands/import.ts';
+import { runImportGemini } from './commands/importGemini.ts';
 import { runImportClaudeCode } from './commands/importClaude.ts';
 import { eventTypeList } from './core/schema.ts';
 import type { Tool } from './types.ts';
@@ -276,6 +277,39 @@ importCmd
         },
       ) =>
         runImportChatgpt(shareUrl, {
+          withResponses: opts.withResponses,
+          paste: opts.paste,
+          file: opts.file,
+          date: opts.date,
+          session: opts.session,
+        }),
+    ),
+  );
+
+importCmd
+  .command('gemini [share-url]')
+  .description(
+    'Import a Google Gemini conversation. A share link is parsed best-effort; if it\n' +
+      'will not work, paste the conversation with --paste (or --file a saved page/transcript).',
+  )
+  .option('--with-responses', "also log Gemini's responses (not just your prompts)")
+  .option('--paste', 'paste a conversation on stdin instead of using a link (backup)')
+  .option('--file <path>', 'parse a saved share page or a saved transcript file')
+  .option('--date <yyyy-mm-dd>', 'date a pasted conversation so it lands on the timeline')
+  .option('-s, --session <id>', 'import into a specific session id')
+  .action(
+    action(
+      async (
+        shareUrl: string | undefined,
+        opts: {
+          withResponses?: boolean;
+          paste?: boolean;
+          file?: string;
+          date?: string;
+          session?: string;
+        },
+      ) =>
+        runImportGemini(shareUrl, {
           withResponses: opts.withResponses,
           paste: opts.paste,
           file: opts.file,

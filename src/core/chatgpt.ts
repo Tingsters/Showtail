@@ -1,24 +1,25 @@
 import { decode } from 'turbo-stream';
-import { logEvent, importedSourceIds } from './events.ts';
-import { sha256OfString } from './hash.ts';
-import type { ShowtailPaths } from './storage.ts';
+import {
+  parseTranscript as parseTranscriptShared,
+  type ParsedConversation,
+  type ParsedMessage,
+  type TranscriptParseOptions,
+  type TranscriptResult,
+} from './importCommon.ts';
+
+// The generic import machinery lives in importCommon.ts. Re-export the parts
+// callers historically imported from here so existing imports keep working.
+export {
+  importConversation,
+  type ParsedConversation,
+  type ParsedMessage,
+  type TranscriptResult,
+  type ImportOptions,
+  type ImportResult,
+} from './importCommon.ts';
 
 const BROWSER_UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
-
-export interface ParsedMessage {
-  id: string;
-  role: string; // user | assistant | system | tool
-  text: string;
-  /** Epoch seconds, when present. */
-  createTime?: number;
-}
-
-export interface ParsedConversation {
-  id?: string;
-  title: string;
-  messages: ParsedMessage[];
-}
 
 /** Fetch a public ChatGPT share page (a browser UA is required, or it 403s). */
 export async function fetchSharedConversation(url: string): Promise<string> {
@@ -193,162 +194,19 @@ function extractText(content: any): string {
 }
 
 // --- Manual paste / backup import -----------------------------------------
-//
-// When a share link won't work, a student can paste the conversation text.
-// We can't tell user vs. assistant prose apart by writing style (that would be
-// AI-detection, which Showtail is not), so we key off *structural* markers:
-// strip ChatGPT's UI chrome, normalize attachment chips, split on the
-// "You said:"/"ChatGPT said:" headings when present, and otherwise record what
-// remains as the student's prompts. The student then skims and can undo.
-
-/** Marks a turn boundary we discovered while stripping chrome. */
-const BOUNDARY = '';
 
 /** Role markers ChatGPT page-copies sometimes include (accessibility headings + labels). */
 const ROLE_RE =
   /(You said:|ChatGPT said:|(?:^|\n)[ \t]*(?:You|User|ChatGPT|Assistant):)/gi;
 
-export interface TranscriptResult {
-  conversation: ParsedConversation;
-  /** True if explicit role markers were found (so responses can be captured too). */
-  markersFound: boolean;
-}
+/** ChatGPT-specific knobs for the shared transcript parser. */
+export const CHATGPT_TRANSCRIPT: TranscriptParseOptions = {
+  roleRe: ROLE_RE,
+  assistantTest: /chatgpt|assistant/i,
+  title: 'ChatGPT conversation (pasted)',
+};
 
-/**
- * Parse a pasted ChatGPT transcript into a conversation. If role markers are
- * present, both prompts and responses are recovered; otherwise every cleaned
- * block is treated as a student prompt and `markersFound` is false.
- */
+/** Parse a pasted ChatGPT transcript (thin wrapper over the shared parser). */
 export function parseTranscript(input: string): TranscriptResult {
-  const text = input.replace(/\r\n?/g, '\n');
-  const markers = [...text.matchAll(ROLE_RE)];
-  if (markers.length > 0) {
-    return { conversation: fromMarkers(text, markers), markersFound: true };
-  }
-  return { conversation: fromPromptsOnly(text), markersFound: false };
-}
-
-/**
- * Strip ChatGPT page-copy chrome and normalize attachment chips, inserting a
- * BOUNDARY where a turn clearly ends (after an attachment, or at a reasoning /
- * action-button artifact).
- */
-function cleanChrome(text: string): string {
-  return (
-    text
-      // "Pasted text(9).txtDocument" -> "[attachment: Pasted text(9).txt]" + boundary.
-      // The chip is glued to the next prompt (no space after "Document"), so no trailing \b.
-      .replace(/([\w ()\-]+?\.[A-Za-z0-9]{1,6})Document/g, `[attachment: $1]${BOUNDARY}`)
-      // reasoning chrome, often with the trailing "Edit" button glued on: a boundary
-      .replace(/Thought for \d+\s*s(?:\s*Edit)?/g, BOUNDARY)
-      // standalone action buttons on their own line
-      .replace(/^[ \t]*(?:Edit|Copy|Regenerate|Read aloud|Share)[ \t]*$/gim, BOUNDARY)
-  );
-}
-
-/** Build a message with a content-hash id so re-pasting the same text dedupes. */
-function pasteMessage(role: string, text: string): ParsedMessage {
-  return { id: 'paste:' + sha256OfString(role + '\n' + text).slice(0, 16), role, text };
-}
-
-/** Split a marked-up transcript into user/assistant turns at the role markers. */
-function fromMarkers(text: string, markers: RegExpMatchArray[]): ParsedConversation {
-  const messages: ParsedMessage[] = [];
-  for (let i = 0; i < markers.length; i++) {
-    const m = markers[i]!;
-    const marker = m[0];
-    const start = (m.index ?? 0) + marker.length;
-    const end =
-      i + 1 < markers.length ? (markers[i + 1]!.index ?? text.length) : text.length;
-    const role = /chatgpt|assistant/i.test(marker) ? 'assistant' : 'user';
-    const body = cleanChrome(text.slice(start, end)).split(BOUNDARY).join('\n').trim();
-    if (body) messages.push(pasteMessage(role, body));
-  }
-  return { title: 'ChatGPT conversation (pasted)', messages };
-}
-
-/** No role markers: record each cleaned block as one of the student's prompts. */
-function fromPromptsOnly(text: string): ParsedConversation {
-  const blocks = cleanChrome(text)
-    .split(new RegExp(`${BOUNDARY}|\\n{2,}`))
-    .map((b) => b.trim())
-    .filter((b) => b.length > 0);
-  return {
-    title: 'ChatGPT conversation (pasted)',
-    messages: blocks.map((b) => pasteMessage('user', b)),
-  };
-}
-
-export interface ImportOptions {
-  withResponses?: boolean;
-  sessionId?: string;
-  /** Tag every imported event with this batch id so the import can be undone. */
-  batchId?: string;
-}
-
-export interface ImportResult {
-  title: string;
-  prompts: number;
-  responses: number;
-  skipped: number;
-  first?: string;
-  last?: string;
-}
-
-/**
- * Import a parsed conversation into the trail: user messages become `prompt`
- * events, assistant messages become `ai_output` (only with `withResponses`),
- * each tagged `tool: chatgpt`, stamped with the original time, and deduped by
- * the ChatGPT message id so re-importing the same link adds nothing.
- */
-export async function importConversation(
-  paths: ShowtailPaths,
-  conversation: ParsedConversation,
-  options: ImportOptions = {},
-): Promise<ImportResult> {
-  const seen = importedSourceIds(paths);
-  const result: ImportResult = {
-    title: conversation.title,
-    prompts: 0,
-    responses: 0,
-    skipped: 0,
-  };
-
-  for (const msg of conversation.messages) {
-    const type =
-      msg.role === 'user' ? 'prompt' : msg.role === 'assistant' ? 'ai_output' : null;
-    if (type === null) continue;
-    if (type === 'ai_output' && !options.withResponses) continue;
-
-    const sourceId =
-      msg.id || `chatgpt:${conversation.id}:${result.prompts + result.responses}`;
-    if (seen.has(sourceId)) {
-      result.skipped += 1;
-      continue;
-    }
-    seen.add(sourceId);
-
-    const timestamp = msg.createTime
-      ? new Date(msg.createTime * 1000).toISOString()
-      : undefined;
-
-    await logEvent(paths, {
-      type,
-      text: msg.text,
-      tool: 'chatgpt',
-      timestamp,
-      sourceId,
-      batchId: options.batchId,
-      sessionId: options.sessionId,
-    });
-
-    if (type === 'prompt') result.prompts += 1;
-    else result.responses += 1;
-    if (timestamp) {
-      if (!result.first || timestamp < result.first) result.first = timestamp;
-      if (!result.last || timestamp > result.last) result.last = timestamp;
-    }
-  }
-
-  return result;
+  return parseTranscriptShared(input, CHATGPT_TRANSCRIPT);
 }

@@ -414,6 +414,44 @@ Import is deliberate and per conversation. Showtail does not read your full Chat
 
 ---
 
+## Google Gemini integration
+
+Gemini conversations import into the same trail, the same way as ChatGPT — your **prompts**
+become `prompt` events tagged `google-gemini`, ready to interleave on the cross-tool timeline.
+
+The **reliable path is paste** (Gemini's share pages use an unstable, undocumented format, so
+auto-parsing a link is best-effort):
+
+```bash
+showtail import gemini --paste         # then paste the conversation and press Ctrl-D (Ctrl-Z↵ on Windows)
+# or from a file you saved:
+showtail import gemini --file my-chat.txt
+```
+
+You can also try a **share link** — in Gemini, click **Share → Create public link**, then:
+
+```bash
+showtail import gemini https://gemini.google.com/share/<id>
+```
+
+If Showtail can't read the page automatically it tells you to paste instead — no conversation is
+lost. The same options as ChatGPT apply:
+
+- `--with-responses` — also log Gemini's answers (`ai_output`); off by default.
+- `--file <path>` — import a saved page **or** a saved transcript.
+- `--date 2026-06-10` — place a pasted conversation on the timeline (a paste carries no times).
+
+As with ChatGPT, **responses are only captured when the copy includes `You said:` /
+`Gemini said:` markers** — otherwise everything is recorded as your prompts (Showtail never guesses
+from writing style). Showtail prints back what it recorded so you can **skim** it; undo the whole
+batch in one step with `showtail import undo`. Re-importing is safe (deduped). Imported prompts
+appear under **"Imported from Google Gemini"** in your report.
+
+**Privacy:** a Gemini share link makes that conversation **public** on Google's servers. Create it,
+import it, then delete the link. The import itself stays local like everything else in Showtail.
+
+---
+
 ## Example classroom workflow
 
 1. **Teacher:** Ask students to use Showtail for a project and commit `.showtail/` with their work.
@@ -522,6 +560,7 @@ Showtail's MVP is a local CLI with a small core that can grow over time:
 - Completed: **Claude Code skill** to log prompts, decisions, and artifacts while you pair. See [Claude Code integration](#claude-code-integration).
 - Completed: **GitHub Copilot and VS Code extension** to capture Copilot prompts and saved edits in one cross-tool report. See [GitHub Copilot integration](#github-copilot-integration).
 - Completed: **ChatGPT import** to bring selected conversations into the same trail. See [ChatGPT integration](#chatgpt-integration).
+- Completed: **Google Gemini import** to bring conversations (paste, or a best-effort share link) into the same trail. See [Google Gemini integration](#google-gemini-integration).
 - Completed: **OpenAI Codex integration** to capture Codex prompts and edits through `AGENTS.md` and hooks. See [OpenAI Codex integration](#openai-codex-integration).
 - Planned: **GitHub Action** to verify a submission's trail automatically in CI.
 - Planned: **Signed provenance records** for stronger guarantees.

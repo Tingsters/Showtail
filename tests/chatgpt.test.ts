@@ -91,7 +91,7 @@ describe('chatgpt share import', () => {
       const paths = pathsForRoot(dir);
       const c = extractConversation(payload())!;
 
-      const res = await importConversation(paths, c);
+      const res = await importConversation(paths, c, 'chatgpt');
       expect(res.prompts).toBe(2);
       expect(res.responses).toBe(0);
 
@@ -112,12 +112,14 @@ describe('chatgpt share import', () => {
       const paths = pathsForRoot(dir);
       const c = extractConversation(payload())!;
 
-      await importConversation(paths, c);
-      const again = await importConversation(paths, c);
+      await importConversation(paths, c, 'chatgpt');
+      const again = await importConversation(paths, c, 'chatgpt');
       expect(again.prompts).toBe(0);
       expect(again.skipped).toBeGreaterThan(0);
 
-      const withResp = await importConversation(paths, c, { withResponses: true });
+      const withResp = await importConversation(paths, c, 'chatgpt', {
+        withResponses: true,
+      });
       expect(withResp.responses).toBe(1); // the one assistant message, newly added
       expect(readAllEvents(paths).some((e) => e.type === 'ai_output')).toBe(true);
     } finally {

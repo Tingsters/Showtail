@@ -62,6 +62,7 @@ export function buildReportData(paths: ShowtailPaths): ReportData {
     timeline: buildTimeline(sessions, paths),
     prompts: byType('prompt'),
     importedChatgpt: events.filter((e) => toolOf(e) === 'chatgpt'),
+    importedGemini: events.filter((e) => toolOf(e) === 'google-gemini'),
     decisions: byType('decision'),
     artifactsCreated: artifacts,
     tests: byType('test'),
@@ -217,6 +218,9 @@ export function renderMarkdown(data: ReportData): string {
   // (a paste backup records prompts here for review) without hunting the timeline.
   if (data.importedChatgpt.length > 0) {
     section(lines, 'Imported from ChatGPT', data.importedChatgpt, (e) => bullet(e));
+  }
+  if (data.importedGemini.length > 0) {
+    section(lines, 'Imported from Google Gemini', data.importedGemini, (e) => bullet(e));
   }
 
   section(lines, 'Major decisions', data.decisions, (e) => bullet(e));

@@ -5,12 +5,13 @@ import {
   parseShareHtml,
   parseTranscript,
   type ParsedConversation,
-} from '../core/chatgpt.ts';
-import { latestBatchId, readAllEvents, removeEventsByBatch } from '../core/events.ts';
+} from '../core/gemini.ts';
+import { readAllEvents } from '../core/events.ts';
 import { makeId } from '../core/ids.ts';
 import { requirePaths } from '../core/storage.ts';
+import { dateToEpochSeconds, oneLine } from './import.ts';
 
-export interface ImportChatgptOptions {
+export interface ImportGeminiOptions {
   withResponses?: boolean;
   file?: string;
   session?: string;
@@ -23,11 +24,13 @@ export interface ImportChatgptOptions {
   date?: string;
 }
 
-const SHARE_RE = /^https:\/\/(chatgpt\.com|chat\.openai\.com)\/share\/[\w-]+/i;
+const SHARE_RE = /^https:\/\/(gemini\.google\.com\/share|g\.co\/gemini\/share)\/[\w-]+/i;
 
-/** A saved page still carries the React Router stream markers; a transcript won't. */
+/** A saved Gemini page carries the Angular/WIZ markers; a transcript won't. */
 function looksLikeSharePage(content: string): boolean {
-  return /__reactRouterContext|streamController\.enqueue\(/.test(content);
+  return /window\.WIZ_global_data|AF_initDataCallback|gemini\.google\.com\/share|<c-wiz/.test(
+    content,
+  );
 }
 
 async function readStdin(): Promise<string> {
@@ -35,30 +38,15 @@ async function readStdin(): Promise<string> {
   return await Bun.stdin.text();
 }
 
-/** Parse `--date` (a day, or any ISO datetime) into epoch seconds; clear error otherwise. */
-export function dateToEpochSeconds(date: string): number {
-  const ms = Date.parse(date.length <= 10 ? `${date}T12:00:00Z` : date);
-  if (Number.isNaN(ms)) {
-    throw new Error(`Could not understand --date "${date}". Use a day like 2026-06-10.`);
-  }
-  return Math.floor(ms / 1000);
-}
-
-/** Collapse a prompt to a single readable line for the skim list. */
-export function oneLine(text: string, max = 120): string {
-  const flat = text.replace(/\s+/g, ' ').trim();
-  return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
-}
-
 /**
- * Import a ChatGPT conversation into the trail. Three input modes:
- *  - a share URL (preferred): fetched and parsed;
+ * Import a Gemini conversation into the trail. Three input modes:
+ *  - a share URL: fetched and parsed best-effort (paste fallback on failure);
  *  - `--file` a saved share page (parsed the same way) or a saved transcript;
- *  - `--paste` a transcript on stdin (the manual backup).
+ *  - `--paste` a transcript on stdin (the reliable manual path).
  */
-export async function runImportChatgpt(
+export async function runImportGemini(
   source: string | undefined,
-  options: ImportChatgptOptions,
+  options: ImportGeminiOptions,
 ): Promise<void> {
   const paths = requirePaths(options.cwd);
 
@@ -88,8 +76,8 @@ export async function runImportChatgpt(
   } else {
     if (!source || !SHARE_RE.test(source)) {
       throw new Error(
-        'Pass a ChatGPT share URL like https://chatgpt.com/share/<id>\n' +
-          '(create one with "Share" in ChatGPT), use --file <saved-page>, or paste a\n' +
+        'Pass a Gemini share URL like https://gemini.google.com/share/<id>\n' +
+          '(create one with "Share" in Gemini), use --file <saved-page>, or paste a\n' +
           'conversation with --paste if the link will not work.',
       );
     }
@@ -111,7 +99,7 @@ export async function runImportChatgpt(
   }
 
   const batchId = makeId('imp');
-  const res = await importConversation(paths, conversation, 'chatgpt', {
+  const res = await importConversation(paths, conversation, 'google-gemini', {
     withResponses: options.withResponses,
     sessionId: options.session,
     batchId,
@@ -140,14 +128,16 @@ function printShareResult(
   } else {
     const parts = [`${res.prompts} prompt(s)`];
     if (withResponses) parts.push(`${res.responses} response(s)`);
-    console.log(`Imported from "${res.title}": ${parts.join(', ')} (tool: chatgpt).`);
+    console.log(
+      `Imported from "${res.title}": ${parts.join(', ')} (tool: google-gemini).`,
+    );
     if (res.skipped) console.log(`  ${res.skipped} already-imported message(s) skipped.`);
     if (res.first && res.last) console.log(`  Spanned ${res.first} → ${res.last}.`);
   }
   console.log('');
   console.log('Run `showtail report` to see it interleaved with your other tools.');
   console.log(
-    'Privacy: a share link is public on OpenAI’s servers — delete it once imported.',
+    'Privacy: a share link is public on Google’s servers — delete it once imported.',
   );
 }
 
@@ -173,15 +163,15 @@ function printPasteResult(
 
   const parts = [`${res.prompts} prompt(s)`];
   if (withResponses && res.responses > 0) parts.push(`${res.responses} response(s)`);
-  console.log(`Recorded ${parts.join(' and ')} from your paste (tool: chatgpt).`);
+  console.log(`Recorded ${parts.join(' and ')} from your paste (tool: google-gemini).`);
 
   if (!markersFound) {
     console.log('');
     console.log(
-      "No 'You said:/ChatGPT said:' markers were in your paste, so I recorded everything",
+      "No 'You said:/Gemini said:' markers were in your paste, so I recorded everything",
     );
     console.log(
-      "as YOUR prompts. If any of it was ChatGPT's reply, undo below and re-copy with those",
+      "as YOUR prompts. If any of it was Gemini's reply, undo below and re-copy with those",
     );
     console.log('markers — or use the share link, which separates them exactly.');
   }
@@ -193,17 +183,7 @@ function printPasteResult(
 
   console.log('');
   console.log('Not yours? Undo this whole batch:  showtail import undo');
-  console.log('Looks right? `showtail report` shows it under “Imported from ChatGPT”.');
-}
-
-/** Undo the most recent import in one step (removes that batch's events). */
-export async function runImportUndo(options: { cwd?: string } = {}): Promise<void> {
-  const paths = requirePaths(options.cwd);
-  const batchId = latestBatchId(paths);
-  if (!batchId) {
-    console.log('Nothing to undo — no imported events found.');
-    return;
-  }
-  const removed = removeEventsByBatch(paths, batchId);
-  console.log(`Undid the last import — removed ${removed} event(s).`);
+  console.log(
+    'Looks right? `showtail report` shows it under “Imported from Google Gemini”.',
+  );
 }
