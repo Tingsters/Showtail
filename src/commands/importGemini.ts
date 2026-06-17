@@ -20,17 +20,20 @@ export interface ImportGeminiOptions {
   paste?: boolean;
   /** A pasted transcript supplied directly (used by tests instead of stdin). */
   text?: string;
-  /** Stamp pasted events with this date (YYYY-MM-DD) so they land on the timeline. */
+  /** Stamp timestamp-less events with this date (YYYY-MM-DD) so they land on the timeline. */
   date?: string;
 }
 
 const SHARE_RE = /^https:\/\/(gemini\.google\.com\/share|g\.co\/gemini\/share)\/[\w-]+/i;
 
-/** A saved Gemini page carries the Angular/WIZ markers; a transcript won't. */
-function looksLikeSharePage(content: string): boolean {
-  return /window\.WIZ_global_data|AF_initDataCallback|gemini\.google\.com\/share|<c-wiz/.test(
-    content,
-  );
+/** A saved Gemini RPC response carries the batchexecute markers; a transcript won't. */
+function looksLikeRpcBody(content: string): boolean {
+  return /"wrb\.fr"/.test(content) || content.trimStart().startsWith(")]}'");
+}
+
+/** A saved Gemini *page* (HTML) — which does NOT contain the conversation. */
+function looksLikeGeminiPage(content: string): boolean {
+  return /window\.WIZ_global_data|<c-wiz/.test(content);
 }
 
 async function readStdin(): Promise<string> {
@@ -39,10 +42,11 @@ async function readStdin(): Promise<string> {
 }
 
 /**
- * Import a Gemini conversation into the trail. Three input modes:
- *  - a share URL: fetched and parsed best-effort (paste fallback on failure);
- *  - `--file` a saved share page (parsed the same way) or a saved transcript;
- *  - `--paste` a transcript on stdin (the reliable manual path).
+ * Import a Google Gemini conversation into the trail. Input modes:
+ *  - a share URL (preferred): the conversation is fetched via Gemini's
+ *    batchexecute RPC and decoded;
+ *  - `--file` a saved RPC response (decoded the same way) or a saved transcript;
+ *  - `--paste` a transcript on stdin (the manual backup).
  */
 export async function runImportGemini(
   source: string | undefined,
@@ -65,8 +69,14 @@ export async function runImportGemini(
       throw new Error(`File not found: ${options.file}`);
     }
     const content = readFileSync(options.file, 'utf8');
-    if (looksLikeSharePage(content)) {
+    if (looksLikeRpcBody(content)) {
       conversation = await parseShareHtml(content);
+    } else if (looksLikeGeminiPage(content)) {
+      throw new Error(
+        'That looks like a saved Gemini page, which does not contain the conversation\n' +
+          '(Gemini loads it in the browser). Import from the share link directly, or copy\n' +
+          'the chat text and use --paste.',
+      );
     } else {
       const parsed = parseTranscript(content);
       conversation = parsed.conversation;
@@ -77,8 +87,8 @@ export async function runImportGemini(
     if (!source || !SHARE_RE.test(source)) {
       throw new Error(
         'Pass a Gemini share URL like https://gemini.google.com/share/<id>\n' +
-          '(create one with "Share" in Gemini), use --file <saved-page>, or paste a\n' +
-          'conversation with --paste if the link will not work.',
+          '(create one with "Share" in Gemini), use --file <saved-transcript>, or paste a\n' +
+          'conversation with --paste.',
       );
     }
     conversation = await parseShareHtml(await fetchSharedConversation(source));
@@ -89,9 +99,9 @@ export async function runImportGemini(
     return;
   }
 
-  // A paste has no timestamps; --date places it on the cross-tool timeline,
-  // with a 1-second step per message so the order is preserved.
-  if (isPaste && options.date) {
+  // Gemini conversations (pasted or shared) carry no per-message timestamps;
+  // --date places them on the cross-tool timeline, 1 second apart so order holds.
+  if (options.date && conversation.messages.every((m) => m.createTime == null)) {
     const base = dateToEpochSeconds(options.date);
     conversation.messages.forEach((m, i) => {
       m.createTime = base + i;
@@ -183,7 +193,5 @@ function printPasteResult(
 
   console.log('');
   console.log('Not yours? Undo this whole batch:  showtail import undo');
-  console.log(
-    'Looks right? `showtail report` shows it under “Imported from Google Gemini”.',
-  );
+  console.log('Looks right? Run `showtail report` to see it under “Prompts used”.');
 }

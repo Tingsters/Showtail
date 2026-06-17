@@ -293,8 +293,8 @@ importCmd
 importCmd
   .command('gemini [share-url]')
   .description(
-    'Import a Google Gemini conversation. A share link is parsed best-effort; if it\n' +
-      'will not work, paste the conversation with --paste (or --file a saved page/transcript).',
+    'Import a Google Gemini conversation from a share link (gemini.google.com/share/…).\n' +
+      'If a link will not work, paste the conversation with --paste (or --file a transcript).',
   )
   .option('--no-responses', "don't import Gemini's responses, only your prompts")
   .option('--with-responses', 'deprecated: responses are imported by default')

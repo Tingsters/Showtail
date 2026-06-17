@@ -122,6 +122,38 @@ describe('gemini paste import', () => {
     ).rejects.toThrow(/--paste/);
   });
 
+  // Wrap a payload the way Gemini's batchexecute endpoint does: the )]}' prefix,
+  // a chunk-length line, then the ["wrb.fr","ujx1Bf",<payloadString>,…] entry.
+  function rpcBody(payload: unknown): string {
+    const entry = JSON.stringify([
+      ['wrb.fr', 'ujx1Bf', JSON.stringify(payload), null, null, null, 'generic'],
+    ]);
+    return `)]}'\n\n${entry.length}\n${entry}\n`;
+  }
+
+  test('parseShareHtml decodes a batchexecute RPC body into paired turns', async () => {
+    // Mirrors the real positional shape: payload[0][1]=turns, payload[0][2][1]=title;
+    // per turn: [0][1]=r_id, [2][0][0]=user, [3][0][0][1][0]=model.
+    const turn = [['c_x', 'r_1'], null, [['my question']], [[[null, ['the answer']]]]];
+    const payload = [[null, [turn], [true, 'My Title\n']]];
+
+    const conv = await parseShareHtml(rpcBody(payload));
+    expect(conv.title).toBe('My Title');
+    expect(conv.messages.map((m) => m.role)).toEqual(['user', 'assistant']);
+    expect(conv.messages[0]!.text).toBe('my question');
+    expect(conv.messages[1]!.text).toBe('the answer');
+    expect(conv.messages[0]!.id).toBe('r_1');
+    expect(conv.messages[1]!.id).toBe('r_1:r');
+  });
+
+  test('parseShareHtml degrades to paste guidance for an invalid/expired share', async () => {
+    // Gemini returns a null payload slot for a share it can't find.
+    const body = `)]}'\n\n40\n${JSON.stringify([
+      ['wrb.fr', 'ujx1Bf', null, null, null, [5], 'generic'],
+    ])}\n`;
+    await expect(parseShareHtml(body)).rejects.toThrow(/--paste/);
+  });
+
   test('imported gemini events appear in the report (prompts + tool)', async () => {
     const dir = makeTempDir();
     try {
