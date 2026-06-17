@@ -64,8 +64,6 @@ export function buildReportData(paths: ShowtailPaths): ReportData {
     toolTimeline: buildToolBlocks(sorted),
     timeline: buildTimeline(withSession, sessions),
     prompts: byType('prompt'),
-    importedChatgpt: events.filter((e) => toolOf(e) === 'chatgpt'),
-    importedGemini: events.filter((e) => toolOf(e) === 'google-gemini'),
     decisions: byType('decision'),
     artifactsCreated: artifacts,
     tests: byType('test'),
@@ -190,6 +188,9 @@ function buildTimeline(
 ): TimelineEntry[] {
   const entries: TimelineEntry[] = [];
   for (const { event, sessionId } of withSession) {
+    // AI responses are shown (grouped with their prompt) in the exchange cards;
+    // listing every one here too just buries the student's own activity.
+    if (event.type === 'ai_output') continue;
     entries.push({
       timestamp: event.timestamp,
       kind: event.type,
@@ -300,7 +301,7 @@ function buildMarkdown(data: ReportData, turnsPlaceholder = false): string {
           : (TYPE_LABELS[entry.kind] ?? entry.kind);
       const badge = entry.tool ? ` \`${toolLabel(entry.tool)}\`` : '';
       lines.push(
-        `- \`${formatDate(entry.timestamp)}\`${badge} **${label}** — ${entry.text}`,
+        `- \`${formatDate(entry.timestamp)}\`${badge} **${label}** — ${oneLine(entry.text)}`,
       );
     }
     lines.push('');
@@ -320,15 +321,6 @@ function buildMarkdown(data: ReportData, turnsPlaceholder = false): string {
   }
 
   section(lines, 'Prompts used', data.prompts, (e) => bullet(e));
-
-  // Imported ChatGPT work, grouped so the student can skim what an import added
-  // (a paste backup records prompts here for review) without hunting the timeline.
-  if (data.importedChatgpt.length > 0) {
-    section(lines, 'Imported from ChatGPT', data.importedChatgpt, (e) => bullet(e));
-  }
-  if (data.importedGemini.length > 0) {
-    section(lines, 'Imported from Google Gemini', data.importedGemini, (e) => bullet(e));
-  }
 
   section(lines, 'Major decisions', data.decisions, (e) => bullet(e));
   section(lines, 'Sources used', data.sources, (e) => bullet(e));
@@ -681,6 +673,12 @@ function bullet(e: Event): string {
 function formatDate(iso: string): string {
   // Keep it simple and locale-independent: trim milliseconds from ISO.
   return iso.replace(/\.\d{3}Z$/, 'Z');
+}
+
+/** Collapse to a single line and cap length — keeps the timeline scannable. */
+function oneLine(text: string, max = 110): string {
+  const s = text.replace(/\s+/g, ' ').trim();
+  return s.length > max ? s.slice(0, max - 1) + '…' : s;
 }
 
 function shortHash(hash: string): string {

@@ -122,7 +122,7 @@ describe('gemini paste import', () => {
     ).rejects.toThrow(/--paste/);
   });
 
-  test('imported gemini events render under their own report section', async () => {
+  test('imported gemini events appear in the report (prompts + tool)', async () => {
     const dir = makeTempDir();
     try {
       await runInit({ cwd: dir });
@@ -131,7 +131,8 @@ describe('gemini paste import', () => {
       await importConversation(paths, conversation, 'google-gemini');
 
       const md = renderMarkdown(buildReportData(paths));
-      expect(md).toContain('Imported from Google Gemini');
+      expect(md).toContain('Q about arrays');
+      expect(md).toContain('Google Gemini');
     } finally {
       cleanup(dir);
     }

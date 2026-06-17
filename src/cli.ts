@@ -261,7 +261,8 @@ importCmd
     'Import a ChatGPT conversation. A share link is easiest; if it will not work,\n' +
       'paste the conversation instead with --paste (or --file a saved page/transcript).',
   )
-  .option('--with-responses', "also log ChatGPT's responses (not just your prompts)")
+  .option('--no-responses', "don't import ChatGPT's responses, only your prompts")
+  .option('--with-responses', 'deprecated: responses are imported by default')
   .option('--paste', 'paste a conversation on stdin instead of using a link (backup)')
   .option('--file <path>', 'parse a saved share page or a saved transcript file')
   .option('--date <yyyy-mm-dd>', 'date a pasted conversation so it lands on the timeline')
@@ -271,6 +272,7 @@ importCmd
       async (
         shareUrl: string | undefined,
         opts: {
+          responses?: boolean;
           withResponses?: boolean;
           paste?: boolean;
           file?: string;
@@ -279,7 +281,7 @@ importCmd
         },
       ) =>
         runImportChatgpt(shareUrl, {
-          withResponses: opts.withResponses,
+          withResponses: opts.responses !== false,
           paste: opts.paste,
           file: opts.file,
           date: opts.date,
@@ -294,7 +296,8 @@ importCmd
     'Import a Google Gemini conversation. A share link is parsed best-effort; if it\n' +
       'will not work, paste the conversation with --paste (or --file a saved page/transcript).',
   )
-  .option('--with-responses', "also log Gemini's responses (not just your prompts)")
+  .option('--no-responses', "don't import Gemini's responses, only your prompts")
+  .option('--with-responses', 'deprecated: responses are imported by default')
   .option('--paste', 'paste a conversation on stdin instead of using a link (backup)')
   .option('--file <path>', 'parse a saved share page or a saved transcript file')
   .option('--date <yyyy-mm-dd>', 'date a pasted conversation so it lands on the timeline')
@@ -304,6 +307,7 @@ importCmd
       async (
         shareUrl: string | undefined,
         opts: {
+          responses?: boolean;
           withResponses?: boolean;
           paste?: boolean;
           file?: string;
@@ -312,7 +316,7 @@ importCmd
         },
       ) =>
         runImportGemini(shareUrl, {
-          withResponses: opts.withResponses,
+          withResponses: opts.responses !== false,
           paste: opts.paste,
           file: opts.file,
           date: opts.date,
@@ -328,7 +332,8 @@ importCmd
       'With no target, imports the most recent session for this project; --list shows all.',
   )
   .option('--list', "list this project's Claude Code transcripts and exit")
-  .option('--with-responses', "also log Claude's text responses (not just your prompts)")
+  .option('--no-responses', "don't import Claude's text responses, only your prompts")
+  .option('--with-responses', 'deprecated: responses are imported by default')
   .option('--file <path>', 'import a specific transcript .jsonl by path')
   .option('-s, --session <id>', 'import into a specific Showtail session id')
   .action(
@@ -337,6 +342,7 @@ importCmd
         target: string | undefined,
         opts: {
           list?: boolean;
+          responses?: boolean;
           withResponses?: boolean;
           file?: string;
           session?: string;
@@ -344,7 +350,7 @@ importCmd
       ) =>
         runImportClaudeCode(target, {
           list: opts.list,
-          withResponses: opts.withResponses,
+          withResponses: opts.responses !== false,
           file: opts.file,
           session: opts.session,
         }),

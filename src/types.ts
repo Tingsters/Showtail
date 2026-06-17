@@ -200,10 +200,6 @@ export interface ReportData {
   toolTimeline: ToolBlock[];
   timeline: TimelineEntry[];
   prompts: Event[];
-  /** Events imported from ChatGPT, grouped so a student can review them in one place. */
-  importedChatgpt: Event[];
-  /** Events imported from Google Gemini, grouped so a student can review them in one place. */
-  importedGemini: Event[];
   decisions: Event[];
   artifactsCreated: Artifact[];
   tests: Event[];
