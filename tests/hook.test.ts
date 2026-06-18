@@ -154,7 +154,7 @@ describe('hook command (end-to-end via stdin)', () => {
       expect(r.code).toBe(0);
       run(dir, ['report', '--format', 'json']);
       const data = readJsonReport(dir);
-      expect(data.prompts[0].tool).toBe('codex');
+      expect(data.turns[0].prompt.tool).toBe('codex');
     } finally {
       cleanup(dir);
     }
