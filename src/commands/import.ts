@@ -1,4 +1,5 @@
 import { existsSync, readFileSync } from 'node:fs';
+import { createInterface } from 'node:readline';
 import {
   fetchSharedConversation,
   importConversation,
@@ -6,6 +7,7 @@ import {
   parseTranscript,
   type ParsedConversation,
 } from '../core/chatgpt.ts';
+import { readClipboard } from '../core/clipboard.ts';
 import { latestBatchId, readAllEvents, removeEventsByBatch } from '../core/events.ts';
 import { makeId } from '../core/ids.ts';
 import { requirePaths } from '../core/storage.ts';
@@ -15,8 +17,12 @@ export interface ImportChatgptOptions {
   file?: string;
   session?: string;
   cwd?: string;
-  /** Read a pasted transcript from stdin (the manual backup path). */
+  /** Read a pasted transcript (from the clipboard interactively, or stdin when piped). */
   paste?: boolean;
+  /** Read the transcript from the system clipboard. */
+  clipboard?: boolean;
+  /** Skip the clipboard preview/confirmation prompt. */
+  yes?: boolean;
   /** A pasted transcript supplied directly (used by tests instead of stdin). */
   text?: string;
   /** Stamp pasted events with this date (YYYY-MM-DD) so they land on the timeline. */
@@ -30,9 +36,58 @@ function looksLikeSharePage(content: string): boolean {
   return /__reactRouterContext|streamController\.enqueue\(/.test(content);
 }
 
-async function readStdin(): Promise<string> {
-  // Running under Bun (CLI + tests): the simplest reliable reader.
-  return await Bun.stdin.text();
+/**
+ * Decide where a pasted transcript comes from. Interactive `--paste` (or an
+ * explicit `--clipboard`) reads the **clipboard**, so nothing is typed into the
+ * terminal — pasting multi-line text into a shell runs each line as a command.
+ * When stdin is piped (scripts, `echo | …`), read stdin as before.
+ */
+export async function readPasteSource(
+  opts: { clipboard?: boolean; paste?: boolean },
+  fileCmd: string,
+): Promise<{ raw: string; fromClipboard: boolean }> {
+  if (opts.clipboard || (opts.paste && process.stdin.isTTY)) {
+    try {
+      return { raw: readClipboard(), fromClipboard: true };
+    } catch (err) {
+      // No clipboard tool — fall back to a clear message pointing at --file.
+      throw new Error(`${(err as Error).message}\n  e.g. ${fileCmd}`);
+    }
+  }
+  // Running under Bun (piped CLI + tests): the simplest reliable reader.
+  return { raw: await Bun.stdin.text(), fromClipboard: false };
+}
+
+/** Show the user what they're about to import from the clipboard (to stderr). */
+export function previewPaste(raw: string, messageCount: number, markersFound: boolean): void {
+  const lines = raw.split(/\r?\n/);
+  const nonBlank = lines.filter((l) => l.trim().length > 0);
+  process.stderr.write(
+    `\nFrom your clipboard: ${raw.length.toLocaleString()} characters, ${lines.length} line(s).\n`,
+  );
+  process.stderr.write('  ┌─ preview ─────────────────────────────\n');
+  for (const l of nonBlank.slice(0, 12)) {
+    process.stderr.write(`  │ ${oneLine(l, 70)}\n`);
+  }
+  if (nonBlank.length > 12) process.stderr.write(`  │ … (${nonBlank.length - 12} more line(s))\n`);
+  process.stderr.write('  └───────────────────────────────────────\n');
+  process.stderr.write(
+    `Detected ${messageCount} message(s)` +
+      (markersFound
+        ? ' with role markers (prompts and responses separated).\n'
+        : ' (no role markers — everything is recorded as YOUR prompts).\n'),
+  );
+}
+
+/** Ask a yes/no question on the terminal. Reads a single line, so paste-safe. */
+export function confirm(message: string): Promise<boolean> {
+  const rl = createInterface({ input: process.stdin, output: process.stderr });
+  return new Promise((resolve) => {
+    rl.question(`${message} `, (answer) => {
+      rl.close();
+      resolve(/^y(es)?$/i.test(answer.trim()));
+    });
+  });
 }
 
 /** Parse `--date` (a day, or any ISO datetime) into epoch seconds; clear error otherwise. */
@@ -66,12 +121,28 @@ export async function runImportChatgpt(
   let isPaste = false;
   let markersFound = false;
 
-  if (options.text !== undefined || options.paste) {
-    const raw = options.text ?? (await readStdin());
+  if (options.text !== undefined || options.paste || options.clipboard) {
+    const { raw, fromClipboard } =
+      options.text !== undefined
+        ? { raw: options.text, fromClipboard: false }
+        : await readPasteSource(options, 'showtail import chatgpt --file <path>');
+    if (fromClipboard && raw.trim() === '') {
+      console.log('Your clipboard is empty — copy the conversation first, then try again.');
+      return;
+    }
     const parsed = parseTranscript(raw);
     conversation = parsed.conversation;
     markersFound = parsed.markersFound;
     isPaste = true;
+
+    // Let the user see what they're about to import, and confirm, before writing.
+    if (fromClipboard && !options.yes) {
+      previewPaste(raw, conversation.messages.length, markersFound);
+      if (!(await confirm('Import this? [y/N]'))) {
+        console.log('Cancelled — nothing imported.');
+        return;
+      }
+    }
   } else if (options.file) {
     if (!existsSync(options.file)) {
       throw new Error(`File not found: ${options.file}`);
@@ -89,8 +160,8 @@ export async function runImportChatgpt(
     if (!source || !SHARE_RE.test(source)) {
       throw new Error(
         'Pass a ChatGPT share URL like https://chatgpt.com/share/<id>\n' +
-          '(create one with "Share" in ChatGPT), use --file <saved-page>, or paste a\n' +
-          'conversation with --paste if the link will not work.',
+          '(create one with "Share" in ChatGPT), use --file <saved-page>, or copy the\n' +
+          'conversation and use --paste (reads your clipboard) if the link will not work.',
       );
     }
     conversation = await parseShareHtml(await fetchSharedConversation(source));
@@ -193,7 +264,7 @@ function printPasteResult(
 
   console.log('');
   console.log('Not yours? Undo this whole batch:  showtail import undo');
-  console.log('Looks right? `showtail report` shows it under “Imported from ChatGPT”.');
+  console.log('Looks right? Run `showtail report` to see it under “Prompts used”.');
 }
 
 /** Undo the most recent import in one step (removes that batch's events). */

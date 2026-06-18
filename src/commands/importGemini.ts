@@ -9,15 +9,25 @@ import {
 import { readAllEvents } from '../core/events.ts';
 import { makeId } from '../core/ids.ts';
 import { requirePaths } from '../core/storage.ts';
-import { dateToEpochSeconds, oneLine } from './import.ts';
+import {
+  confirm,
+  dateToEpochSeconds,
+  oneLine,
+  previewPaste,
+  readPasteSource,
+} from './import.ts';
 
 export interface ImportGeminiOptions {
   withResponses?: boolean;
   file?: string;
   session?: string;
   cwd?: string;
-  /** Read a pasted transcript from stdin (the manual backup path). */
+  /** Read a pasted transcript (from the clipboard interactively, or stdin when piped). */
   paste?: boolean;
+  /** Read the transcript from the system clipboard. */
+  clipboard?: boolean;
+  /** Skip the clipboard preview/confirmation prompt. */
+  yes?: boolean;
   /** A pasted transcript supplied directly (used by tests instead of stdin). */
   text?: string;
   /** Stamp timestamp-less events with this date (YYYY-MM-DD) so they land on the timeline. */
@@ -34,11 +44,6 @@ function looksLikeRpcBody(content: string): boolean {
 /** A saved Gemini *page* (HTML) — which does NOT contain the conversation. */
 function looksLikeGeminiPage(content: string): boolean {
   return /window\.WIZ_global_data|<c-wiz/.test(content);
-}
-
-async function readStdin(): Promise<string> {
-  // Running under Bun (CLI + tests): the simplest reliable reader.
-  return await Bun.stdin.text();
 }
 
 /**
@@ -58,12 +63,28 @@ export async function runImportGemini(
   let isPaste = false;
   let markersFound = false;
 
-  if (options.text !== undefined || options.paste) {
-    const raw = options.text ?? (await readStdin());
+  if (options.text !== undefined || options.paste || options.clipboard) {
+    const { raw, fromClipboard } =
+      options.text !== undefined
+        ? { raw: options.text, fromClipboard: false }
+        : await readPasteSource(options, 'showtail import gemini --file <path>');
+    if (fromClipboard && raw.trim() === '') {
+      console.log('Your clipboard is empty — copy the conversation first, then try again.');
+      return;
+    }
     const parsed = parseTranscript(raw);
     conversation = parsed.conversation;
     markersFound = parsed.markersFound;
     isPaste = true;
+
+    // Let the user see what they're about to import, and confirm, before writing.
+    if (fromClipboard && !options.yes) {
+      previewPaste(raw, conversation.messages.length, markersFound);
+      if (!(await confirm('Import this? [y/N]'))) {
+        console.log('Cancelled — nothing imported.');
+        return;
+      }
+    }
   } else if (options.file) {
     if (!existsSync(options.file)) {
       throw new Error(`File not found: ${options.file}`);
@@ -87,8 +108,8 @@ export async function runImportGemini(
     if (!source || !SHARE_RE.test(source)) {
       throw new Error(
         'Pass a Gemini share URL like https://gemini.google.com/share/<id>\n' +
-          '(create one with "Share" in Gemini), use --file <saved-transcript>, or paste a\n' +
-          'conversation with --paste.',
+          '(create one with "Share" in Gemini), use --file <saved-transcript>, or copy the\n' +
+          'conversation and use --paste (reads your clipboard).',
       );
     }
     conversation = await parseShareHtml(await fetchSharedConversation(source));

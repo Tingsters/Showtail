@@ -263,7 +263,9 @@ importCmd
   )
   .option('--no-responses', "don't import ChatGPT's responses, only your prompts")
   .option('--with-responses', 'deprecated: responses are imported by default')
-  .option('--paste', 'paste a conversation on stdin instead of using a link (backup)')
+  .option('--paste', 'import a copied conversation (reads your clipboard)')
+  .option('--clipboard', 'import the conversation from your clipboard')
+  .option('-y, --yes', 'skip the clipboard preview/confirmation prompt')
   .option('--file <path>', 'parse a saved share page or a saved transcript file')
   .option('--date <yyyy-mm-dd>', 'date a pasted conversation so it lands on the timeline')
   .option('-s, --session <id>', 'import into a specific session id')
@@ -275,6 +277,8 @@ importCmd
           responses?: boolean;
           withResponses?: boolean;
           paste?: boolean;
+          clipboard?: boolean;
+          yes?: boolean;
           file?: string;
           date?: string;
           session?: string;
@@ -283,6 +287,8 @@ importCmd
         runImportChatgpt(shareUrl, {
           withResponses: opts.responses !== false,
           paste: opts.paste,
+          clipboard: opts.clipboard,
+          yes: opts.yes,
           file: opts.file,
           date: opts.date,
           session: opts.session,
@@ -298,7 +304,9 @@ importCmd
   )
   .option('--no-responses', "don't import Gemini's responses, only your prompts")
   .option('--with-responses', 'deprecated: responses are imported by default')
-  .option('--paste', 'paste a conversation on stdin instead of using a link (backup)')
+  .option('--paste', 'import a copied conversation (reads your clipboard)')
+  .option('--clipboard', 'import the conversation from your clipboard')
+  .option('-y, --yes', 'skip the clipboard preview/confirmation prompt')
   .option('--file <path>', 'parse a saved share page or a saved transcript file')
   .option('--date <yyyy-mm-dd>', 'date a pasted conversation so it lands on the timeline')
   .option('-s, --session <id>', 'import into a specific session id')
@@ -310,6 +318,8 @@ importCmd
           responses?: boolean;
           withResponses?: boolean;
           paste?: boolean;
+          clipboard?: boolean;
+          yes?: boolean;
           file?: string;
           date?: string;
           session?: string;
@@ -318,6 +328,8 @@ importCmd
         runImportGemini(shareUrl, {
           withResponses: opts.responses !== false,
           paste: opts.paste,
+          clipboard: opts.clipboard,
+          yes: opts.yes,
           file: opts.file,
           date: opts.date,
           session: opts.session,
