@@ -51,3 +51,33 @@ export function readClipboard(): string {
       'Save the conversation to a text file and import it with --file <path> instead.',
   );
 }
+
+/**
+ * Return the clipboard's **HTML** representation (the `text/html` flavor a browser
+ * writes alongside plain text when you copy a selection), or null if there is none.
+ * This is what lets us recover exact message roles: a copied ChatGPT/Gemini
+ * conversation keeps its role-tagged markup here. Best-effort and never throws —
+ * callers fall back to plain text.
+ */
+export function readClipboardHtml(): string | null {
+  let out: string | null = null;
+  if (process.platform === 'win32') {
+    out = tryRead('powershell', [
+      '-STA',
+      '-NoProfile',
+      '-Command',
+      'Add-Type -AssemblyName System.Windows.Forms; ' +
+        '[System.Windows.Forms.Clipboard]::GetText([System.Windows.Forms.TextDataFormat]::Html)',
+    ]);
+  } else if (process.platform === 'darwin') {
+    // osascript returns «data HTML48…» (hex); decode it.
+    const raw = tryRead('osascript', ['-e', 'the clipboard as «class HTML»']);
+    const hex = raw?.match(/«data HTML([0-9A-Fa-f]+)»/)?.[1];
+    out = hex ? Buffer.from(hex, 'hex').toString('utf8') : null;
+  } else {
+    out =
+      tryRead('wl-paste', ['--type', 'text/html']) ??
+      tryRead('xclip', ['-selection', 'clipboard', '-t', 'text/html', '-o']);
+  }
+  return out && out.trim().length > 0 ? out : null;
+}

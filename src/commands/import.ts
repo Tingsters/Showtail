@@ -7,7 +7,8 @@ import {
   parseTranscript,
   type ParsedConversation,
 } from '../core/chatgpt.ts';
-import { readClipboard } from '../core/clipboard.ts';
+import { readClipboard, readClipboardHtml } from '../core/clipboard.ts';
+import { CHATGPT_HTML, parseConversationHtml, type HtmlParseConfig } from '../core/pasteHtml.ts';
 import { latestBatchId, readAllEvents, removeEventsByBatch } from '../core/events.ts';
 import { makeId } from '../core/ids.ts';
 import { requirePaths } from '../core/storage.ts';
@@ -36,47 +37,76 @@ function looksLikeSharePage(content: string): boolean {
   return /__reactRouterContext|streamController\.enqueue\(/.test(content);
 }
 
+/** Where a pasted transcript came from: exact roles (HTML) or raw text. */
+export type PasteSource =
+  | { conversation: ParsedConversation; raw?: undefined; fromClipboard: boolean; viaHtml: true }
+  | { raw: string; conversation?: undefined; fromClipboard: boolean; viaHtml: false };
+
 /**
  * Decide where a pasted transcript comes from. Interactive `--paste` (or an
  * explicit `--clipboard`) reads the **clipboard**, so nothing is typed into the
  * terminal — pasting multi-line text into a shell runs each line as a command.
- * When stdin is piped (scripts, `echo | …`), read stdin as before.
+ * Prefer the clipboard's HTML (exact prompt/response roles); fall back to its
+ * plain text. When stdin is piped (scripts, `echo | …`), read stdin as before.
  */
 export async function readPasteSource(
   opts: { clipboard?: boolean; paste?: boolean },
+  htmlConfig: HtmlParseConfig,
   fileCmd: string,
-): Promise<{ raw: string; fromClipboard: boolean }> {
+): Promise<PasteSource> {
   if (opts.clipboard || (opts.paste && process.stdin.isTTY)) {
+    let html: string | null = null;
     try {
-      return { raw: readClipboard(), fromClipboard: true };
+      html = readClipboardHtml();
+    } catch {
+      html = null;
+    }
+    const conversation = html ? parseConversationHtml(html, htmlConfig) : null;
+    if (conversation && conversation.messages.length > 0) {
+      return { conversation, fromClipboard: true, viaHtml: true };
+    }
+    try {
+      return { raw: readClipboard(), fromClipboard: true, viaHtml: false };
     } catch (err) {
       // No clipboard tool — fall back to a clear message pointing at --file.
       throw new Error(`${(err as Error).message}\n  e.g. ${fileCmd}`);
     }
   }
   // Running under Bun (piped CLI + tests): the simplest reliable reader.
-  return { raw: await Bun.stdin.text(), fromClipboard: false };
+  return { raw: await Bun.stdin.text(), fromClipboard: false, viaHtml: false };
 }
 
-/** Show the user what they're about to import from the clipboard (to stderr). */
-export function previewPaste(raw: string, messageCount: number, markersFound: boolean): void {
-  const lines = raw.split(/\r?\n/);
-  const nonBlank = lines.filter((l) => l.trim().length > 0);
-  process.stderr.write(
-    `\nFrom your clipboard: ${raw.length.toLocaleString()} characters, ${lines.length} line(s).\n`,
-  );
-  process.stderr.write('  ┌─ preview ─────────────────────────────\n');
-  for (const l of nonBlank.slice(0, 12)) {
-    process.stderr.write(`  │ ${oneLine(l, 70)}\n`);
+/** Show the user what they're about to import, and how roles were determined. */
+export function previewImport(
+  conversation: ParsedConversation,
+  meta: { viaHtml: boolean; markersFound: boolean },
+): void {
+  const prompts = conversation.messages.filter((m) => m.role === 'user').length;
+  const replies = conversation.messages.filter((m) => m.role === 'assistant').length;
+  process.stderr.write('\n');
+  if (meta.viaHtml) {
+    process.stderr.write(
+      `Recovered roles from the page: ${prompts} prompt(s), ${replies} AI reply(ies).\n`,
+    );
+  } else if (meta.markersFound) {
+    process.stderr.write(
+      `Detected ${prompts} prompt(s) and ${replies} reply(ies) from role markers.\n`,
+    );
+  } else {
+    process.stderr.write(
+      `No role markers found — recording all ${conversation.messages.length} block(s) ` +
+        'as YOUR prompts. For exact roles, use the share link.\n',
+    );
   }
-  if (nonBlank.length > 12) process.stderr.write(`  │ … (${nonBlank.length - 12} more line(s))\n`);
+  process.stderr.write('  ┌─ preview ─────────────────────────────\n');
+  for (const m of conversation.messages.slice(0, 8)) {
+    const who = m.role === 'assistant' ? 'AI ' : 'You';
+    process.stderr.write(`  │ ${who} │ ${oneLine(m.text, 60)}\n`);
+  }
+  if (conversation.messages.length > 8) {
+    process.stderr.write(`  │ … (${conversation.messages.length - 8} more)\n`);
+  }
   process.stderr.write('  └───────────────────────────────────────\n');
-  process.stderr.write(
-    `Detected ${messageCount} message(s)` +
-      (markersFound
-        ? ' with role markers (prompts and responses separated).\n'
-        : ' (no role markers — everything is recorded as YOUR prompts).\n'),
-  );
 }
 
 /** Ask a yes/no question on the terminal. Reads a single line, so paste-safe. */
@@ -122,22 +152,30 @@ export async function runImportChatgpt(
   let markersFound = false;
 
   if (options.text !== undefined || options.paste || options.clipboard) {
-    const { raw, fromClipboard } =
+    const src: PasteSource =
       options.text !== undefined
-        ? { raw: options.text, fromClipboard: false }
-        : await readPasteSource(options, 'showtail import chatgpt --file <path>');
-    if (fromClipboard && raw.trim() === '') {
-      console.log('Your clipboard is empty — copy the conversation first, then try again.');
-      return;
+        ? { raw: options.text, fromClipboard: false, viaHtml: false }
+        : await readPasteSource(options, CHATGPT_HTML, 'showtail import chatgpt --file <path>');
+
+    let viaHtml = false;
+    if (src.viaHtml) {
+      conversation = src.conversation; // exact roles from the page markup
+      markersFound = true;
+      viaHtml = true;
+    } else {
+      if (src.fromClipboard && src.raw.trim() === '') {
+        console.log('Your clipboard is empty — copy the conversation first, then try again.');
+        return;
+      }
+      const parsed = parseTranscript(src.raw);
+      conversation = parsed.conversation;
+      markersFound = parsed.markersFound;
     }
-    const parsed = parseTranscript(raw);
-    conversation = parsed.conversation;
-    markersFound = parsed.markersFound;
     isPaste = true;
 
     // Let the user see what they're about to import, and confirm, before writing.
-    if (fromClipboard && !options.yes) {
-      previewPaste(raw, conversation.messages.length, markersFound);
+    if (src.fromClipboard && !options.yes) {
+      previewImport(conversation, { viaHtml, markersFound });
       if (!(await confirm('Import this? [y/N]'))) {
         console.log('Cancelled — nothing imported.');
         return;

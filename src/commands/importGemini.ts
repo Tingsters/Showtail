@@ -9,12 +9,14 @@ import {
 import { readAllEvents } from '../core/events.ts';
 import { makeId } from '../core/ids.ts';
 import { requirePaths } from '../core/storage.ts';
+import { GEMINI_HTML } from '../core/pasteHtml.ts';
 import {
   confirm,
   dateToEpochSeconds,
   oneLine,
-  previewPaste,
+  previewImport,
   readPasteSource,
+  type PasteSource,
 } from './import.ts';
 
 export interface ImportGeminiOptions {
@@ -65,22 +67,30 @@ export async function runImportGemini(
   let markersFound = false;
 
   if (options.text !== undefined || options.paste || options.clipboard) {
-    const { raw, fromClipboard } =
+    const src: PasteSource =
       options.text !== undefined
-        ? { raw: options.text, fromClipboard: false }
-        : await readPasteSource(options, 'showtail import gemini --file <path>');
-    if (fromClipboard && raw.trim() === '') {
-      console.log('Your clipboard is empty — copy the conversation first, then try again.');
-      return;
+        ? { raw: options.text, fromClipboard: false, viaHtml: false }
+        : await readPasteSource(options, GEMINI_HTML, 'showtail import gemini --file <path>');
+
+    let viaHtml = false;
+    if (src.viaHtml) {
+      conversation = src.conversation; // exact roles from the page markup
+      markersFound = true;
+      viaHtml = true;
+    } else {
+      if (src.fromClipboard && src.raw.trim() === '') {
+        console.log('Your clipboard is empty — copy the conversation first, then try again.');
+        return;
+      }
+      const parsed = parseTranscript(src.raw);
+      conversation = parsed.conversation;
+      markersFound = parsed.markersFound;
     }
-    const parsed = parseTranscript(raw);
-    conversation = parsed.conversation;
-    markersFound = parsed.markersFound;
     isPaste = true;
 
     // Let the user see what they're about to import, and confirm, before writing.
-    if (fromClipboard && !options.yes) {
-      previewPaste(raw, conversation.messages.length, markersFound);
+    if (src.fromClipboard && !options.yes) {
+      previewImport(conversation, { viaHtml, markersFound });
       if (!(await confirm('Import this? [y/N]'))) {
         console.log('Cancelled — nothing imported.');
         return;
