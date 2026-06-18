@@ -383,18 +383,20 @@ export function renderHtml(data: ReportData): string {
   }
   .ai-sep { border: none; border-top: 1px solid #e3e3e8; margin: 0.7rem 0; }
   .turn-close {
-    display: inline-block;
-    margin: 0.7rem 0 0.1rem;
-    padding: 0.2rem 0.7rem;
+    display: block;
+    width: auto;
+    margin: 0.8rem -0.9rem -0.8rem;
+    padding: 0.55rem;
     font: inherit;
-    font-size: 0.75rem;
-    color: #3a3f6b;
-    background: #eceef6;
-    border: 1px solid #d8dcee;
-    border-radius: 0.4rem;
+    font-size: 0.8rem;
+    text-align: center;
+    color: #6b6b76;
+    background: transparent;
+    border: none;
+    border-top: 1px solid #e3e3e8;
     cursor: pointer;
   }
-  .turn-close:hover { background: #e2e5f3; }
+  .turn-close:hover { background: #f1f1f5; color: #3a3f6b; }
   .prompt-block {
     margin: 0.3rem 0 0.6rem;
     padding: 0.2rem 0 0.2rem 0.7rem;
@@ -464,7 +466,8 @@ export function renderHtml(data: ReportData): string {
     .ai-text a { color: #aab0ff; }
     .ai-text blockquote { border-left-color: #4a4a52; color: #b8b8c2; }
     .ai-sep { border-top-color: #34343a; }
-    .turn-close { background: #2a2d40; border-color: #3a3f5e; color: #c6cbf0; }
+    .turn-close { color: #9a9aa6; border-top-color: #34343a; }
+    .turn-close:hover { background: #242429; color: #c6cbf0; }
   }
 </style>
 </head>
