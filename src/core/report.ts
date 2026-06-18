@@ -462,7 +462,33 @@ export function renderHtml(data: ReportData): string {
   .turn .stat { font-size: 0.78rem; color: #8a8a94; }
   .turn-body { padding: 0 0.9rem 0.8rem; }
   .turn-body h4 { margin: 0.8rem 0 0.3rem; font-size: 0.85rem; color: #6b6b76; }
-  .ai-text { white-space: pre-wrap; margin: 0.2rem 0 0.6rem; }
+  .ai-text { margin: 0.2rem 0 0.6rem; }
+  .ai-text p { margin: 0.4rem 0; }
+  .ai-text ul, .ai-text ol { margin: 0.4rem 0; padding-left: 1.4rem; }
+  .ai-text li { margin: 0.15rem 0; }
+  .ai-text .md-h { font-weight: 600; margin: 0.7rem 0 0.3rem; }
+  .ai-text strong { font-weight: 600; }
+  .ai-text em { font-style: italic; color: inherit; font-size: inherit; }
+  .ai-text a { color: #3a3f9b; }
+  .ai-text blockquote {
+    margin: 0.5rem 0;
+    padding: 0.3rem 0.8rem;
+    border-left: 3px solid #c9c9d2;
+    color: #4a4a52;
+  }
+  .ai-sep { border: none; border-top: 1px solid #e3e3e8; margin: 0.7rem 0; }
+  .prompt-block {
+    margin: 0.3rem 0 0.6rem;
+    padding: 0.2rem 0 0.2rem 0.7rem;
+    border-left: 3px solid #c6cbf0;
+  }
+  .role-tag {
+    font-size: 0.68rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: #8a8a94;
+  }
+  .prompt-block .ai-text { margin: 0.1rem 0 0; }
   .code { margin: 0.4rem 0; }
   .code > summary { cursor: pointer; font-size: 0.85rem; color: #3a3f6b; }
   pre.diff {
@@ -517,6 +543,9 @@ export function renderHtml(data: ReportData): string {
     pre.diff .del { background: #3a1f1f; color: #e6a3a3; }
     pre.codeblock { background: #242429; border-color: #34343a; }
     .code-lang { background: #2a2a30; border-color: #34343a; color: #a0a0aa; }
+    .ai-text a { color: #aab0ff; }
+    .ai-text blockquote { border-left-color: #4a4a52; color: #b8b8c2; }
+    .ai-sep { border-top-color: #34343a; }
   }
 </style>
 </head>
@@ -550,14 +579,20 @@ function turnsHtml(data: ReportData): string {
     );
     out.push('<div class="turn-body">');
 
+    // Show the full prompt only when it has more than the one line in the summary,
+    // marked distinctly so the student's words are clear from the AI's reply.
     if (turn.prompt.text.trim() !== firstLine(turn.prompt.text)) {
-      out.push('<h4>Prompt</h4>');
-      out.push(`<div class="ai-text">${renderRichText(turn.prompt.text)}</div>`);
+      out.push(
+        `<div class="prompt-block"><span class="role-tag">Prompt</span>` +
+          `<div class="ai-text">${renderRichText(turn.prompt.text)}</div></div>`,
+      );
     }
-    for (const ai of turn.aiOutputs) {
-      out.push('<h4>AI response</h4>');
+    // The card already means "this prompt → its reply", so the reply needs no
+    // label; multiple replies in one turn are separated by a thin divider.
+    turn.aiOutputs.forEach((ai, i) => {
+      if (i > 0) out.push('<hr class="ai-sep">');
       out.push(`<div class="ai-text">${renderRichText(ai.text)}</div>`);
-    }
+    });
     for (const code of turn.codeChanges) {
       const stat2 = code.diffLines ? ` (~${code.diffLines} line(s))` : '';
       out.push('<details class="code">');
@@ -602,10 +637,11 @@ function escapeHtml(s: string): string {
 }
 
 /**
- * Render prompt/AI text for a turn card: Markdown fenced code becomes a real
- * monospace code box, inline `code` becomes <code>, and the rest is escaped
- * prose (the container is `white-space: pre-wrap`, so prose line breaks show).
- * Everything is escaped, so no script can slip through.
+ * Render prompt/AI text (Markdown) for a turn card: fenced code becomes a real
+ * monospace code box, and the prose between fences is rendered as a small
+ * Markdown subset (headings, lists, quotes, rules, bold/italic/code/links).
+ * Everything is escaped before formatting, so no script can slip through, and
+ * only http/https links become anchors.
  */
 function renderRichText(text: string): string {
   const out: string[] = [];
@@ -613,17 +649,88 @@ function renderRichText(text: string): string {
   let last = 0;
   let m: RegExpExecArray | null;
   while ((m = fence.exec(text)) !== null) {
-    out.push(prose(text.slice(last, m.index)));
+    out.push(renderBlocks(text.slice(last, m.index)));
     out.push(codeBox(m[2] ?? '', m[1] ?? ''));
     last = fence.lastIndex;
   }
-  out.push(prose(text.slice(last)));
+  out.push(renderBlocks(text.slice(last)));
   return out.join('');
 }
 
-/** Escape a prose run, then turn inline `code` spans into <code>. */
-function prose(s: string): string {
-  return escapeHtml(s).replace(/`([^`\n]+)`/g, '<code>$1</code>');
+/** Escape a run, then apply inline Markdown: code, bold, italic, links. */
+function inlineMd(s: string): string {
+  return escapeHtml(s)
+    .replace(/`([^`\n]+)`/g, '<code>$1</code>')
+    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+    .replace(/(^|[\s(])\*([^*\s][^*]*?)\*(?=$|[\s.,)])/g, '$1<em>$2</em>')
+    .replace(/(^|[\s(])_([^_]+)_(?=$|[\s.,)])/g, '$1<em>$2</em>')
+    .replace(
+      /\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g,
+      '<a href="$2" rel="noreferrer">$1</a>',
+    );
+}
+
+/**
+ * Render a Markdown prose run (no fenced code — that's handled above) into HTML:
+ * headings, unordered/ordered lists, blockquotes, horizontal rules, paragraphs.
+ */
+function renderBlocks(md: string): string {
+  const out: string[] = [];
+  let list: { tag: 'ul' | 'ol'; items: string[] } | null = null;
+  let para: string[] = [];
+  const flushList = () => {
+    if (list) {
+      out.push(`<${list.tag}>${list.items.join('')}</${list.tag}>`);
+      list = null;
+    }
+  };
+  const flushPara = () => {
+    if (para.length) {
+      out.push(`<p>${para.map(inlineMd).join('<br>')}</p>`);
+      para = [];
+    }
+  };
+
+  for (const raw of md.split('\n')) {
+    const line = raw.replace(/\s+$/, '');
+    let mm: RegExpMatchArray | null;
+    if (line.trim() === '') {
+      flushList();
+      flushPara();
+    } else if ((mm = line.match(/^(#{1,6})\s+(.*)$/))) {
+      flushList();
+      flushPara();
+      out.push(`<div class="md-h">${inlineMd(mm[2]!)}</div>`);
+    } else if (/^\s*[-*+]\s+/.test(line)) {
+      flushPara();
+      if (!list || list.tag !== 'ul') {
+        flushList();
+        list = { tag: 'ul', items: [] };
+      }
+      list.items.push(`<li>${inlineMd(line.replace(/^\s*[-*+]\s+/, ''))}</li>`);
+    } else if (/^\s*\d+\.\s+/.test(line)) {
+      flushPara();
+      if (!list || list.tag !== 'ol') {
+        flushList();
+        list = { tag: 'ol', items: [] };
+      }
+      list.items.push(`<li>${inlineMd(line.replace(/^\s*\d+\.\s+/, ''))}</li>`);
+    } else if (/^>\s?/.test(line)) {
+      flushList();
+      flushPara();
+      out.push(`<blockquote>${inlineMd(line.replace(/^>\s?/, ''))}</blockquote>`);
+    } else if (/^(-{3,}|\*{3,}|_{3,})$/.test(line.trim())) {
+      flushList();
+      flushPara();
+      out.push('<hr>');
+    } else {
+      flushList();
+      para.push(line);
+    }
+  }
+  flushList();
+  flushPara();
+  return out.join('');
 }
 
 /** A monospace code box (no view-time JS) with an optional language label. */

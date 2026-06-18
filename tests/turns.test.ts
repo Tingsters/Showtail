@@ -100,6 +100,42 @@ describe('turns', () => {
     }
   });
 
+  test('renders Markdown in an AI response (bold/heading/list/link), no raw marks', async () => {
+    const dir = makeTempDir();
+    try {
+      await runInit({ cwd: dir });
+      const paths = pathsForRoot(dir);
+      startSession(paths);
+      const { event: prompt } = await logEvent(paths, {
+        type: 'prompt',
+        text: 'explain',
+        tool: 'chatgpt',
+      });
+      await logEvent(paths, {
+        type: 'ai_output',
+        text:
+          '## Steps\nUse **bold** and *italic*.\n- one\n- two\n\nSee [docs](https://example.com).\n' +
+          'Avoid [evil](javascript:alert(1)).',
+        tool: 'chatgpt',
+        turnId: prompt.id,
+      });
+
+      const html = renderHtml(buildReportData(paths));
+      expect(html).toContain('<strong>bold</strong>');
+      expect(html).toContain('<em>italic</em>');
+      expect(html).toContain('<div class="md-h">Steps</div>');
+      expect(html).toContain('<ul><li>one</li><li>two</li></ul>');
+      expect(html).toContain('<a href="https://example.com"');
+      expect(html).not.toContain('**bold**'); // no raw marks left
+      expect(html).not.toContain('<h4>AI response</h4>'); // redundant label dropped
+      // javascript: link is not turned into an anchor
+      expect(html).not.toContain('href="javascript:');
+      expect(html).not.toContain('<script>');
+    } finally {
+      cleanup(dir);
+    }
+  });
+
   test('renders collapsible <details> cards with diff coloring and no <script>', async () => {
     const dir = makeTempDir();
     try {

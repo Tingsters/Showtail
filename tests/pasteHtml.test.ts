@@ -21,8 +21,8 @@ describe('parseConversationHtml', () => {
     const msgs = conv!.messages;
     expect(msgs.map((m) => m.role)).toEqual(['user', 'assistant', 'user', 'assistant']);
     expect(msgs[0]!.text).toBe('How do I reverse a list?');
-    // Inline tags stripped, &amp; decoded, action buttons removed.
-    expect(msgs[1]!.text).toBe('Use list.reverse() & reversed().');
+    // <strong> → Markdown bold, &amp; decoded, action buttons removed.
+    expect(msgs[1]!.text).toBe('Use **list.reverse()** & reversed().');
     expect(msgs[2]!.text).toBe('And sorting?');
     expect(msgs[3]!.text).toBe('Use sorted(list).');
     const joined = msgs.map((m) => m.text).join('\n');
@@ -56,5 +56,17 @@ describe('parseConversationHtml', () => {
     expect(ai).toContain('`python hi.py`'); // inline code
     expect(ai).not.toContain('Copy'); // button chrome stripped
     expect(ai).not.toContain('<span'); // highlight spans stripped
+  });
+
+  test('converts inline formatting (strong/em/links/lists) to Markdown', () => {
+    const clip = `<html><body><!--StartFragment--><div data-message-author-role="user"><div class="whitespace-pre-wrap">q</div></div><div data-message-author-role="assistant"><div class="markdown"><p>Use <strong>bold</strong> and <em>italic</em>.</p><ul><li>first</li><li>second</li></ul><p>See <a href="https://example.com/docs">the docs</a>.</p></div></div><!--EndFragment--></body></html>`;
+    const ai = parseConversationHtml(clip, CHATGPT_HTML)!.messages[1]!.text;
+    expect(ai).toContain('**bold**');
+    expect(ai).toContain('*italic*');
+    expect(ai).toContain('- first');
+    expect(ai).toContain('- second');
+    expect(ai).toContain('[the docs](https://example.com/docs)');
+    expect(ai).not.toContain('<strong>');
+    expect(ai).not.toContain('<a ');
   });
 });

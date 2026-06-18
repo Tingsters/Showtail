@@ -84,15 +84,40 @@ function preToFence(html: string): string {
   });
 }
 
+/** Inner text of a formatting tag: drop nested tags, collapse whitespace. */
+function inlineText(s: string): string {
+  return s.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
+}
+
 /** Reduce one turn's HTML to its readable text, preserving code, dropping chrome. */
 function htmlToText(html: string): string {
   const withCode = preToFence(html).replace(
     // Inline <code> → `backticks` (collapsed to one line).
     /<code\b[^>]*>([\s\S]*?)<\/code>/gi,
-    (_full, t: string) => '`' + t.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim() + '`',
+    (_full, t: string) => '`' + inlineText(t) + '`',
   );
+  // Turn the chat UI's formatting into Markdown so the report renders it (the
+  // report only understands Markdown, and link-imports already arrive as Markdown).
+  const withFmt = withCode
+    .replace(/<(strong|b)\b[^>]*>([\s\S]*?)<\/\1>/gi, (_m, _t, inner: string) => {
+      const t = inlineText(inner);
+      return t ? `**${t}**` : '';
+    })
+    .replace(/<(em|i)\b[^>]*>([\s\S]*?)<\/\1>/gi, (_m, _t, inner: string) => {
+      const t = inlineText(inner);
+      return t ? `*${t}*` : '';
+    })
+    .replace(/<a\b[^>]*\shref="([^"]*)"[^>]*>([\s\S]*?)<\/a>/gi, (_m, href: string, inner: string) => {
+      const t = inlineText(inner);
+      return /^https?:\/\//i.test(href) ? `[${t}](${href})` : t;
+    })
+    .replace(
+      /<h([1-6])\b[^>]*>([\s\S]*?)<\/h\1>/gi,
+      (_m, lvl: string, inner: string) => `\n${'#'.repeat(Number(lvl))} ${inlineText(inner)}\n`,
+    )
+    .replace(/<li\b[^>]*>([\s\S]*?)<\/li>/gi, (_m, inner: string) => `\n- ${inlineText(inner)}`);
   return decodeEntities(
-    withCode
+    withFmt
       // Drop interactive chrome (Copy/Edit/Regenerate/Share/Download/reasoning toggles).
       .replace(/<button\b[^>]*>[\s\S]*?<\/button>/gi, ' ')
       .replace(/<svg\b[^>]*>[\s\S]*?<\/svg>/gi, ' ')
