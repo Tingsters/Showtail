@@ -21,7 +21,7 @@ import { runImportClaudeCode } from './commands/importClaude.ts';
 import { eventTypeList } from './core/schema.ts';
 import type { Tool } from './types.ts';
 
-const VERSION = '0.7.0';
+const VERSION = '0.8.0';
 
 /** Wrap a command action so errors print a clean message and set exit code 1. */
 function action<A extends unknown[]>(fn: (...args: A) => Promise<unknown>) {
