@@ -198,13 +198,6 @@ export interface ReportData {
   tools: ToolUsage[];
   /** Chronological blocks of tool usage; boundaries are tool switches. */
   toolTimeline: ToolBlock[];
-  timeline: TimelineEntry[];
-  prompts: Event[];
-  decisions: Event[];
-  artifactsCreated: Artifact[];
-  tests: Event[];
-  reflections: Event[];
-  sources: Event[];
   /** Prompt-and-AI exchanges, each rendered as a collapsible card. */
   turns: Turn[];
   /** How many secrets/PII Showtail scrubbed before storing (0 when none). */
@@ -283,14 +276,4 @@ export interface JournalEntry {
   diffHash?: string;
   diffLines?: number;
   eventIds?: string[];
-}
-
-/** One chronological entry combining sessions and their events. */
-export interface TimelineEntry {
-  timestamp: string;
-  kind: 'session_start' | EventType;
-  text: string;
-  sessionId: string;
-  /** Which tool the entry came through (undefined for session starts). */
-  tool?: Tool;
 }

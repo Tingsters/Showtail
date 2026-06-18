@@ -42,20 +42,20 @@ describe('report', () => {
 
       const data = buildReportData(paths);
       expect(data.project).toBe('Parser Project');
-      expect(data.prompts).toHaveLength(1);
-      expect(data.decisions).toHaveLength(1);
-      expect(data.reflections).toHaveLength(1);
-      expect(data.sources).toHaveLength(1);
-      expect(data.tests).toHaveLength(1);
-      expect(data.artifactsCreated).toHaveLength(1);
-      expect(data.timeline.length).toBeGreaterThanOrEqual(6);
+      expect(data.turns).toHaveLength(1);
+      expect(data.summary.artifacts).toBe(1);
       expect(data.authorship).toContain('my own');
 
       const md = renderMarkdown(data);
       expect(md).toContain('# Showtail Report — Parser Project');
       expect(md).toContain('How do I structure this parser?');
+      expect(md).toContain('## Prompts & AI exchanges');
       expect(md).toContain('## Authorship statement');
-      expect(md).toContain('parser.ts');
+      // The removed sections are gone.
+      expect(md).not.toContain('## Project timeline');
+      expect(md).not.toContain('## Major decisions');
+      expect(md).not.toContain('## Artifacts created');
+      expect(md).not.toContain('## Student reflections');
     } finally {
       cleanup(dir);
     }
@@ -68,7 +68,7 @@ describe('report', () => {
       const paths = pathsForRoot(dir);
       const md = renderMarkdown(buildReportData(paths));
       expect(md).toContain('# Showtail Report');
-      expect(md).toContain('No activity recorded yet.');
+      expect(md).toContain('No prompts recorded.');
     } finally {
       cleanup(dir);
     }
@@ -123,7 +123,7 @@ describe('report', () => {
       const html = renderHtml(buildReportData(paths));
       expect(html.toLowerCase().startsWith('<!doctype html')).toBe(true);
       expect(html).toContain('<h1>Showtail Report</h1>');
-      expect(html).toContain('No activity recorded yet.');
+      expect(html).toContain('No prompts recorded.');
     } finally {
       cleanup(dir);
     }

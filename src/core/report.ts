@@ -3,8 +3,6 @@ import type {
   Event,
   JournalEntry,
   ReportData,
-  Session,
-  TimelineEntry,
   Tool,
   ToolBlock,
   ToolUsage,
@@ -15,18 +13,6 @@ import { readArtifacts } from './artifacts.ts';
 import { readAllEventsWithSession } from './events.ts';
 import { readObject } from './objects.ts';
 import { readConfig, readJournal, readSessions, type ShowtailPaths } from './storage.ts';
-
-/** A short, student-friendly label for each event type. */
-const TYPE_LABELS: Record<string, string> = {
-  prompt: 'Prompt',
-  ai_output: 'AI output',
-  human_edit: 'Hand-written edit',
-  decision: 'Decision',
-  reflection: 'Reflection',
-  source: 'Source',
-  test: 'Test / validation',
-  artifact: 'Artifact',
-};
 
 /** The tool an event flowed through (defaults to "cli" for older/manual events). */
 function toolOf(event: Event): Tool {
@@ -48,7 +34,6 @@ export function buildReportData(paths: ShowtailPaths): ReportData {
   const withSession = readAllEventsWithSession(paths);
   const events = withSession.map((x) => x.event);
 
-  const byType = (type: Event['type']): Event[] => events.filter((e) => e.type === type);
   const tools = buildToolUsage(events);
   const sorted = sortByTime(events);
 
@@ -62,13 +47,6 @@ export function buildReportData(paths: ShowtailPaths): ReportData {
     },
     tools,
     toolTimeline: buildToolBlocks(sorted),
-    timeline: buildTimeline(withSession, sessions),
-    prompts: byType('prompt'),
-    decisions: byType('decision'),
-    artifactsCreated: artifacts,
-    tests: byType('test'),
-    reflections: byType('reflection'),
-    sources: byType('source'),
     turns: buildTurns(withSession, artifacts, paths),
     redactionCount: countRedactions(paths),
     authorship: buildAuthorshipStatement(config.project, tools),
@@ -182,38 +160,6 @@ export function buildToolBlocks(sortedEvents: Event[]): ToolBlock[] {
   return blocks;
 }
 
-function buildTimeline(
-  withSession: EventWithSession[],
-  sessions: Session[],
-): TimelineEntry[] {
-  const entries: TimelineEntry[] = [];
-  for (const { event, sessionId } of withSession) {
-    // AI responses are shown (grouped with their prompt) in the exchange cards;
-    // listing every one here too just buries the student's own activity.
-    if (event.type === 'ai_output') continue;
-    entries.push({
-      timestamp: event.timestamp,
-      kind: event.type,
-      text: event.text,
-      sessionId,
-      tool: toolOf(event),
-    });
-  }
-  for (const session of sessions) {
-    entries.push({
-      timestamp: session.startedAt,
-      kind: 'session_start',
-      text: session.label
-        ? `Started session "${session.label}"`
-        : 'Started a work session',
-      sessionId: session.id,
-      tool: session.tool,
-    });
-  }
-  entries.sort((a, b) => a.timestamp.localeCompare(b.timestamp));
-  return entries;
-}
-
 function buildAuthorshipStatement(
   project: string | undefined,
   tools: ToolUsage[],
@@ -289,24 +235,6 @@ function buildMarkdown(data: ReportData, turnsPlaceholder = false): string {
     }
   }
 
-  // Timeline
-  lines.push('## Project timeline', '');
-  if (data.timeline.length === 0) {
-    lines.push('_No activity recorded yet._', '');
-  } else {
-    for (const entry of data.timeline) {
-      const label =
-        entry.kind === 'session_start'
-          ? 'Session'
-          : (TYPE_LABELS[entry.kind] ?? entry.kind);
-      const badge = entry.tool ? ` \`${toolLabel(entry.tool)}\`` : '';
-      lines.push(
-        `- \`${formatDate(entry.timestamp)}\`${badge} **${label}** — ${oneLine(entry.text)}`,
-      );
-    }
-    lines.push('');
-  }
-
   // Prompts & AI exchanges — the heart of the report. In HTML this becomes
   // collapsible cards; in Markdown it reads top-to-bottom.
   lines.push('## Prompts & AI exchanges', '');
@@ -319,29 +247,6 @@ function buildMarkdown(data: ReportData, turnsPlaceholder = false): string {
       turnMarkdown(lines, turn);
     }
   }
-
-  section(lines, 'Prompts used', data.prompts, (e) => bullet(e));
-
-  section(lines, 'Major decisions', data.decisions, (e) => bullet(e));
-  section(lines, 'Sources used', data.sources, (e) => bullet(e));
-  section(lines, 'Tests & validation', data.tests, (e) => bullet(e));
-
-  // Artifacts get a richer rendering.
-  lines.push('## Artifacts created', '');
-  if (data.artifactsCreated.length === 0) {
-    lines.push('_No artifacts recorded._', '');
-  } else {
-    for (const a of data.artifactsCreated) {
-      const via = a.tool ? `, via ${toolLabel(a.tool as Tool)}` : '';
-      lines.push(
-        `- **${a.path}** — \`${shortHash(a.sha256)}\` ` +
-          `(${formatDate(a.timestamp)}${a.gitCommit ? `, commit \`${shortHash(a.gitCommit)}\`` : ''}${via})`,
-      );
-    }
-    lines.push('');
-  }
-
-  section(lines, 'Student reflections', data.reflections, (e) => bullet(e));
 
   lines.push('## Authorship statement', '');
   lines.push('> ' + data.authorship, '');
@@ -812,40 +717,7 @@ function inline(text: string): string {
     .replace(/(^|[\s(])_([^_]+)_(?=$|[\s.,)])/g, '$1<em>$2</em>');
 }
 
-function section(
-  lines: string[],
-  heading: string,
-  events: Event[],
-  render: (e: Event) => string,
-): void {
-  lines.push(`## ${heading}`, '');
-  if (events.length === 0) {
-    lines.push('_None recorded._', '');
-    return;
-  }
-  for (const e of events) lines.push(render(e));
-  lines.push('');
-}
-
-function bullet(e: Event): string {
-  const meta: string[] = [formatDate(e.timestamp)];
-  meta.push(toolLabel(toolOf(e)));
-  if (e.files && e.files.length > 0) meta.push(`files: ${e.files.join(', ')}`);
-  if (e.tags && e.tags.length > 0) meta.push(`tags: ${e.tags.join(', ')}`);
-  return `- ${e.text}  \n  _(${meta.join(' · ')})_`;
-}
-
 function formatDate(iso: string): string {
   // Keep it simple and locale-independent: trim milliseconds from ISO.
   return iso.replace(/\.\d{3}Z$/, 'Z');
-}
-
-/** Collapse to a single line and cap length — keeps the timeline scannable. */
-function oneLine(text: string, max = 110): string {
-  const s = text.replace(/\s+/g, ' ').trim();
-  return s.length > max ? s.slice(0, max - 1) + '…' : s;
-}
-
-function shortHash(hash: string): string {
-  return hash.slice(0, 10);
 }
