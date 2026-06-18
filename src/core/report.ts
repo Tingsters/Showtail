@@ -382,6 +382,19 @@ export function renderHtml(data: ReportData): string {
     color: #4a4a52;
   }
   .ai-sep { border: none; border-top: 1px solid #e3e3e8; margin: 0.7rem 0; }
+  .turn-close {
+    display: inline-block;
+    margin: 0.7rem 0 0.1rem;
+    padding: 0.2rem 0.7rem;
+    font: inherit;
+    font-size: 0.75rem;
+    color: #3a3f6b;
+    background: #eceef6;
+    border: 1px solid #d8dcee;
+    border-radius: 0.4rem;
+    cursor: pointer;
+  }
+  .turn-close:hover { background: #e2e5f3; }
   .prompt-block {
     margin: 0.3rem 0 0.6rem;
     padding: 0.2rem 0 0.2rem 0.7rem;
@@ -451,6 +464,7 @@ export function renderHtml(data: ReportData): string {
     .ai-text a { color: #aab0ff; }
     .ai-text blockquote { border-left-color: #4a4a52; color: #b8b8c2; }
     .ai-sep { border-top-color: #34343a; }
+    .turn-close { background: #2a2d40; border-color: #3a3f5e; color: #c6cbf0; }
   }
 </style>
 </head>
@@ -505,6 +519,13 @@ function turnsHtml(data: ReportData): string {
       if (code.diff) out.push(diffHtml(code.diff));
       out.push('</details>');
     }
+
+    // Collapse the card from where you finished reading. Inline handler so the
+    // file stays self-contained; degrades to a no-op if JS is disabled.
+    out.push(
+      '<button type="button" class="turn-close" ' +
+        'onclick="this.closest(\'details.turn\').open=false">▲ Close</button>',
+    );
 
     out.push('</div></details>');
   }

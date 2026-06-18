@@ -160,6 +160,9 @@ describe('turns', () => {
       expect(html).toContain('class="badge"');
       expect(html).toContain('class="add"');
       expect(html).toContain('class="del"');
+      // A Close button collapses the card; inline handler, not a <script>.
+      expect(html).toContain('class="turn-close"');
+      expect(html).toContain('open=false');
       expect(html).not.toContain('<script>');
     } finally {
       cleanup(dir);
