@@ -5,6 +5,7 @@ import {
   importConversation,
   parseShareHtml,
   parseTranscript,
+  shareIdFromUrl,
 } from '../src/core/gemini.ts';
 import { buildReportData, renderMarkdown } from '../src/core/report.ts';
 import { readAllEvents } from '../src/core/events.ts';
@@ -144,6 +145,18 @@ describe('gemini paste import', () => {
     expect(conv.messages[1]!.text).toBe('the answer');
     expect(conv.messages[0]!.id).toBe('r_1');
     expect(conv.messages[1]!.id).toBe('r_1:r');
+  });
+
+  test('shareIdFromUrl extracts the canonical id from share URLs (short links resolve at fetch)', () => {
+    expect(shareIdFromUrl('https://gemini.google.com/share/87bdb8f6639c')).toBe(
+      '87bdb8f6639c',
+    );
+    expect(shareIdFromUrl('https://gemini.google.com/share/46ec23aeb00e?skid=abc')).toBe(
+      '46ec23aeb00e',
+    );
+    expect(shareIdFromUrl('https://g.co/gemini/share/76f6474922fc')).toBe('76f6474922fc');
+    // Short share.gemini.google links carry a different token, resolved via redirect.
+    expect(shareIdFromUrl('https://share.gemini.google/xK8SpLrNswyq')).toBeNull();
   });
 
   test('parseShareHtml degrades to paste guidance for an invalid/expired share', async () => {

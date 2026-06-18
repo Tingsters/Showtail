@@ -424,6 +424,7 @@ In Gemini, click **Share → Create public link**, then import it directly:
 
 ```bash
 showtail import gemini https://gemini.google.com/share/<id>
+# short share.gemini.google/<id> links work too
 ```
 
 Showtail fetches the shared conversation, logs your **prompts** plus Gemini's **answers**, and

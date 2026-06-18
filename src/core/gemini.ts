@@ -32,12 +32,43 @@ const FALLBACK_MSG =
   'Could not read the Gemini conversation automatically (the share format may have changed). ' +
   'Use --paste to paste the conversation, or --file a saved transcript.';
 
-/** Pull the share id out of a gemini.google.com/share/<id> or g.co/gemini/share/<id> URL. */
+/**
+ * Pull the canonical share id out of a `gemini.google.com/share/<id>` or
+ * `g.co/gemini/share/<id>` URL (the path token is the id the RPC wants). Short
+ * `share.gemini.google/<token>` links use a *different* token and must be
+ * resolved via {@link resolveShortShareId} first — they return null here.
+ */
 export function shareIdFromUrl(url: string): string | null {
   const m = url.match(
     /^https:\/\/(?:gemini\.google\.com\/share|g\.co\/gemini\/share)\/([\w-]+)/i,
   );
   return m ? m[1]! : null;
+}
+
+/** A short share link (share.gemini.google/<token>) that 301s to the canonical URL. */
+function isShortShareUrl(url: string): boolean {
+  return /^https:\/\/share\.gemini\.google\/[\w-]+/i.test(url);
+}
+
+/**
+ * Resolve a short `share.gemini.google/<token>` link to its canonical share id
+ * by following the redirect (the token itself is not the id the RPC accepts).
+ */
+async function resolveShortShareId(url: string): Promise<string | null> {
+  // Read the Location header without downloading the page when possible.
+  try {
+    const res = await fetch(url, {
+      headers: { 'user-agent': BROWSER_UA },
+      redirect: 'manual',
+    });
+    const loc = res.headers.get('location');
+    const id = loc ? shareIdFromUrl(loc) : null;
+    if (id) return id;
+  } catch {
+    // Fall through to the follow-redirect path below.
+  }
+  const res = await fetch(url, { headers: { 'user-agent': BROWSER_UA } });
+  return shareIdFromUrl(res.url);
 }
 
 /**
@@ -47,7 +78,10 @@ export function shareIdFromUrl(url: string): string | null {
  * UA. Returns the raw RPC response body for `parseShareHtml` to decode.
  */
 export async function fetchSharedConversation(url: string): Promise<string> {
-  const shareId = shareIdFromUrl(url);
+  let shareId = shareIdFromUrl(url);
+  if (!shareId && isShortShareUrl(url)) {
+    shareId = await resolveShortShareId(url);
+  }
   if (!shareId) {
     throw new Error('Pass a Gemini share URL like https://gemini.google.com/share/<id>.');
   }

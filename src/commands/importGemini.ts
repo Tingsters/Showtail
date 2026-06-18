@@ -34,7 +34,8 @@ export interface ImportGeminiOptions {
   date?: string;
 }
 
-const SHARE_RE = /^https:\/\/(gemini\.google\.com\/share|g\.co\/gemini\/share)\/[\w-]+/i;
+const SHARE_RE =
+  /^https:\/\/(?:gemini\.google\.com\/share|g\.co\/gemini\/share|share\.gemini\.google)\/[\w-]+/i;
 
 /** A saved Gemini RPC response carries the batchexecute markers; a transcript won't. */
 function looksLikeRpcBody(content: string): boolean {
