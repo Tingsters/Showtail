@@ -160,6 +160,99 @@ describe('hook command (end-to-end via stdin)', () => {
     }
   });
 
+  test('stop hook attributes only the current turn, not transcript backlog', () => {
+    const dir = makeTempDir();
+    try {
+      initProject(dir);
+      run(
+        dir,
+        ['hook', 'session-start'],
+        JSON.stringify({ cwd: dir, source: 'startup' }),
+      );
+
+      // A persisted Claude Code transcript that already holds a prior
+      // conversation (the "backlog"), then the current turn's prompt + reply.
+      // Only the current turn's assistant message should be captured; the
+      // backlog must not be dumped onto the new prompt.
+      const lines = [
+        {
+          type: 'user',
+          uuid: 'old-u',
+          promptSource: 'typed',
+          sessionId: 'sess-1',
+          cwd: dir,
+          message: { role: 'user', content: 'old backlog prompt' },
+        },
+        {
+          type: 'assistant',
+          uuid: 'old-a1',
+          message: {
+            role: 'assistant',
+            model: 'claude-opus-4-8',
+            content: [{ type: 'text', text: 'BACKLOG reply one' }],
+          },
+        },
+        {
+          type: 'assistant',
+          uuid: 'old-a2',
+          message: {
+            role: 'assistant',
+            model: 'claude-opus-4-8',
+            content: [{ type: 'text', text: 'BACKLOG reply two' }],
+          },
+        },
+        {
+          type: 'user',
+          uuid: 'new-u',
+          promptSource: 'typed',
+          sessionId: 'sess-1',
+          cwd: dir,
+          message: { role: 'user', content: 'make the new change' },
+        },
+        {
+          type: 'assistant',
+          uuid: 'new-a',
+          message: {
+            role: 'assistant',
+            model: 'claude-opus-4-8',
+            content: [{ type: 'text', text: 'CURRENT reply applied' }],
+          },
+        },
+      ];
+      const transcriptPath = join(dir, 'transcript.jsonl');
+      writeFileSync(transcriptPath, lines.map((l) => JSON.stringify(l)).join('\n'));
+
+      // The live hook captures the new prompt (opening the turn), then Stop.
+      run(
+        dir,
+        ['hook', 'user-prompt'],
+        JSON.stringify({ cwd: dir, prompt: 'make the new change' }),
+      );
+      run(
+        dir,
+        ['hook', 'stop'],
+        JSON.stringify({ cwd: dir, transcript_path: transcriptPath }),
+      );
+
+      run(dir, ['report', '--format', 'json']);
+      const data = readJsonReport(dir);
+
+      // Exactly one prompt was logged live, so exactly one turn — carrying only
+      // the current turn's single reply, none of the backlog.
+      expect(data.turns.length).toBe(1);
+      const turn = data.turns[0];
+      expect(turn.prompt.text).toBe('make the new change');
+      expect(turn.aiOutputs.length).toBe(1);
+      expect(turn.aiOutputs[0].text).toBe('CURRENT reply applied');
+
+      // The backlog must not appear anywhere in the report.
+      const blob = JSON.stringify(data);
+      expect(blob).not.toContain('BACKLOG reply');
+    } finally {
+      cleanup(dir);
+    }
+  });
+
   test('post-edit --tool codex snapshots a file from an apply_patch envelope', () => {
     const dir = makeTempDir();
     try {

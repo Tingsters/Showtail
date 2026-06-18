@@ -120,9 +120,15 @@ async function handlePostEdit(
 
 /**
  * On Stop, capture the AI's text reply for the turn. Claude Code passes the
- * transcript path; we read the latest assistant message(s) not already recorded
- * and log them as `ai_output`, linked to the open turn. Best-effort: if no
+ * transcript path; we read the assistant message(s) from the *current* turn and
+ * log them as `ai_output`, linked to the open turn. Best-effort: if no
  * transcript is available (e.g. Codex doesn't provide one), this is a no-op.
+ *
+ * Stop fires once per turn, so only the assistant messages *after the last user
+ * prompt* in the transcript belong to this turn. We deliberately ignore anything
+ * before it: that's either already captured by an earlier Stop, or — when a
+ * persisted transcript is resumed under a fresh trail — backlog from before
+ * Showtail was watching, which must not be dumped onto the current prompt.
  */
 async function handleStop(
   paths: ShowtailPaths,
@@ -141,9 +147,20 @@ async function handleStop(
     return; // Unknown/unsupported transcript format — nothing to capture.
   }
 
+  // The current turn starts after the last real user prompt in the transcript.
+  // `parseClaudeTranscript` only emits role 'user' for genuine typed/pasted
+  // prompts, so this reliably marks the boundary. No user message means there's
+  // no turn to attribute to (shouldn't happen on a real Stop) — capture nothing.
+  let lastUserIdx = -1;
+  for (let i = 0; i < transcript.messages.length; i++) {
+    if (transcript.messages[i]!.role === 'user') lastUserIdx = i;
+  }
+  if (lastUserIdx < 0) return;
+
   const seen = importedSourceIds(paths);
   const turnId = readState(paths).currentPromptId ?? undefined;
-  for (const msg of transcript.messages) {
+  for (let i = lastUserIdx + 1; i < transcript.messages.length; i++) {
+    const msg = transcript.messages[i]!;
     if (msg.role !== 'assistant') continue;
     if (seen.has(msg.sourceId)) continue;
     await logEvent(paths, {
