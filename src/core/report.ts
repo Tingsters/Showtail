@@ -384,19 +384,19 @@ export function renderHtml(data: ReportData): string {
   .ai-sep { border: none; border-top: 1px solid #e3e3e8; margin: 0.7rem 0; }
   .turn-close {
     display: block;
-    width: auto;
-    margin: 0.8rem -0.9rem -0.8rem;
-    padding: 0.55rem;
+    width: 100%;
+    box-sizing: border-box;
+    padding: 0.6rem;
     font: inherit;
     font-size: 0.8rem;
     text-align: center;
-    color: #6b6b76;
-    background: transparent;
+    color: #5c5f78;
+    background: #f3f4f9;
     border: none;
     border-top: 1px solid #e3e3e8;
     cursor: pointer;
   }
-  .turn-close:hover { background: #f1f1f5; color: #3a3f6b; }
+  .turn-close:hover { background: #e8eaf4; color: #2f3566; }
   .prompt-block {
     margin: 0.3rem 0 0.6rem;
     padding: 0.2rem 0 0.2rem 0.7rem;
@@ -466,8 +466,8 @@ export function renderHtml(data: ReportData): string {
     .ai-text a { color: #aab0ff; }
     .ai-text blockquote { border-left-color: #4a4a52; color: #b8b8c2; }
     .ai-sep { border-top-color: #34343a; }
-    .turn-close { color: #9a9aa6; border-top-color: #34343a; }
-    .turn-close:hover { background: #242429; color: #c6cbf0; }
+    .turn-close { color: #b8b8c2; background: #242429; border-top-color: #34343a; }
+    .turn-close:hover { background: #2c2c33; color: #e4e4ea; }
   }
 </style>
 </head>
@@ -523,14 +523,17 @@ function turnsHtml(data: ReportData): string {
       out.push('</details>');
     }
 
-    // Collapse the card from where you finished reading. Inline handler so the
-    // file stays self-contained; degrades to a no-op if JS is disabled.
+    out.push('</div>'); // end .turn-body
+
+    // Full-width footer that collapses the card — a direct child of the card so
+    // it spans edge to edge. Inline handler keeps the file self-contained
+    // (degrades to a no-op if JS is disabled; the summary still toggles).
     out.push(
       '<button type="button" class="turn-close" ' +
         'onclick="this.closest(\'details.turn\').open=false">▲ Close</button>',
     );
 
-    out.push('</div></details>');
+    out.push('</details>');
   }
   return out.join('\n');
 }
