@@ -42,4 +42,19 @@ describe('parseConversationHtml', () => {
     const b = parseConversationHtml(CHATGPT_CLIP, CHATGPT_HTML)!;
     expect(a.messages.map((m) => m.id)).toEqual(b.messages.map((m) => m.id));
   });
+
+  test('preserves code blocks (br-separated, span-tokenized) as fences', () => {
+    // Mirrors ChatGPT's real markup: language header + Copy button, token <span>s,
+    // and <br> for line breaks (no real newlines inside <code>).
+    const clip = `Version:0.9
+<html><body><!--StartFragment--><div data-message-author-role="user"><div class="whitespace-pre-wrap">hello world in python</div></div><div data-message-author-role="assistant"><div class="markdown"><p>Here you go:</p><pre><div class="hdr">python<button>Copy</button></div><code class="language-python"><span class="x">print</span><span>(</span><span class="s">"Hello, world!"</span><span>)</span><br><span>    </span><span class="k">name</span><span> = "x"</span></code></pre><p>Run with <code>python hi.py</code>.</p></div></div><!--EndFragment--></body></html>`;
+    const conv = parseConversationHtml(clip, CHATGPT_HTML)!;
+    const ai = conv.messages[1]!.text;
+    expect(ai).toContain('```python');
+    // <br> became a newline; indentation preserved; tokens joined.
+    expect(ai).toContain('print("Hello, world!")\n    name = "x"');
+    expect(ai).toContain('`python hi.py`'); // inline code
+    expect(ai).not.toContain('Copy'); // button chrome stripped
+    expect(ai).not.toContain('<span'); // highlight spans stripped
+  });
 });

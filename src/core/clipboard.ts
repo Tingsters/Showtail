@@ -28,7 +28,8 @@ export function readClipboard(): string {
     const out = tryRead('powershell', [
       '-NoProfile',
       '-Command',
-      'Get-Clipboard -Raw',
+      // Emit UTF-8 so non-ASCII (curly quotes, em-dashes, accents) survives.
+      '[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; Get-Clipboard -Raw',
     ]);
     if (out !== null) return out;
   } else if (process.platform === 'darwin') {
@@ -62,13 +63,16 @@ export function readClipboard(): string {
 export function readClipboardHtml(): string | null {
   let out: string | null = null;
   if (process.platform === 'win32') {
-    out = tryRead('powershell', [
-      '-STA',
-      '-NoProfile',
-      '-Command',
-      'Add-Type -AssemblyName System.Windows.Forms; ' +
-        '[System.Windows.Forms.Clipboard]::GetText([System.Windows.Forms.TextDataFormat]::Html)',
-    ]);
+    // CF_HTML ("HTML Format") is UTF-8, but .NET decodes it with the system ANSI
+    // code page — the "Hereâ€™s" mojibake. Reverse that exactly: re-encode the
+    // string back to ANSI bytes (the original UTF-8 bytes) and decode as UTF-8.
+    const ps = [
+      '[Console]::OutputEncoding=[System.Text.Encoding]::UTF8;',
+      'Add-Type -AssemblyName System.Windows.Forms;',
+      '$s=[System.Windows.Forms.Clipboard]::GetText([System.Windows.Forms.TextDataFormat]::Html);',
+      'if($s){[System.Text.Encoding]::UTF8.GetString([System.Text.Encoding]::Default.GetBytes($s))}',
+    ].join(' ');
+    out = tryRead('powershell', ['-STA', '-NoProfile', '-Command', ps]);
   } else if (process.platform === 'darwin') {
     // osascript returns «data HTML48…» (hex); decode it.
     const raw = tryRead('osascript', ['-e', 'the clipboard as «class HTML»']);

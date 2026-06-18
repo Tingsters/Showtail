@@ -62,16 +62,43 @@ function decodeEntities(s: string): string {
     .replace(/&[a-z]+;|&#x?[0-9a-f]+;/gi, (m) => ENTITIES[m.toLowerCase()] ?? m);
 }
 
-/** Reduce one turn's HTML to its readable text, dropping UI chrome. */
+/**
+ * Convert a copied code block (`<pre>…<code>…</code>…</pre>`) into a Markdown
+ * fence so it renders as a real code box in the report. Uses the `<code>` text
+ * (skipping the language header / Copy button that sit in the `<pre>`), captures
+ * the language from `class="language-xxx"`, and keeps the code's own newlines.
+ */
+function preToFence(html: string): string {
+  return html.replace(/<pre\b[^>]*>([\s\S]*?)<\/pre>/gi, (_full, inner: string) => {
+    const codeMatch = inner.match(/<code\b([^>]*)>([\s\S]*?)<\/code>/i);
+    const body = codeMatch ? codeMatch[2]! : inner;
+    const lang =
+      (inner.match(/language-([\w+#.-]+)/i) ?? ([] as RegExpMatchArray | never[]))[1] ?? '';
+    // Code lines are separated by <br> (with token <span>s); turn <br> into real
+    // newlines, then strip the spans. Entities stay for the final decode pass.
+    const code = body
+      .replace(/<br\s*\/?>/gi, '\n')
+      .replace(/<[^>]+>/g, '')
+      .replace(/^\n+|\n+$/g, '');
+    return `\n\n\`\`\`${lang}\n${code}\n\`\`\`\n\n`;
+  });
+}
+
+/** Reduce one turn's HTML to its readable text, preserving code, dropping chrome. */
 function htmlToText(html: string): string {
+  const withCode = preToFence(html).replace(
+    // Inline <code> → `backticks` (collapsed to one line).
+    /<code\b[^>]*>([\s\S]*?)<\/code>/gi,
+    (_full, t: string) => '`' + t.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim() + '`',
+  );
   return decodeEntities(
-    html
+    withCode
       // Drop interactive chrome (Copy/Edit/Regenerate/Share/Download/reasoning toggles).
       .replace(/<button\b[^>]*>[\s\S]*?<\/button>/gi, ' ')
       .replace(/<svg\b[^>]*>[\s\S]*?<\/svg>/gi, ' ')
       // Block boundaries become line breaks.
       .replace(/<br\s*\/?>/gi, '\n')
-      .replace(/<\/(p|div|section|li|h[1-6]|tr|blockquote|pre)>/gi, '\n')
+      .replace(/<\/(p|div|section|li|h[1-6]|tr|blockquote)>/gi, '\n')
       // Remaining complete tags, then any trailing partial tag at a turn boundary.
       .replace(/<[^>]+>/g, '')
       .replace(/<[^>]*$/, ''),

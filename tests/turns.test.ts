@@ -70,6 +70,36 @@ describe('turns', () => {
     }
   });
 
+  test('renders fenced code in an AI response as a monospace code box', async () => {
+    const dir = makeTempDir();
+    try {
+      await runInit({ cwd: dir });
+      const paths = pathsForRoot(dir);
+      startSession(paths);
+      const { event: prompt } = await logEvent(paths, {
+        type: 'prompt',
+        text: 'hello world in python',
+        tool: 'chatgpt',
+      });
+      await logEvent(paths, {
+        type: 'ai_output',
+        text: 'Here you go:\n```python\nprint("Hello, world!")\n```\nRun with `python hi.py`.',
+        tool: 'chatgpt',
+        turnId: prompt.id,
+      });
+
+      const html = renderHtml(buildReportData(paths));
+      expect(html).toContain('<pre class="codeblock">');
+      expect(html).toContain('class="code-lang"'); // language label
+      expect(html).toContain('print(&quot;Hello, world!&quot;)'); // escaped code
+      expect(html).toContain('<code>python hi.py</code>'); // inline code
+      expect(html).not.toContain('```'); // no literal fences left
+      expect(html).not.toContain('<script>');
+    } finally {
+      cleanup(dir);
+    }
+  });
+
   test('renders collapsible <details> cards with diff coloring and no <script>', async () => {
     const dir = makeTempDir();
     try {

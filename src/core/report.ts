@@ -477,6 +477,33 @@ export function renderHtml(data: ReportData): string {
   }
   pre.diff .add { background: #e3f7e8; color: #18602a; display: block; }
   pre.diff .del { background: #fbe4e4; color: #8a1f1f; display: block; }
+  /* Code boxes inside an AI response / prompt (a code box with a code font). */
+  pre.codeblock {
+    margin: 0.4rem 0 0.6rem;
+    padding: 0.6rem 0.8rem;
+    background: #f6f6f9;
+    border: 1px solid #e3e3e8;
+    border-radius: 0.35rem;
+    overflow-x: auto;
+    white-space: pre;
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 0.8rem;
+    line-height: 1.45;
+  }
+  pre.codeblock code { background: none; padding: 0; font-size: inherit; border-radius: 0; }
+  .code-lang {
+    display: inline-block;
+    margin: 0.4rem 0 0;
+    padding: 0.1rem 0.5rem;
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 0.7rem;
+    color: #6b6b76;
+    background: #ececf1;
+    border: 1px solid #e3e3e8;
+    border-bottom: none;
+    border-radius: 0.35rem 0.35rem 0 0;
+  }
+  .code-lang + pre.codeblock { margin-top: 0; border-top-left-radius: 0; }
   @media (prefers-color-scheme: dark) {
     body { color: #e4e4ea; background: #18181b; }
     h2 { border-bottom-color: #34343a; }
@@ -488,6 +515,8 @@ export function renderHtml(data: ReportData): string {
     pre.diff { background: #242429; }
     pre.diff .add { background: #16331f; color: #8fdca2; }
     pre.diff .del { background: #3a1f1f; color: #e6a3a3; }
+    pre.codeblock { background: #242429; border-color: #34343a; }
+    .code-lang { background: #2a2a30; border-color: #34343a; color: #a0a0aa; }
   }
 </style>
 </head>
@@ -523,11 +552,11 @@ function turnsHtml(data: ReportData): string {
 
     if (turn.prompt.text.trim() !== firstLine(turn.prompt.text)) {
       out.push('<h4>Prompt</h4>');
-      out.push(`<div class="ai-text">${escapeHtml(turn.prompt.text)}</div>`);
+      out.push(`<div class="ai-text">${renderRichText(turn.prompt.text)}</div>`);
     }
     for (const ai of turn.aiOutputs) {
       out.push('<h4>AI response</h4>');
-      out.push(`<div class="ai-text">${escapeHtml(ai.text)}</div>`);
+      out.push(`<div class="ai-text">${renderRichText(ai.text)}</div>`);
     }
     for (const code of turn.codeChanges) {
       const stat2 = code.diffLines ? ` (~${code.diffLines} line(s))` : '';
@@ -570,6 +599,38 @@ function escapeHtml(s: string): string {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
+}
+
+/**
+ * Render prompt/AI text for a turn card: Markdown fenced code becomes a real
+ * monospace code box, inline `code` becomes <code>, and the rest is escaped
+ * prose (the container is `white-space: pre-wrap`, so prose line breaks show).
+ * Everything is escaped, so no script can slip through.
+ */
+function renderRichText(text: string): string {
+  const out: string[] = [];
+  const fence = /```([\w+#.-]*)[ \t]*\r?\n?([\s\S]*?)```/g;
+  let last = 0;
+  let m: RegExpExecArray | null;
+  while ((m = fence.exec(text)) !== null) {
+    out.push(prose(text.slice(last, m.index)));
+    out.push(codeBox(m[2] ?? '', m[1] ?? ''));
+    last = fence.lastIndex;
+  }
+  out.push(prose(text.slice(last)));
+  return out.join('');
+}
+
+/** Escape a prose run, then turn inline `code` spans into <code>. */
+function prose(s: string): string {
+  return escapeHtml(s).replace(/`([^`\n]+)`/g, '<code>$1</code>');
+}
+
+/** A monospace code box (no view-time JS) with an optional language label. */
+function codeBox(code: string, lang: string): string {
+  const label = lang ? `<div class="code-lang">${escapeHtml(lang)}</div>` : '';
+  const body = escapeHtml(code.replace(/\n$/, ''));
+  return `${label}<pre class="codeblock"><code>${body}</code></pre>`;
 }
 
 /**
