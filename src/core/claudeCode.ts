@@ -153,7 +153,11 @@ export function findProjectTranscripts(root: string): TranscriptInfo[] {
       }
       if (!cwd || !samePath(cwd, root)) continue;
 
-      out.push({ path: fp, sessionId: file.replace(/\.jsonl$/, ''), mtimeMs: st.mtimeMs });
+      out.push({
+        path: fp,
+        sessionId: file.replace(/\.jsonl$/, ''),
+        mtimeMs: st.mtimeMs,
+      });
     }
   }
 
@@ -210,7 +214,11 @@ export function parseClaudeTranscript(content: string, root: string): ClaudeTran
     if (typeof obj.sessionId === 'string' && !sessionId) sessionId = obj.sessionId;
 
     // Drop noise that isn't the student's direct work.
-    if (obj.isSidechain === true || obj.isMeta === true || obj.isApiErrorMessage === true) {
+    if (
+      obj.isSidechain === true ||
+      obj.isMeta === true ||
+      obj.isApiErrorMessage === true
+    ) {
       continue;
     }
 
@@ -224,7 +232,9 @@ export function parseClaudeTranscript(content: string, root: string): ClaudeTran
 
   return {
     sessionId,
-    title: sessionId ? `Claude Code session ${sessionId.slice(0, 8)}` : 'Claude Code session',
+    title: sessionId
+      ? `Claude Code session ${sessionId.slice(0, 8)}`
+      : 'Claude Code session',
     messages,
   };
 }
@@ -274,7 +284,8 @@ function handleAssistant(obj: any, root: string): ClaudeMessage[] {
         text: `Claude edited ${rel}`,
         files: [rel],
         timestamp,
-        sourceId: typeof part.id === 'string' && part.id ? part.id : `${uuid}:${out.length}`,
+        sourceId:
+          typeof part.id === 'string' && part.id ? part.id : `${uuid}:${out.length}`,
       });
     }
   }
@@ -354,7 +365,11 @@ export async function importClaudeTranscript(
     seen.add(msg.sourceId);
 
     const type =
-      msg.role === 'user' ? 'prompt' : msg.role === 'assistant' ? 'ai_output' : 'artifact';
+      msg.role === 'user'
+        ? 'prompt'
+        : msg.role === 'assistant'
+          ? 'ai_output'
+          : 'artifact';
 
     const { event } = await logEvent(paths, {
       type,

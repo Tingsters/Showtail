@@ -596,9 +596,7 @@ function turnsHtml(data: ReportData): string {
     for (const code of turn.codeChanges) {
       const stat2 = code.diffLines ? ` (~${code.diffLines} line(s))` : '';
       out.push('<details class="code">');
-      out.push(
-        `<summary>${escapeHtml(code.path)}${escapeHtml(stat2)}</summary>`,
-      );
+      out.push(`<summary>${escapeHtml(code.path)}${escapeHtml(stat2)}</summary>`);
       if (code.diff) out.push(diffHtml(code.diff));
       out.push('</details>');
     }
@@ -611,8 +609,7 @@ function turnsHtml(data: ReportData): string {
 /** Render a diff as a <pre> with simple +/- line coloring (all escaped). */
 function diffHtml(diff: string): string {
   const lines = diff.split('\n').map((line) => {
-    const cls =
-      /^\+(?!\+)/.test(line) ? 'add' : /^-(?!-)/.test(line) ? 'del' : '';
+    const cls = /^\+(?!\+)/.test(line) ? 'add' : /^-(?!-)/.test(line) ? 'del' : '';
     const safe = escapeHtml(line) || '&nbsp;';
     return cls ? `<span class="${cls}">${safe}</span>` : safe;
   });

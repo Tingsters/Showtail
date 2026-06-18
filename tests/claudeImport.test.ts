@@ -165,7 +165,11 @@ describe('claude-code import (end to end)', () => {
       const count = imported.length;
 
       // Re-importing the same transcript adds nothing (deduped by sourceId).
-      await runImportClaudeCode(undefined, { file: fixture, withResponses: true, cwd: dir });
+      await runImportClaudeCode(undefined, {
+        file: fixture,
+        withResponses: true,
+        cwd: dir,
+      });
       expect(cc().length).toBe(count);
 
       // Undo removes the whole batch.

@@ -73,7 +73,8 @@ function preToFence(html: string): string {
     const codeMatch = inner.match(/<code\b([^>]*)>([\s\S]*?)<\/code>/i);
     const body = codeMatch ? codeMatch[2]! : inner;
     const lang =
-      (inner.match(/language-([\w+#.-]+)/i) ?? ([] as RegExpMatchArray | never[]))[1] ?? '';
+      (inner.match(/language-([\w+#.-]+)/i) ?? ([] as RegExpMatchArray | never[]))[1] ??
+      '';
     // Code lines are separated by <br> (with token <span>s); turn <br> into real
     // newlines, then strip the spans. Entities stay for the final decode pass.
     const code = body
@@ -86,7 +87,10 @@ function preToFence(html: string): string {
 
 /** Inner text of a formatting tag: drop nested tags, collapse whitespace. */
 function inlineText(s: string): string {
-  return s.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
+  return s
+    .replace(/<[^>]+>/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 /** Reduce one turn's HTML to its readable text, preserving code, dropping chrome. */
@@ -107,15 +111,22 @@ function htmlToText(html: string): string {
       const t = inlineText(inner);
       return t ? `*${t}*` : '';
     })
-    .replace(/<a\b[^>]*\shref="([^"]*)"[^>]*>([\s\S]*?)<\/a>/gi, (_m, href: string, inner: string) => {
-      const t = inlineText(inner);
-      return /^https?:\/\//i.test(href) ? `[${t}](${href})` : t;
-    })
+    .replace(
+      /<a\b[^>]*\shref="([^"]*)"[^>]*>([\s\S]*?)<\/a>/gi,
+      (_m, href: string, inner: string) => {
+        const t = inlineText(inner);
+        return /^https?:\/\//i.test(href) ? `[${t}](${href})` : t;
+      },
+    )
     .replace(
       /<h([1-6])\b[^>]*>([\s\S]*?)<\/h\1>/gi,
-      (_m, lvl: string, inner: string) => `\n${'#'.repeat(Number(lvl))} ${inlineText(inner)}\n`,
+      (_m, lvl: string, inner: string) =>
+        `\n${'#'.repeat(Number(lvl))} ${inlineText(inner)}\n`,
     )
-    .replace(/<li\b[^>]*>([\s\S]*?)<\/li>/gi, (_m, inner: string) => `\n- ${inlineText(inner)}`);
+    .replace(
+      /<li\b[^>]*>([\s\S]*?)<\/li>/gi,
+      (_m, inner: string) => `\n- ${inlineText(inner)}`,
+    );
   return decodeEntities(
     withFmt
       // Drop interactive chrome (Copy/Edit/Regenerate/Share/Download/reasoning toggles).
@@ -158,7 +169,8 @@ export function parseConversationHtml(
     // Start at the end of this turn's opening tag; stop at the next turn's marker.
     const tagClose = frag.indexOf('>', (m.index ?? 0) + m[0].length);
     const start = tagClose === -1 ? (m.index ?? 0) + m[0].length : tagClose + 1;
-    const end = i + 1 < markers.length ? (markers[i + 1]!.index ?? frag.length) : frag.length;
+    const end =
+      i + 1 < markers.length ? (markers[i + 1]!.index ?? frag.length) : frag.length;
     const text = htmlToText(frag.slice(start, end));
     if (text) messages.push(htmlMessage(role, text));
   }

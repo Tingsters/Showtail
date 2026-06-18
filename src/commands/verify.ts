@@ -3,7 +3,12 @@ import { checkArtifactHashes } from '../core/artifacts.ts';
 import { eventFromEntry } from '../core/events.ts';
 import { buildReportData, renderMarkdown } from '../core/report.ts';
 import { validateEvent } from '../core/schema.ts';
-import { readConfig, readJournal, requirePaths, type ShowtailPaths } from '../core/storage.ts';
+import {
+  readConfig,
+  readJournal,
+  requirePaths,
+  type ShowtailPaths,
+} from '../core/storage.ts';
 
 export interface VerifyOptions {
   cwd?: string;
@@ -61,7 +66,9 @@ export async function verifyProject(paths: ShowtailPaths): Promise<VerifyResult>
       if (entry.kind === 'artifact') {
         if (!entry.path || !entry.sha256) {
           eventsCheck.ok = false;
-          eventsCheck.details.push(`entry ${i} (${entry.id}): artifact missing path/sha256.`);
+          eventsCheck.details.push(
+            `entry ${i} (${entry.id}): artifact missing path/sha256.`,
+          );
         }
         continue;
       }

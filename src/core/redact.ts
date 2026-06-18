@@ -93,12 +93,7 @@ const PII_RULES: Rule[] = [
 ];
 
 /** Apply one rule, redacting matches that aren't allow-listed and pass `check`. */
-function applyRule(
-  text: string,
-  rule: Rule,
-  allow: string[],
-  onHit: () => void,
-): string {
+function applyRule(text: string, rule: Rule, allow: string[], onHit: () => void): string {
   return text.replace(rule.re, (...args: string[]) => {
     const match = args[0]!;
     // args = [match, ...groups, offset, fullString]; groups are the middle.

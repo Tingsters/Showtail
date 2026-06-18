@@ -8,7 +8,11 @@ import {
   type ParsedConversation,
 } from '../core/chatgpt.ts';
 import { readClipboard, readClipboardHtml } from '../core/clipboard.ts';
-import { CHATGPT_HTML, parseConversationHtml, type HtmlParseConfig } from '../core/pasteHtml.ts';
+import {
+  CHATGPT_HTML,
+  parseConversationHtml,
+  type HtmlParseConfig,
+} from '../core/pasteHtml.ts';
 import { latestBatchId, readAllEvents, removeEventsByBatch } from '../core/events.ts';
 import { makeId } from '../core/ids.ts';
 import { requirePaths } from '../core/storage.ts';
@@ -39,7 +43,12 @@ function looksLikeSharePage(content: string): boolean {
 
 /** Where a pasted transcript came from: exact roles (HTML) or raw text. */
 export type PasteSource =
-  | { conversation: ParsedConversation; raw?: undefined; fromClipboard: boolean; viaHtml: true }
+  | {
+      conversation: ParsedConversation;
+      raw?: undefined;
+      fromClipboard: boolean;
+      viaHtml: true;
+    }
   | { raw: string; conversation?: undefined; fromClipboard: boolean; viaHtml: false };
 
 /**
@@ -155,7 +164,11 @@ export async function runImportChatgpt(
     const src: PasteSource =
       options.text !== undefined
         ? { raw: options.text, fromClipboard: false, viaHtml: false }
-        : await readPasteSource(options, CHATGPT_HTML, 'showtail import chatgpt --file <path>');
+        : await readPasteSource(
+            options,
+            CHATGPT_HTML,
+            'showtail import chatgpt --file <path>',
+          );
 
     let viaHtml = false;
     if (src.viaHtml) {
@@ -164,7 +177,9 @@ export async function runImportChatgpt(
       viaHtml = true;
     } else {
       if (src.fromClipboard && src.raw.trim() === '') {
-        console.log('Your clipboard is empty — copy the conversation first, then try again.');
+        console.log(
+          'Your clipboard is empty — copy the conversation first, then try again.',
+        );
         return;
       }
       const parsed = parseTranscript(src.raw);

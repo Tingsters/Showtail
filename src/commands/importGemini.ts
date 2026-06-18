@@ -70,7 +70,11 @@ export async function runImportGemini(
     const src: PasteSource =
       options.text !== undefined
         ? { raw: options.text, fromClipboard: false, viaHtml: false }
-        : await readPasteSource(options, GEMINI_HTML, 'showtail import gemini --file <path>');
+        : await readPasteSource(
+            options,
+            GEMINI_HTML,
+            'showtail import gemini --file <path>',
+          );
 
     let viaHtml = false;
     if (src.viaHtml) {
@@ -79,7 +83,9 @@ export async function runImportGemini(
       viaHtml = true;
     } else {
       if (src.fromClipboard && src.raw.trim() === '') {
-        console.log('Your clipboard is empty — copy the conversation first, then try again.');
+        console.log(
+          'Your clipboard is empty — copy the conversation first, then try again.',
+        );
         return;
       }
       const parsed = parseTranscript(src.raw);

@@ -33,7 +33,9 @@ describe('parseConversationHtml', () => {
   });
 
   test('returns null when there are no role markers (plain text fallback)', () => {
-    expect(parseConversationHtml('<html><body><p>just text</p></body></html>', CHATGPT_HTML)).toBeNull();
+    expect(
+      parseConversationHtml('<html><body><p>just text</p></body></html>', CHATGPT_HTML),
+    ).toBeNull();
     expect(parseConversationHtml('not even html', CHATGPT_HTML)).toBeNull();
   });
 

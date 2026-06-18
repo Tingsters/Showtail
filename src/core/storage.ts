@@ -184,7 +184,10 @@ function activeSegment(paths: ShowtailPaths): string {
 /** Bring an older/looser entry up to the current shape. Additive-only so far. */
 export function normalizeEntry(raw: Record<string, unknown>): JournalEntry {
   const entry = raw as unknown as JournalEntry;
-  return { ...entry, v: typeof raw.v === 'number' ? (raw.v as number) : JOURNAL_ENTRY_VERSION };
+  return {
+    ...entry,
+    v: typeof raw.v === 'number' ? (raw.v as number) : JOURNAL_ENTRY_VERSION,
+  };
 }
 
 /** Append one journal entry to the active segment (O(1), append-only). */

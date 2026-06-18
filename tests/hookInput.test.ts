@@ -9,14 +9,20 @@ import {
 describe('extractSuggestedCode', () => {
   test('Edit becomes a +/- diff', () => {
     const code = extractSuggestedCode({
-      tool_input: { file_path: 'a.ts', old_string: 'const a = 1;', new_string: 'const a = 2;' },
+      tool_input: {
+        file_path: 'a.ts',
+        old_string: 'const a = 1;',
+        new_string: 'const a = 2;',
+      },
     });
     expect(code).toContain('- const a = 1;');
     expect(code).toContain('+ const a = 2;');
   });
 
   test('Write becomes added lines', () => {
-    const code = extractSuggestedCode({ tool_input: { file_path: 'a.ts', content: 'line one\nline two' } });
+    const code = extractSuggestedCode({
+      tool_input: { file_path: 'a.ts', content: 'line one\nline two' },
+    });
     expect(code).toBe('+ line one\n+ line two');
   });
 

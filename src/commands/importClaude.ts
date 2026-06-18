@@ -83,9 +83,7 @@ function resolveTranscriptPath(
   const found = findProjectTranscripts(paths.root);
   if (found.length === 0) {
     console.log('No Claude Code transcripts were found for this project on disk.');
-    console.log(
-      'If you have a transcript elsewhere, point at it with --file <path>.',
-    );
+    console.log('If you have a transcript elsewhere, point at it with --file <path>.');
     return null;
   }
 
@@ -132,7 +130,9 @@ function listTranscripts(paths: ShowtailPaths): void {
       // Couldn't parse it — still list the id so it can be tried with --file.
     }
     console.log(`  ${t.sessionId}`);
-    console.log(`    ${trimMs(new Date(t.mtimeMs).toISOString())} · ${promptCount} prompt(s)`);
+    console.log(
+      `    ${trimMs(new Date(t.mtimeMs).toISOString())} · ${promptCount} prompt(s)`,
+    );
     if (firstPrompt) console.log(`    first: ${oneLine(firstPrompt)}`);
     console.log('');
   }
@@ -153,7 +153,9 @@ function printResult(res: ClaudeImportResult, withResponses: boolean): void {
   const parts = [`${res.prompts} prompt(s)`];
   if (withResponses) parts.push(`${res.responses} response(s)`);
   parts.push(`${res.edits} edit(s)`);
-  console.log(`Imported from your Claude Code session: ${parts.join(', ')} (tool: claude-code).`);
+  console.log(
+    `Imported from your Claude Code session: ${parts.join(', ')} (tool: claude-code).`,
+  );
   if (res.skipped) console.log(`  ${res.skipped} already-imported item(s) skipped.`);
   if (res.first && res.last) {
     console.log(`  Spanned ${trimMs(res.first)} → ${trimMs(res.last)}.`);
@@ -162,5 +164,7 @@ function printResult(res: ClaudeImportResult, withResponses: boolean): void {
   console.log('');
   console.log('This was all local — nothing left your machine.');
   console.log('Not what you expected? Undo this whole batch:  showtail import undo');
-  console.log('Looks right? `showtail report` shows it interleaved with your other work.');
+  console.log(
+    'Looks right? `showtail report` shows it interleaved with your other work.',
+  );
 }

@@ -50,8 +50,20 @@ describe('object store + journal', () => {
     try {
       await runInit({ cwd: dir });
       const paths = pathsForRoot(dir);
-      appendJournal(paths, { v: 1, kind: 'event', id: 'a', ts: '2026-01-01T00:00:00Z', type: 'prompt' });
-      appendJournal(paths, { v: 1, kind: 'event', id: 'b', ts: '2026-01-01T00:01:00Z', type: 'prompt' });
+      appendJournal(paths, {
+        v: 1,
+        kind: 'event',
+        id: 'a',
+        ts: '2026-01-01T00:00:00Z',
+        type: 'prompt',
+      });
+      appendJournal(paths, {
+        v: 1,
+        kind: 'event',
+        id: 'b',
+        ts: '2026-01-01T00:01:00Z',
+        type: 'prompt',
+      });
       const entries = readJournal(paths);
       expect(entries.map((e) => e.id)).toEqual(['a', 'b']);
       expect(existsSync(join(paths.journalDir, '0001.log'))).toBe(true);
@@ -88,7 +100,10 @@ describe('object store + journal', () => {
     try {
       await runInit({ cwd: dir });
       const paths = pathsForRoot(dir);
-      await logEvent(paths, { type: 'prompt', text: 'a memorable unique phrase zylophone' });
+      await logEvent(paths, {
+        type: 'prompt',
+        text: 'a memorable unique phrase zylophone',
+      });
       // Object filenames are hashes (no readable names).
       for (const f of walk(paths.objectsDir)) {
         expect(f).not.toContain('zylophone');
