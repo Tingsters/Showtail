@@ -11,6 +11,7 @@ import type {
 import { TOOL_LABELS } from '../types.ts';
 import { readArtifacts } from './artifacts.ts';
 import { readAllEventsWithSession } from './events.ts';
+import { highlightCode } from './highlight.ts';
 import { readObject } from './objects.ts';
 import { readConfig, readJournal, readSessions, type ShowtailPaths } from './storage.ts';
 
@@ -413,16 +414,33 @@ export function renderHtml(data: ReportData): string {
   .code > summary { cursor: pointer; font-size: 0.85rem; color: #3a3f6b; }
   pre.diff {
     margin: 0.4rem 0 0;
-    padding: 0.6rem 0.8rem;
+    padding: 0.6rem 0;
     background: #f6f6f9;
     border-radius: 0.35rem;
     overflow-x: auto;
+    white-space: pre;
     font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
     font-size: 0.8rem;
-    line-height: 1.45;
+    line-height: 1.5;
   }
-  pre.diff .add { background: #e3f7e8; color: #18602a; display: block; }
-  pre.diff .del { background: #fbe4e4; color: #8a1f1f; display: block; }
+  .dline { display: block; padding-right: 0.8rem; }
+  .dline.add { background: #e6ffec; }
+  .dline.del { background: #ffebe9; }
+  .dmark {
+    display: inline-block;
+    width: 1.6rem;
+    text-align: center;
+    color: #8a8a94;
+    user-select: none;
+  }
+  .dline.add .dmark { color: #1a7f37; background: #ccffd8; }
+  .dline.del .dmark { color: #cf222e; background: #ffd7d5; }
+  /* Shared syntax theme (GitHub Primer) for diffs and code blocks. */
+  .tok-kw { color: #cf222e; }
+  .tok-str { color: #0a3069; }
+  .tok-com { color: #6e7781; font-style: italic; }
+  .tok-num { color: #0550ae; }
+  .tok-fn { color: #8250df; }
   /* Code boxes inside an AI response / prompt (a code box with a code font). */
   pre.codeblock {
     margin: 0.4rem 0 0.6rem;
@@ -459,8 +477,16 @@ export function renderHtml(data: ReportData): string {
     .turn { background: #1f1f23; border-color: #34343a; }
     .badge { background: #2c2f45; color: #c6cbf0; }
     pre.diff { background: #242429; }
-    pre.diff .add { background: #16331f; color: #8fdca2; }
-    pre.diff .del { background: #3a1f1f; color: #e6a3a3; }
+    .dline.add { background: rgba(46, 160, 67, 0.15); }
+    .dline.del { background: rgba(248, 81, 73, 0.15); }
+    .dmark { color: #8a8a94; }
+    .dline.add .dmark { color: #3fb950; background: rgba(63, 185, 80, 0.3); }
+    .dline.del .dmark { color: #f85149; background: rgba(248, 81, 73, 0.3); }
+    .tok-kw { color: #ff7b72; }
+    .tok-str { color: #a5d6ff; }
+    .tok-com { color: #8b949e; }
+    .tok-num { color: #79c0ff; }
+    .tok-fn { color: #d2a8ff; }
     pre.codeblock { background: #242429; border-color: #34343a; }
     .code-lang { background: #2a2a30; border-color: #34343a; color: #a0a0aa; }
     .ai-text a { color: #aab0ff; }
@@ -538,14 +564,32 @@ function turnsHtml(data: ReportData): string {
   return out.join('\n');
 }
 
-/** Render a diff as a <pre> with simple +/- line coloring (all escaped). */
+/**
+ * Render a diff GitHub-style: each line is a full-width block row with a faint
+ * add/del tint and a +/- gutter, and the code itself is syntax-highlighted (the
+ * add/del state lives in the tint + gutter, not the text color). Rows are
+ * concatenated with no `\n` so there are no blank gaps between them.
+ */
 function diffHtml(diff: string): string {
-  const lines = diff.split('\n').map((line) => {
-    const cls = /^\+(?!\+)/.test(line) ? 'add' : /^-(?!-)/.test(line) ? 'del' : '';
-    const safe = escapeHtml(line) || '&nbsp;';
-    return cls ? `<span class="${cls}">${safe}</span>` : safe;
+  const rows = diff.split('\n').map((raw) => {
+    let cls = 'ctx';
+    let mark = ' ';
+    let code = raw.replace(/^ /, ''); // drop a unified-diff context space
+    if (/^\+/.test(raw)) {
+      cls = 'add';
+      mark = '+';
+      code = raw.replace(/^\+ ?/, '');
+    } else if (/^-/.test(raw)) {
+      cls = 'del';
+      mark = '-';
+      code = raw.replace(/^- ?/, '');
+    }
+    return (
+      `<span class="dline ${cls}"><span class="dmark">${mark}</span>` +
+      `${highlightCode(code) || '&nbsp;'}</span>`
+    );
   });
-  return `<pre class="diff">${lines.join('\n')}</pre>`;
+  return `<pre class="diff">${rows.join('')}</pre>`;
 }
 
 /** The first non-empty line of a string (for a card's collapsed summary). */
@@ -665,7 +709,8 @@ function renderBlocks(md: string): string {
 /** A monospace code box (no view-time JS) with an optional language label. */
 function codeBox(code: string, lang: string): string {
   const label = lang ? `<div class="code-lang">${escapeHtml(lang)}</div>` : '';
-  const body = escapeHtml(code.replace(/\n$/, ''));
+  // Syntax-highlight per line (highlightCode escapes), sharing the diff's theme.
+  const body = code.replace(/\n$/, '').split('\n').map(highlightCode).join('\n');
   return `${label}<pre class="codeblock"><code>${body}</code></pre>`;
 }
 

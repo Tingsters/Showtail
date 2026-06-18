@@ -91,7 +91,8 @@ describe('turns', () => {
       const html = renderHtml(buildReportData(paths));
       expect(html).toContain('<pre class="codeblock">');
       expect(html).toContain('class="code-lang"'); // language label
-      expect(html).toContain('print(&quot;Hello, world!&quot;)'); // escaped code
+      expect(html).toContain('Hello, world!'); // string still present
+      expect(html).toContain('class="tok-'); // syntax highlighting applied
       expect(html).toContain('<code>python hi.py</code>'); // inline code
       expect(html).not.toContain('```'); // no literal fences left
       expect(html).not.toContain('<script>');
@@ -147,19 +148,25 @@ describe('turns', () => {
         text: 'write a test',
         tool: 'claude-code',
       });
-      writeFileSync(join(dir, 'a.ts'), 'const a = 1;');
+      writeFileSync(join(dir, 'a.ts'), 'const a = 2;');
       await addArtifact(paths, {
         filePath: 'a.ts',
         tool: 'claude-code',
         turnId: prompt.id,
-        diff: '- old line\n+ new line',
+        diff: '- const a = 1;\n+ const a = 2;',
       });
 
       const html = renderHtml(buildReportData(paths));
       expect(html).toContain('<details class="turn">');
       expect(html).toContain('class="badge"');
-      expect(html).toContain('class="add"');
-      expect(html).toContain('class="del"');
+      // Each changed line is a single .dline block with a +/- gutter (.dmark).
+      expect(html).toContain('class="dline del"');
+      expect(html).toContain('class="dline add"');
+      expect(html).toContain('class="dmark"');
+      // Code inside the diff is syntax-highlighted with the shared tok-* theme.
+      expect(html).toContain('class="tok-kw"');
+      // Rows are adjacent — no empty (gray-gap) line is emitted between them.
+      expect(html).toContain('</span><span class="dline');
       // A Close button collapses the card; inline handler, not a <script>.
       expect(html).toContain('class="turn-close"');
       expect(html).toContain('open=false');
