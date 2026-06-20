@@ -20,7 +20,7 @@ import { runImportClaudeCode } from './commands/importClaude.ts';
 import { eventTypeList } from './core/schema.ts';
 import type { Tool } from './types.ts';
 
-const VERSION = '0.9.2';
+const VERSION = '0.9.3';
 
 // Help-group headings (Commander 14 renders commands grouped under these).
 const G_START = 'Get started:';
