@@ -12,7 +12,7 @@ Everything is stored locally under `.showtail/`. Never send it anywhere.
 - **Do the coding normally** — you are the agent; create and edit files as usual.
 - The **Showtail VS Code extension** automatically snapshots every file that is **saved**, so
   the edit history is recorded no matter how a change was made. **Do NOT run
-  `showtail artifact add` yourself — that would double-record the same file.**
+  `showtail artifact` yourself — that would double-record the same file.**
 
 ## What you should do
 

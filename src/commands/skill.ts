@@ -1,6 +1,5 @@
 import { existsSync } from 'node:fs';
 import {
-  autoCaptureActive,
   installHooks,
   removeSkill,
   resolveTarget,
@@ -52,7 +51,7 @@ export async function runSkillInstall(options: SkillInstallOptions): Promise<voi
       '  anytime with `showtail report`. To opt out, re-run with --no-hooks, or',
     );
     console.log(
-      '  remove them with `showtail skill uninstall`' +
+      '  remove them with `showtail disconnect claude`' +
         (scope === 'user' ? ' --user' : '') +
         '.',
     );
@@ -66,37 +65,6 @@ export async function runSkillInstall(options: SkillInstallOptions): Promise<voi
   console.log('');
   console.log('Open Claude Code in this project and the skill will be available');
   console.log('automatically (or invoke it explicitly with `/showtail`).');
-}
-
-export interface SkillStatusOptions {
-  cwd?: string;
-}
-
-/**
- * Report whether auto-capture hooks are active. The skill runs this to decide
- * whether to capture prompts/edits itself (avoiding duplication when hooks are
- * already doing it). The wording is intentionally instructional for the agent.
- */
-export async function runSkillStatus(options: SkillStatusOptions = {}): Promise<void> {
-  if (autoCaptureActive(options.cwd)) {
-    console.log('auto-capture: ON');
-    console.log(
-      'Hooks are installed: every prompt and every file edit is recorded automatically.',
-    );
-    console.log(
-      'Do NOT log prompts or file snapshots yourself — focus on the judgment events',
-    );
-    console.log('(decisions, reflections, sources, tests) in the student’s own voice.');
-  } else {
-    console.log('auto-capture: OFF');
-    console.log('No capture hooks are installed; nothing is logging prompts or edits.');
-    console.log('As you work, ALSO do what the hooks would have done:');
-    console.log(
-      '  - log the student’s request, in their words: showtail log --type prompt --text "..."',
-    );
-    console.log('  - snapshot files you change: showtail artifact add <file>');
-    console.log('Plus the judgment events (decisions, reflections, sources, tests).');
-  }
 }
 
 export interface SkillUninstallOptions {

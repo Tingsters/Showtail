@@ -11,7 +11,7 @@ tools.
   project that has a `.showtail/` folder it writes `.github/copilot-instructions.md` for you,
   and on later opens it refreshes them. It only ever overwrites text Showtail wrote: blocks you
   edit are kept (you'll get a one-time "update available" nudge, never an overwrite), and it
-  won't fight a later `showtail copilot uninstall`.
+  won't fight a later `showtail disconnect copilot`.
 - **Snapshots files on save** as artifacts (tagged `github-copilot`) — automatic, no action
   needed, no matter which tool made the change.
 - **`@showtail` — a Showtail control surface in chat** (not a coding agent). Record a prompt
@@ -20,7 +20,7 @@ tools.
 - **Commands**: `Showtail: Generate Report`, `Showtail: Status`.
 
 Code with **native Copilot** as usual — `.github/copilot-instructions.md` (written by
-`showtail copilot install`) teaches it to log your prompt, decisions, and reflections in your
+`showtail connect copilot`) teaches it to log your prompt, decisions, and reflections in your
 voice, and the extension captures every save. Use `@showtail` for the Showtail commands.
 
 ## Requirements

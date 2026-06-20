@@ -16,7 +16,7 @@ tagging `--tool github-copilot`:
 - decisions they made (and why), reflections (what they understood), sources they used, tests
   they ran. Link files with `--files path`.
 
-**Do NOT run `showtail artifact add`** — the Showtail VS Code extension already snapshots every
+**Do NOT run `showtail artifact`** — the Showtail VS Code extension already snapshots every
 saved file, so running it yourself would double-record. Do not narrate your own actions or
 fabricate reflections. Offer `showtail report` and `showtail verify` when a work block ends.
 Never log secrets.

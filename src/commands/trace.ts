@@ -56,7 +56,7 @@ export async function runTrace(file: string, options: TraceOptions): Promise<voi
 
   console.log('Artifact history (hashes over time):');
   if (result.artifacts.length === 0) {
-    console.log('  (none recorded — try `showtail artifact add ' + result.path + '`)');
+    console.log('  (none recorded — try `showtail artifact ' + result.path + '`)');
   } else {
     for (const a of result.artifacts) {
       const commit = a.gitCommit ? `  commit ${a.gitCommit.slice(0, 10)}` : '';

@@ -13,7 +13,7 @@ showtail init
 showtail start
 showtail log --type prompt   --text "How should I structure this parser?"
 showtail log --type decision --text "I chose the simpler regex approach after testing edge cases."
-showtail artifact add src/parser.ts
+showtail artifact src/parser.ts
 showtail report
 ```
 
@@ -113,18 +113,23 @@ showtail log --type test       --text "Added edge-case tests; all passing."
 showtail log --type reflection --text "I now understand how the tokenizer turns text into tokens."
 
 # 4. Record snapshots of important files. This stores a SHA-256 hash and git commit.
-showtail artifact add src/parser.ts
+showtail artifact src/parser.ts
 
-# 5. See the full trail for a file.
+# 5. Check where you are: current session, event count, connected tools.
+showtail status
+showtail sessions               # list every session
+
+# 6. See the full trail for a file.
 showtail trace src/parser.ts
 
-# 6. Generate a report for your educator.
+# 7. Generate a report for your educator.
 showtail report                 # HTML and Markdown in .showtail/reports/
 showtail report --format md     # Markdown only
 showtail report --format json   # Machine-readable JSON
 
-# 7. Check the trail before you submit.
+# 8. Check the trail before you submit, then close the session.
 showtail verify
+showtail end
 ```
 
 ### Logging longer notes
@@ -170,13 +175,13 @@ If you work with [Claude Code](https://claude.com/claude-code), Showtail can hel
 
 ```bash
 # In your project. Creates ./.claude/skills/showtail/ and ./.claude/settings.json.
-showtail skill install --project
+showtail connect claude --project
 
 # Or install for all projects.
-showtail skill install --user
+showtail connect claude --user
 
 # Install the skill without changing settings. Capture is then manual.
-showtail skill install --project --no-hooks
+showtail connect claude --project --no-hooks
 ```
 
 What this gives you:
@@ -190,7 +195,7 @@ What this gives you:
 | Claude edits or writes a file | Snapshots that file as an `artifact` |
 | A session starts | Ensures a work session exists |
 
-If you install with `--no-hooks`, the skill can still check `showtail skill status` and log prompts and file snapshots itself. That mode is model-driven rather than guaranteed, but it still gives you a useful trail.
+If you install with `--no-hooks`, the skill can still check `showtail status --json` and log prompts and file snapshots itself. That mode is model-driven rather than guaranteed, but it still gives you a useful trail.
 
 At the end of your work session, run:
 
@@ -218,8 +223,8 @@ When hooks are active, every prompt you submit and every file Claude edits is lo
 - Nothing is sent anywhere. There are no external calls and no telemetry.
 - The trail may be committed to your repository, so do not put secrets in prompts while capture is on.
 - Review your trail anytime with `showtail report`.
-- Turn capture off with `showtail skill uninstall`. Add `--user` if you installed at user scope.
-- To install the skill without hooks, use `showtail skill install --no-hooks`. The skill can still capture prompts itself, but it will not add hooks to `settings.json`.
+- Turn capture off with `showtail disconnect claude`. Add `--user` if you installed at user scope.
+- To install the skill without hooks, use `showtail connect claude --no-hooks`. The skill can still capture prompts itself, but it will not add hooks to `settings.json`.
 
 ---
 
@@ -240,7 +245,7 @@ When you open a project in VS Code, the extension sets up the Copilot instructio
 You can also set this up explicitly:
 
 ```bash
-showtail copilot install
+showtail connect copilot
 ```
 
 ### How Copilot capture works
@@ -260,9 +265,9 @@ The instruction files are yours to edit. Showtail only overwrites text that it w
 
 - A block you have not changed is refreshed to the latest version.
 - A block you have edited is left exactly as you wrote it.
-- `showtail copilot status` reports customized blocks as `customized`.
+- `showtail status` reports a customized Copilot block via its `updateAvailable` flag.
 - If a newer managed block is available, Showtail gives you a one-time update notice.
-- To take the latest managed block, run `showtail copilot install --force`.
+- To take the latest managed block, run `showtail connect copilot --force`.
 
 Add your own rules outside the Showtail markers. Those rules are always preserved. The cleanest option is to put your rules in your own `.github/instructions/your-rules.instructions.md` file. Copilot reads every instructions file, and Showtail never touches yours.
 
@@ -289,13 +294,13 @@ If you work with [Codex](https://developers.openai.com/codex), Showtail can capt
 
 ```bash
 # In your project. Writes ./AGENTS.md and ./.codex/hooks.json, then offers to enable hooks.
-showtail codex install --project
+showtail connect codex --project
 
 # Or install for all projects.
-showtail codex install --user
+showtail connect codex --user
 
 # Instructions only, no hooks. AGENTS.md then captures manually.
-showtail codex install --project --no-hooks
+showtail connect codex --project --no-hooks
 ```
 
 What this gives you:
@@ -312,7 +317,7 @@ What this gives you:
 
 ### Enabling Codex hooks
 
-Codex only fires lifecycle hooks when `features.hooks = true` is set in its `config.toml`. During `showtail codex install`, Showtail asks before turning that setting on. The default answer is yes.
+Codex only fires lifecycle hooks when `features.hooks = true` is set in its `config.toml`. During `showtail connect codex`, Showtail asks before turning that setting on. The default answer is yes.
 
 Showtail edits `config.toml` carefully. It sets only this key and leaves your other settings alone:
 
@@ -324,12 +329,12 @@ hooks = true
 Useful commands:
 
 ```bash
-showtail codex install --project --yes  # Enable hooks without prompting
-showtail codex status                   # Check instructions and auto-capture state
-showtail codex uninstall                # Remove the AGENTS.md block and hooks
+showtail connect codex --project --yes  # Enable hooks without prompting
+showtail status                          # Check instructions and auto-capture state
+showtail disconnect codex                # Remove the AGENTS.md block and hooks
 ```
 
-`showtail codex uninstall` leaves `config.toml` alone.
+`showtail disconnect codex` leaves `config.toml` alone.
 
 ### Notes on Codex edits
 
@@ -338,12 +343,12 @@ Codex applies file changes through its `apply_patch` tool. Showtail parses those
 If Codex changes files by running raw shell commands, such as `sed`, those edits are not visible to the hook and are not auto-snapshotted. Record them manually when you want them in the trail:
 
 ```bash
-showtail artifact add <file> --tool codex
+showtail artifact <file> --tool codex
 ```
 
 As with the other integrations, everything stays local. There is no telemetry and no external calls.
 
-The instructions block is yours to customize. If you edit inside the Showtail markers, `showtail codex status` reports the block as `customized` and Showtail will not overwrite your changes. Run `showtail codex install --force` to take the latest managed version.
+The instructions block is yours to customize. If you edit inside the Showtail markers, Showtail will not overwrite your changes (and `showtail status` flags that an update is available). Run `showtail connect codex --force` to take the latest managed version.
 
 ---
 
@@ -367,7 +372,7 @@ brainstormed in ChatGPT -> built with Copilot -> debugged in Claude Code
 
 Options:
 
-- `--with-responses` also logs ChatGPT's answers as `ai_output`. This is off by default to keep the trail focused on your work.
+- `--no-responses` logs only your prompts. ChatGPT's answers are imported as `ai_output` by default.
 - `--file <path>` imports from a saved share page or saved transcript instead of fetching the page. This is useful offline or if the share format changes.
 
 Re-importing the same link is safe. Showtail skips messages it has already imported by message id.
