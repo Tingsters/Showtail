@@ -158,7 +158,7 @@ describe('turns', () => {
 
       const html = renderHtml(buildReportData(paths));
       expect(html).toContain('<details class="turn">');
-      expect(html).toContain('class="badge"');
+      expect(html).toContain('class="badge badge--claude-code"');
       // Each changed line is a single .dline block with a +/- gutter (.dmark).
       expect(html).toContain('class="dline del"');
       expect(html).toContain('class="dline add"');

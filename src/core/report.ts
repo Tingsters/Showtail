@@ -364,6 +364,13 @@ export function renderHtml(data: ReportData): string {
     background: #e7e9f5;
     color: #3a3f6b;
   }
+  /* Per-tool pastel colors so switches between AI tools stand out at a glance. */
+  .badge--claude-code    { background: #ffe6d5; color: #9c4221; }
+  .badge--google-gemini  { background: #d8e6fb; color: #1f4f9c; }
+  .badge--chatgpt        { background: #d4f0e2; color: #1d6b4c; }
+  .badge--codex          { background: #e7defb; color: #5b3a9c; }
+  .badge--github-copilot { background: #e2e5ec; color: #3a4253; }
+  .badge--cli            { background: #ebe8e2; color: #5a554b; }
   .turn .time { font-size: 0.78rem; color: #8a8a94; }
   .turn .stat { font-size: 0.78rem; color: #8a8a94; }
   .turn-body { padding: 0 0.9rem 0.8rem; }
@@ -476,6 +483,12 @@ export function renderHtml(data: ReportData): string {
     blockquote { background: #242429; border-left-color: #4a4a52; color: #cfcfd6; }
     .turn { background: #1f1f23; border-color: #34343a; }
     .badge { background: #2c2f45; color: #c6cbf0; }
+    .badge--claude-code    { background: #4a2c1c; color: #ffc6a3; }
+    .badge--google-gemini  { background: #1d3252; color: #a6c8f5; }
+    .badge--chatgpt        { background: #1b3d2f; color: #9ce3c1; }
+    .badge--codex          { background: #322a4d; color: #cdb6f5; }
+    .badge--github-copilot { background: #2d313c; color: #c2c9d8; }
+    .badge--cli            { background: #33312b; color: #cfc9bb; }
     pre.diff { background: #242429; }
     .dline.add { background: rgba(46, 160, 67, 0.15); }
     .dline.del { background: rgba(248, 81, 73, 0.15); }
@@ -520,7 +533,7 @@ function turnsHtml(data: ReportData): string {
     out.push(
       '<summary>' +
         `<span class="prompt-text">${escapeHtml(firstLine(turn.prompt.text))}</span>` +
-        `<span class="badge">${escapeHtml(toolLabel(turn.tool))}</span>` +
+        `<span class="badge badge--${escapeHtml(turn.tool)}">${escapeHtml(toolLabel(turn.tool))}</span>` +
         `<span class="time">${escapeHtml(formatDate(turn.prompt.timestamp))}</span>` +
         `<span class="stat">${escapeHtml(stat)}</span>` +
         '</summary>',
