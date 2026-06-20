@@ -16,6 +16,7 @@ import {
 import { latestBatchId, readAllEvents, removeEventsByBatch } from '../core/events.ts';
 import { makeId } from '../core/ids.ts';
 import { requirePaths } from '../core/storage.ts';
+import { oneLine } from '../core/text.ts';
 
 export interface ImportChatgptOptions {
   withResponses?: boolean;
@@ -136,12 +137,6 @@ export function dateToEpochSeconds(date: string): number {
     throw new Error(`Could not understand --date "${date}". Use a day like 2026-06-10.`);
   }
   return Math.floor(ms / 1000);
-}
-
-/** Collapse a prompt to a single readable line for the skim list. */
-export function oneLine(text: string, max = 120): string {
-  const flat = text.replace(/\s+/g, ' ').trim();
-  return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
 }
 
 /**

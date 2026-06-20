@@ -13,11 +13,11 @@ import { GEMINI_HTML } from '../core/pasteHtml.ts';
 import {
   confirm,
   dateToEpochSeconds,
-  oneLine,
   previewImport,
   readPasteSource,
   type PasteSource,
 } from './import.ts';
+import { oneLine } from '../core/text.ts';
 
 export interface ImportGeminiOptions {
   withResponses?: boolean;

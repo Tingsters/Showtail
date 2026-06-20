@@ -10,6 +10,7 @@ import {
 } from '../core/claudeCode.ts';
 import { makeId } from '../core/ids.ts';
 import { requirePaths, type ShowtailPaths } from '../core/storage.ts';
+import { oneLine } from '../core/text.ts';
 
 export interface ImportClaudeOptions {
   /** List this project's transcripts and exit. */
@@ -21,12 +22,6 @@ export interface ImportClaudeOptions {
   /** Import into a specific Showtail session id. */
   session?: string;
   cwd?: string;
-}
-
-/** Collapse text to a single readable line for listings. */
-function oneLine(text: string, max = 100): string {
-  const flat = text.replace(/\s+/g, ' ').trim();
-  return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
 }
 
 /** Trim milliseconds from an ISO timestamp for friendlier output. */
@@ -76,9 +71,9 @@ function printSummary(s: TranscriptSummary, ordinal: number): void {
   console.log(
     `  ${ordinal}. ${relativeTime(s.info.mtimeMs)}    ${meta.join(', ')}${importMarker(s.importState)}`,
   );
-  if (s.firstPrompt) console.log(`     first: ${oneLine(s.firstPrompt)}`);
+  if (s.firstPrompt) console.log(`     first: ${oneLine(s.firstPrompt, 100)}`);
   if (s.lastPrompt && s.lastPrompt !== s.firstPrompt) {
-    console.log(`     last:  ${oneLine(s.lastPrompt)}`);
+    console.log(`     last:  ${oneLine(s.lastPrompt, 100)}`);
   }
   console.log(`     id: ${s.info.sessionId}`);
   console.log('');

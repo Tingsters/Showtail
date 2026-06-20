@@ -17,6 +17,7 @@ import {
 } from './storage.ts';
 import { makeSession } from './sessions.ts';
 import { validateEvent } from './schema.ts';
+import { oneLine } from './text.ts';
 
 /** Fields a caller provides when logging a new event. */
 export interface NewEventInput {
@@ -40,8 +41,7 @@ export interface NewEventInput {
 
 /** A one-line preview kept in the journal so the content stays glanceable. */
 function preview(text: string): string {
-  const oneLine = text.replace(/\s+/g, ' ').trim();
-  return oneLine.length > 140 ? oneLine.slice(0, 139) + '…' : oneLine;
+  return oneLine(text, 140);
 }
 
 /**

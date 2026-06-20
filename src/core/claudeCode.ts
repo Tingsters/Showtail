@@ -24,6 +24,7 @@ import {
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { importedSourceIds, logEvent } from './events.ts';
+import { asArray, asString, isObject, prop } from './parse.ts';
 import { toRepoRelative, type ShowtailPaths } from './storage.ts';
 
 /** A normalized message recovered from a transcript. */
@@ -281,28 +282,30 @@ export function parseClaudeTranscript(content: string, root: string): ClaudeTran
     const line = rawLine.trim();
     if (!line) continue;
 
-    let obj: any;
+    let obj: unknown;
     try {
       obj = JSON.parse(line);
     } catch {
       continue;
     }
 
-    if (typeof obj.sessionId === 'string' && !sessionId) sessionId = obj.sessionId;
+    const sid = asString(prop(obj, 'sessionId'));
+    if (sid !== undefined && !sessionId) sessionId = sid;
 
     // Drop noise that isn't the student's direct work.
     if (
-      obj.isSidechain === true ||
-      obj.isMeta === true ||
-      obj.isApiErrorMessage === true
+      prop(obj, 'isSidechain') === true ||
+      prop(obj, 'isMeta') === true ||
+      prop(obj, 'isApiErrorMessage') === true
     ) {
       continue;
     }
 
-    if (obj.type === 'user') {
+    const type = prop(obj, 'type');
+    if (type === 'user') {
       const msg = handleUser(obj);
       if (msg) messages.push(msg);
-    } else if (obj.type === 'assistant') {
+    } else if (type === 'assistant') {
       messages.push(...handleAssistant(obj, root));
     }
   }
@@ -317,11 +320,11 @@ export function parseClaudeTranscript(content: string, root: string): ClaudeTran
 }
 
 /** A real typed prompt: string content, not a tool result or a tooling wrapper. */
-function handleUser(obj: any): ClaudeMessage | null {
-  const content = obj?.message?.content;
-  if (typeof content !== 'string') return null; // tool_result lines carry an array.
+function handleUser(obj: unknown): ClaudeMessage | null {
+  const content = asString(prop(prop(obj, 'message'), 'content'));
+  if (content === undefined) return null; // tool_result lines carry an array.
 
-  const source = obj.promptSource;
+  const source = prop(obj, 'promptSource');
   // Accept typed/pasted prompts; older transcripts may omit the field entirely.
   if (typeof source === 'string' && source !== 'typed' && source !== 'paste') return null;
 
@@ -331,38 +334,41 @@ function handleUser(obj: any): ClaudeMessage | null {
   return {
     role: 'user',
     text,
-    timestamp: typeof obj.timestamp === 'string' ? obj.timestamp : undefined,
-    sourceId: typeof obj.uuid === 'string' ? obj.uuid : `cc:user:${text.slice(0, 24)}`,
+    timestamp: asString(prop(obj, 'timestamp')),
+    sourceId: asString(prop(obj, 'uuid')) ?? `cc:user:${text.slice(0, 24)}`,
   };
 }
 
 /** Assistant turns: text parts become one reply; Edit/Write/MultiEdit become edits. */
-function handleAssistant(obj: any, root: string): ClaudeMessage[] {
-  const msg = obj?.message;
-  if (!msg || msg.model === '<synthetic>') return [];
-  const content = msg.content;
-  if (!Array.isArray(content)) return [];
+function handleAssistant(obj: unknown, root: string): ClaudeMessage[] {
+  const msg = prop(obj, 'message');
+  if (!msg || prop(msg, 'model') === '<synthetic>') return [];
+  const content = asArray(prop(msg, 'content'));
+  if (!content) return [];
 
-  const timestamp = typeof obj.timestamp === 'string' ? obj.timestamp : undefined;
-  const uuid = typeof obj.uuid === 'string' ? obj.uuid : '';
+  const timestamp = asString(prop(obj, 'timestamp'));
+  const uuid = asString(prop(obj, 'uuid')) ?? '';
   const out: ClaudeMessage[] = [];
 
   const texts: string[] = [];
   for (const part of content) {
-    if (!part || typeof part !== 'object') continue;
+    if (!isObject(part)) continue;
 
-    if (part.type === 'text' && typeof part.text === 'string' && part.text.trim()) {
-      texts.push(part.text.trim());
-    } else if (part.type === 'tool_use' && EDIT_TOOLS.has(part.name)) {
-      const rel = relForEdit(part?.input?.file_path, root);
+    const type = prop(part, 'type');
+    const partText = asString(prop(part, 'text'));
+    const name = prop(part, 'name');
+    if (type === 'text' && partText !== undefined && partText.trim()) {
+      texts.push(partText.trim());
+    } else if (type === 'tool_use' && typeof name === 'string' && EDIT_TOOLS.has(name)) {
+      const rel = relForEdit(prop(prop(part, 'input'), 'file_path'), root);
       if (!rel) continue;
+      const partId = asString(prop(part, 'id'));
       out.push({
         role: 'edit',
         text: `Claude edited ${rel}`,
         files: [rel],
         timestamp,
-        sourceId:
-          typeof part.id === 'string' && part.id ? part.id : `${uuid}:${out.length}`,
+        sourceId: partId ? partId : `${uuid}:${out.length}`,
       });
     }
   }

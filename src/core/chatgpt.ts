@@ -1,4 +1,5 @@
 import { decode } from 'turbo-stream';
+import { asArray, asNumber, asString, isObject, prop } from './parse.ts';
 import {
   parseTranscript as parseTranscriptShared,
   type ParsedConversation,
@@ -105,53 +106,48 @@ export function extractConversation(decoded: unknown): ParsedConversation | null
  * Turn a conversation object into a normalized conversation. Handles both the
  * `linear_conversation` array and the `mapping` graph shapes ChatGPT uses.
  */
-function conversationFromData(data: any): ParsedConversation {
-  const nodes: unknown[] = Array.isArray(data.linear_conversation)
-    ? data.linear_conversation
-    : data.mapping
-      ? orderedFromMapping(data.mapping)
-      : [];
+function conversationFromData(data: unknown): ParsedConversation {
+  const mapping = prop(data, 'mapping');
+  const nodes: unknown[] =
+    asArray(prop(data, 'linear_conversation')) ??
+    (mapping ? orderedFromMapping(mapping) : []);
 
   const messages: ParsedMessage[] = [];
   for (const node of nodes) {
-    const msg = (node as { message?: any })?.message;
-    if (!msg || typeof msg !== 'object') continue;
-    if (msg.metadata?.is_visually_hidden_from_conversation) continue;
+    const msg = prop(node, 'message');
+    if (!isObject(msg)) continue;
+    if (prop(prop(msg, 'metadata'), 'is_visually_hidden_from_conversation')) continue;
     // Skip tool-directed messages (e.g. ChatGPT's internal web-search queries):
     // real user/assistant turns are addressed to "all".
-    if (typeof msg.recipient === 'string' && msg.recipient !== 'all') continue;
-    const role = msg.author?.role;
-    if (typeof role !== 'string') continue;
-    const text = extractText(msg.content);
+    const recipient = prop(msg, 'recipient');
+    if (typeof recipient === 'string' && recipient !== 'all') continue;
+    const role = asString(prop(prop(msg, 'author'), 'role'));
+    if (role === undefined) continue;
+    const text = extractText(prop(msg, 'content'));
     if (!text.trim()) continue;
     messages.push({
-      id: typeof msg.id === 'string' ? msg.id : '',
+      id: asString(prop(msg, 'id')) ?? '',
       role,
       text,
-      createTime: typeof msg.create_time === 'number' ? msg.create_time : undefined,
+      createTime: asNumber(prop(msg, 'create_time')),
     });
   }
 
+  const title = asString(prop(data, 'title'));
   return {
-    id:
-      typeof data.conversation_id === 'string'
-        ? data.conversation_id
-        : typeof data.id === 'string'
-          ? data.id
-          : undefined,
-    title:
-      typeof data.title === 'string' && data.title ? data.title : 'ChatGPT conversation',
+    id: asString(prop(data, 'conversation_id')) ?? asString(prop(data, 'id')),
+    title: title ? title : 'ChatGPT conversation',
     messages,
   };
 }
 
 /** Find the `serverResponse.data` object holding the conversation, by shape (route-key agnostic). */
-function findConversationData(decoded: unknown): any | null {
-  const ld = (decoded as any)?.loaderData;
-  const buckets = ld && typeof ld === 'object' ? Object.values(ld) : [decoded];
+function findConversationData(decoded: unknown): unknown {
+  const ld = prop(decoded, 'loaderData');
+  const buckets = isObject(ld) ? Object.values(ld) : [decoded];
   for (const b of buckets) {
-    const data = (b as any)?.serverResponse?.data ?? (b as any)?.data ?? b;
-    if (data && typeof data === 'object' && (data.linear_conversation || data.mapping)) {
+    const data = prop(prop(b, 'serverResponse'), 'data') ?? prop(b, 'data') ?? b;
+    if (isObject(data) && (prop(data, 'linear_conversation') || prop(data, 'mapping'))) {
       return data;
     }
   }
@@ -159,20 +155,25 @@ function findConversationData(decoded: unknown): any | null {
 }
 
 /** Reconstruct message order from a `mapping` graph (fallback when no linear_conversation). */
-function orderedFromMapping(mapping: Record<string, any>): unknown[] {
+function orderedFromMapping(mapping: unknown): unknown[] {
+  if (!isObject(mapping)) return [];
   const nodes = Object.values(mapping);
-  const root = nodes.find((n) => !n?.parent);
+  const root = nodes.find((n) => !prop(n, 'parent'));
   if (!root) {
     return nodes
-      .filter((n) => n?.message)
-      .sort((a, b) => (a.message.create_time ?? 0) - (b.message.create_time ?? 0));
+      .filter((n) => prop(n, 'message'))
+      .sort(
+        (a, b) =>
+          (asNumber(prop(prop(a, 'message'), 'create_time')) ?? 0) -
+          (asNumber(prop(prop(b, 'message'), 'create_time')) ?? 0),
+      );
   }
   const ordered: unknown[] = [];
-  let cur: any = root;
+  let cur: unknown = root;
   const seen = new Set<string>();
   while (cur) {
-    if (cur.message) ordered.push(cur);
-    const childId: string | undefined = cur.children?.[0];
+    if (prop(cur, 'message')) ordered.push(cur);
+    const childId = asString(prop(prop(cur, 'children'), '0'));
     if (!childId || seen.has(childId)) break;
     seen.add(childId);
     cur = mapping[childId];
@@ -180,17 +181,16 @@ function orderedFromMapping(mapping: Record<string, any>): unknown[] {
   return ordered;
 }
 
-function extractText(content: any): string {
+function extractText(content: unknown): string {
   if (!content) return '';
-  const parts = content.parts;
-  if (Array.isArray(parts)) {
+  const parts = asArray(prop(content, 'parts'));
+  if (parts) {
     return parts
-      .map((p) => (typeof p === 'string' ? p : typeof p?.text === 'string' ? p.text : ''))
+      .map((p) => asString(p) ?? asString(prop(p, 'text')) ?? '')
       .filter(Boolean)
       .join('\n');
   }
-  if (typeof content.text === 'string') return content.text;
-  return '';
+  return asString(prop(content, 'text')) ?? '';
 }
 
 // --- Manual paste / backup import -----------------------------------------

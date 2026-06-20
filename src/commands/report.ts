@@ -13,7 +13,7 @@ export interface ReportOptions {
 
 /** A filesystem-safe timestamp for report filenames, e.g. 2026-06-12T140300. */
 function fileStamp(iso: string): string {
-  return iso.replace(/:/g, '').replace(/\..+$/, '').replace('T', 'T');
+  return iso.replace(/:/g, '').replace(/\..+$/, '');
 }
 
 /**
