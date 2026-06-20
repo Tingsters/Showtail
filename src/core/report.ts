@@ -325,7 +325,7 @@ export function renderHtml(data: ReportData): string {
     background: #fbfbfd;
     max-width: 52rem;
     margin: 0 auto;
-    padding: 2.5rem 1.5rem 4rem;
+    padding: 0 1.5rem 4rem;
   }
   /* Timezone selector bar: a strip at the top of the document, spanning the
      content column's edges. It is not pinned, so it scrolls away with the page. */
