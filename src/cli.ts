@@ -20,7 +20,7 @@ import { runImportClaudeCode } from './commands/importClaude.ts';
 import { eventTypeList } from './core/schema.ts';
 import type { Tool } from './types.ts';
 
-const VERSION = '0.9.3';
+const VERSION = '0.9.4';
 
 // Help-group headings (Commander 14 renders commands grouped under these).
 const G_START = 'Get started:';
@@ -140,7 +140,8 @@ program
   )
   .helpGroup(G_REVIEW)
   .option('--format <format>', 'output format: html (default), md, or json', 'html')
-  .action(action(async (opts: { format?: string }) => runReport(opts)));
+  .option('--open', 'open the generated report in your default app')
+  .action(action(async (opts: { format?: string; open?: boolean }) => runReport(opts)));
 
 program
   .command('verify')

@@ -1,11 +1,14 @@
 import { join } from 'node:path';
 import { buildReportData, renderHtml, renderMarkdown } from '../core/report.ts';
 import { requirePaths, writeJson } from '../core/storage.ts';
+import { fileLink, openInDefaultApp } from '../core/terminal.ts';
 import { writeFileSync, mkdirSync } from 'node:fs';
 
 export interface ReportOptions {
   format?: string;
   cwd?: string;
+  /** Open the generated report in the OS default app after writing it. */
+  open?: boolean;
 }
 
 /** A filesystem-safe timestamp for report filenames, e.g. 2026-06-12T140300. */
@@ -29,7 +32,8 @@ export async function runReport(options: ReportOptions): Promise<void> {
   if (options.format === 'json') {
     const out = join(paths.reportsDir, `report-${stamp}.json`);
     writeJson(out, data);
-    console.log(`Wrote JSON report: ${out}`);
+    console.log(`Wrote JSON report: ${fileLink(out)}`);
+    maybeOpen(out, options);
     return;
   }
 
@@ -38,14 +42,18 @@ export async function runReport(options: ReportOptions): Promise<void> {
   const mdOut = join(paths.reportsDir, `report-${stamp}.md`);
   writeFileSync(mdOut, renderMarkdown(data) + '\n', 'utf8');
 
+  // The main artifact for `--open` is the format's primary file.
+  let primary = mdOut;
   if (options.format === 'md') {
-    console.log(`Wrote report: ${mdOut}`);
+    console.log(`Wrote report: ${fileLink(mdOut)}`);
   } else {
     const htmlOut = join(paths.reportsDir, `report-${stamp}.html`);
     writeFileSync(htmlOut, renderHtml(data), 'utf8');
-    console.log(`Wrote report: ${htmlOut}`);
-    console.log(`Markdown source: ${mdOut}`);
+    console.log(`Wrote report: ${fileLink(htmlOut)}`);
+    console.log(`Markdown source: ${fileLink(mdOut)}`);
+    primary = htmlOut;
   }
+  maybeOpen(primary, options);
 
   console.log('');
   console.log(
@@ -53,4 +61,11 @@ export async function runReport(options: ReportOptions): Promise<void> {
       `${data.summary.artifacts} artifact record(s).`,
   );
   console.log('Open the file above to review the full trail.');
+}
+
+/** With `--open`, launch the report in the OS default app (best-effort). */
+function maybeOpen(path: string, options: ReportOptions): void {
+  if (!options.open) return;
+  console.log('Opening report…');
+  openInDefaultApp(path);
 }
