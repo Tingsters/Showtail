@@ -68,12 +68,22 @@ export function pathsForRoot(root: string): ShowtailPaths {
 /**
  * Walk up from `startDir` looking for an existing `.showtail/` folder.
  * Returns the project root (the folder containing `.showtail/`) or null.
+ *
+ * `SHOWTAIL_ROOT_CEILING` (when set) caps the upward walk at that directory:
+ * a `.showtail/` *at* the ceiling is still found, but discovery never climbs
+ * above it. This keeps spawned-CLI tests hermetic — their temp dirs live under
+ * the OS temp dir, which itself sits under the user's home, so without a ceiling
+ * `findRoot` would escape the sandbox and resolve a real `~/.showtail`. Unset in
+ * normal use, so real users see the unchanged walk-to-filesystem-root behavior.
  */
 export function findRoot(startDir: string = process.cwd()): string | null {
+  const ceilingEnv = process.env.SHOWTAIL_ROOT_CEILING;
+  const ceiling = ceilingEnv && ceilingEnv.length > 0 ? resolve(ceilingEnv) : null;
   let dir = resolve(startDir);
-  // Walk up until the filesystem root.
+  // Walk up until the filesystem root (or the ceiling, if one is set).
   while (true) {
     if (existsSync(join(dir, SHOWTAIL_DIR))) return dir;
+    if (ceiling && dir === ceiling) return null;
     const parent = dirname(dir);
     if (parent === dir) return null;
     dir = parent;

@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
 import { readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { cleanup, makeTempDir } from './helpers.ts';
+import { cleanup, makeTempDir, spawnEnv } from './helpers.ts';
 
 /** Read the structured JSON report `showtail report --format json` wrote. */
 function readJsonReport(dir: string): any {
@@ -19,6 +19,7 @@ function run(cwd: string, args: string[], input?: string) {
     cwd,
     encoding: 'utf8',
     input,
+    env: spawnEnv(),
   });
   return { stdout: res.stdout ?? '', stderr: res.stderr ?? '', code: res.status ?? 0 };
 }

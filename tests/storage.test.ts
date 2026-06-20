@@ -60,6 +60,30 @@ describe('storage', () => {
     }
   });
 
+  test('findRoot stops at SHOWTAIL_ROOT_CEILING and never escapes upward', () => {
+    const outer = makeTempDir();
+    try {
+      // A real `.showtail` sits ABOVE the search start — mimicking a developer's
+      // global `~/.showtail` above the OS temp dir that tests must never reach.
+      mkdirSync(join(outer, '.showtail'), { recursive: true });
+      const ceiling = join(outer, 'sandbox');
+      const start = join(ceiling, 'project', 'src');
+      mkdirSync(start, { recursive: true });
+
+      const prev = process.env.SHOWTAIL_ROOT_CEILING;
+      process.env.SHOWTAIL_ROOT_CEILING = ceiling;
+      try {
+        // Without the ceiling this resolves `outer` (the `.showtail` above).
+        expect(findRoot(start)).toBeNull();
+      } finally {
+        if (prev === undefined) delete process.env.SHOWTAIL_ROOT_CEILING;
+        else process.env.SHOWTAIL_ROOT_CEILING = prev;
+      }
+    } finally {
+      cleanup(outer);
+    }
+  });
+
   test('requirePaths throws NotInitializedError when uninitialized', () => {
     const dir = makeTempDir();
     try {

@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
 import { existsSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { cleanup, makeTempDir } from './helpers.ts';
+import { cleanup, makeTempDir, spawnEnv } from './helpers.ts';
 
 const CLI = join(import.meta.dir, '..', 'src', 'cli.ts');
 
@@ -17,6 +17,7 @@ function run(cwd: string, args: string[]): RunResult {
   const res = spawnSync(process.execPath, ['run', CLI, ...args], {
     cwd,
     encoding: 'utf8',
+    env: spawnEnv(),
   });
   return {
     stdout: res.stdout ?? '',
@@ -125,6 +126,7 @@ describe('cli (end-to-end acceptance sequence)', () => {
         cwd: dir,
         encoding: 'utf8',
         input: 'How do parsers tokenize input?',
+        env: spawnEnv(),
       });
       expect(res.status).toBe(0);
       expect(res.stdout).toContain('Logged prompt');
