@@ -526,35 +526,51 @@ The goal is not to catch anyone. The goal is to make the process visible and giv
 
 A generated report looks like this. The HTML report is rendered from the Markdown source:
 
-```markdown
-# Showtail Report: Demo Project
+````markdown
+# Showtail Report — Demo Project
 
-_Generated 2026-06-12T15:02:30Z_
+_Generated 2026-06-12T15:14:07Z_
 
-**Summary:** 1 session(s), 3 event(s), 1 artifact record(s).
+**Summary:** 1 session(s), 5 event(s), 1 artifact record(s).
 
-## Project timeline
+## Tools used
 
-- `2026-06-12T15:02:29Z` **Session:** Started a work session
-- `2026-06-12T15:02:29Z` **Prompt:** Help me plan the project
-- `2026-06-12T15:02:29Z` **Decision:** I implemented the CLI first
-- `2026-06-12T15:02:29Z` **Artifact:** Recorded artifact README.md (sha256 aee1535315)
+- **Claude Code** — 4 event(s)
+- **GitHub Copilot** — 1 event(s)
 
-## Major decisions
+Tool timeline (each arrow is a switch):
 
-- I implemented the CLI first
-  _(2026-06-12T15:02:29Z · files: README.md)_
+- **Claude Code** · 2026-06-12T15:02:11Z → 2026-06-12T15:09:48Z · 4 event(s)
+- **GitHub Copilot** · 2026-06-12T15:14:02Z · 1 event(s)
 
-## Artifacts created
+## Prompts & AI exchanges
 
-- **README.md:** `aee1535315` (2026-06-12T15:02:29Z, commit `bd9ccb2835`)
+**Prompt** · `2026-06-12T15:02:11Z` · `Claude Code`
+
+Help me structure a CSV parser.
+
+_AI response:_
+
+Start by splitting the file on newlines, then parse each row into fields.
+
+_Suggested code — `src/parser.ts` (~6 line(s)):_
+
+```diff
++export function parse(csv: string): string[][] {
++  return csv
++    .split("\n")
++    .filter((line) => line.length > 0)
++    .map((line) => line.split(","));
++}
+```
 
 ## Authorship statement
 
 > I recorded this trail while working on "Demo Project". It shows the prompts I used, the
-> decisions I made, the sources I drew on, the tests I ran, and my own reflections. The work
-> and understanding represented here are my own.
-```
+> decisions I made, the sources I drew on, the tests I ran, and my own reflections. I worked
+> through Claude Code and GitHub Copilot, and this trail records each. The work and
+> understanding represented here are my own.
+````
 
 ---
 
