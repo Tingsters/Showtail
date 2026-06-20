@@ -1,6 +1,6 @@
 {
   "name": "showtail",
-  "version": "0.9.5",
+  "version": "0.9.6",
   "description": "Show your work: automatically capture the prompts you send to AI and the files you change into a verifiable, repo-local provenance trail educators can review.",
   "type": "module",
   "license": "Apache-2.0",

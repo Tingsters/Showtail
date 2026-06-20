@@ -306,10 +306,13 @@ function turnMarkdown(lines: string[], turn: Turn): void {
 export function renderHtml(data: ReportData): string {
   const title = data.project ? `Showtail Report — ${data.project}` : 'Showtail Report';
   const body = markdownToHtml(buildMarkdown(data, true))
-    .replace(`<p>${TURNS_PLACEHOLDER}</p>`, turnsHtml(data))
     // Swap the timestamp tokens emitted in HTML mode for real <time> elements
-    // (the turn cards already embed <time> directly, so they carry no tokens).
-    .replace(TIME_TOKEN, (_m, iso: string) => timeTag(iso));
+    // FIRST, before splicing in the turn cards. The cards embed <time> directly
+    // (they carry no tokens), and their escaped prompt/AI text can itself contain
+    // the sentinel — Showtail captures its own sessions — so running this global
+    // regex after the splice would match and corrupt that content.
+    .replace(TIME_TOKEN, (_m, iso: string) => timeTag(iso))
+    .replace(`<p>${TURNS_PLACEHOLDER}</p>`, turnsHtml(data));
   return `<!doctype html>
 <html lang="en">
 <head>

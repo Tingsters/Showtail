@@ -181,4 +181,49 @@ describe('turns', () => {
       cleanup(dir);
     }
   });
+
+  test('captured text containing the timestamp sentinel does not corrupt the report', async () => {
+    const dir = makeTempDir();
+    try {
+      await runInit({ cwd: dir });
+      const paths = pathsForRoot(dir);
+      startSession(paths);
+      const { event: prompt } = await logEvent(paths, {
+        type: 'prompt',
+        text: 'why does SHOWTAILTIME@2026-01-01T00:00:00.000Z@ appear?',
+        tool: 'claude-code',
+      });
+      // Showtail captures its own sessions, so an AI message can literally contain
+      // the timestamp sentinel. Here it spans some `inline code` — the global token
+      // regex used to match across it and swallow the </code>, orphaning the tag
+      // (monospace tail) and producing a <time> with markup in its datetime.
+      await logEvent(paths, {
+        type: 'ai_output',
+        text: 'Token talk: SHOWTAILTIME@ then `inline code` then SHOWTAILTIME@2026-01-01T00:00:00.000Z@ done.',
+        tool: 'claude-code',
+        turnId: prompt.id,
+      });
+
+      const html = renderHtml(buildReportData(paths));
+      // The sentinel inside captured content is left as literal escaped text, not
+      // swapped — proof the global regex never scanned the turn card.
+      expect(html).toContain('SHOWTAILTIME@2026-01-01T00:00:00.000Z@');
+      // The inline code in the AI text survives intact (its </code> was not eaten).
+      expect(html).toContain('<code>inline code</code>');
+      // No <time> element swallowed markup into its datetime attribute.
+      expect(html).not.toMatch(/datetime="[^"]*&lt;/);
+      // Document structure stays balanced (the corruption's signature was an
+      // unclosed <code> / unbalanced <div>).
+      expect((html.match(/<code>/g) ?? []).length).toBe(
+        (html.match(/<\/code>/g) ?? []).length,
+      );
+      expect((html.match(/<div\b/g) ?? []).length).toBe(
+        (html.match(/<\/div>/g) ?? []).length,
+      );
+      // Real event timestamps still render as live <time> elements.
+      expect(html).toContain('<time class="st-time"');
+    } finally {
+      cleanup(dir);
+    }
+  });
 });
