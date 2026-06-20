@@ -1,11 +1,13 @@
 import { describe, expect, test } from 'bun:test';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { parseClaudeTranscript } from '../src/core/claudeCode.ts';
+import { parseClaudeTranscript, summarizeTranscripts } from '../src/core/claudeCode.ts';
 import { readAllEvents } from '../src/core/events.ts';
 import { runInit } from '../src/commands/init.ts';
-import { runImportClaudeCode } from '../src/commands/importClaude.ts';
+import { parseSelection, runImportClaudeCode } from '../src/commands/importClaude.ts';
 import { runImportUndo } from '../src/commands/import.ts';
+import { claudeProjectsDir } from '../src/core/claudeCode.ts';
+import { mkdirSync } from 'node:fs';
 import { pathsForRoot } from '../src/core/storage.ts';
 import { cleanup, makeTempDir } from './helpers.ts';
 
@@ -133,6 +135,71 @@ describe('parseClaudeTranscript', () => {
       // Timestamps are preserved for back-dating.
       expect(messages[0]!.timestamp).toBe('2026-06-10T10:00:00.000Z');
     } finally {
+      cleanup(dir);
+    }
+  });
+});
+
+describe('parseSelection', () => {
+  test('parses single, comma, space, and range inputs to zero-based indices', () => {
+    expect(parseSelection('1', 3)).toEqual([0]);
+    expect(parseSelection('1,3', 3)).toEqual([0, 2]);
+    expect(parseSelection('1 3', 3)).toEqual([0, 2]);
+    expect(parseSelection('1-3', 3)).toEqual([0, 1, 2]);
+    expect(parseSelection('2-1', 3)).toBeNull(); // descending range is invalid
+  });
+
+  test('de-duplicates while preserving first-seen order', () => {
+    expect(parseSelection('3,1,3,1', 3)).toEqual([2, 0]);
+  });
+
+  test('rejects out-of-range, zero, and non-numeric tokens', () => {
+    expect(parseSelection('0', 3)).toBeNull();
+    expect(parseSelection('4', 3)).toBeNull();
+    expect(parseSelection('1,x', 3)).toBeNull();
+    expect(parseSelection('', 3)).toBeNull();
+  });
+});
+
+describe('summarizeTranscripts', () => {
+  test('reports counts, span, first/last prompt, and import state', async () => {
+    const config = makeTempDir();
+    const dir = makeTempDir();
+    const prevConfig = process.env.CLAUDE_CONFIG_DIR;
+    process.env.CLAUDE_CONFIG_DIR = config;
+    try {
+      await runInit({ cwd: dir });
+      const paths = pathsForRoot(dir);
+
+      // Drop a transcript where Claude Code would store it (matched by cwd).
+      const projDir = join(claudeProjectsDir(), 'encoded-project');
+      mkdirSync(projDir, { recursive: true });
+      writeFileSync(join(projDir, 'sess-1.jsonl'), makeTranscript(dir), 'utf8');
+
+      let summaries = summarizeTranscripts(paths);
+      expect(summaries.length).toBe(1);
+      const s = summaries[0]!;
+      expect(s.info.sessionId).toBe('sess-1');
+      expect(s.promptCount).toBe(2);
+      expect(s.editCount).toBe(1);
+      expect(s.firstPrompt).toBe('Add a foo function to the project.');
+      expect(s.lastPrompt).toBe('Now add a test for foo.');
+      expect(s.first).toBe('2026-06-10T10:00:00.000Z');
+      expect(s.last).toBe('2026-06-10T10:03:00.000Z');
+      expect(s.importState).toBe('none');
+
+      // After importing the whole session, it reads as fully imported.
+      await runImportClaudeCode(undefined, {
+        file: join(projDir, 'sess-1.jsonl'),
+        withResponses: true,
+        cwd: dir,
+      });
+      summaries = summarizeTranscripts(paths);
+      expect(summaries[0]!.importState).toBe('full');
+    } finally {
+      if (prevConfig === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+      else process.env.CLAUDE_CONFIG_DIR = prevConfig;
+      cleanup(config);
       cleanup(dir);
     }
   });

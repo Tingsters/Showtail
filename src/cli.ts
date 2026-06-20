@@ -341,7 +341,8 @@ importCmd
   .command('claude-code [target]')
   .description(
     'Import an existing Claude Code session transcript from disk into your trail.\n' +
-      'With no target, imports the most recent session for this project; --list shows all.',
+      "With no target, opens an interactive picker of this project's sessions " +
+      '(choose one or several); --list prints the same list non-interactively.',
   )
   .option('--list', "list this project's Claude Code transcripts and exit")
   .option('--no-responses', "don't import Claude's text responses, only your prompts")

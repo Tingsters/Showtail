@@ -54,6 +54,30 @@ export interface TranscriptInfo {
   mtimeMs: number;
 }
 
+/**
+ * An at-a-glance summary of one transcript, so a student can tell sessions
+ * apart in the picker without opening each file. Built by parsing the
+ * transcript once and counting what's in it.
+ */
+export interface TranscriptSummary {
+  info: TranscriptInfo;
+  /** Number of typed prompts in the session. */
+  promptCount: number;
+  /** Number of file edits Claude made in the session. */
+  editCount: number;
+  /** The first and last typed prompt (for recognizing the session). */
+  firstPrompt: string;
+  lastPrompt: string;
+  /** Earliest / latest message timestamp (ISO), for a rough duration. */
+  first?: string;
+  last?: string;
+  /**
+   * Whether this session is already in the trail: `none` (nothing imported),
+   * `full` (every message already imported), or `partial` (some but not all).
+   */
+  importState: 'none' | 'partial' | 'full';
+}
+
 const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit']);
 
 /** User-content wrappers that are tooling chrome, not something the student typed. */
@@ -163,6 +187,59 @@ export function findProjectTranscripts(root: string): TranscriptInfo[] {
 
   out.sort((a, b) => b.mtimeMs - a.mtimeMs);
   return out;
+}
+
+/**
+ * Summarize every transcript for `paths.root`, newest first, so the picker can
+ * show counts, a time span, and first/last prompt for each. Each transcript is
+ * parsed once; a transcript that fails to parse still appears (counts zeroed)
+ * so it can be tried via `--file`. `importState` is computed against the source
+ * ids already in the trail so the picker can flag already-imported sessions.
+ */
+export function summarizeTranscripts(paths: ShowtailPaths): TranscriptSummary[] {
+  const seen = importedSourceIds(paths);
+  return findProjectTranscripts(paths.root).map((info) => {
+    const summary: TranscriptSummary = {
+      info,
+      promptCount: 0,
+      editCount: 0,
+      firstPrompt: '',
+      lastPrompt: '',
+      importState: 'none',
+    };
+
+    let parsed: ClaudeTranscript;
+    try {
+      parsed = parseClaudeTranscript(readFileSync(info.path, 'utf8'), paths.root);
+    } catch {
+      return summary; // Couldn't parse — list it bare so --file can still reach it.
+    }
+
+    const prompts = parsed.messages.filter((m) => m.role === 'user');
+    summary.promptCount = prompts.length;
+    summary.editCount = parsed.messages.filter((m) => m.role === 'edit').length;
+    summary.firstPrompt = prompts[0]?.text ?? '';
+    summary.lastPrompt = prompts[prompts.length - 1]?.text ?? '';
+
+    let importedCount = 0;
+    for (const m of parsed.messages) {
+      if (seen.has(m.sourceId)) importedCount += 1;
+      if (m.timestamp) {
+        if (!summary.first || m.timestamp < summary.first) summary.first = m.timestamp;
+        if (!summary.last || m.timestamp > summary.last) summary.last = m.timestamp;
+      }
+    }
+    if (parsed.messages.length > 0) {
+      summary.importState =
+        importedCount === 0
+          ? 'none'
+          : importedCount === parsed.messages.length
+            ? 'full'
+            : 'partial';
+    }
+
+    return summary;
+  });
 }
 
 function safeReaddir(dir: string): string[] {
