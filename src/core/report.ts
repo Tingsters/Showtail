@@ -325,14 +325,16 @@ export function renderHtml(data: ReportData): string {
     background: #fbfbfd;
     max-width: 52rem;
     margin: 0 auto;
-    padding: 2.5rem 1.5rem 4rem;
+    padding: 0 1.5rem 4rem;
   }
-  /* Sticky timezone selector bar (spans the body's horizontal padding). */
+  /* Timezone selector bar: pinned to the top, spanning the content column's edges.
+     The bar (not body padding) provides the top spacing, so its normal-flow
+     position starts at the content-box top — which is what lets sticky pin it. */
   .st-tzbar {
     position: sticky;
     top: 0;
     z-index: 10;
-    margin: -2.5rem -1.5rem 1.75rem;
+    margin: 0 -1.5rem 1.75rem;
     padding: 0.55rem 1.5rem;
     background: #f1f1f5;
     border-bottom: 1px solid #e3e3e8;
@@ -578,10 +580,28 @@ ${body}
   var saved = null;
   try { saved = localStorage.getItem('showtail-tz'); } catch (e) {}
   var current = (saved && zones.indexOf(saved) !== -1) ? saved : local;
+  // The short code (e.g. PDT) plus the numeric GMT offset (e.g. GMT-7), both
+  // derived from Intl; they collapse to one when the abbreviation is the offset.
+  function zonePart(tz, type) {
+    try {
+      var parts = new Intl.DateTimeFormat('en-US', { timeZone: tz, timeZoneName: type }).formatToParts(new Date());
+      for (var i = 0; i < parts.length; i++) {
+        if (parts[i].type === 'timeZoneName') return parts[i].value;
+      }
+    } catch (e) {}
+    return '';
+  }
+  function zoneLabel(tz) {
+    var name = zonePart(tz, 'short');
+    var offset = zonePart(tz, 'shortOffset');
+    if (name && offset && name !== offset) return tz + ' (' + name + ', ' + offset + ')';
+    var code = offset || name;
+    return code ? tz + ' (' + code + ')' : tz;
+  }
   for (var i = 0; i < zones.length; i++) {
     var o = document.createElement('option');
     o.value = zones[i];
-    o.textContent = zones[i];
+    o.textContent = zoneLabel(zones[i]);
     if (zones[i] === current) o.selected = true;
     sel.appendChild(o);
   }

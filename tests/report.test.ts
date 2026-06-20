@@ -109,6 +109,9 @@ describe('report', () => {
       expect(html).toContain('Intl.DateTimeFormat().resolvedOptions().timeZone');
       expect(html).toContain('timeZoneName: ');
       expect(html).toContain("querySelectorAll('time.st-time')");
+      // Picker option labels carry the short code and numeric GMT offset.
+      expect(html).toContain('formatToParts');
+      expect(html).toContain("'shortOffset'");
     } finally {
       cleanup(dir);
     }
