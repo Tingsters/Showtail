@@ -1,9 +1,7 @@
 import { existsSync } from 'node:fs';
 import { createInterface } from 'node:readline/promises';
 import {
-  codexAutoCaptureActive,
   codexHooksFeatureEnabled,
-  codexInstructionsState,
   enableCodexHooksFeature,
   installCodexHooks,
   removeCodexInstructions,
@@ -97,7 +95,7 @@ export async function runCodexInstall(options: CodexInstallOptions): Promise<voi
       '  anytime with `showtail report`. To opt out, re-run with --no-hooks, or',
     );
     console.log(
-      '  remove them with `showtail codex uninstall`' +
+      '  remove them with `showtail disconnect codex`' +
         (scope === 'user' ? ' --user' : '') +
         '.',
     );
@@ -116,53 +114,6 @@ export async function runCodexInstall(options: CodexInstallOptions): Promise<voi
   console.log(
     'Then just work with Codex in this project — it reads AGENTS.md automatically.',
   );
-}
-
-export interface CodexStatusOptions {
-  cwd?: string;
-}
-
-/** Report whether the Codex integration is installed, current, and capturing. */
-export async function runCodexStatus(options: CodexStatusOptions = {}): Promise<void> {
-  const target = resolveCodexTarget('project', options.cwd);
-  const state = codexInstructionsState(target);
-
-  if (!state.installed) {
-    console.log('codex integration: OFF');
-    console.log('  Run `showtail codex install` to set it up.');
-  } else {
-    console.log('codex integration: ON');
-    console.log(`  instructions: ${target.agentsFile}`);
-    console.log(
-      `  state: ${state.userEdited ? 'customized (your edits are kept)' : 'up to date'}`,
-    );
-    console.log(`  update-available: ${state.updateAvailable ? 'yes' : 'no'}`);
-    if (state.updateAvailable && state.userEdited) {
-      console.log('  Run `showtail codex install --force` to take the latest.');
-    }
-  }
-
-  console.log('');
-  if (codexAutoCaptureActive(options.cwd)) {
-    console.log('auto-capture: ON');
-    console.log(
-      'Hooks are installed: every prompt and every apply_patch edit is recorded automatically.',
-    );
-    console.log(
-      'Do NOT log prompts or file snapshots yourself — focus on the judgment events',
-    );
-    console.log('(decisions, reflections, sources, tests) in the student’s own voice.');
-  } else {
-    console.log('auto-capture: OFF');
-    console.log('No capture hooks are installed; nothing is logging prompts or edits.');
-    console.log('As you work, ALSO do what the hooks would have done:');
-    console.log(
-      '  - log the student’s request, in their words: showtail log --type prompt --text "..." --tool codex',
-    );
-    console.log(
-      '  - snapshot files you change: showtail artifact add <file> --tool codex',
-    );
-  }
 }
 
 export interface CodexUninstallOptions {

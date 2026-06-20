@@ -167,7 +167,7 @@ function resolveTranscriptPath(
     if (!chosen) {
       throw new Error(
         `No Claude Code session matching "${target}" for this project. ` +
-          'Run `showtail import claude-code --list` to see what is available.',
+          'Run `showtail import claude --list` to see what is available.',
       );
     }
     return chosen.path;
@@ -311,8 +311,8 @@ function listTranscripts(paths: ShowtailPaths): void {
   console.log(`Claude Code transcripts for this project (${summaries.length}):`);
   console.log('');
   summaries.forEach((s, i) => printSummary(s, i + 1));
-  console.log('Import one with:  showtail import claude-code <session-id>');
-  console.log('Or run `showtail import claude-code` to pick interactively.');
+  console.log('Import one with:  showtail import claude <session-id>');
+  console.log('Or run `showtail import claude` to pick interactively.');
 }
 
 function printResult(

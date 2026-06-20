@@ -55,8 +55,8 @@ describe('cli (end-to-end acceptance sequence)', () => {
       ]);
       expect(r.code).toBe(0);
 
-      // artifact add
-      r = run(dir, ['artifact', 'add', 'README.md']);
+      // artifact
+      r = run(dir, ['artifact', 'README.md']);
       expect(r.code).toBe(0);
       expect(r.stdout).toContain('Recorded artifact: README.md');
 
@@ -128,6 +128,67 @@ describe('cli (end-to-end acceptance sequence)', () => {
       );
       expect(res.status).toBe(0);
       expect(res.stdout).toContain('Logged reflection');
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('status, sessions, and end report the session lifecycle', () => {
+    const dir = makeTempDir();
+    try {
+      run(dir, ['init']);
+      run(dir, ['start', '--label', 'lap one']);
+      run(dir, ['log', '--type', 'prompt', '--text', 'plan it']);
+
+      // status: open session with its event count and a connected-tools section
+      let r = run(dir, ['status']);
+      expect(r.code).toBe(0);
+      expect(r.stdout).toContain('lap one');
+      expect(r.stdout).toContain('1 event');
+      expect(r.stdout).toContain('Connected tools');
+
+      // status --json: machine-readable, exposes hooksActive for the skill
+      r = run(dir, ['status', '--json']);
+      expect(r.code).toBe(0);
+      const status = JSON.parse(r.stdout);
+      expect(status.session.label).toBe('lap one');
+      expect(status.session.events).toBe(1);
+      expect(typeof status.hooksActive).toBe('boolean');
+
+      // sessions: lists the one session and marks it current
+      r = run(dir, ['sessions']);
+      expect(r.code).toBe(0);
+      expect(r.stdout).toContain('lap one');
+      expect(r.stdout).toContain('current session');
+
+      // end: closes it; a following status reports no open session
+      r = run(dir, ['end']);
+      expect(r.code).toBe(0);
+      expect(r.stdout).toContain('Closed session');
+      r = run(dir, ['status']);
+      expect(r.code).toBe(0);
+      expect(r.stdout).toContain('No open session');
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('--help groups commands under labeled sections', () => {
+    const dir = makeTempDir();
+    try {
+      const r = run(dir, ['--help']);
+      expect(r.code).toBe(0);
+      for (const heading of [
+        'Get started:',
+        'Capture your work:',
+        'Review your trail:',
+        'Connect your tools:',
+      ]) {
+        expect(r.stdout).toContain(heading);
+      }
+      // The unified integration verbs replace the old per-tool groups.
+      expect(r.stdout).toContain('connect');
+      expect(r.stdout).toContain('disconnect');
     } finally {
       cleanup(dir);
     }

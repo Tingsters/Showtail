@@ -121,6 +121,8 @@ export interface Session {
   label?: string;
   /** Which tool opened this session, if known. */
   tool?: Tool;
+  /** ISO-8601 timestamp the session was closed with `showtail end`, if it was. */
+  endedAt?: string;
 }
 
 /**

@@ -3,7 +3,7 @@ import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 // The skill markdown is the single source of truth: it is committed under
 // assets/ AND embedded into the compiled binary via this text import, so
-// `showtail skill install` is fully self-contained (no files to ship).
+// `showtail connect claude` is fully self-contained (no files to ship).
 import SKILL_MD from '../../assets/claude-code/plugin/skills/showtail/SKILL.md' with { type: 'text' };
 import {
   hasOurHooks,
@@ -131,7 +131,7 @@ export function hooksInstalledAt(settingsFile: string): boolean {
 /**
  * Whether Showtail's auto-capture hooks are active for work in `cwd` — true if
  * they're installed at either project or user scope. The skill uses this (via
- * `showtail skill status`) to decide whether to capture prompts/edits manually.
+ * `showtail status --json`) to decide whether to capture prompts/edits manually.
  */
 export function autoCaptureActive(cwd: string = process.cwd()): boolean {
   return (

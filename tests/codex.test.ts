@@ -204,6 +204,6 @@ describe('enableCodexHooksFeature (config.toml)', () => {
 describe('codex AGENTS body', () => {
   test('teaches logging tagged --tool codex', () => {
     expect(AGENTS_BODY).toContain('--tool codex');
-    expect(AGENTS_BODY).toContain('showtail codex status');
+    expect(AGENTS_BODY).toContain('showtail status --json');
   });
 });

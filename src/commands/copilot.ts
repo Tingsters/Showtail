@@ -43,7 +43,7 @@ export async function runCopilotInstall(options: CopilotInstallOptions): Promise
   if (after.userEdited && after.updateAvailable && !options.force) {
     console.log('');
     console.log('  A newer version is available. Your edits were kept — run');
-    console.log('  `showtail copilot install --force` to take the latest instead.');
+    console.log('  `showtail connect copilot --force` to take the latest instead.');
   }
 
   console.log('');
@@ -88,35 +88,4 @@ export async function runCopilotUninstall(
   console.log(
     'To also remove the extension: code --uninstall-extension ' + MARKETPLACE_ID,
   );
-}
-
-export interface CopilotStatusOptions {
-  cwd?: string;
-}
-
-/** Report whether the Copilot instructions are installed, current, or customized. */
-export async function runCopilotStatus(
-  options: CopilotStatusOptions = {},
-): Promise<void> {
-  const target = resolveCopilotTarget(options.cwd);
-  const state = copilotState(target);
-
-  if (!state.installed) {
-    console.log('copilot integration: OFF');
-    console.log('  Run `showtail copilot install` to set it up.');
-    return;
-  }
-
-  console.log('copilot integration: ON');
-  console.log(`  instructions: ${target.instructionsFile}`);
-  if (state.userEdited) {
-    console.log('  state: customized (your edits are kept)');
-  } else {
-    console.log('  state: up to date');
-  }
-  // A stable line the VS Code extension greps to decide whether to nudge.
-  console.log(`  update-available: ${state.updateAvailable ? 'yes' : 'no'}`);
-  if (state.updateAvailable && state.userEdited) {
-    console.log('  Run `showtail copilot install --force` to take the latest.');
-  }
 }

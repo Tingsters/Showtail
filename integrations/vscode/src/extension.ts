@@ -85,10 +85,10 @@ export function activate(context: vscode.ExtensionContext): void {
  * Keep the Copilot instructions (`.github/copilot-instructions.md`) set up and
  * current, so opening the project in VS Code is all the student needs to do:
  *   - if the instructions are already present, refresh them to the latest
- *     (a no-op when already current — `showtail copilot install` only rewrites
+ *     (a no-op when already current — `showtail connect copilot` only rewrites
  *     on change), so updates ship automatically on the next open;
  *   - if they're absent, install them the first time only (tracked in
- *     workspaceState) so we never fight a later manual `copilot uninstall`.
+ *     workspaceState) so we never fight a later manual `disconnect copilot`.
  * Only acts inside a `.showtail/` project.
  */
 async function maybeAutoInstallCopilot(context: vscode.ExtensionContext): Promise<void> {
@@ -103,7 +103,7 @@ async function maybeAutoInstallCopilot(context: vscode.ExtensionContext): Promis
   if (existsSync(sentinel)) {
     // Installed already — refresh untouched blocks to the latest (edit-aware:
     // a block you've customized is kept, not overwritten).
-    await runShowtail(['copilot', 'install', '--no-extension'], cwd);
+    await runShowtail(['connect', 'copilot', '--no-extension'], cwd);
     await context.workspaceState.update(KEY, true);
     output.appendLine('Showtail Copilot instructions checked (untouched blocks refreshed).');
     await maybeNotifyUpdate(context, cwd);
@@ -113,7 +113,7 @@ async function maybeAutoInstallCopilot(context: vscode.ExtensionContext): Promis
   // Absent: only auto-install the first time, to respect a manual uninstall.
   if (context.workspaceState.get<boolean>(KEY)) return;
 
-  const out = await runShowtail(['copilot', 'install', '--no-extension'], cwd);
+  const out = await runShowtail(['connect', 'copilot', '--no-extension'], cwd);
   await context.workspaceState.update(KEY, true);
   if (out !== undefined) {
     output.appendLine('Auto-installed Showtail Copilot instructions in .github/.');
@@ -129,8 +129,15 @@ async function maybeAutoInstallCopilot(context: vscode.ExtensionContext): Promis
  */
 async function maybeNotifyUpdate(context: vscode.ExtensionContext, cwd: string): Promise<void> {
   const NOTIFY_KEY = 'showtail.copilotUpdateNotified';
-  const status = await runShowtail(['copilot', 'status'], cwd);
-  const updateAvailable = !!status && /update-available:\s*yes/.test(status);
+  const status = await runShowtail(['status', '--json'], cwd);
+  let updateAvailable = false;
+  try {
+    const parsed = status ? JSON.parse(status) : null;
+    const copilot = parsed?.tools?.find((t: { tool: string }) => t.tool === 'copilot');
+    updateAvailable = copilot?.updateAvailable === true;
+  } catch {
+    updateAvailable = false;
+  }
 
   if (!updateAvailable) {
     if (context.workspaceState.get<boolean>(NOTIFY_KEY)) {
@@ -147,7 +154,7 @@ async function maybeNotifyUpdate(context: vscode.ExtensionContext, cwd: string):
     'Keep mine',
   );
   if (choice === 'Apply update') {
-    await runShowtail(['copilot', 'install', '--no-extension', '--force'], cwd);
+    await runShowtail(['connect', 'copilot', '--no-extension', '--force'], cwd);
     await context.workspaceState.update(NOTIFY_KEY, false);
     output.appendLine('Applied the latest Showtail Copilot instructions.');
   }
@@ -180,7 +187,7 @@ function registerChatParticipant(context: vscode.ExtensionContext): void {
       return;
     }
     if (request.command === 'verify' || request.command === 'status') {
-      const args = request.command === 'verify' ? ['verify'] : ['copilot', 'status'];
+      const args = request.command === 'verify' ? ['verify'] : ['status'];
       const out = await runShowtail(args, cwd);
       stream.markdown('```\n' + (out ?? 'showtail was not found on your PATH.').trim() + '\n```');
       return;
@@ -261,7 +268,7 @@ function registerSaveCapture(context: vscode.ExtensionContext): void {
       file,
       setTimeout(() => {
         timers.delete(file);
-        void runShowtail(['artifact', 'add', file, '--tool', 'github-copilot'], cwd).then(
+        void runShowtail(['artifact', file, '--tool', 'github-copilot'], cwd).then(
           () => output.appendLine(`snapshotted ${file}`),
         );
       }, 1500),
@@ -298,7 +305,7 @@ function registerCommands(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('showtail.status', async () => {
       const cwd = folderFor(undefined);
       if (!cwd) return;
-      const out = await runShowtail(['copilot', 'status'], cwd);
+      const out = await runShowtail(['status'], cwd);
       output.show(true);
       output.appendLine(out ?? 'showtail not found on PATH.');
     }),

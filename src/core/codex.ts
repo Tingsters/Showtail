@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 // Single source of truth: committed under assets/ AND embedded into the binary,
-// so `showtail codex install` is fully self-contained (no files to ship).
+// so `showtail connect codex` is fully self-contained (no files to ship).
 import AGENTS_BODY from '../../assets/codex/AGENTS.showtail.md' with { type: 'text' };
 import {
   hasOurHooks,

@@ -12,17 +12,17 @@ Everything is stored locally under `.showtail/`. Never send it anywhere.
 Run this once at the start and follow what it says:
 
 ```bash
-showtail codex status
+showtail status --json
 ```
 
-- **`auto-capture: ON`** — Codex hooks already record every student prompt and snapshot every
-  file you edit with `apply_patch`. **Do NOT log prompts or run `showtail artifact add`
+- **`"hooksActive": true`** — Codex hooks already record every student prompt and snapshot every
+  file you edit with `apply_patch`. **Do NOT log prompts or run `showtail artifact`
   yourself** (you'd duplicate them). Focus only on the judgment events below.
-- **`auto-capture: OFF`** — nothing is recording automatically. In addition to the judgment
+- **`"hooksActive": false`** — nothing is recording automatically. In addition to the judgment
   events below, also:
   - log the student's request, **in their own words**, before you act on it:
     `showtail log --type prompt --text "<what the student actually asked>" --tool codex`
-  - snapshot each file you create or change: `showtail artifact add <path> --tool codex`
+  - snapshot each file you create or change: `showtail artifact <path> --tool codex`
 
 If there is no `.showtail/` folder yet, have the student run `showtail init` **inside their
 project folder**, then `showtail start` to open a session.

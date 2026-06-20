@@ -132,14 +132,14 @@ describe('hook command (end-to-end via stdin)', () => {
     }
   });
 
-  test('skill status reports ON once project hooks are installed', () => {
+  test('status reports hooksActive once project hooks are connected', () => {
     const dir = makeTempDir();
     try {
       initProject(dir);
-      run(dir, ['skill', 'install', '--project']); // hooks on by default
-      const r = run(dir, ['skill', 'status']);
+      run(dir, ['connect', 'claude', '--project']); // hooks on by default
+      const r = run(dir, ['status', '--json']);
       expect(r.code).toBe(0);
-      expect(r.stdout).toContain('auto-capture: ON');
+      expect(JSON.parse(r.stdout).hooksActive).toBe(true);
     } finally {
       cleanup(dir);
     }

@@ -19,17 +19,17 @@ Everything is stored locally under `.showtail/`. Never send it anywhere.
 Run this once at the start and follow what it says:
 
 ```bash
-showtail skill status
+showtail status --json
 ```
 
-- **`auto-capture: ON`** — hooks already record every student prompt and every file edit
+- **`"hooksActive": true`** — hooks already record every student prompt and every file edit
   automatically. **Do NOT log prompts or file snapshots yourself** (you'd duplicate them).
   Focus only on the judgment events in step 2.
-- **`auto-capture: OFF`** — nothing is recording automatically. In addition to step 2, you
+- **`"hooksActive": false`** — nothing is recording automatically. In addition to step 2, you
   must also:
   - log the student's request, **in their own words**, at the start of each task:
     `showtail log --type prompt --text "<what the student actually asked>"`
-  - snapshot each file you create or change: `showtail artifact add <path>`
+  - snapshot each file you create or change: `showtail artifact <path>`
 
 ## 1. Make sure a session exists
 
@@ -77,11 +77,13 @@ Offer to run `showtail report` (the Markdown report for the educator) and `showt
 
 | Command | What it does |
 |---|---|
-| `showtail skill status` | Report whether auto-capture hooks are active |
+| `showtail status [--json]` | Current session + whether auto-capture hooks are active |
 | `showtail init` | Create the `.showtail/` folder (run in the project folder) |
 | `showtail start` | Begin a work session |
+| `showtail end` | Close the current session |
+| `showtail sessions` | List your work sessions |
 | `showtail log --type <type> --text "..." [--files a,b] [--tags x,y]` | Record one event |
-| `showtail artifact add <file>` | Snapshot a file (SHA-256 + git commit) |
+| `showtail artifact <file>` | Snapshot a file (SHA-256 + git commit) |
 | `showtail trace <file>` | Show a file's provenance trail |
 | `showtail report [--format json]` | Generate the report |
 | `showtail verify` | Check the trail is valid and consistent |
