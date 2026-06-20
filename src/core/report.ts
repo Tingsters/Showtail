@@ -260,6 +260,17 @@ export function renderMarkdown(data: ReportData): string {
   return buildMarkdown(data, false);
 }
 
+/**
+ * A link from a report (written to `.showtail/reports/`) to a repo-relative file.
+ * `code.path` is already forward-slash repo-relative, so we just step up out of
+ * `reports/` and `.showtail/` and URL-encode each segment (handles spaces, etc.).
+ * Relative + forward-slash means it resolves the same in any browser or Markdown
+ * viewer, on any OS, and stays valid when the report is committed and shared.
+ */
+function fileHref(repoRelPath: string): string {
+  return '../../' + repoRelPath.split('/').map(encodeURIComponent).join('/');
+}
+
 /** Append one turn as readable Markdown (used for the canonical text export). */
 function turnMarkdown(lines: string[], turn: Turn): void {
   const meta = `\`${formatDate(turn.prompt.timestamp)}\` · \`${toolLabel(turn.tool)}\``;
@@ -271,7 +282,10 @@ function turnMarkdown(lines: string[], turn: Turn): void {
   }
   for (const code of turn.codeChanges) {
     const stat = code.diffLines ? ` (~${code.diffLines} line(s))` : '';
-    lines.push(`_Suggested code — \`${code.path}\`${stat}:_`, '');
+    lines.push(
+      `_Suggested code — [\`${code.path}\`](${fileHref(code.path)})${stat}:_`,
+      '',
+    );
     if (code.diff) {
       lines.push('```diff', code.diff, '```', '');
     }
@@ -419,6 +433,8 @@ export function renderHtml(data: ReportData): string {
   .prompt-block .ai-text { margin: 0.1rem 0 0; }
   .code { margin: 0.4rem 0; }
   .code > summary { cursor: pointer; font-size: 0.85rem; color: #3a3f6b; }
+  .file-link { color: #3a3f6b; text-decoration: none; font-weight: 600; }
+  .file-link:hover { text-decoration: underline; }
   pre.diff {
     margin: 0.4rem 0 0;
     padding: 0.6rem 0;
@@ -503,6 +519,7 @@ export function renderHtml(data: ReportData): string {
     pre.codeblock { background: #242429; border-color: #34343a; }
     .code-lang { background: #2a2a30; border-color: #34343a; color: #a0a0aa; }
     .ai-text a { color: #aab0ff; }
+    .file-link { color: #aab0ff; }
     .ai-text blockquote { border-left-color: #4a4a52; color: #b8b8c2; }
     .ai-sep { border-top-color: #34343a; }
     .turn-close { color: #b8b8c2; background: #242429; border-top-color: #34343a; }
@@ -557,7 +574,12 @@ function turnsHtml(data: ReportData): string {
     for (const code of turn.codeChanges) {
       const stat2 = code.diffLines ? ` (~${code.diffLines} line(s))` : '';
       out.push('<details class="code">');
-      out.push(`<summary>${escapeHtml(code.path)}${escapeHtml(stat2)}</summary>`);
+      out.push(
+        '<summary>' +
+          `<a class="file-link" href="${escapeHtml(fileHref(code.path))}" ` +
+          'target="_blank" rel="noopener" onclick="event.stopPropagation()">' +
+          `${escapeHtml(code.path)}</a>${escapeHtml(stat2)}</summary>`,
+      );
       if (code.diff) out.push(diffHtml(code.diff));
       out.push('</details>');
     }

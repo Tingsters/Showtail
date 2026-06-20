@@ -129,6 +129,39 @@ describe('report', () => {
     }
   });
 
+  test('links code-change file paths relative to the report (HTML + Markdown)', async () => {
+    const dir = makeTempDir();
+    try {
+      await runInit({ cwd: dir, project: 'Parser Project' });
+      const paths = pathsForRoot(dir);
+      const session = startSession(paths);
+      await logEvent(paths, { type: 'prompt', text: 'Help me structure a CSV parser.' });
+
+      // A normal path and one with a space, both edited in this turn. Passing the
+      // session id is what links the artifact to the prompt's turn (as the hooks do).
+      writeFileSync(join(dir, 'src-parser.ts'), 'export const parse = () => {};');
+      await addArtifact(paths, { filePath: 'src-parser.ts', sessionId: session.id });
+      writeFileSync(join(dir, 'my file.ts'), 'export const x = 1;');
+      await addArtifact(paths, { filePath: 'my file.ts', sessionId: session.id });
+
+      const data = buildReportData(paths);
+      const html = renderHtml(data);
+      const md = renderMarkdown(data);
+
+      // Reports live in .showtail/reports/, so ../../ steps back to the repo root.
+      expect(html).toContain('href="../../src-parser.ts"');
+      expect(html).toContain('class="file-link"');
+      expect(html).toContain('event.stopPropagation()');
+      expect(md).toContain('](../../src-parser.ts)');
+
+      // Spaces (and other unsafe chars) are URL-encoded per segment.
+      expect(html).toContain('href="../../my%20file.ts"');
+      expect(md).toContain('](../../my%20file.ts)');
+    } finally {
+      cleanup(dir);
+    }
+  });
+
   test('markdownToHtml converts the supported Markdown subset', () => {
     expect(markdownToHtml('## Heading')).toContain('<h2>Heading</h2>');
     expect(markdownToHtml('# Title')).toContain('<h1>Title</h1>');
