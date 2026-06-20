@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs';
 import { addArtifact } from '../core/artifacts.ts';
 import { readTranscriptFile } from '../core/claudeCode.ts';
-import { importedSourceIds, logEvent } from '../core/events.ts';
+import { importedSourceIds, logEvent, readSessionEvents } from '../core/events.ts';
 import {
   extractApplyPatchFiles,
   extractEditedFiles,
@@ -10,11 +10,13 @@ import {
   readHookPayload,
   type HookPayload,
 } from '../core/hookInput.ts';
+import { redact } from '../core/redact.ts';
 import { currentSession, startSession } from '../core/sessions.ts';
 import {
   findRoot,
   pathsForRoot,
   readConfig,
+  readSessions,
   readState,
   updateState,
   type ShowtailPaths,
@@ -119,16 +121,19 @@ async function handlePostEdit(
 }
 
 /**
- * On Stop, capture the AI's text reply for the turn. Claude Code passes the
- * transcript path; we read the assistant message(s) from the *current* turn and
- * log them as `ai_output`, linked to the open turn. Best-effort: if no
- * transcript is available (e.g. Codex doesn't provide one), this is a no-op.
+ * On Stop, reconcile the trail against Claude Code's transcript — the complete,
+ * truthful record of the session. We walk the transcript in order and attribute
+ * each assistant reply to the prompt it actually followed, so every reply lands
+ * under the right turn no matter how many prompts happened between Stops. Any
+ * prompt the student typed but that the live `user-prompt` hook missed is
+ * back-filled here (never dropped); the `Stop` and `user-prompt` hooks are
+ * separate, so a prompt can be absent even though the student really sent it.
  *
- * Stop fires once per turn, so only the assistant messages *after the last user
- * prompt* in the transcript belong to this turn. We deliberately ignore anything
- * before it: that's either already captured by an earlier Stop, or — when a
- * persisted transcript is resumed under a fresh trail — backlog from before
- * Showtail was watching, which must not be dumped onto the current prompt.
+ * The only thing excluded is content from *before this session started watching*
+ * (pre-trail backlog from a resumed transcript), which must not be dumped onto a
+ * later turn. A transcript prompt counts as in-window if it matches a prompt we
+ * already logged this session, or it carries a timestamp at/after the session
+ * start. Best-effort: no transcript (e.g. Codex) means a silent no-op.
  */
 async function handleStop(
   paths: ShowtailPaths,
@@ -147,28 +152,75 @@ async function handleStop(
     return; // Unknown/unsupported transcript format — nothing to capture.
   }
 
-  // The current turn starts after the last real user prompt in the transcript.
-  // `parseClaudeTranscript` only emits role 'user' for genuine typed/pasted
-  // prompts, so this reliably marks the boundary. No user message means there's
-  // no turn to attribute to (shouldn't happen on a real Stop) — capture nothing.
-  let lastUserIdx = -1;
-  for (let i = 0; i < transcript.messages.length; i++) {
-    if (transcript.messages[i]!.role === 'user') lastUserIdx = i;
+  const sessionId = readState(paths).currentSessionId;
+  if (!sessionId) return; // No active session to attribute to.
+  const session = readSessions(paths).find((s) => s.id === sessionId);
+  if (!session) return;
+  const startedAt = session.startedAt;
+
+  // Prompts already logged this session, indexed two ways: by transcript uuid
+  // (a prompt we back-filled on an earlier Stop) and by stored text as a FIFO
+  // (a prompt logged live), so duplicate prompt texts line up in order.
+  const bySourceId = new Map<string, string>();
+  const byText = new Map<string, string[]>();
+  for (const p of readSessionEvents(paths, sessionId)) {
+    if (p.type !== 'prompt') continue;
+    if (p.sourceId) bySourceId.set(p.sourceId, p.id);
+    const queue = byText.get(p.text) ?? [];
+    queue.push(p.id);
+    byText.set(p.text, queue);
   }
-  if (lastUserIdx < 0) return;
 
   const seen = importedSourceIds(paths);
-  const turnId = readState(paths).currentPromptId ?? undefined;
-  for (let i = lastUserIdx + 1; i < transcript.messages.length; i++) {
-    const msg = transcript.messages[i]!;
-    if (msg.role !== 'assistant') continue;
-    if (seen.has(msg.sourceId)) continue;
-    await logEvent(paths, {
-      type: 'ai_output',
-      text: msg.text,
-      tool,
-      turnId,
-      sourceId: msg.sourceId,
-    });
+  const redactCfg = config.settings.redact;
+  let currentTurn: string | undefined; // The prompt id replies attach to.
+
+  for (const msg of transcript.messages) {
+    if (msg.role === 'user') {
+      // Clearly pre-trail backlog: a timestamp before this session began.
+      if (msg.timestamp && msg.timestamp < startedAt) {
+        currentTurn = undefined;
+        continue;
+      }
+      // Match an already-logged prompt: by uuid first, then by redacted text
+      // (prompts are stored redacted, so redact the transcript text to compare).
+      let id = msg.sourceId ? bySourceId.get(msg.sourceId) : undefined;
+      if (!id) {
+        const queue = byText.get(redact(msg.text, redactCfg).text);
+        if (queue && queue.length > 0) id = queue.shift();
+      }
+      if (!id) {
+        // Unmatched. Back-fill only when a timestamp proves it's in-window; a
+        // timestamp-less, unmatched prompt is treated as backlog (don't dump).
+        if (!msg.timestamp) {
+          currentTurn = undefined;
+          continue;
+        }
+        const { event } = await logEvent(paths, {
+          type: 'prompt',
+          text: msg.text,
+          tool,
+          timestamp: msg.timestamp,
+          sourceId: msg.sourceId,
+          sessionId,
+        });
+        id = event.id;
+        if (msg.sourceId) bySourceId.set(msg.sourceId, id);
+      }
+      currentTurn = id;
+    } else if (msg.role === 'assistant') {
+      // A reply only belongs to the trail if it follows an in-window prompt.
+      if (!currentTurn || seen.has(msg.sourceId)) continue;
+      await logEvent(paths, {
+        type: 'ai_output',
+        text: msg.text,
+        tool,
+        turnId: currentTurn,
+        sourceId: msg.sourceId,
+        sessionId,
+      });
+      seen.add(msg.sourceId);
+    }
+    // `edit` messages are ignored — the post-edit hook already records those.
   }
 }

@@ -253,6 +253,138 @@ describe('hook command (end-to-end via stdin)', () => {
     }
   });
 
+  test('stop hook attributes each reply to its own prompt across many turns', () => {
+    const dir = makeTempDir();
+    try {
+      initProject(dir);
+      run(
+        dir,
+        ['hook', 'session-start'],
+        JSON.stringify({ cwd: dir, source: 'startup' }),
+      );
+
+      // Two prompts logged live, before a single Stop captures both replies.
+      // Each reply must land under its own prompt — not all on the last one.
+      run(dir, ['hook', 'user-prompt'], JSON.stringify({ cwd: dir, prompt: 'first task' }));
+      run(dir, ['hook', 'user-prompt'], JSON.stringify({ cwd: dir, prompt: 'second task' }));
+
+      const lines = [
+        {
+          type: 'user',
+          uuid: 'first-u',
+          promptSource: 'typed',
+          sessionId: 'sess-1',
+          cwd: dir,
+          message: { role: 'user', content: 'first task' },
+        },
+        {
+          type: 'assistant',
+          uuid: 'first-a',
+          message: {
+            role: 'assistant',
+            model: 'claude-opus-4-8',
+            content: [{ type: 'text', text: 'FIRST reply applied' }],
+          },
+        },
+        {
+          type: 'user',
+          uuid: 'second-u',
+          promptSource: 'typed',
+          sessionId: 'sess-1',
+          cwd: dir,
+          message: { role: 'user', content: 'second task' },
+        },
+        {
+          type: 'assistant',
+          uuid: 'second-a',
+          message: {
+            role: 'assistant',
+            model: 'claude-opus-4-8',
+            content: [{ type: 'text', text: 'SECOND reply applied' }],
+          },
+        },
+      ];
+      const transcriptPath = join(dir, 'transcript.jsonl');
+      writeFileSync(transcriptPath, lines.map((l) => JSON.stringify(l)).join('\n'));
+
+      run(
+        dir,
+        ['hook', 'stop'],
+        JSON.stringify({ cwd: dir, transcript_path: transcriptPath }),
+      );
+
+      run(dir, ['report', '--format', 'json']);
+      const data = readJsonReport(dir);
+
+      expect(data.turns.length).toBe(2);
+      const first = data.turns.find((t: any) => t.prompt.text === 'first task');
+      const second = data.turns.find((t: any) => t.prompt.text === 'second task');
+      expect(first.aiOutputs.map((o: any) => o.text)).toEqual(['FIRST reply applied']);
+      expect(second.aiOutputs.map((o: any) => o.text)).toEqual(['SECOND reply applied']);
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('stop hook back-fills a prompt the live hook missed, not dropping the work', () => {
+    const dir = makeTempDir();
+    try {
+      initProject(dir);
+      run(
+        dir,
+        ['hook', 'session-start'],
+        JSON.stringify({ cwd: dir, source: 'startup' }),
+      );
+
+      // The student typed this prompt and Claude replied, but the live
+      // `user-prompt` hook never fired for it (the two hooks can desync). The
+      // transcript still holds it, in-window (timestamp after session start), so
+      // Stop must back-fill the prompt and attach its reply — never drop it.
+      const ts = new Date(Date.now() + 5000).toISOString();
+      const lines = [
+        {
+          type: 'user',
+          uuid: 'work-u',
+          promptSource: 'typed',
+          sessionId: 'sess-1',
+          cwd: dir,
+          timestamp: ts,
+          message: { role: 'user', content: 'add a retry to the fetch helper' },
+        },
+        {
+          type: 'assistant',
+          uuid: 'work-a',
+          timestamp: ts,
+          message: {
+            role: 'assistant',
+            model: 'claude-opus-4-8',
+            content: [{ type: 'text', text: 'Added retry logic to fetchHelper.' }],
+          },
+        },
+      ];
+      const transcriptPath = join(dir, 'transcript.jsonl');
+      writeFileSync(transcriptPath, lines.map((l) => JSON.stringify(l)).join('\n'));
+
+      run(
+        dir,
+        ['hook', 'stop'],
+        JSON.stringify({ cwd: dir, transcript_path: transcriptPath }),
+      );
+
+      run(dir, ['report', '--format', 'json']);
+      const data = readJsonReport(dir);
+
+      expect(data.turns.length).toBe(1);
+      const turn = data.turns[0];
+      expect(turn.prompt.text).toBe('add a retry to the fetch helper');
+      expect(turn.aiOutputs.map((o: any) => o.text)).toEqual([
+        'Added retry logic to fetchHelper.',
+      ]);
+    } finally {
+      cleanup(dir);
+    }
+  });
+
   test('post-edit --tool codex snapshots a file from an apply_patch envelope', () => {
     const dir = makeTempDir();
     try {
