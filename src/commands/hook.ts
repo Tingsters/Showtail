@@ -6,18 +6,21 @@ import {
   extractApplyPatchFiles,
   extractEditedFiles,
   extractPrompt,
+  extractSessionId,
   extractSuggestedCode,
   readHookPayload,
   type HookPayload,
 } from '../core/hookInput.ts';
 import { redact } from '../core/redact.ts';
-import { currentSession, startSession } from '../core/sessions.ts';
+import { currentSession, sessionForClaudeId, startSession } from '../core/sessions.ts';
 import {
   findRoot,
   pathsForRoot,
   readConfig,
   readSessions,
   readState,
+  setTurnForClaudeSession,
+  turnForClaudeSession,
   updateState,
   type ShowtailPaths,
 } from '../core/storage.ts';
@@ -59,7 +62,7 @@ export async function runHook(
 
     switch (event) {
       case 'session-start':
-        return handleSessionStart(paths);
+        return handleSessionStart(paths, payload, tool);
       case 'user-prompt':
         return await handleUserPrompt(paths, payload, tool);
       case 'post-edit':
@@ -73,8 +76,20 @@ export async function runHook(
   }
 }
 
-function handleSessionStart(paths: ShowtailPaths): void {
-  const session = currentSession(paths) ?? startSession(paths);
+function handleSessionStart(
+  paths: ShowtailPaths,
+  payload: HookPayload | null,
+  tool: Tool,
+): void {
+  // Bind this Showtail session to Claude's session_id when we have one, so a
+  // resume/compact reuses the *same* trail instead of spawning a new session
+  // each time. Without an id (older clients), fall back to the single current
+  // session. Either way this becomes the CLI's "current" session.
+  const claudeSessionId = extractSessionId(payload);
+  const session = claudeSessionId
+    ? sessionForClaudeId(paths, claudeSessionId, { tool })
+    : (currentSession(paths) ?? startSession(paths));
+  updateState(paths, { currentSessionId: session.id });
   // SessionStart stdout is injected into Claude's context — keep it to one line.
   process.stdout.write(
     `Showtail is capturing this session's work trail (session ${session.id}). ` +
@@ -90,9 +105,22 @@ async function handleUserPrompt(
   if (!payload) return;
   const text = extractPrompt(payload);
   if (!text) return;
-  const { event } = await logEvent(paths, { type: 'prompt', text, tool });
+  // Log the prompt into the session that owns this Claude session_id (creating
+  // it if the session-start hook never fired); without an id, the current
+  // session is used (unchanged behavior).
+  const claudeSessionId = extractSessionId(payload);
+  const sessionId = claudeSessionId
+    ? sessionForClaudeId(paths, claudeSessionId, { tool }).id
+    : undefined;
+  const { event } = await logEvent(paths, { type: 'prompt', text, tool, sessionId });
   // Open a new "turn": edits and AI output that follow link back to this prompt.
-  updateState(paths, { currentPromptId: event.id });
+  // Track it per Claude session so interleaved sessions don't share one turn.
+  if (claudeSessionId) {
+    updateState(paths, { currentSessionId: sessionId });
+    setTurnForClaudeSession(paths, claudeSessionId, event.id);
+  } else {
+    updateState(paths, { currentPromptId: event.id });
+  }
   // Print nothing: this path must not add anything to the session's context.
 }
 
@@ -103,7 +131,13 @@ async function handlePostEdit(
   config: Config,
 ): Promise<void> {
   if (!payload) return;
-  const turnId = readState(paths).currentPromptId ?? undefined;
+  // Attach the edit to the open turn of *its* Claude session when we can tell
+  // which one fired; otherwise the global current turn (unchanged behavior).
+  const claudeSessionId = extractSessionId(payload);
+  const turnId =
+    (claudeSessionId ? turnForClaudeSession(paths, claudeSessionId) : undefined) ??
+    readState(paths).currentPromptId ??
+    undefined;
   // Capture the AI-suggested code (unless code capture is turned off).
   const diff =
     config.settings.captureCode === false ? undefined : extractSuggestedCode(payload);
@@ -129,11 +163,17 @@ async function handlePostEdit(
  * back-filled here (never dropped); the `Stop` and `user-prompt` hooks are
  * separate, so a prompt can be absent even though the student really sent it.
  *
+ * Replies are attributed to the Showtail session that mirrors *this transcript's
+ * own* Claude `session_id` — never a single global "current" session, which
+ * under concurrent/resumed sessions points at the wrong one and silently drops
+ * legitimate replies.
+ *
  * The only thing excluded is content from *before this session started watching*
  * (pre-trail backlog from a resumed transcript), which must not be dumped onto a
  * later turn. A transcript prompt counts as in-window if it matches a prompt we
- * already logged this session, or it carries a timestamp at/after the session
- * start. Best-effort: no transcript (e.g. Codex) means a silent no-op.
+ * already logged this session (checked first, so it can never be mistaken for
+ * backlog), or it carries a timestamp at/after the session start. Best-effort:
+ * no transcript (e.g. Codex) means a silent no-op.
  */
 async function handleStop(
   paths: ShowtailPaths,
@@ -152,10 +192,19 @@ async function handleStop(
     return; // Unknown/unsupported transcript format — nothing to capture.
   }
 
-  const sessionId = readState(paths).currentSessionId;
-  if (!sessionId) return; // No active session to attribute to.
-  const session = readSessions(paths).find((s) => s.id === sessionId);
-  if (!session) return;
+  // Resolve the session this transcript belongs to. The transcript's own
+  // session_id is the source of truth; fall back to the payload's, then to the
+  // global current session (older clients that send no id).
+  const claudeSessionId = transcript.sessionId ?? extractSessionId(payload);
+  let session;
+  if (claudeSessionId) {
+    session = sessionForClaudeId(paths, claudeSessionId, { tool });
+  } else {
+    const currentId = readState(paths).currentSessionId;
+    session = currentId ? readSessions(paths).find((s) => s.id === currentId) : undefined;
+  }
+  if (!session) return; // No session to attribute to.
+  const sessionId = session.id;
   const startedAt = session.startedAt;
 
   // Prompts already logged this session, indexed two ways: by transcript uuid
@@ -177,22 +226,21 @@ async function handleStop(
 
   for (const msg of transcript.messages) {
     if (msg.role === 'user') {
-      // Clearly pre-trail backlog: a timestamp before this session began.
-      if (msg.timestamp && msg.timestamp < startedAt) {
-        currentTurn = undefined;
-        continue;
-      }
-      // Match an already-logged prompt: by uuid first, then by redacted text
+      // Match an already-logged prompt FIRST — by uuid, then by redacted text
       // (prompts are stored redacted, so redact the transcript text to compare).
+      // A prompt we already logged this session is in-window by definition and
+      // must never be reclassified as backlog, even if its transcript timestamp
+      // predates this session's start.
       let id = msg.sourceId ? bySourceId.get(msg.sourceId) : undefined;
       if (!id) {
         const queue = byText.get(redact(msg.text, redactCfg).text);
         if (queue && queue.length > 0) id = queue.shift();
       }
       if (!id) {
-        // Unmatched. Back-fill only when a timestamp proves it's in-window; a
-        // timestamp-less, unmatched prompt is treated as backlog (don't dump).
-        if (!msg.timestamp) {
+        // Unmatched. Back-fill only when a timestamp proves it's in-window
+        // (at/after this session's start); a backlog or timestamp-less prompt is
+        // skipped so a resumed transcript isn't dumped onto a later turn.
+        if (!msg.timestamp || msg.timestamp < startedAt) {
           currentTurn = undefined;
           continue;
         }

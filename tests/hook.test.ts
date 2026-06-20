@@ -27,6 +27,44 @@ function initProject(dir: string) {
   run(dir, ['init', '--project', 'Hook Test']);
 }
 
+/** A typed-user transcript line. Pass `sessionId: null` to omit the field. */
+function userLine(
+  uuid: string,
+  content: string,
+  dir: string,
+  sessionId: string | null = 'sess-1',
+) {
+  const line: any = {
+    type: 'user',
+    uuid,
+    promptSource: 'typed',
+    cwd: dir,
+    message: { role: 'user', content },
+  };
+  if (sessionId !== null) line.sessionId = sessionId;
+  return line;
+}
+
+/** An assistant text-reply transcript line. */
+function asstLine(uuid: string, text: string) {
+  return {
+    type: 'assistant',
+    uuid,
+    message: {
+      role: 'assistant',
+      model: 'claude-opus-4-8',
+      content: [{ type: 'text', text }],
+    },
+  };
+}
+
+/** Write transcript `lines` to a uniquely named file in `dir` and return its path. */
+function writeTranscript(dir: string, name: string, lines: unknown[]): string {
+  const path = join(dir, name);
+  writeFileSync(path, lines.map((l) => JSON.stringify(l)).join('\n'));
+  return path;
+}
+
 describe('hook command (end-to-end via stdin)', () => {
   test('user-prompt hook logs a prompt event', () => {
     const dir = makeTempDir();
@@ -167,7 +205,7 @@ describe('hook command (end-to-end via stdin)', () => {
       run(
         dir,
         ['hook', 'session-start'],
-        JSON.stringify({ cwd: dir, source: 'startup' }),
+        JSON.stringify({ cwd: dir, source: 'startup', session_id: 'sess-1' }),
       );
 
       // A persisted Claude Code transcript that already holds a prior
@@ -226,7 +264,7 @@ describe('hook command (end-to-end via stdin)', () => {
       run(
         dir,
         ['hook', 'user-prompt'],
-        JSON.stringify({ cwd: dir, prompt: 'make the new change' }),
+        JSON.stringify({ cwd: dir, prompt: 'make the new change', session_id: 'sess-1' }),
       );
       run(
         dir,
@@ -260,7 +298,7 @@ describe('hook command (end-to-end via stdin)', () => {
       run(
         dir,
         ['hook', 'session-start'],
-        JSON.stringify({ cwd: dir, source: 'startup' }),
+        JSON.stringify({ cwd: dir, source: 'startup', session_id: 'sess-1' }),
       );
 
       // Two prompts logged live, before a single Stop captures both replies.
@@ -268,12 +306,12 @@ describe('hook command (end-to-end via stdin)', () => {
       run(
         dir,
         ['hook', 'user-prompt'],
-        JSON.stringify({ cwd: dir, prompt: 'first task' }),
+        JSON.stringify({ cwd: dir, prompt: 'first task', session_id: 'sess-1' }),
       );
       run(
         dir,
         ['hook', 'user-prompt'],
-        JSON.stringify({ cwd: dir, prompt: 'second task' }),
+        JSON.stringify({ cwd: dir, prompt: 'second task', session_id: 'sess-1' }),
       );
 
       const lines = [
@@ -341,7 +379,7 @@ describe('hook command (end-to-end via stdin)', () => {
       run(
         dir,
         ['hook', 'session-start'],
-        JSON.stringify({ cwd: dir, source: 'startup' }),
+        JSON.stringify({ cwd: dir, source: 'startup', session_id: 'sess-1' }),
       );
 
       // The student typed this prompt and Claude replied, but the live
@@ -411,6 +449,174 @@ describe('hook command (end-to-end via stdin)', () => {
       const data = JSON.parse(trace.stdout);
       expect(data.artifacts.length).toBe(1);
       expect(data.artifacts[0].tool).toBe('codex');
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('two interleaved Claude sessions keep separate trails', () => {
+    const dir = makeTempDir();
+    try {
+      initProject(dir);
+      // Two Claude sessions start and each gets a prompt, interleaved.
+      run(dir, ['hook', 'session-start'], JSON.stringify({ cwd: dir, session_id: 'sA' }));
+      run(dir, ['hook', 'session-start'], JSON.stringify({ cwd: dir, session_id: 'sB' }));
+      run(
+        dir,
+        ['hook', 'user-prompt'],
+        JSON.stringify({ cwd: dir, prompt: 'task A', session_id: 'sA' }),
+      );
+      run(
+        dir,
+        ['hook', 'user-prompt'],
+        JSON.stringify({ cwd: dir, prompt: 'task B', session_id: 'sB' }),
+      );
+
+      const tA = writeTranscript(dir, 'a.jsonl', [
+        userLine('a-u', 'task A', dir, 'sA'),
+        asstLine('a-a', 'reply A'),
+      ]);
+      const tB = writeTranscript(dir, 'b.jsonl', [
+        userLine('b-u', 'task B', dir, 'sB'),
+        asstLine('b-a', 'reply B'),
+      ]);
+      run(dir, ['hook', 'stop'], JSON.stringify({ cwd: dir, transcript_path: tA }));
+      run(dir, ['hook', 'stop'], JSON.stringify({ cwd: dir, transcript_path: tB }));
+
+      run(dir, ['report', '--format', 'json']);
+      const data = readJsonReport(dir);
+      const a = data.turns.find((t: any) => t.prompt.text === 'task A');
+      const b = data.turns.find((t: any) => t.prompt.text === 'task B');
+      // Each reply lands under its own session's prompt — neither blank, no cross-talk.
+      expect(a.aiOutputs.map((o: any) => o.text)).toEqual(['reply A']);
+      expect(b.aiOutputs.map((o: any) => o.text)).toEqual(['reply B']);
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('stop on an older session after a newer one started still captures its reply', () => {
+    const dir = makeTempDir();
+    try {
+      initProject(dir);
+      // The exact regression: a prompt is logged in session "old", then a newer
+      // session "new" starts (advancing the global current pointer). The old
+      // session's Stop must still attribute its reply to the old prompt — not
+      // drop it as "backlog" against the newer session's start time.
+      run(
+        dir,
+        ['hook', 'session-start'],
+        JSON.stringify({ cwd: dir, session_id: 'old' }),
+      );
+      run(
+        dir,
+        ['hook', 'user-prompt'],
+        JSON.stringify({ cwd: dir, prompt: 'old session task', session_id: 'old' }),
+      );
+      run(
+        dir,
+        ['hook', 'session-start'],
+        JSON.stringify({ cwd: dir, session_id: 'new' }),
+      );
+
+      const tOld = writeTranscript(dir, 'old.jsonl', [
+        userLine('old-u', 'old session task', dir, 'old'),
+        asstLine('old-a', 'old reply applied'),
+      ]);
+      run(dir, ['hook', 'stop'], JSON.stringify({ cwd: dir, transcript_path: tOld }));
+
+      run(dir, ['report', '--format', 'json']);
+      const data = readJsonReport(dir);
+      const turn = data.turns.find((t: any) => t.prompt.text === 'old session task');
+      expect(turn.aiOutputs.map((o: any) => o.text)).toEqual(['old reply applied']);
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('session-start binds one Showtail session per Claude session_id (no churn)', () => {
+    const dir = makeTempDir();
+    try {
+      initProject(dir);
+      const ss = (id: string) =>
+        run(dir, ['hook', 'session-start'], JSON.stringify({ cwd: dir, session_id: id }));
+      ss('sX'); // first time: creates one
+      ss('sY'); // a different id: creates a second
+      ss('sX'); // repeat (e.g. resume/compact): must NOT create a third
+
+      run(dir, ['report', '--format', 'json']);
+      const data = readJsonReport(dir);
+      expect(data.summary.sessions).toBe(2);
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('falls back to the current session when no session_id is present', () => {
+    const dir = makeTempDir();
+    try {
+      initProject(dir);
+      // No session_id anywhere and no sessionId in the transcript (older client).
+      run(
+        dir,
+        ['hook', 'session-start'],
+        JSON.stringify({ cwd: dir, source: 'startup' }),
+      );
+      run(
+        dir,
+        ['hook', 'user-prompt'],
+        JSON.stringify({ cwd: dir, prompt: 'fallback task' }),
+      );
+      const t = writeTranscript(dir, 'f.jsonl', [
+        userLine('f-u', 'fallback task', dir, null),
+        asstLine('f-a', 'fallback reply'),
+      ]);
+      run(dir, ['hook', 'stop'], JSON.stringify({ cwd: dir, transcript_path: t }));
+
+      run(dir, ['report', '--format', 'json']);
+      const data = readJsonReport(dir);
+      expect(data.turns.length).toBe(1);
+      expect(data.turns[0].prompt.text).toBe('fallback task');
+      expect(data.turns[0].aiOutputs.map((o: any) => o.text)).toEqual(['fallback reply']);
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('post-edit attaches to the open turn of its own Claude session', () => {
+    const dir = makeTempDir();
+    try {
+      initProject(dir);
+      // Two concurrent sessions each open a turn; an edit tagged to session A
+      // must attach to A's prompt, not B's (the most recent global turn).
+      run(
+        dir,
+        ['hook', 'user-prompt'],
+        JSON.stringify({ cwd: dir, prompt: 'task A', session_id: 'sA' }),
+      );
+      run(
+        dir,
+        ['hook', 'user-prompt'],
+        JSON.stringify({ cwd: dir, prompt: 'task B', session_id: 'sB' }),
+      );
+      writeFileSync(join(dir, 'a.ts'), 'export const a = 1;');
+      run(
+        dir,
+        ['hook', 'post-edit'],
+        JSON.stringify({
+          cwd: dir,
+          session_id: 'sA',
+          tool_name: 'Edit',
+          tool_input: { file_path: join(dir, 'a.ts') },
+        }),
+      );
+
+      run(dir, ['report', '--format', 'json']);
+      const data = readJsonReport(dir);
+      const a = data.turns.find((t: any) => t.prompt.text === 'task A');
+      const b = data.turns.find((t: any) => t.prompt.text === 'task B');
+      expect(a.codeChanges.length).toBe(1);
+      expect(b.codeChanges.length).toBe(0);
     } finally {
       cleanup(dir);
     }

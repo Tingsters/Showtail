@@ -121,6 +121,12 @@ export interface Session {
   label?: string;
   /** Which tool opened this session, if known. */
   tool?: Tool;
+  /**
+   * The Claude Code `session_id` this Showtail session mirrors, 1:1, if known.
+   * Lets concurrent/resumed Claude sessions each keep their own trail instead of
+   * sharing the single global `currentSessionId` pointer.
+   */
+  claudeSessionId?: string;
   /** ISO-8601 timestamp the session was closed with `showtail end`, if it was. */
   endedAt?: string;
 }
@@ -165,8 +171,17 @@ export interface Config {
 /** Tracks which session new `log` events flow into, and the open turn. */
 export interface State {
   currentSessionId: string | null;
-  /** The prompt event id that opened the current turn, if any. */
+  /**
+   * The prompt event id that opened the current turn, if any. Used by the CLI
+   * and as the fallback turn pointer when a hook payload carries no
+   * `session_id` (older transcripts, manual `showtail log`, Codex).
+   */
   currentPromptId?: string | null;
+  /**
+   * The open turn per Claude Code `session_id`, so edits from concurrent
+   * sessions attach to the right prompt instead of a single global turn.
+   */
+  turnByClaudeSession?: Record<string, string>;
 }
 
 /** How many events were recorded through a given tool. */
