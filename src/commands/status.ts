@@ -1,37 +1,13 @@
-import { existsSync } from 'node:fs';
 import { requirePaths } from '../core/storage.ts';
 import { currentSession } from '../core/sessions.ts';
 import { readSessionEvents } from '../core/events.ts';
-import { autoCaptureActive, resolveTarget } from '../core/skill.ts';
-import { copilotState, resolveCopilotTarget } from '../core/copilot.ts';
-import {
-  codexAutoCaptureActive,
-  codexInstructionsState,
-  resolveCodexTarget,
-} from '../core/codex.ts';
+import { connectedToolsLines, toolStatuses } from '../core/tools.ts';
 import { EVENT_TYPES } from '../types.ts';
 
 export interface StatusOptions {
   /** Emit machine-readable JSON (consumed by the skill to decide manual capture). */
   json?: boolean;
   cwd?: string;
-}
-
-/** Is the Showtail Claude Code skill installed at either scope? */
-function skillInstalled(cwd?: string): boolean {
-  return (
-    existsSync(resolveTarget('project', cwd).skillFile) ||
-    existsSync(resolveTarget('user', cwd).skillFile)
-  );
-}
-
-interface ToolStatus {
-  tool: 'claude' | 'copilot' | 'codex';
-  connected: boolean;
-  /** Whether auto-capture hooks are active (claude, codex). */
-  hooksActive?: boolean;
-  /** Whether the managed instructions are behind the latest (copilot, codex). */
-  updateAvailable?: boolean;
 }
 
 /**
@@ -51,27 +27,8 @@ export async function runStatus(options: StatusOptions = {}): Promise<void> {
     count: counts[t] as number,
   }));
 
-  const claudeHooks = autoCaptureActive(options.cwd);
-  const copilot = copilotState(resolveCopilotTarget(options.cwd));
-  const codex = codexInstructionsState(resolveCodexTarget('project', options.cwd));
-  const tools: ToolStatus[] = [
-    {
-      tool: 'claude',
-      connected: skillInstalled(options.cwd) || claudeHooks,
-      hooksActive: claudeHooks,
-    },
-    {
-      tool: 'copilot',
-      connected: copilot.installed,
-      updateAvailable: copilot.installed ? copilot.updateAvailable : undefined,
-    },
-    {
-      tool: 'codex',
-      connected: codex.installed,
-      hooksActive: codexAutoCaptureActive(options.cwd),
-      updateAvailable: codex.installed ? codex.updateAvailable : undefined,
-    },
-  ];
+  const tools = toolStatuses(options.cwd);
+  const claudeHooks = tools.find((t) => t.tool === 'claude')?.hooksActive ?? false;
 
   if (options.json) {
     console.log(
@@ -110,14 +67,7 @@ export async function runStatus(options: StatusOptions = {}): Promise<void> {
 
   console.log('');
   console.log('Connected tools');
-  for (const t of tools) {
-    let state: string;
-    if (!t.connected) state = 'not connected';
-    else if (t.hooksActive) state = 'connected · hooks active';
-    else if (t.hooksActive === false) state = 'connected · no hooks';
-    else state = 'connected';
-    console.log(`  ${t.tool.padEnd(8)} ${state}`);
-  }
+  for (const line of connectedToolsLines(tools)) console.log(line);
 }
 
 function plural(n: number): string {

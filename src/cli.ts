@@ -64,7 +64,7 @@ program
 
 program
   .command('start')
-  .description('Start a new work session.')
+  .description('Begin a new work session (run this each time you sit down to work).')
   .helpGroup(G_START)
   .option('-l, --label <label>', 'a short label for the session')
   .action(action(async (opts: { label?: string }) => runStart({ label: opts.label })));
@@ -79,15 +79,15 @@ program
 
 program
   .command('log')
-  .description('Record an event in your current session.')
+  .description('Record a prompt, decision, reflection, or other note in your current session.')
   .helpGroup(G_CAPTURE)
   .requiredOption('-t, --type <type>', `event type (one of: ${eventTypeList()})`)
   .option('-x, --text <text>', 'the content (or pipe it via stdin)')
   .option('-f, --files <files>', 'comma-separated related files')
   .option('--tags <tags>', 'comma-separated tags')
-  .option('--tool <tool>', 'tool this came through (claude-code, github-copilot, cli)')
+  .option('--tool <tool>', 'tool this came through (e.g. claude-code, codex, cli)')
   .option('-s, --session <id>', 'log to a specific session id')
-  .option('--turn <id>', "link to a prompt's turn (e.g. an ai_output for a prompt)")
+  .option('--turn <id>', 'link this event to a prompt (e.g. an AI response to your prompt)')
   .action(
     action(
       async (opts: {
@@ -104,11 +104,13 @@ program
 
 program
   .command('artifact <file>')
-  .description('Snapshot a file: its SHA-256 hash, time, and git commit if available.')
+  .description(
+    "Snapshot a file's current state (hash, time, git commit) to show how it changed over time.",
+  )
   .helpGroup(G_CAPTURE)
   .option('-s, --session <id>', 'attach to a specific session id')
   .option('-e, --events <ids>', 'comma-separated related event ids')
-  .option('--tool <tool>', 'tool this came through (claude-code, github-copilot, cli)')
+  .option('--tool <tool>', 'tool this came through (e.g. claude-code, codex, cli)')
   .action(
     action(
       async (file: string, opts: { session?: string; events?: string; tool?: string }) =>
@@ -134,14 +136,14 @@ program
 
 program
   .command('report')
-  .description('Generate a report summarizing your work trail.')
+  .description('Generate a shareable report (HTML by default) summarizing your work trail.')
   .helpGroup(G_REVIEW)
   .option('--format <format>', 'output format: html (default), md, or json', 'html')
   .action(action(async (opts: { format?: string }) => runReport(opts)));
 
 program
   .command('verify')
-  .description('Check that your trail is complete and consistent.')
+  .description('Run integrity checks on your trail (config, journal, artifact hashes, report).')
   .helpGroup(G_REVIEW)
   .action(
     action(async () => {
@@ -152,7 +154,7 @@ program
 
 program
   .command('trace <file>')
-  .description('Show the known provenance trail for a file.')
+  .description('Show every snapshot and related event (prompts, edits, decisions) for a file.')
   .helpGroup(G_REVIEW)
   .option('--format <format>', 'output format: text (default) or json', 'text')
   .action(
@@ -215,11 +217,13 @@ interface ConnectOptions {
 
 program
   .command('connect <tool>')
-  .description('Enable auto-capture for a tool (claude | copilot | codex).')
+  .description(
+    'Connect an AI tool so your prompts and edits are captured as you work (claude | copilot | codex).',
+  )
   .helpGroup(G_CONNECT)
   .option('--user', 'install for your user, all projects (claude, codex)')
   .option('--project', 'install for this project only [default] (claude, codex)')
-  .option('--no-hooks', 'skip the auto-capture hooks (claude, codex)')
+  .option('--no-hooks', 'skip auto-capture hooks; log prompts/edits yourself via the skill (claude, codex)')
   .option('--no-extension', 'skip the VS Code extension guidance (copilot)')
   .option('--yes', 'enable Codex hooks in config.toml without prompting (codex)')
   .option('--force', 'overwrite existing instructions/skill (take the latest)')
@@ -258,7 +262,7 @@ program
 
 program
   .command('disconnect <tool>')
-  .description('Remove a tool integration (claude | copilot | codex).')
+  .description('Disconnect an AI tool (removes its instructions/skill and any auto-capture hooks).')
   .helpGroup(G_CONNECT)
   .option('--user', 'remove from your user scope (claude, codex)')
   .option('--project', 'remove from this project [default] (claude, codex)')
@@ -277,7 +281,7 @@ program
 
 const importCmd = program
   .command('import')
-  .description('Import work done in other AI tools into your trail.')
+  .description('Import conversations from other AI tools (ChatGPT, Gemini, Claude Code) into your trail.')
   .helpGroup(G_CONNECT);
 
 importCmd
@@ -392,7 +396,7 @@ importCmd
 
 importCmd
   .command('undo')
-  .description('Undo the most recent import (removes that batch of events).')
+  .description('Undo the most recent import (permanently removes that batch of events).')
   .action(action(async () => runImportUndo()));
 
 // Internal: invoked by Claude Code / Codex hooks (reads the hook JSON from stdin).
