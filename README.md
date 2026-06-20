@@ -226,6 +226,53 @@ When hooks are active, every prompt you submit and every file Claude edits is lo
 - Turn capture off with `showtail disconnect claude`. Add `--user` if you installed at user scope.
 - To install the skill without hooks, use `showtail connect claude --no-hooks`. The skill can still capture prompts itself, but it will not add hooks to `settings.json`.
 
+### Importing an existing Claude Code session
+
+If you enabled Showtail partway through a session — or only afterwards — you do not have to lose the earlier work. Claude Code writes a full transcript of every session to disk (under `~/.claude/projects/…`), and Showtail can back-fill your trail from it so it reads as if capture had been on from the start. This is **local** like everything else: nothing is fetched, and because the transcript records who said what, there is no guessing about what you wrote versus what Claude produced.
+
+Run it with no arguments to pick from this project's sessions:
+
+```bash
+showtail import claude
+```
+
+This opens an interactive picker. Each session shows how long ago it ran, its prompt and edit counts, a rough duration, its first and last prompt, and whether it is already in your trail — so the right one is easy to spot:
+
+```text
+Claude Code sessions for this project (3):
+
+  1. 2h ago    8 prompt(s), 5 edit(s), ~25 min
+     first: rework the claude code import so it is easier to pick sessions
+     last:  add tests for the picker
+     id: cc010626-49c0-4bef-a72f-2c1a0a4a172e
+
+  2. yesterday    3 prompt(s), 0 edit(s), ~4 min  [imported]
+     first: fix the timestamp parsing bug
+     id: a019ec8b-df56-4e6b-9176-13bae0c42a86
+
+Pick sessions to import [e.g. 1,3 or 'all', q to quit]:
+```
+
+Pick one or several — `1`, a list like `1,3`, a range `1-2`, or `all`. The whole selection is imported as a single batch, so one `showtail import undo` reverses it.
+
+Options:
+
+- `<session-id>` — import a specific session by its id (or just the start of it), skipping the picker.
+- `--list` — print the same list without prompting, then import by id.
+- `--no-responses` — import only your prompts. Claude's replies are imported by default.
+- `--file <path>` — import a specific transcript `.jsonl` by path. Useful offline, or for a transcript stored elsewhere.
+- `-s, --session <id>` — import into a specific Showtail session.
+
+The command is also available as `showtail import claude-code`.
+
+Your prompts become `prompt` events, Claude's replies become `ai_output`, and each file Claude edited becomes an `artifact` — all tagged `claude-code` and stamped with their original times, so they interleave correctly with the rest of your trail. Re-importing is safe: messages already in your trail are skipped (that is what the `[imported]` marker means), and you can undo a whole batch in one step:
+
+```bash
+showtail import undo
+```
+
+In a script or non-interactive shell there is nothing to pick from, so the command imports the most recent session for the project.
+
 ---
 
 ## GitHub Copilot integration
@@ -568,6 +615,7 @@ bun run build       # Compile a standalone binary to dist/showtail
 Showtail's MVP is a local CLI with a small core that can grow over time:
 
 - Completed: **Claude Code skill** to log prompts, decisions, and artifacts while you pair. See [Claude Code integration](#claude-code-integration).
+- Completed: **Claude Code session import** to back-fill your trail from a session's on-disk transcript. See [Importing an existing Claude Code session](#importing-an-existing-claude-code-session).
 - Completed: **GitHub Copilot and VS Code extension** to capture Copilot prompts and saved edits in one cross-tool report. See [GitHub Copilot integration](#github-copilot-integration).
 - Completed: **ChatGPT import** to bring selected conversations into the same trail. See [ChatGPT integration](#chatgpt-integration).
 - Completed: **Google Gemini import** to bring conversations into the same trail from a share link or a paste. See [Google Gemini integration](#google-gemini-integration).
