@@ -95,7 +95,9 @@ describe('turns', () => {
       expect(html).toContain('class="tok-'); // syntax highlighting applied
       expect(html).toContain('<code>python hi.py</code>'); // inline code
       expect(html).not.toContain('```'); // no literal fences left
-      expect(html).not.toContain('<script>');
+      // The only script in the document is the trusted inline timezone helper;
+      // rendering user content must never introduce another.
+      expect(html.match(/<script\b/g)?.length ?? 0).toBe(1);
     } finally {
       cleanup(dir);
     }
@@ -131,7 +133,9 @@ describe('turns', () => {
       expect(html).not.toContain('<h4>AI response</h4>'); // redundant label dropped
       // javascript: link is not turned into an anchor
       expect(html).not.toContain('href="javascript:');
-      expect(html).not.toContain('<script>');
+      // The only script in the document is the trusted inline timezone helper;
+      // rendering user content must never introduce another.
+      expect(html.match(/<script\b/g)?.length ?? 0).toBe(1);
     } finally {
       cleanup(dir);
     }
@@ -167,10 +171,12 @@ describe('turns', () => {
       expect(html).toContain('class="tok-kw"');
       // Rows are adjacent — no empty (gray-gap) line is emitted between them.
       expect(html).toContain('</span><span class="dline');
-      // A Close button collapses the card; inline handler, not a <script>.
+      // A Close button collapses the card via an inline handler (no card script).
       expect(html).toContain('class="turn-close"');
       expect(html).toContain('open=false');
-      expect(html).not.toContain('<script>');
+      // The only script in the document is the trusted inline timezone helper;
+      // rendering user content must never introduce another.
+      expect(html.match(/<script\b/g)?.length ?? 0).toBe(1);
     } finally {
       cleanup(dir);
     }

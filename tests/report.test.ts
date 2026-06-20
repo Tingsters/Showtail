@@ -86,6 +86,52 @@ describe('report', () => {
     }
   });
 
+  test('HTML carries timestamps as interactive <time> elements with a timezone selector', async () => {
+    const dir = makeTempDir();
+    try {
+      await runInit({ cwd: dir, project: 'Parser Project' });
+      const paths = pathsForRoot(dir);
+      startSession(paths);
+      await logEvent(paths, { type: 'prompt', text: 'How do I structure this parser?' });
+
+      const data = buildReportData(paths);
+      const html = renderHtml(data);
+
+      // Every timestamp is a <time> element holding the raw UTC instant plus a
+      // readable UTC fallback (so it still reads correctly with JS disabled).
+      expect(html).toMatch(/<time class="st-time" datetime="[^"]+Z">/);
+      expect(html).toContain(' UTC</time>');
+      // The token placeholder must have been fully swapped out.
+      expect(html).not.toContain('SHOWTAILTIME@');
+
+      // The selector + inline script default to the viewer's machine timezone.
+      expect(html).toContain('<select id="st-tz"');
+      expect(html).toContain('Intl.DateTimeFormat().resolvedOptions().timeZone');
+      expect(html).toContain('timeZoneName: ');
+      expect(html).toContain("querySelectorAll('time.st-time')");
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('Markdown export keeps static, readable UTC timestamps (no scripts)', async () => {
+    const dir = makeTempDir();
+    try {
+      await runInit({ cwd: dir, project: 'Parser Project' });
+      const paths = pathsForRoot(dir);
+      startSession(paths);
+      await logEvent(paths, { type: 'prompt', text: 'How do I structure this parser?' });
+
+      const md = renderMarkdown(buildReportData(paths));
+      // Readable UTC like "2026-06-20 21:30 UTC", and no <time> tags or tokens.
+      expect(md).toMatch(/Generated \d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC/);
+      expect(md).not.toContain('<time');
+      expect(md).not.toContain('SHOWTAILTIME@');
+    } finally {
+      cleanup(dir);
+    }
+  });
+
   test('HTML escapes user-supplied text', async () => {
     const dir = makeTempDir();
     try {

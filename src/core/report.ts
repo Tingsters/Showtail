@@ -198,8 +198,12 @@ function buildMarkdown(data: ReportData, turnsPlaceholder = false): string {
   const lines: string[] = [];
   const title = data.project ? `Showtail Report — ${data.project}` : 'Showtail Report';
 
+  // In HTML mode, timestamps are emitted as tokens that {@link renderHtml} swaps
+  // for interactive <time> elements; the canonical Markdown export uses static UTC.
+  const fmt = turnsPlaceholder ? timeToken : staticUtc;
+
   lines.push(`# ${title}`, '');
-  lines.push(`_Generated ${formatDate(data.generatedAt)}_`, '');
+  lines.push(`_Generated ${fmt(data.generatedAt)}_`, '');
   lines.push(
     `**Summary:** ${data.summary.sessions} session(s), ` +
       `${data.summary.events} event(s), ${data.summary.artifacts} artifact record(s).`,
@@ -226,10 +230,7 @@ function buildMarkdown(data: ReportData, turnsPlaceholder = false): string {
     if (data.toolTimeline.length > 1) {
       lines.push('Tool timeline (each arrow is a switch):', '');
       for (const b of data.toolTimeline) {
-        const span =
-          b.from === b.to
-            ? formatDate(b.from)
-            : `${formatDate(b.from)} → ${formatDate(b.to)}`;
+        const span = b.from === b.to ? fmt(b.from) : `${fmt(b.from)} → ${fmt(b.to)}`;
         lines.push(`- **${toolLabel(b.tool)}** · ${span} · ${b.count} event(s)`);
       }
       lines.push('');
@@ -273,7 +274,7 @@ function fileHref(repoRelPath: string): string {
 
 /** Append one turn as readable Markdown (used for the canonical text export). */
 function turnMarkdown(lines: string[], turn: Turn): void {
-  const meta = `\`${formatDate(turn.prompt.timestamp)}\` · \`${toolLabel(turn.tool)}\``;
+  const meta = `\`${staticUtc(turn.prompt.timestamp)}\` · \`${toolLabel(turn.tool)}\``;
   lines.push(`**Prompt** · ${meta}`, '');
   lines.push(turn.prompt.text, '');
   for (const ai of turn.aiOutputs) {
@@ -296,16 +297,19 @@ function turnMarkdown(lines: string[], turn: Turn): void {
  * Render a report as a standalone HTML document. Most of the document is a
  * rendering of the Markdown returned by `renderMarkdown`; the "Prompts & AI
  * exchanges" section is rendered directly to interactive `<details>` cards
- * (which the Markdown subset can't express) and spliced in. No JavaScript: the
- * cards use native HTML disclosure, so the file stays self-contained and
- * printable.
+ * (which the Markdown subset can't express) and spliced in. The file stays a
+ * single self-contained document with no network calls; the only script is a
+ * small inline one that re-renders timestamps in the viewer's chosen timezone.
+ * Everything degrades gracefully without JavaScript: the cards use native HTML
+ * disclosure, and timestamps fall back to their static UTC text.
  */
 export function renderHtml(data: ReportData): string {
   const title = data.project ? `Showtail Report — ${data.project}` : 'Showtail Report';
-  const body = markdownToHtml(buildMarkdown(data, true)).replace(
-    `<p>${TURNS_PLACEHOLDER}</p>`,
-    turnsHtml(data),
-  );
+  const body = markdownToHtml(buildMarkdown(data, true))
+    .replace(`<p>${TURNS_PLACEHOLDER}</p>`, turnsHtml(data))
+    // Swap the timestamp tokens emitted in HTML mode for real <time> elements
+    // (the turn cards already embed <time> directly, so they carry no tokens).
+    .replace(TIME_TOKEN, (_m, iso: string) => timeTag(iso));
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -322,6 +326,27 @@ export function renderHtml(data: ReportData): string {
     max-width: 52rem;
     margin: 0 auto;
     padding: 2.5rem 1.5rem 4rem;
+  }
+  /* Sticky timezone selector bar (spans the body's horizontal padding). */
+  .st-tzbar {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    margin: -2.5rem -1.5rem 1.75rem;
+    padding: 0.55rem 1.5rem;
+    background: #f1f1f5;
+    border-bottom: 1px solid #e3e3e8;
+    font-size: 0.8rem;
+    color: #6b6b76;
+  }
+  .st-tzbar select {
+    font: inherit;
+    font-size: 0.8rem;
+    padding: 0.1rem 0.35rem;
+    border: 1px solid #c7c7d0;
+    border-radius: 0.25rem;
+    background: #fff;
+    color: #1b1b1f;
   }
   h1 { font-size: 1.9rem; margin: 0 0 0.25rem; }
   h2 {
@@ -494,6 +519,8 @@ export function renderHtml(data: ReportData): string {
   .code-lang + pre.codeblock { margin-top: 0; border-top-left-radius: 0; }
   @media (prefers-color-scheme: dark) {
     body { color: #e4e4ea; background: #18181b; }
+    .st-tzbar { background: #1f1f23; border-bottom-color: #34343a; color: #a0a0aa; }
+    .st-tzbar select { background: #2a2a30; color: #e4e4ea; border-color: #44444c; }
     h2 { border-bottom-color: #34343a; }
     code { background: #2a2a30; }
     em { color: #a0a0aa; }
@@ -529,7 +556,57 @@ export function renderHtml(data: ReportData): string {
 </style>
 </head>
 <body>
+<div class="st-tzbar">Times shown in <select id="st-tz" aria-label="Display timezone"></select></div>
 ${body}
+<script>
+(function () {
+  var sel = document.getElementById('st-tz');
+  if (!sel) return;
+  var local = 'UTC';
+  try { local = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'; } catch (e) {}
+  var zones = null;
+  try {
+    if (typeof Intl.supportedValuesOf === 'function') zones = Intl.supportedValuesOf('timeZone');
+  } catch (e) { zones = null; }
+  if (!zones || !zones.length) {
+    zones = ['UTC', 'America/Los_Angeles', 'America/Denver', 'America/Chicago',
+      'America/New_York', 'America/Sao_Paulo', 'Europe/London', 'Europe/Paris',
+      'Europe/Moscow', 'Asia/Dubai', 'Asia/Kolkata', 'Asia/Shanghai',
+      'Asia/Tokyo', 'Australia/Sydney'];
+  }
+  if (zones.indexOf(local) === -1) zones = [local].concat(zones);
+  var saved = null;
+  try { saved = localStorage.getItem('showtail-tz'); } catch (e) {}
+  var current = (saved && zones.indexOf(saved) !== -1) ? saved : local;
+  for (var i = 0; i < zones.length; i++) {
+    var o = document.createElement('option');
+    o.value = zones[i];
+    o.textContent = zones[i];
+    if (zones[i] === current) o.selected = true;
+    sel.appendChild(o);
+  }
+  function render(tz) {
+    var fmt;
+    try {
+      fmt = new Intl.DateTimeFormat('en-US', {
+        year: 'numeric', month: 'short', day: 'numeric',
+        hour: 'numeric', minute: '2-digit',
+        timeZoneName: 'short', timeZone: tz
+      });
+    } catch (e) { return; }
+    var nodes = document.querySelectorAll('time.st-time');
+    for (var i = 0; i < nodes.length; i++) {
+      var d = new Date(nodes[i].getAttribute('datetime'));
+      if (!isNaN(d.getTime())) nodes[i].textContent = fmt.format(d);
+    }
+  }
+  sel.addEventListener('change', function () {
+    try { localStorage.setItem('showtail-tz', sel.value); } catch (e) {}
+    render(sel.value);
+  });
+  render(current);
+})();
+</script>
 </body>
 </html>
 `;
@@ -552,7 +629,7 @@ function turnsHtml(data: ReportData): string {
       '<summary>' +
         `<span class="prompt-text">${escapeHtml(firstLine(turn.prompt.text))}</span>` +
         `<span class="badge badge--${escapeHtml(turn.tool)}">${escapeHtml(toolLabel(turn.tool))}</span>` +
-        `<span class="time">${escapeHtml(formatDate(turn.prompt.timestamp))}</span>` +
+        `<span class="time">${timeTag(turn.prompt.timestamp)}</span>` +
         `<span class="stat">${escapeHtml(stat)}</span>` +
         '</summary>',
     );
@@ -825,7 +902,39 @@ function inline(text: string): string {
     .replace(/(^|[\s(])_([^_]+)_(?=$|[\s.,)])/g, '$1<em>$2</em>');
 }
 
-function formatDate(iso: string): string {
-  // Keep it simple and locale-independent: trim milliseconds from ISO.
-  return iso.replace(/\.\d{3}Z$/, 'Z');
+/**
+ * A readable, locale-independent UTC rendering (e.g. `2026-06-20 21:30 UTC`).
+ * This is the static fallback shown wherever the timezone script can't run: the
+ * Markdown export, printing, and HTML viewed with JavaScript disabled.
+ */
+function staticUtc(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso.replace(/\.\d{3}Z$/, 'Z');
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return (
+    `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())} ` +
+    `${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())} UTC`
+  );
+}
+
+/**
+ * A placeholder for a timestamp in the Markdown-for-HTML stream. It uses no
+ * Markdown-special characters, so it survives `markdownToHtml` untouched and is
+ * swapped for a real `<time>` element by {@link renderHtml}. ISO instants never
+ * contain `@`, so the delimiter is unambiguous.
+ */
+function timeToken(iso: string): string {
+  return `SHOWTAILTIME@${iso}@`;
+}
+
+/** Matches {@link timeToken} output for the post-Markdown swap to `<time>` tags. */
+const TIME_TOKEN = /SHOWTAILTIME@([^@]+)@/g;
+
+/**
+ * A `<time>` element carrying the raw UTC instant plus a static UTC fallback.
+ * The inline timezone script re-renders its text in the viewer's chosen zone;
+ * with JavaScript off it still reads as a valid UTC timestamp.
+ */
+function timeTag(iso: string): string {
+  return `<time class="st-time" datetime="${escapeHtml(iso)}">${escapeHtml(staticUtc(iso))}</time>`;
 }
