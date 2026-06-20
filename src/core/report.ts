@@ -325,15 +325,11 @@ export function renderHtml(data: ReportData): string {
     background: #fbfbfd;
     max-width: 52rem;
     margin: 0 auto;
-    padding: 0 1.5rem 4rem;
+    padding: 2.5rem 1.5rem 4rem;
   }
-  /* Timezone selector bar: pinned to the top, spanning the content column's edges.
-     The bar (not body padding) provides the top spacing, so its normal-flow
-     position starts at the content-box top — which is what lets sticky pin it. */
+  /* Timezone selector bar: a strip at the top of the document, spanning the
+     content column's edges. It is not pinned, so it scrolls away with the page. */
   .st-tzbar {
-    position: sticky;
-    top: 0;
-    z-index: 10;
     margin: 0 -1.5rem 1.75rem;
     padding: 0.55rem 1.5rem;
     background: #f1f1f5;
