@@ -21,6 +21,12 @@ export interface HookPayload {
   source?: string;
   /** Stop: absolute path to the session transcript (Claude Code provides this). */
   transcript_path?: string;
+  /**
+   * The Claude Code session this hook fired for. Sent on every payload, stable
+   * across the session's lifetime; lets Showtail keep one trail per real
+   * session even when several run/restart concurrently.
+   */
+  session_id?: string;
 }
 
 /** Read all of stdin and parse it as JSON. Returns null if empty/invalid. */
@@ -39,6 +45,12 @@ export async function readHookPayload(): Promise<HookPayload | null> {
   } catch {
     return null;
   }
+}
+
+/** Extract the Claude Code session id, or undefined if absent/empty. */
+export function extractSessionId(payload: HookPayload | null): string | undefined {
+  const id = payload?.session_id;
+  return typeof id === 'string' && id.length > 0 ? id : undefined;
 }
 
 /** Extract the submitted prompt text, or null if absent/empty. */

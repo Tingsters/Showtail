@@ -3,6 +3,7 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
+  renameSync,
   statSync,
   writeFileSync,
   appendFileSync,
@@ -97,7 +98,12 @@ export function readJson<T>(file: string): T {
 
 export function writeJson(file: string, value: unknown): void {
   mkdirSync(dirname(file), { recursive: true });
-  writeFileSync(file, JSON.stringify(value, null, 2) + '\n', 'utf8');
+  // Write to a per-process temp file then rename — an atomic replace on the same
+  // volume — so a concurrent reader never sees a half-written file and two
+  // writers can't interleave bytes into one document.
+  const tmp = `${file}.${process.pid}.tmp`;
+  writeFileSync(tmp, JSON.stringify(value, null, 2) + '\n', 'utf8');
+  renameSync(tmp, file);
 }
 
 // --- JSONL helpers --------------------------------------------------------
@@ -146,6 +152,34 @@ export function writeState(paths: ShowtailPaths, state: State): void {
 /** Merge a partial update into state without clobbering the other fields. */
 export function updateState(paths: ShowtailPaths, partial: Partial<State>): void {
   writeState(paths, { ...readState(paths), ...partial });
+}
+
+/**
+ * Record the open turn (prompt id) for a Claude Code `session_id`, so a later
+ * edit from that same session attaches to the right prompt even when other
+ * sessions are interleaved. Read-modify-write of the per-session map; tolerant
+ * of a concurrent writer (worst case a live edit attributes to a slightly stale
+ * turn — the Stop-hook transcript pass remains the authority for replies).
+ */
+export function setTurnForClaudeSession(
+  paths: ShowtailPaths,
+  claudeSessionId: string,
+  promptId: string,
+): void {
+  const state = readState(paths);
+  const turnByClaudeSession = {
+    ...state.turnByClaudeSession,
+    [claudeSessionId]: promptId,
+  };
+  writeState(paths, { ...state, turnByClaudeSession });
+}
+
+/** The open turn (prompt id) recorded for a Claude `session_id`, if any. */
+export function turnForClaudeSession(
+  paths: ShowtailPaths,
+  claudeSessionId: string,
+): string | undefined {
+  return readState(paths).turnByClaudeSession?.[claudeSessionId];
 }
 
 export function readSessions(paths: ShowtailPaths): Session[] {
