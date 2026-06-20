@@ -32,7 +32,9 @@ export async function runStart(options: StartOptions = {}): Promise<void> {
   console.log('');
 
   if (anyHooks) {
-    console.log('Your prompts and edits are captured automatically — just work as usual.');
+    console.log(
+      'Your prompts and edits are captured automatically — just work as usual.',
+    );
     console.log('Add your own notes any time, for example:');
     console.log(LOG_EXAMPLES[1]);
   } else if (anyConnected) {
@@ -52,5 +54,7 @@ export async function runStart(options: StartOptions = {}): Promise<void> {
 
   console.log('');
   console.log('Check progress any time with `showtail status`.');
-  console.log('When you finish: `showtail end`, then `showtail report` to build your report.');
+  console.log(
+    'When you finish: `showtail end`, then `showtail report` to build your report.',
+  );
 }

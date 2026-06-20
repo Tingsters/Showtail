@@ -265,8 +265,16 @@ describe('hook command (end-to-end via stdin)', () => {
 
       // Two prompts logged live, before a single Stop captures both replies.
       // Each reply must land under its own prompt — not all on the last one.
-      run(dir, ['hook', 'user-prompt'], JSON.stringify({ cwd: dir, prompt: 'first task' }));
-      run(dir, ['hook', 'user-prompt'], JSON.stringify({ cwd: dir, prompt: 'second task' }));
+      run(
+        dir,
+        ['hook', 'user-prompt'],
+        JSON.stringify({ cwd: dir, prompt: 'first task' }),
+      );
+      run(
+        dir,
+        ['hook', 'user-prompt'],
+        JSON.stringify({ cwd: dir, prompt: 'second task' }),
+      );
 
       const lines = [
         {

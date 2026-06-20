@@ -79,7 +79,9 @@ program
 
 program
   .command('log')
-  .description('Record a prompt, decision, reflection, or other note in your current session.')
+  .description(
+    'Record a prompt, decision, reflection, or other note in your current session.',
+  )
   .helpGroup(G_CAPTURE)
   .requiredOption('-t, --type <type>', `event type (one of: ${eventTypeList()})`)
   .option('-x, --text <text>', 'the content (or pipe it via stdin)')
@@ -87,7 +89,10 @@ program
   .option('--tags <tags>', 'comma-separated tags')
   .option('--tool <tool>', 'tool this came through (e.g. claude-code, codex, cli)')
   .option('-s, --session <id>', 'log to a specific session id')
-  .option('--turn <id>', 'link this event to a prompt (e.g. an AI response to your prompt)')
+  .option(
+    '--turn <id>',
+    'link this event to a prompt (e.g. an AI response to your prompt)',
+  )
   .action(
     action(
       async (opts: {
@@ -136,14 +141,18 @@ program
 
 program
   .command('report')
-  .description('Generate a shareable report (HTML by default) summarizing your work trail.')
+  .description(
+    'Generate a shareable report (HTML by default) summarizing your work trail.',
+  )
   .helpGroup(G_REVIEW)
   .option('--format <format>', 'output format: html (default), md, or json', 'html')
   .action(action(async (opts: { format?: string }) => runReport(opts)));
 
 program
   .command('verify')
-  .description('Run integrity checks on your trail (config, journal, artifact hashes, report).')
+  .description(
+    'Run integrity checks on your trail (config, journal, artifact hashes, report).',
+  )
   .helpGroup(G_REVIEW)
   .action(
     action(async () => {
@@ -154,7 +163,9 @@ program
 
 program
   .command('trace <file>')
-  .description('Show every snapshot and related event (prompts, edits, decisions) for a file.')
+  .description(
+    'Show every snapshot and related event (prompts, edits, decisions) for a file.',
+  )
   .helpGroup(G_REVIEW)
   .option('--format <format>', 'output format: text (default) or json', 'text')
   .action(
@@ -223,7 +234,10 @@ program
   .helpGroup(G_CONNECT)
   .option('--user', 'install for your user, all projects (claude, codex)')
   .option('--project', 'install for this project only [default] (claude, codex)')
-  .option('--no-hooks', 'skip auto-capture hooks; log prompts/edits yourself via the skill (claude, codex)')
+  .option(
+    '--no-hooks',
+    'skip auto-capture hooks; log prompts/edits yourself via the skill (claude, codex)',
+  )
   .option('--no-extension', 'skip the VS Code extension guidance (copilot)')
   .option('--yes', 'enable Codex hooks in config.toml without prompting (codex)')
   .option('--force', 'overwrite existing instructions/skill (take the latest)')
@@ -262,7 +276,9 @@ program
 
 program
   .command('disconnect <tool>')
-  .description('Disconnect an AI tool (removes its instructions/skill and any auto-capture hooks).')
+  .description(
+    'Disconnect an AI tool (removes its instructions/skill and any auto-capture hooks).',
+  )
   .helpGroup(G_CONNECT)
   .option('--user', 'remove from your user scope (claude, codex)')
   .option('--project', 'remove from this project [default] (claude, codex)')
@@ -281,7 +297,9 @@ program
 
 const importCmd = program
   .command('import')
-  .description('Import conversations from other AI tools (ChatGPT, Gemini, Claude Code) into your trail.')
+  .description(
+    'Import conversations from other AI tools (ChatGPT, Gemini, Claude Code) into your trail.',
+  )
   .helpGroup(G_CONNECT);
 
 importCmd

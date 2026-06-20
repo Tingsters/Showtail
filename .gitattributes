@@ -1,0 +1,3 @@
+# Normalize line endings to LF on checkout so formatting/lint checks are
+# consistent across platforms (prevents CRLF from masking real prettier issues).
+* text=auto eol=lf
