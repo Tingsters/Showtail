@@ -20,8 +20,8 @@ tools.
 - **Commands**: `Showtail: Generate Report`, `Showtail: Status`.
 
 Code with **native Copilot** as usual — `.github/copilot-instructions.md` (written by
-`showtail connect copilot`) teaches it to log your prompt, decisions, and reflections in your
-voice, and the extension captures every save. Use `@showtail` for the Showtail commands.
+`showtail connect copilot`) teaches it to log your prompts, and the extension captures every
+save. Use `@showtail` for the Showtail commands.
 
 ## Requirements
 

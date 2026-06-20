@@ -7,10 +7,8 @@ export interface StartOptions {
   cwd?: string;
 }
 
-const LOG_EXAMPLES = [
-  '  showtail log --type prompt --text "How should I structure this?"',
-  '  showtail log --type decision --text "I chose the simpler approach."',
-];
+const LOG_PROMPT_EXAMPLE =
+  '  showtail log --type prompt --text "How should I structure this?"';
 
 /** Start a new work session and make it the active one for `log`. */
 export async function runStart(options: StartOptions = {}): Promise<void> {
@@ -35,12 +33,12 @@ export async function runStart(options: StartOptions = {}): Promise<void> {
     console.log(
       'Your prompts and edits are captured automatically — just work as usual.',
     );
-    console.log('Add your own notes any time, for example:');
-    console.log(LOG_EXAMPLES[1]);
   } else if (anyConnected) {
     console.log('A tool is connected, but auto-capture hooks are not active.');
-    console.log('Re-run `showtail connect <tool>` to enable them, or log as you work:');
-    for (const ex of LOG_EXAMPLES) console.log(ex);
+    console.log(
+      'Re-run `showtail connect <tool>` to enable them, or log prompts as you work:',
+    );
+    console.log(LOG_PROMPT_EXAMPLE);
   } else {
     console.log('No AI tools connected yet. Connect one so your prompts and edits are');
     console.log('captured automatically as you work:');
@@ -48,8 +46,8 @@ export async function runStart(options: StartOptions = {}): Promise<void> {
     console.log('  showtail connect copilot    (GitHub Copilot)');
     console.log('  showtail connect codex      (OpenAI Codex)');
     console.log('');
-    console.log('Prefer to log by hand? Record events as you go:');
-    for (const ex of LOG_EXAMPLES) console.log(ex);
+    console.log('Prefer to log by hand? Record your prompts as you go:');
+    console.log(LOG_PROMPT_EXAMPLE);
   }
 
   console.log('');

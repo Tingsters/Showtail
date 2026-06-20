@@ -4,17 +4,15 @@
 
 # Showtail
 
-**Show your work.** Showtail helps students keep a clear record of how they built a project: the prompts they used, the AI suggestions they accepted or rejected, the files they created, the choices they made, the tests they ran, and what they learned along the way.
+**Show your work.** Showtail keeps a clear record of how you built a project with AI: the prompts you sent and the files you changed along the way. It captures this **automatically** as you work, so the trail builds itself.
 
 Showtail writes that record to a plain `.showtail/` folder inside your project. There are no accounts, no cloud service, and no telemetry. It is just local files that you and your educator can open, review, and commit with the rest of your work.
 
 ```bash
-showtail init
-showtail start
-showtail log --type prompt   --text "How should I structure this parser?"
-showtail log --type decision --text "I chose the simpler regex approach after testing edge cases."
-showtail artifact src/parser.ts
-showtail report
+showtail init                 # set up Showtail in your project
+showtail connect claude       # turn on automatic capture for your AI tool
+# ...now just work — your prompts and edits are captured automatically...
+showtail report               # generate the report for your educator
 ```
 
 ---
@@ -22,14 +20,14 @@ showtail report
 ## What Showtail is
 
 - A **show your work tool** for coursework and projects.
-- A simple way to **document your process honestly**, including prompts, decisions, sources, tests, and reflections.
+- A **hands-free** way to document your process: your prompts and edits are captured automatically as you work with AI.
 - A **local, file-based trail** that is easy to commit to git and easy for a human to review.
-- **Evidence of your learning process**, showing how you worked and what you understood.
+- **Evidence of your process**, showing how you worked with AI to build the project.
 
 ## What Showtail is not
 
 - **Not an AI detector.** Showtail does not try to guess whether work was AI-generated.
-- **Not surveillance.** It only records what you choose to log, unless you enable one of the optional capture integrations.
+- **Not surveillance.** It only records your prompts and file edits while a capture integration is enabled — nothing else.
 - **Not a cloud service.** Nothing leaves your machine, and there are no external API calls.
 - **Not a grading tool.** It produces a report so people can review the work. It does not judge the work itself.
 
@@ -100,62 +98,39 @@ Put `dist/showtail` on your `PATH` if you want to run it as `showtail` from anyw
 # 1. Set up Showtail in your project. This creates the .showtail/ folder.
 showtail init --project "Week 5 Parser"
 
-# 2. Start a work session.
-showtail start
+# 2. Connect your AI tool so capture is automatic (one time).
+showtail connect claude         # or: copilot, codex
 
-# 3. Log your work as you go.
-showtail log --type prompt     --text "How do I structure this parser?"
-showtail log --type ai_output  --text "Accepted the AI's tokenizer outline, rewrote the loop myself."
-showtail log --type human_edit --text "Refactored the tokenizer by hand." --files src/parser.ts
-showtail log --type decision   --text "Chose regex over a hand-written scanner after testing edge cases."
-showtail log --type source     --text "Used class notes from week 3."
-showtail log --type test       --text "Added edge-case tests; all passing."
-showtail log --type reflection --text "I now understand how the tokenizer turns text into tokens."
-
-# 4. Record snapshots of important files. This stores a SHA-256 hash and git commit.
-showtail artifact src/parser.ts
-
-# 5. Check where you are: current session, event count, connected tools.
-showtail status
+# 3. Just work. Your prompts and the files your tool edits are captured for you.
+#    Check where you are any time:
+showtail status                 # current session, event count, connected tools
 showtail sessions               # list every session
+showtail trace src/parser.ts    # the full trail for one file
 
-# 6. See the full trail for a file.
-showtail trace src/parser.ts
-
-# 7. Generate a report for your educator.
+# 4. Generate a report for your educator.
 showtail report                 # HTML and Markdown in .showtail/reports/
 showtail report --format md     # Markdown only
 showtail report --format json   # Machine-readable JSON
 
-# 8. Check the trail before you submit, then close the session.
+# 5. Check the trail before you submit, then close the session.
 showtail verify
 showtail end
 ```
 
-### Logging longer notes
-
-If you omit `--text`, Showtail reads from standard input. This is useful for longer notes:
-
-```bash
-echo "I spent an hour debugging an off-by-one error in the scanner." | showtail log --type reflection
-```
+That's the whole flow — connect once, then work. (Not using a tool with hooks, e.g. ChatGPT?
+See [the integrations below](#claude-code-integration) for importing a conversation.)
 
 ---
 
 ## Event types
 
-Each `showtail log` command records one event. Supported `--type` values are:
+Showtail records three kinds of event, all captured automatically while you work:
 
-| Type | Use it for |
+| Type | What it is |
 | ---- | ---------- |
-| `prompt` | A prompt you gave an AI tool |
-| `ai_output` | An AI response you accepted or rejected |
-| `human_edit` | A change you made by hand |
-| `decision` | A choice you made and why you made it |
-| `reflection` | What you learned or now understand |
-| `source` | An outside source, such as notes, documentation, or a classmate |
-| `test` | A test or validation step you ran |
-| `artifact` | A file you created or changed, usually logged for you |
+| `prompt` | A prompt you sent to an AI tool |
+| `ai_output` | An AI response |
+| `artifact` | A file you created or changed |
 
 Every event records:
 
@@ -163,7 +138,7 @@ Every event records:
 - ISO `timestamp`
 - `type`
 - `text`
-- optional `files` and `tags`
+- optional `files`
 - the current git commit hash, if your project is a git repository
 - `actor: "student"`
 
@@ -186,8 +161,8 @@ showtail connect claude --project --no-hooks
 
 What this gives you:
 
-- **A Showtail skill** that teaches Claude to record the trail in the student's voice, including decisions, reflections, sources, tests, sessions, reports, and verification.
-- **Hooks**, enabled by default, that capture routine activity automatically.
+- **A Showtail skill** that helps Claude keep the trail tidy and offers to generate the report when you finish.
+- **Hooks**, enabled by default, that capture your prompts and file edits automatically.
 
 | When | Showtail does this |
 | ---- | ------------------ |
@@ -299,7 +274,7 @@ showtail connect copilot
 
 Copilot is more closed than Claude Code, so the integration works a little differently:
 
-- **Use native Copilot as usual.** This includes agent mode, inline suggestions, and chat. The `.github/copilot-instructions.md` file teaches Copilot to log prompts, decisions, and reflections in your voice through the Showtail CLI.
+- **Use native Copilot as usual.** This includes agent mode, inline suggestions, and chat. The `.github/copilot-instructions.md` file teaches Copilot to log your prompts through the Showtail CLI (Copilot has no capture hooks, so prompts are recorded this way).
 - **File edits are captured automatically.** The VS Code extension snapshots every file you save as an artifact tagged `github-copilot`.
 - **`@showtail` is the Showtail control surface in chat.** It is not a coding agent. Use it to record a prompt verbatim with `@showtail <your question>`, or to run Showtail commands such as `@showtail /report`, `/verify`, `/status`, and `/trace <file>`.
 - **For hands-on file edits, use native Copilot.** Saved edits are captured regardless.
@@ -352,8 +327,8 @@ showtail connect codex --project --no-hooks
 
 What this gives you:
 
-- **Instructions in `AGENTS.md`.** Showtail adds a fingerprinted, managed block that teaches Codex to record the trail in the student's voice. Your own text in `AGENTS.md` is never touched.
-- **Codex-tagged events.** Codex records decisions, reflections, sources, and tests with the `codex` tag.
+- **Instructions in `AGENTS.md`.** Showtail adds a fingerprinted, managed block that keeps the trail tidy. Your own text in `AGENTS.md` is never touched.
+- **Codex-tagged events.** Your prompts and edits are captured with the `codex` tag.
 - **Auto-capture hooks**, enabled by default unless you pass `--no-hooks`.
 
 | When | Showtail does this |
@@ -512,8 +487,8 @@ import it, then delete the link. The import itself stays local like everything e
 ## Example classroom workflow
 
 1. **Teacher:** Ask students to use Showtail for a project and commit `.showtail/` with their work.
-2. **Student:** Run `showtail init` and `showtail start` at the beginning of the project.
-3. **Student:** Log prompts, decisions, sources, tests, reflections, and important artifacts while working.
+2. **Student:** Run `showtail init`, then `showtail connect <tool>` to turn on automatic capture.
+3. **Student:** Work on the project as usual — prompts and edits are captured for you.
 4. **Student:** Before submitting, run `showtail report` and `showtail verify`, then commit everything, including `.showtail/`.
 5. **Teacher:** Open `.showtail/reports/report-*.html` in a browser to review the trail. The Markdown source sits beside it.
 6. **Teacher:** Run `showtail verify` or `showtail trace <file>` when a deeper review is needed.
@@ -566,10 +541,9 @@ _Suggested code — `src/parser.ts` (~6 line(s)):_
 
 ## Authorship statement
 
-> I recorded this trail while working on "Demo Project". It shows the prompts I used, the
-> decisions I made, the sources I drew on, the tests I ran, and my own reflections. I worked
-> through Claude Code and GitHub Copilot, and this trail records each. The work and
-> understanding represented here are my own.
+> I recorded this trail while working on "Demo Project". It shows the prompts I used and the
+> files I built along the way. I worked through Claude Code and GitHub Copilot, and this trail
+> records each. The work and understanding represented here are my own.
 ````
 
 ---
@@ -587,7 +561,7 @@ Showtail is privacy-first by design:
 
 Showtail is designed to be committed into your repository so your educator can review it. The default `.gitignore` does not ignore `.showtail/`.
 
-Before you commit, remember that your logged text, including prompts, reflections, and notes, becomes part of your git history. Do not put passwords, private personal information, or anything you would not want shared into your log text.
+Before you commit, remember that your captured prompts become part of your git history. Do not put passwords, private personal information, or anything you would not want shared into your prompts while capture is on.
 
 If a project is sensitive, you can add `.showtail/` to your `.gitignore` and share reports another way.
 
@@ -630,7 +604,7 @@ bun run build       # Compile a standalone binary to dist/showtail
 
 Showtail's MVP is a local CLI with a small core that can grow over time:
 
-- Completed: **Claude Code skill** to log prompts, decisions, and artifacts while you pair. See [Claude Code integration](#claude-code-integration).
+- Completed: **Claude Code skill + hooks** to capture your prompts and edits automatically while you pair. See [Claude Code integration](#claude-code-integration).
 - Completed: **Claude Code session import** to back-fill your trail from a session's on-disk transcript. See [Importing an existing Claude Code session](#importing-an-existing-claude-code-session).
 - Completed: **GitHub Copilot and VS Code extension** to capture Copilot prompts and saved edits in one cross-tool report. See [GitHub Copilot integration](#github-copilot-integration).
 - Completed: **ChatGPT import** to bring selected conversations into the same trail. See [ChatGPT integration](#chatgpt-integration).

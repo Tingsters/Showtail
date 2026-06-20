@@ -7,7 +7,6 @@ export interface LogOptions {
   type?: string;
   text?: string;
   files?: string;
-  tags?: string;
   tool?: string;
   session?: string;
   /** Link this event to a prompt's turn (e.g. an `ai_output` for a prompt). */
@@ -51,7 +50,7 @@ export async function runLog(options: LogOptions): Promise<void> {
   if (!text || text.length === 0) {
     throw new Error(
       'No text provided. Pass --text "..." or pipe text in via stdin.\n' +
-        'Example: showtail log --type reflection --text "I understand the tokenizer now."',
+        'Example: showtail log --type prompt --text "How do I structure this parser?"',
     );
   }
 
@@ -59,13 +58,11 @@ export async function runLog(options: LogOptions): Promise<void> {
 
   // Normalize any referenced files to clean repo-relative paths.
   const files = splitList(options.files).map((f) => toRepoRelative(paths.root, f));
-  const tags = splitList(options.tags);
 
   const { event, session } = await logEvent(paths, {
     type,
     text,
     files,
-    tags,
     tool: options.tool as Tool | undefined,
     sessionId: options.session,
     turnId: options.turn,

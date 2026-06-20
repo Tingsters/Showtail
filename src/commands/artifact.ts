@@ -5,18 +5,8 @@ import { requirePaths } from '../core/storage.ts';
 
 export interface ArtifactAddOptions {
   session?: string;
-  /** Comma-separated related event ids. */
-  events?: string;
   tool?: string;
   cwd?: string;
-}
-
-function splitList(value: string | undefined): string[] {
-  if (!value) return [];
-  return value
-    .split(',')
-    .map((s) => s.trim())
-    .filter((s) => s.length > 0);
 }
 
 /**
@@ -31,14 +21,12 @@ export async function runArtifactAdd(
 
   // Make sure there is a session to attach the timeline event to.
   const session = resolveOrStartSession(paths, options.session);
-  const eventIds = splitList(options.events);
 
   const tool = options.tool as Tool | undefined;
 
   const { artifact, created } = await addArtifact(paths, {
     filePath: file,
     sessionId: session.id,
-    eventIds,
     tool,
   });
 

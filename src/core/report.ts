@@ -173,9 +173,9 @@ function buildAuthorshipStatement(
         ', and this trail records each.'
       : '';
   return (
-    `I recorded this trail while working on ${name}. It shows the prompts I used, ` +
-    `the decisions I made, the sources I drew on, the tests I ran, and my own ` +
-    `reflections.${toolList} The work and understanding represented here are my own.`
+    `I recorded this trail while working on ${name}. It shows the prompts I used ` +
+    `and the files I built along the way.${toolList} The work and understanding ` +
+    `represented here are my own.`
   );
 }
 

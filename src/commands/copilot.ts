@@ -48,9 +48,9 @@ export async function runCopilotInstall(options: CopilotInstallOptions): Promise
 
   console.log('');
   console.log(
-    'These teach Copilot to record decisions, reflections, sources, and tests in',
+    'These teach Copilot to record your prompts (tagged github-copilot) as you pair;',
   );
-  console.log('the student’s voice (tagged github-copilot) as you pair.');
+  console.log('saved files are snapshotted by the VS Code extension.');
 
   if (options.extension !== false) {
     console.log('');

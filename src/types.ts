@@ -5,16 +5,15 @@
  * `.showtail/` stay simple for an educator (or a student) to open and read.
  */
 
-/** The kinds of events a student can record in their work trail. */
+/**
+ * The kinds of events in a work trail. Showtail captures these automatically —
+ * a student's prompts and the files their AI tool changes — so the trail builds
+ * itself while they work.
+ */
 export const EVENT_TYPES = [
   'prompt', // a prompt the student gave to an AI tool
-  'ai_output', // an AI response the student accepted or rejected
-  'human_edit', // a change the student made by hand
-  'decision', // a choice the student made and why
-  'reflection', // what the student learned / understands
-  'source', // an outside source they used (notes, docs, a friend)
-  'test', // a test or validation step they ran
-  'artifact', // a file they created or changed (usually auto-logged)
+  'ai_output', // an AI response
+  'artifact', // a file that was created or changed (usually auto-logged)
 ] as const;
 
 export type EventType = (typeof EVENT_TYPES)[number];
@@ -56,7 +55,7 @@ export interface Event {
   timestamp: string;
   /** What kind of event this is. */
   type: EventType;
-  /** The human-readable content (the prompt, the decision, the reflection...). */
+  /** The human-readable content (the prompt text, the AI's reply...). */
   text: string;
   /** Optional files this event relates to (repo-relative paths). */
   files?: string[];
@@ -96,8 +95,6 @@ export interface Artifact {
   sessionId?: string;
   /** Which tool the work flowed through when this snapshot was taken. */
   tool?: Tool;
-  /** Related event ids the student chose to link. */
-  eventIds?: string[];
   /** The prompt's turn this edit belongs to (see {@link Event.turnId}). */
   turnId?: string;
   /**
@@ -277,5 +274,4 @@ export interface JournalEntry {
   sha256?: string;
   diffHash?: string;
   diffLines?: number;
-  eventIds?: string[];
 }

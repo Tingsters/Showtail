@@ -78,7 +78,7 @@ function handleSessionStart(paths: ShowtailPaths): void {
   // SessionStart stdout is injected into Claude's context — keep it to one line.
   process.stdout.write(
     `Showtail is capturing this session's work trail (session ${session.id}). ` +
-      `Log decisions and reflections as you go; prompts and edits are captured automatically.\n`,
+      `Your prompts and edits are captured automatically — just work as usual.\n`,
   );
 }
 

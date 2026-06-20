@@ -18,11 +18,6 @@ interface TraceResult {
 const TYPE_LABELS: Record<string, string> = {
   prompt: 'Prompt',
   ai_output: 'AI output',
-  human_edit: 'Hand-written edit',
-  decision: 'Decision',
-  reflection: 'Reflection',
-  source: 'Source',
-  test: 'Test / validation',
   artifact: 'Artifact',
 };
 

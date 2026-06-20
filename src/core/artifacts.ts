@@ -23,7 +23,6 @@ export interface AddArtifactInput {
   /** A path as the user typed it (absolute or relative to cwd). */
   filePath: string;
   sessionId?: string;
-  eventIds?: string[];
   /** Which tool the work flowed through when this snapshot was taken. */
   tool?: Tool;
   /** The prompt's turn this edit belongs to. */
@@ -62,7 +61,6 @@ export function artifactFromEntry(entry: JournalEntry): Artifact {
   if (entry.gitCommit) artifact.gitCommit = entry.gitCommit;
   if (entry.conv) artifact.sessionId = entry.conv;
   if (entry.tool) artifact.tool = entry.tool;
-  if (entry.eventIds && entry.eventIds.length > 0) artifact.eventIds = entry.eventIds;
   if (entry.turn) artifact.turnId = entry.turn;
   if (entry.diffHash) artifact.diffHash = entry.diffHash;
   if (entry.diffLines !== undefined) artifact.diffLines = entry.diffLines;
@@ -119,7 +117,6 @@ export async function addArtifact(
   };
   if (gitCommit) entry.gitCommit = gitCommit;
   if (input.tool) entry.tool = input.tool;
-  if (input.eventIds && input.eventIds.length > 0) entry.eventIds = input.eventIds;
   if (input.turnId) entry.turn = input.turnId;
 
   // Capture the AI-suggested code into the object store (scrubbed, capped).

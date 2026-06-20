@@ -12,23 +12,18 @@ const validEvent: Event = {
 
 describe('schema', () => {
   test('isEventType accepts all supported types', () => {
-    for (const t of [
-      'prompt',
-      'ai_output',
-      'human_edit',
-      'decision',
-      'reflection',
-      'source',
-      'test',
-      'artifact',
-    ]) {
+    for (const t of ['prompt', 'ai_output', 'artifact']) {
       expect(isEventType(t)).toBe(true);
     }
   });
 
-  test('isEventType rejects unknown types', () => {
+  test('isEventType rejects unknown and removed types', () => {
     expect(isEventType('nonsense')).toBe(false);
     expect(isEventType('PROMPT')).toBe(false);
+    // The old manual "judgment" types are no longer supported.
+    for (const t of ['human_edit', 'decision', 'reflection', 'source', 'test']) {
+      expect(isEventType(t)).toBe(false);
+    }
   });
 
   test('a well-formed event has no issues', () => {

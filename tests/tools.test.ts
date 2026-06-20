@@ -28,8 +28,8 @@ describe('cross-tool attribution', () => {
       const paths = pathsForRoot(dir);
       const a = await logEvent(paths, { type: 'prompt', text: 'hi' });
       const b = await logEvent(paths, {
-        type: 'decision',
-        text: 'chose x',
+        type: 'ai_output',
+        text: 'here is x',
         tool: 'github-copilot',
       });
       expect(a.event.tool).toBe('cli');
@@ -80,7 +80,7 @@ describe('cross-tool attribution', () => {
       await runInit({ cwd: dir, project: 'Mixed' });
       const paths = pathsForRoot(dir);
       await logEvent(paths, { type: 'prompt', text: 'q1', tool: 'github-copilot' });
-      await logEvent(paths, { type: 'decision', text: 'd1', tool: 'claude-code' });
+      await logEvent(paths, { type: 'ai_output', text: 'd1', tool: 'claude-code' });
       await logEvent(paths, { type: 'prompt', text: 'q2', tool: 'codex' });
 
       const data = buildReportData(paths);

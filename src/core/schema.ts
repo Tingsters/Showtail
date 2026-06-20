@@ -1,4 +1,4 @@
-import { EVENT_TYPES, type Event, type EventType } from '../types.ts';
+import { EVENT_TYPES, type EventType } from '../types.ts';
 
 /** True if `value` is one of the supported event types. */
 export function isEventType(value: string): value is EventType {
@@ -64,9 +64,4 @@ export function validateEvent(value: unknown): ValidationIssue[] {
 
 function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((v) => typeof v === 'string');
-}
-
-/** Narrowing helper used after validation passes. */
-export function asEvent(value: unknown): Event {
-  return value as Event;
 }

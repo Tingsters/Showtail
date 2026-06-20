@@ -24,17 +24,8 @@ describe('report', () => {
 
       await logEvent(paths, { type: 'prompt', text: 'How do I structure this parser?' });
       await logEvent(paths, {
-        type: 'decision',
-        text: 'I chose the simpler regex approach.',
-      });
-      await logEvent(paths, {
-        type: 'reflection',
-        text: 'I understand the tokenizer now.',
-      });
-      await logEvent(paths, { type: 'source', text: 'Used class notes from week 3.' });
-      await logEvent(paths, {
-        type: 'test',
-        text: 'Ran the edge-case suite, all green.',
+        type: 'ai_output',
+        text: 'Split the input on newlines, then parse each row into fields.',
       });
 
       writeFileSync(join(dir, 'parser.ts'), 'export const parse = () => {};');

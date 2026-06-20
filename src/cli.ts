@@ -45,8 +45,8 @@ const program = new Command();
 program
   .name('showtail')
   .description(
-    'Show your work. Capture prompts, edits, decisions, artifacts, and reflections\n' +
-      'into a local, reviewable trail of how you built your project.',
+    'Show your work. Automatically capture the prompts you send to AI and the\n' +
+      'files you build together, into a local, reviewable trail of how you worked.',
   )
   .configureHelp({ sortSubcommands: false })
   .version(VERSION, '-v, --version');
@@ -79,14 +79,11 @@ program
 
 program
   .command('log')
-  .description(
-    'Record a prompt, decision, reflection, or other note in your current session.',
-  )
+  .description('Record an event (usually a prompt) in your current session.')
   .helpGroup(G_CAPTURE)
   .requiredOption('-t, --type <type>', `event type (one of: ${eventTypeList()})`)
   .option('-x, --text <text>', 'the content (or pipe it via stdin)')
   .option('-f, --files <files>', 'comma-separated related files')
-  .option('--tags <tags>', 'comma-separated tags')
   .option('--tool <tool>', 'tool this came through (e.g. claude-code, codex, cli)')
   .option('-s, --session <id>', 'log to a specific session id')
   .option(
@@ -99,7 +96,6 @@ program
         type?: string;
         text?: string;
         files?: string;
-        tags?: string;
         tool?: string;
         session?: string;
         turn?: string;
@@ -114,12 +110,10 @@ program
   )
   .helpGroup(G_CAPTURE)
   .option('-s, --session <id>', 'attach to a specific session id')
-  .option('-e, --events <ids>', 'comma-separated related event ids')
   .option('--tool <tool>', 'tool this came through (e.g. claude-code, codex, cli)')
   .action(
-    action(
-      async (file: string, opts: { session?: string; events?: string; tool?: string }) =>
-        runArtifactAdd(file, opts),
+    action(async (file: string, opts: { session?: string; tool?: string }) =>
+      runArtifactAdd(file, opts),
     ),
   );
 
@@ -163,9 +157,7 @@ program
 
 program
   .command('trace <file>')
-  .description(
-    'Show every snapshot and related event (prompts, edits, decisions) for a file.',
-  )
+  .description('Show every snapshot and related event (prompts, edits) for a file.')
   .helpGroup(G_REVIEW)
   .option('--format <format>', 'output format: text (default) or json', 'text')
   .action(

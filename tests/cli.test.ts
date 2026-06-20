@@ -45,13 +45,13 @@ describe('cli (end-to-end acceptance sequence)', () => {
       expect(r.code).toBe(0);
       expect(r.stdout).toContain('Logged prompt');
 
-      // log decision
+      // log an AI response
       r = run(dir, [
         'log',
         '--type',
-        'decision',
+        'ai_output',
         '--text',
-        'I implemented the CLI first',
+        'Start with the CLI entry point',
       ]);
       expect(r.code).toBe(0);
 
@@ -121,13 +121,13 @@ describe('cli (end-to-end acceptance sequence)', () => {
     const dir = makeTempDir();
     try {
       run(dir, ['init']);
-      const res = spawnSync(
-        process.execPath,
-        ['run', CLI, 'log', '--type', 'reflection'],
-        { cwd: dir, encoding: 'utf8', input: 'I learned how parsers tokenize input.' },
-      );
+      const res = spawnSync(process.execPath, ['run', CLI, 'log', '--type', 'prompt'], {
+        cwd: dir,
+        encoding: 'utf8',
+        input: 'How do parsers tokenize input?',
+      });
       expect(res.status).toBe(0);
-      expect(res.stdout).toContain('Logged reflection');
+      expect(res.stdout).toContain('Logged prompt');
     } finally {
       cleanup(dir);
     }
