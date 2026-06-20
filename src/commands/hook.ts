@@ -35,7 +35,10 @@ export interface HookOptions {
 }
 
 /** Don't snapshot Showtail/Claude/Codex's own bookkeeping files. */
-function isInternalPath(p: string): boolean {
+export function isInternalPath(p: string): boolean {
+  // .claude/worktrees/<name>/ holds isolated code checkouts (real work), so edits
+  // there must be captured; only the tools' own metadata dirs are skipped.
+  if (/(^|[\\/])\.claude[\\/]worktrees[\\/]/.test(p)) return false;
   return /(^|[\\/])\.(showtail|claude|codex)([\\/]|$)/.test(p);
 }
 

@@ -3,6 +3,7 @@ import { spawnSync } from 'node:child_process';
 import { readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { cleanup, makeTempDir, spawnEnv } from './helpers.ts';
+import { isInternalPath } from '../src/commands/hook.ts';
 
 /** Read the structured JSON report `showtail report --format json` wrote. */
 function readJsonReport(dir: string): any {
@@ -621,5 +622,28 @@ describe('hook command (end-to-end via stdin)', () => {
     } finally {
       cleanup(dir);
     }
+  });
+});
+
+describe('isInternalPath', () => {
+  test('skips the tools own bookkeeping dirs', () => {
+    expect(isInternalPath('C:\\Users\\me\\proj\\.showtail\\state.json')).toBe(true);
+    expect(isInternalPath('/home/me/proj/.claude/settings.json')).toBe(true);
+    expect(isInternalPath('/home/me/.codex/config.toml')).toBe(true);
+  });
+
+  test('captures code edited inside a .claude/worktrees/ checkout', () => {
+    // Real work happens in these isolated checkouts — they must not be skipped.
+    expect(
+      isInternalPath(
+        'C:\\Users\\me\\proj\\.claude\\worktrees\\feature-x\\src\\core\\report.ts',
+      ),
+    ).toBe(false);
+    expect(isInternalPath('/home/me/proj/.claude/worktrees/wt/src/foo.ts')).toBe(false);
+  });
+
+  test('does not skip ordinary project files', () => {
+    expect(isInternalPath('/home/me/proj/src/foo.ts')).toBe(false);
+    expect(isInternalPath('C:\\Users\\me\\proj\\src\\foo.ts')).toBe(false);
   });
 });

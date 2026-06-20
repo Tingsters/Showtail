@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
-import { writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { runInit } from '../src/commands/init.ts';
 import {
   addArtifact,
@@ -59,6 +59,33 @@ describe('artifacts', () => {
       expect(a.created).toBe(true);
       expect(b.created).toBe(false);
       expect(artifactsForPath(paths, 'essay.md').length).toBe(1);
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('a worktree edit is recorded relative to the worktree root', async () => {
+    const { dir, paths } = await initProject();
+    try {
+      // Edits made inside .claude/worktrees/<name>/ are real work, captured and
+      // recorded by their logical repo path — not the ephemeral worktree path.
+      const wtFile = join(dir, '.claude', 'worktrees', 'wt', 'src', 'foo.ts');
+      mkdirSync(dirname(wtFile), { recursive: true });
+      writeFileSync(wtFile, 'export const foo = 1;');
+      const { artifact } = await addArtifact(paths, {
+        filePath: wtFile,
+        diff: '+ export const foo = 1;',
+      });
+      expect(artifact.path).toBe('src/foo.ts');
+      expect(artifact.sha256).toMatch(/^[a-f0-9]{64}$/);
+      expect(artifact.diffHash).toBeTruthy();
+
+      // A normal (non-worktree) nested edit still records relative to the root.
+      const normal = join(dir, 'src', 'bar.ts');
+      mkdirSync(dirname(normal), { recursive: true });
+      writeFileSync(normal, 'export const bar = 2;');
+      const { artifact: n } = await addArtifact(paths, { filePath: normal });
+      expect(n.path).toBe('src/bar.ts');
     } finally {
       cleanup(dir);
     }

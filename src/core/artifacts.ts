@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import type { Artifact, JournalEntry, Tool } from '../types.ts';
 import { maybeCurrentCommit } from './git.ts';
 import { sha256OfFile } from './hash.ts';
@@ -17,6 +17,20 @@ import {
 
 /** Cap a single captured diff so one huge edit can't bloat the store. */
 const MAX_DIFF_BYTES = 64 * 1024;
+
+/**
+ * The display path to record for an edited file. A file edited inside a git
+ * worktree (`.claude/worktrees/<name>/…`) is recorded relative to that worktree
+ * root, so the report shows the logical repo path (e.g. `src/core/report.ts`)
+ * rather than the ephemeral worktree location. Everything else falls back to the
+ * normal trail-root-relative path.
+ */
+const WORKTREE_RE = /[\\/]\.claude[\\/]worktrees[\\/][^\\/]+[\\/](.+)$/;
+function reportRelativePath(root: string, abs: string): string {
+  const m = abs.match(WORKTREE_RE);
+  if (m) return m[1]!.split(/[\\/]/).join('/');
+  return toRepoRelative(root, abs);
+}
 
 /** Options when recording an artifact. */
 export interface AddArtifactInput {
@@ -84,13 +98,16 @@ export async function addArtifact(
   paths: ShowtailPaths,
   input: AddArtifactInput,
 ): Promise<AddArtifactResult> {
-  const repoPath = toRepoRelative(paths.root, input.filePath);
-  const absPath = join(paths.root, repoPath);
+  // Resolve the real on-disk file (absolute from the hook, or relative to the
+  // trail root) separately from the display path — a worktree edit lives outside
+  // the trail root, so we can't reconstruct it by re-joining root + repoPath.
+  const absPath = resolve(paths.root, input.filePath);
   if (!existsSync(absPath)) {
     throw new Error(
       `File not found: ${input.filePath}. Pass a path to a file in your project.`,
     );
   }
+  const repoPath = reportRelativePath(paths.root, absPath);
 
   const config = readConfig(paths);
   const sha256 = await sha256OfFile(absPath);
