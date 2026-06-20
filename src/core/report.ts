@@ -353,13 +353,14 @@ export function renderHtml(data: ReportData): string {
   .turn {
     border: 1px solid #e3e3e8;
     border-radius: 0.5rem;
-    margin: 0.6rem 0;
+    margin: 0.35rem 0;
     background: #fff;
     overflow: hidden;
   }
   .turn > summary {
     cursor: pointer;
-    padding: 0.7rem 0.9rem;
+    padding: 0.4rem 0.9rem;
+    line-height: 1.35;
     list-style: none;
     display: flex;
     flex-wrap: wrap;
