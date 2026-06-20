@@ -605,18 +605,18 @@ ${body}
     sel.appendChild(o);
   }
   function render(tz) {
-    var fmt;
+    // "20 Jun 2026, 14:30" — day-first, spelled month, 24-hour, no zone code
+    // (the bar above already states the zone). Two formatters so the join is
+    // exact regardless of locale quirks.
+    var dateFmt, timeFmt;
     try {
-      fmt = new Intl.DateTimeFormat('en-US', {
-        year: 'numeric', month: 'short', day: 'numeric',
-        hour: 'numeric', minute: '2-digit',
-        timeZoneName: 'short', timeZone: tz
-      });
+      dateFmt = new Intl.DateTimeFormat('en-GB', { day: '2-digit', month: 'short', year: 'numeric', timeZone: tz });
+      timeFmt = new Intl.DateTimeFormat('en-GB', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: tz });
     } catch (e) { return; }
     var nodes = document.querySelectorAll('time.st-time');
     for (var i = 0; i < nodes.length; i++) {
       var d = new Date(nodes[i].getAttribute('datetime'));
-      if (!isNaN(d.getTime())) nodes[i].textContent = fmt.format(d);
+      if (!isNaN(d.getTime())) nodes[i].textContent = dateFmt.format(d) + ', ' + timeFmt.format(d);
     }
   }
   sel.addEventListener('change', function () {
@@ -638,9 +638,11 @@ function turnsHtml(data: ReportData): string {
   for (const turn of data.turns) {
     const fileCount = turn.codeChanges.length;
     const lineCount = turn.codeChanges.reduce((n, c) => n + (c.diffLines ?? 0), 0);
+    // Only surface the edit count when there were edits; "no edits" is noise in
+    // a tight summary row.
     const stat =
       fileCount === 0
-        ? 'no edits'
+        ? ''
         : `edited ${fileCount} file(s)${lineCount ? `, ~${lineCount} line(s)` : ''}`;
 
     out.push('<details class="turn">');
@@ -649,7 +651,7 @@ function turnsHtml(data: ReportData): string {
         `<span class="prompt-text">${escapeHtml(firstLine(turn.prompt.text))}</span>` +
         `<span class="badge badge--${escapeHtml(turn.tool)}">${escapeHtml(toolLabel(turn.tool))}</span>` +
         `<span class="time">${timeTag(turn.prompt.timestamp)}</span>` +
-        `<span class="stat">${escapeHtml(stat)}</span>` +
+        (stat ? `<span class="stat">${escapeHtml(stat)}</span>` : '') +
         '</summary>',
     );
     out.push('<div class="turn-body">');
@@ -921,17 +923,34 @@ function inline(text: string): string {
     .replace(/(^|[\s(])_([^_]+)_(?=$|[\s.,)])/g, '$1<em>$2</em>');
 }
 
+const MONTHS = [
+  'Jan',
+  'Feb',
+  'Mar',
+  'Apr',
+  'May',
+  'Jun',
+  'Jul',
+  'Aug',
+  'Sep',
+  'Oct',
+  'Nov',
+  'Dec',
+];
+
 /**
- * A readable, locale-independent UTC rendering (e.g. `2026-06-20 21:30 UTC`).
- * This is the static fallback shown wherever the timezone script can't run: the
- * Markdown export, printing, and HTML viewed with JavaScript disabled.
+ * A readable, locale-independent UTC rendering (e.g. `20 Jun 2026, 21:30 UTC`).
+ * Mirrors the timezone script's `20 Jun 2026, 14:30` style but keeps the `UTC`
+ * marker, since this is the static fallback shown wherever that script can't run
+ * (the Markdown export, printing, and HTML viewed with JavaScript disabled) and
+ * there is no selector bar to state the zone.
  */
 function staticUtc(iso: string): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return iso.replace(/\.\d{3}Z$/, 'Z');
   const pad = (n: number) => String(n).padStart(2, '0');
   return (
-    `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())} ` +
+    `${pad(d.getUTCDate())} ${MONTHS[d.getUTCMonth()]} ${d.getUTCFullYear()}, ` +
     `${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())} UTC`
   );
 }

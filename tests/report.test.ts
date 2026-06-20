@@ -126,8 +126,8 @@ describe('report', () => {
       await logEvent(paths, { type: 'prompt', text: 'How do I structure this parser?' });
 
       const md = renderMarkdown(buildReportData(paths));
-      // Readable UTC like "2026-06-20 21:30 UTC", and no <time> tags or tokens.
-      expect(md).toMatch(/Generated \d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC/);
+      // Readable UTC like "20 Jun 2026, 21:30 UTC", and no <time> tags or tokens.
+      expect(md).toMatch(/Generated \d{2} [A-Z][a-z]{2} \d{4}, \d{2}:\d{2} UTC/);
       expect(md).not.toContain('<time');
       expect(md).not.toContain('SHOWTAILTIME@');
     } finally {
