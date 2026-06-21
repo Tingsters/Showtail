@@ -210,6 +210,108 @@ describe('parseClaudeTranscript — decisions', () => {
       cleanup(dir);
     }
   });
+
+  test('reads answers + notes from the structured toolUseResult', () => {
+    const dir = makeTempDir();
+    try {
+      const q1 = 'Which DB?';
+      const q2 = 'Pick features?';
+      const q3 = 'Anything else?';
+      const lines: unknown[] = [
+        {
+          type: 'user',
+          uuid: 'u1',
+          timestamp: '2026-06-10T10:00:00.000Z',
+          promptSource: 'typed',
+          sessionId: 'sess-1',
+          message: { role: 'user', content: 'Set it up.' },
+        },
+        {
+          type: 'assistant',
+          uuid: 'u2',
+          timestamp: '2026-06-10T10:01:00.000Z',
+          message: {
+            role: 'assistant',
+            model: 'claude-opus-4-8',
+            content: [
+              {
+                type: 'tool_use',
+                id: 'tq1',
+                name: 'AskUserQuestion',
+                input: {
+                  questions: [
+                    {
+                      question: q1,
+                      options: [{ label: 'SQLite' }, { label: 'Postgres' }],
+                    },
+                    {
+                      question: q2,
+                      multiSelect: true,
+                      options: [
+                        { label: 'Auth' },
+                        { label: 'Logging' },
+                        { label: 'Cache' },
+                      ],
+                    },
+                    { question: q3, options: [{ label: 'Yes' }, { label: 'No' }] },
+                  ],
+                },
+              },
+            ],
+          },
+        },
+        {
+          type: 'user',
+          uuid: 'u3',
+          timestamp: '2026-06-10T10:02:00.000Z',
+          // The structured result lives at the line level, alongside `message`.
+          toolUseResult: {
+            answers: {
+              [q1]: 'SQLite',
+              [q2]: 'Auth, Cache',
+              [q3]: '(notes only)',
+            },
+            annotations: {
+              [q1]: { notes: 'use the lightweight one' },
+              [q3]: { notes: 'please add docs' },
+            },
+          },
+          message: {
+            role: 'user',
+            content: [
+              {
+                type: 'tool_result',
+                tool_use_id: 'tq1',
+                content: 'Your questions have been answered: (see structured result).',
+              },
+            ],
+          },
+        },
+      ];
+      const transcript = lines.map((l) => JSON.stringify(l)).join('\n') + '\n';
+      const { messages } = parseClaudeTranscript(transcript, dir);
+      const d = messages.find((m) => m.role === 'decision')!;
+      expect(d).toBeDefined();
+
+      // Q1: preset chosen + note rendered.
+      expect(d.questions![0]!.options.find((o) => o.label === 'SQLite')!.chosen).toBe(
+        true,
+      );
+      expect(d.text).toContain('**SQLite** ✅');
+      expect(d.text).toContain('**Your note:** use the lightweight one');
+      // Q2: multi-select marks every chosen label.
+      const f = d.questions![1]!.options;
+      expect(f.find((o) => o.label === 'Auth')!.chosen).toBe(true);
+      expect(f.find((o) => o.label === 'Cache')!.chosen).toBe(true);
+      expect(f.find((o) => o.label === 'Logging')!.chosen).toBe(false);
+      // Q3: notes-only → no option, but the note is captured.
+      expect(d.questions![2]!.options.some((o) => o.chosen)).toBe(false);
+      expect(d.text).toContain('_(no option selected)_');
+      expect(d.text).toContain('**Your note:** please add docs');
+    } finally {
+      cleanup(dir);
+    }
+  });
 });
 
 describe('claude-code decision import', () => {

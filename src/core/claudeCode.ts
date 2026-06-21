@@ -43,6 +43,8 @@ export interface DecisionQuestion {
   answer?: string;
   /** True when the answer was typed in, matching no offered option. */
   custom: boolean;
+  /** A free-text note the student attached to this question, if any. */
+  note?: string;
 }
 
 /** A normalized message recovered from a transcript. */
@@ -305,10 +307,10 @@ export function readTranscriptFile(path: string, root: string): ClaudeTranscript
 export function parseClaudeTranscript(content: string, root: string): ClaudeTranscript {
   const messages: ClaudeMessage[] = [];
   let sessionId: string | undefined;
-  // The student's answers to AskUserQuestion arrive as `tool_result` blocks on
-  // *later* user lines, keyed by the question's `tool_use` id. Collect them as we
-  // go, then resolve each decision's answer in a second pass below.
-  const answersByToolId = new Map<string, string>();
+  // The student's answers to AskUserQuestion arrive on *later* user lines, keyed
+  // by the question's `tool_use` id. Collect them as we go, then resolve each
+  // decision's answer + note in a second pass below.
+  const answersByToolId = new Map<string, DecisionResult>();
 
   for (const rawLine of content.split(/\r?\n/)) {
     const line = rawLine.trim();
@@ -343,11 +345,11 @@ export function parseClaudeTranscript(content: string, root: string): ClaudeTran
     }
   }
 
-  // Second pass: pair each decision with the student's answer and (re-)render it.
+  // Second pass: pair each decision with the student's answer + note and re-render.
   for (const m of messages) {
     if (m.role !== 'decision' || !m.questions) continue;
-    const blob = answersByToolId.get(m.sourceId);
-    if (blob) resolveDecisionAnswers(m.questions, blob);
+    const rec = answersByToolId.get(m.sourceId);
+    if (rec) resolveDecisionAnswers(m.questions, rec);
     m.text = renderDecisionText(m.questions);
   }
 
@@ -473,15 +475,36 @@ function parseDecisionQuestions(input: unknown): DecisionQuestion[] {
   return out;
 }
 
+/**
+ * What a tool_result told us about an AskUserQuestion. `answers`/`annotations`
+ * come from the line's structured `toolUseResult` (present on a normal submit,
+ * keyed by question text); `blob` is the flat result string (the only source for
+ * a clarify/reject result, and for older transcripts without `toolUseResult`).
+ */
+interface DecisionResult {
+  blob?: string;
+  answers?: Record<string, unknown>;
+  annotations?: Record<string, unknown>;
+}
+
 /** Collect any AskUserQuestion answers carried on a user line's tool_result blocks. */
-function collectDecisionAnswers(obj: unknown, into: Map<string, string>): void {
+function collectDecisionAnswers(obj: unknown, into: Map<string, DecisionResult>): void {
   const content = asArray(prop(prop(obj, 'message'), 'content'));
   if (!content) return;
+  // The structured result sits at the line level, alongside `message`.
+  const tur = prop(obj, 'toolUseResult');
+  const answers = prop(tur, 'answers');
+  const annotations = prop(tur, 'annotations');
   for (const part of content) {
     if (prop(part, 'type') !== 'tool_result') continue;
     const id = asString(prop(part, 'tool_use_id'));
+    if (!id) continue;
+    const rec: DecisionResult = into.get(id) ?? {};
     const text = asString(prop(part, 'content'));
-    if (id && text) into.set(id, text);
+    if (text) rec.blob = text;
+    if (isObject(answers)) rec.answers = answers;
+    if (isObject(annotations)) rec.annotations = annotations;
+    into.set(id, rec);
   }
 }
 
@@ -523,15 +546,35 @@ function parseAnswerValues(blob: string): (string | undefined)[] {
     });
 }
 
-/** Fill in which option each question's student chose, or flag a typed answer. */
-function resolveDecisionAnswers(questions: DecisionQuestion[], blob: string): void {
-  const answers = parseAnswerValues(blob);
+/** A result value meaning the student picked nothing (e.g. left only a note). */
+function isNoSelection(answer: string | undefined): boolean {
+  return (
+    answer === undefined || answer === '(notes only)' || answer === '(No answer provided)'
+  );
+}
+
+/**
+ * Fill in, per question, the note the student attached and which option they
+ * chose (or flag a typed answer). Prefers the structured `toolUseResult` (keyed
+ * by question text, and the only place notes live); falls back to the positional
+ * flat-string parser for clarify/reject results and older transcripts.
+ */
+function resolveDecisionAnswers(
+  questions: DecisionQuestion[],
+  rec: DecisionResult,
+): void {
+  const structured = rec.answers !== undefined;
+  const positional = structured ? [] : parseAnswerValues(rec.blob ?? '');
   questions.forEach((q, i) => {
-    const answer = answers[i];
-    if (answer === undefined) return;
+    // Notes only ever arrive structured; capture before anything else.
+    const note = asString(prop(rec.annotations?.[q.question], 'notes'));
+    if (note) q.note = note;
+
+    const answer = structured ? asString(rec.answers?.[q.question]) : positional[i];
+    if (isNoSelection(answer)) return;
     q.answer = answer;
     // multiSelect answers are comma-joined labels; single answers match one label.
-    const picked = answer.split(/,\s*/);
+    const picked = answer!.split(/,\s*/);
     let matched = false;
     for (const o of q.options) {
       if (o.label === answer || picked.includes(o.label)) {
@@ -558,6 +601,8 @@ function renderDecisionText(questions: DecisionQuestion[]): string {
       // (e.g. they clarified instead). Say so rather than leaving it ambiguous.
       lines.push('', '_(no option selected)_');
     }
+    // A free-text note the student left, whether or not they also picked an option.
+    if (q.note) lines.push('', `**Your note:** ${q.note}`);
     blocks.push(lines.join('\n'));
   }
   return blocks.join('\n\n');
