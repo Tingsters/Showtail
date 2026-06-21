@@ -25,7 +25,7 @@ import { ShowtailError } from './core/errors.ts';
 import { NotInitializedError } from './core/storage.ts';
 import type { Tool } from './types.ts';
 
-const VERSION = '0.10.0';
+const VERSION = '0.10.1';
 
 // Help-group headings (Commander 14 renders commands grouped under these).
 const G_START = 'Get started:';

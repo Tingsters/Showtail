@@ -103,15 +103,22 @@ function turnsHtml(data: ReportData): string {
     });
     for (const code of turn.codeChanges) {
       const stat2 = code.diffLines ? ` (~${code.diffLines} line(s))` : '';
-      out.push('<details class="code">');
-      out.push(
-        '<summary>' +
-          `<a class="file-link" href="${escapeHtml(fileHref(code.path))}" ` +
-          'target="_blank" rel="noopener" onclick="event.stopPropagation()">' +
-          `${escapeHtml(code.path)}</a>${escapeHtml(stat2)}</summary>`,
-      );
-      if (code.diff) out.push(diffHtml(code.diff));
-      out.push('</details>');
+      const fileLink =
+        `<a class="file-link" href="${escapeHtml(fileHref(code.path))}" ` +
+        'target="_blank" rel="noopener" onclick="event.stopPropagation()">' +
+        `${escapeHtml(code.path)}</a>`;
+      if (code.diff) {
+        // A diff was captured — show it in an expandable card.
+        out.push('<details class="code">');
+        out.push(`<summary>${fileLink}${escapeHtml(stat2)}</summary>`);
+        out.push(diffHtml(code.diff));
+        out.push('</details>');
+      } else {
+        // No inline diff (e.g. a file snapshot with no suggested code, or a Codex
+        // shell edit). Render a plain file row — not an expander that opens to
+        // nothing. The file link still works.
+        out.push(`<div class="code code-file">${fileLink}${escapeHtml(stat2)}</div>`);
+      }
     }
 
     out.push('</div>'); // end .turn-body

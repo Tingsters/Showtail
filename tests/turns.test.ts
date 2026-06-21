@@ -49,6 +49,37 @@ describe('turns', () => {
     }
   });
 
+  test('a code change with no captured diff renders a plain file row, not an empty expander', async () => {
+    const dir = makeTempDir();
+    try {
+      await runInit({ cwd: dir });
+      const paths = pathsForRoot(dir);
+      const author = authorFor(paths);
+      startSession(author);
+
+      const { event: prompt } = await logEvent(author, {
+        type: 'prompt',
+        text: 'rename a constant',
+        tool: 'claude-code',
+      });
+      writeFileSync(join(dir, 'util.ts'), 'export const x = 1;');
+      // No `diff` — e.g. a Codex shell edit, or capture without suggested code.
+      await addArtifact(author, {
+        filePath: 'util.ts',
+        tool: 'claude-code',
+        turnId: prompt.id,
+      });
+
+      const html = renderHtml(buildReportData(paths));
+      expect(html).toContain('util.ts');
+      // Rendered as a plain row, not an expander that opens to nothing.
+      expect(html).toContain('class="code code-file"');
+      expect(html).not.toContain('<details class="code">');
+    } finally {
+      cleanup(dir);
+    }
+  });
+
   test('falls back to timestamp adjacency when turnId is absent', async () => {
     const dir = makeTempDir();
     try {

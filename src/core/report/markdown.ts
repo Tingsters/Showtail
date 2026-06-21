@@ -123,12 +123,13 @@ function turnMarkdown(lines: string[], turn: Turn, author?: string): void {
   }
   for (const code of turn.codeChanges) {
     const stat = code.diffLines ? ` (~${code.diffLines} line(s))` : '';
-    lines.push(
-      `_Suggested code — [\`${code.path}\`](${fileHref(code.path)})${stat}:_`,
-      '',
-    );
+    const link = `[\`${code.path}\`](${fileHref(code.path)})`;
     if (code.diff) {
+      lines.push(`_Suggested code — ${link}${stat}:_`, '');
       lines.push('```diff', code.diff, '```', '');
+    } else {
+      // No diff captured — name the changed file without promising code below it.
+      lines.push(`_Changed file — ${link}${stat}._`, '');
     }
   }
 }

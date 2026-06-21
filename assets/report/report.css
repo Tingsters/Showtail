@@ -151,6 +151,8 @@ blockquote {
 .prompt-block .ai-text { margin: 0.1rem 0 0; }
 .code { margin: 0.4rem 0; }
 .code > summary { cursor: pointer; font-size: 0.85rem; color: #3a3f6b; }
+/* A code change with no captured diff: a plain file row, no disclosure arrow. */
+.code-file { font-size: 0.85rem; color: #3a3f6b; }
 .file-link { color: #3a3f6b; text-decoration: none; font-weight: 600; }
 .file-link:hover { text-decoration: underline; }
 pre.diff {
