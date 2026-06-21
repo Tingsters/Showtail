@@ -48,11 +48,7 @@ export function currentSession(author: AuthorPaths): Session | null {
  * current-session pointer only when it points at *this* session, so closing one
  * session never disturbs a different concurrent one.
  */
-export function closeSession(
-  author: AuthorPaths,
-  sessionId: string,
-  at: string,
-): void {
+export function closeSession(author: AuthorPaths, sessionId: string, at: string): void {
   const sessions = readSessions(author);
   const session = sessions.find((s) => s.id === sessionId);
   if (session && !session.endedAt) {

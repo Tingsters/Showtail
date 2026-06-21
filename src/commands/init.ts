@@ -76,8 +76,7 @@ export async function ensureInitialized(
   // the trail sits at a plain working dir.
   const top = await gitToplevel(root);
   const git = top !== undefined;
-  const anchorKind: 'git' | 'cwd' =
-    git && resolve(top) === resolve(root) ? 'git' : 'cwd';
+  const anchorKind: 'git' | 'cwd' = git && resolve(top) === resolve(root) ? 'git' : 'cwd';
 
   const config: Config = {
     version: CONFIG_VERSION,
@@ -115,7 +114,11 @@ export async function runInit(options: InitOptions = {}): Promise<void> {
 
   if (existsSync(paths.config)) {
     if (options.json) {
-      emitJson({ created: false, root, anchorKind: readConfig(paths).anchorKind ?? null });
+      emitJson({
+        created: false,
+        root,
+        anchorKind: readConfig(paths).anchorKind ?? null,
+      });
       return;
     }
     console.log('Showtail is already set up here (.showtail/config.json exists).');
