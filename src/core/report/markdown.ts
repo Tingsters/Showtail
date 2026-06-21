@@ -24,7 +24,8 @@ export function fileHref(repoRelPath: string): string {
  */
 export function buildMarkdown(data: ReportData, turnsPlaceholder = false): string {
   const lines: string[] = [];
-  const base = data.project ? `Showtail Report — ${data.project}` : 'Showtail Report';
+  // The subject is always present (override → project name → folder name).
+  const base = `Showtail Report — ${data.displayName}`;
   // A per-student report names whose work it is; the team report doesn't.
   const title = data.scope ? `${base} — ${data.scope.name}` : base;
 

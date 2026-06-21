@@ -86,7 +86,10 @@ program
   .command('init')
   .description('Set up Showtail in this project (creates the .showtail/ folder).')
   .helpGroup(G_START)
-  .option('-p, --project <name>', 'a name for this project')
+  .option(
+    '-p, --project <name>',
+    "set or update this project's name (shown in report titles)",
+  )
   .option('--json', 'output machine-readable JSON')
   .action(
     action(async (opts: { project?: string; json?: boolean }) =>
@@ -204,6 +207,7 @@ program
   .option('--open', 'open the generated report in your default app')
   .option('--author <slug>', 'generate only this contributor’s report')
   .option('--team', 'generate only the combined team report')
+  .option('--title <text>', 'name shown in the report title (overrides the project name)')
   .option('--json', 'output machine-readable JSON (the written paths + summary)')
   .action(
     action(
@@ -212,6 +216,7 @@ program
         open?: boolean;
         author?: string;
         team?: boolean;
+        title?: string;
         json?: boolean;
       }) => runReport(opts),
     ),

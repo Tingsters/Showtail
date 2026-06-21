@@ -9,7 +9,7 @@ import {
   CONFIG_VERSION,
   pathsForRoot,
   readConfig,
-  writeJson,
+  writeConfig,
   writeState,
   type ShowtailPaths,
 } from '../core/storage.ts';
@@ -92,7 +92,7 @@ export async function ensureInitialized(
   };
   if (options.project) config.project = options.project;
 
-  writeJson(paths.config, config);
+  writeConfig(paths, config);
   if (!existsSync(paths.state)) {
     writeState(paths, { currentSessionId: null, currentPromptId: null });
   }
@@ -113,15 +113,30 @@ export async function runInit(options: InitOptions = {}): Promise<void> {
   const paths = pathsForRoot(root);
 
   if (existsSync(paths.config)) {
+    // The one mutation a re-run performs: set/update the project name. (init is
+    // intentionally the single project-config entry point — no separate command.)
+    let projectUpdated: string | null = null;
+    if (options.project) {
+      const config = readConfig(paths);
+      if (config.project !== options.project) {
+        config.project = options.project;
+        writeConfig(paths, config);
+      }
+      projectUpdated = options.project;
+    }
+
     if (options.json) {
+      const cfg = readConfig(paths);
       emitJson({
         created: false,
         root,
-        anchorKind: readConfig(paths).anchorKind ?? null,
+        anchorKind: cfg.anchorKind ?? null,
+        project: cfg.project ?? null,
       });
       return;
     }
     console.log('Showtail is already set up here (.showtail/config.json exists).');
+    if (projectUpdated) console.log(`Updated project name to "${projectUpdated}".`);
     // Still make sure *this* student has an author folder — a teammate who just
     // cloned the repo runs `init` to register themselves without re-creating it.
     const author = await establishIdentity(paths, { cwd: root, allowPrompt: true });

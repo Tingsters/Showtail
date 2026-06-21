@@ -16,6 +16,8 @@ export interface ReportOptions {
   author?: string;
   /** Generate only the combined team report. */
   team?: boolean;
+  /** Override the descriptive name shown in the title (beats the project name). */
+  title?: string;
   /** Emit machine-readable JSON (the written paths + summary) instead of prose. */
   json?: boolean;
 }
@@ -73,7 +75,7 @@ export async function runReport(options: ReportOptions): Promise<void> {
   let teamData: ReportData | undefined;
 
   for (const target of targets) {
-    const data = buildReportData(paths, target.scope);
+    const data = buildReportData(paths, { ...target.scope, title: options.title });
     if (target.key === 'team') teamData = data;
     written.push(writeOneReport(paths.reportsDir, target.key, stamp, data, options));
   }

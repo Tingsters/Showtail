@@ -19,7 +19,8 @@ import { TIME_TOKEN, timeTag } from './time.ts';
  * disclosure, and timestamps fall back to their static UTC text.
  */
 export function renderHtml(data: ReportData): string {
-  const title = data.project ? `Showtail Report — ${data.project}` : 'Showtail Report';
+  const base = `Showtail Report — ${data.displayName}`;
+  const title = data.scope ? `${base} — ${data.scope.name}` : base;
   const body = markdownToHtml(buildMarkdown(data, true))
     // Swap the timestamp tokens emitted in HTML mode for real <time> elements
     // FIRST, before splicing in the turn cards. The cards embed <time> directly

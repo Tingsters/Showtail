@@ -246,6 +246,11 @@ export function readConfig(paths: ShowtailPaths): Config {
   return readJson<Config>(paths.config);
 }
 
+/** Write the project config (atomic temp+rename, symmetric with {@link readConfig}). */
+export function writeConfig(paths: ShowtailPaths, config: Config): void {
+  writeJson(paths.config, config);
+}
+
 export function readState(paths: ShowtailPaths): State {
   if (!existsSync(paths.state)) return { currentSessionId: null };
   return readJson<State>(paths.state);

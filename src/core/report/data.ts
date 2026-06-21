@@ -1,3 +1,4 @@
+import { basename } from 'node:path';
 import type {
   Artifact,
   Contributor,
@@ -34,6 +35,8 @@ export function toolLabel(tool: Tool): string {
 export interface ReportScope {
   /** Limit the report to a single author (per-student report). Omit for the team report. */
   authorSlug?: string;
+  /** Override the descriptive name in the title for this report (beats config.project). */
+  title?: string;
 }
 
 /**
@@ -77,8 +80,14 @@ export function buildReportData(
   );
   const scopeName = onlySlug ? (nameBySlug.get(onlySlug) ?? onlySlug) : null;
 
+  // The descriptive subject for the title: an explicit override, else the
+  // configured project name, else the repo/folder name — so a report is never
+  // a bare "Showtail Report" even when no project name was ever set.
+  const displayName = scope.title ?? config.project ?? basename(paths.root);
+
   return {
     project: config.project ?? null,
+    displayName,
     generatedAt: new Date().toISOString(),
     scope: onlySlug ? { slug: onlySlug, name: scopeName ?? onlySlug } : null,
     summary: {
@@ -91,7 +100,7 @@ export function buildReportData(
     toolTimeline: buildToolBlocks(sorted),
     turns: buildTurns(withSession, artifacts, paths),
     redactionCount: countRedactions(paths, slugsInScope),
-    authorship: buildAuthorshipStatement(config.project, contributors, scopeName),
+    authorship: buildAuthorshipStatement(displayName, contributors, scopeName),
   };
 }
 
@@ -237,11 +246,11 @@ export function buildToolBlocks(sortedEvents: Event[]): ToolBlock[] {
  * contributor and attests the work is the team's own.
  */
 function buildAuthorshipStatement(
-  project: string | undefined,
+  displayName: string,
   contributors: Contributor[],
   scopeName: string | null,
 ): string {
-  const name = project ? `"${project}"` : 'this project';
+  const name = `"${displayName}"`;
 
   if (scopeName) {
     return (

@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { runInit } from '../src/commands/init.ts';
 import { addArtifact } from '../src/core/artifacts.ts';
 import { logEvent } from '../src/core/events.ts';
@@ -11,7 +11,7 @@ import {
   renderMarkdown,
 } from '../src/core/report.ts';
 import { startSession } from '../src/core/sessions.ts';
-import { pathsForRoot } from '../src/core/storage.ts';
+import { pathsForRoot, readConfig } from '../src/core/storage.ts';
 import { authorFor, cleanup, makeTempDir } from './helpers.ts';
 
 describe('report', () => {
@@ -168,7 +168,8 @@ describe('report', () => {
       const paths = pathsForRoot(dir);
       const html = renderHtml(buildReportData(paths));
       expect(html.toLowerCase().startsWith('<!doctype html')).toBe(true);
-      expect(html).toContain('<h1>Showtail Report</h1>');
+      // With no project name, the title falls back to the folder name.
+      expect(html).toContain('<h1>Showtail Report —');
       expect(html).toContain('No prompts recorded.');
     } finally {
       cleanup(dir);
@@ -204,6 +205,50 @@ describe('report', () => {
       // Spaces (and other unsafe chars) are URL-encoded per segment.
       expect(html).toContain('href="../../my%20file.ts"');
       expect(md).toContain('](../../my%20file.ts)');
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('title falls back to the folder name when no project is set', async () => {
+    const dir = makeTempDir();
+    try {
+      await runInit({ cwd: dir });
+      const data = buildReportData(pathsForRoot(dir));
+      expect(data.project).toBeNull(); // nothing configured
+      expect(data.displayName).toBe(basename(dir)); // resolved fallback
+      expect(renderMarkdown(data)).toContain(`# Showtail Report — ${basename(dir)}`);
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('--title overrides the configured project name for one report', async () => {
+    const dir = makeTempDir();
+    try {
+      await runInit({ cwd: dir, project: 'Configured Name' });
+      const data = buildReportData(pathsForRoot(dir), { title: 'One-off Title' });
+      expect(data.project).toBe('Configured Name'); // configured value preserved
+      expect(data.displayName).toBe('One-off Title'); // override wins
+      expect(renderMarkdown(data)).toContain('# Showtail Report — One-off Title');
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('init --project sets/updates the name on an already-initialized project', async () => {
+    const dir = makeTempDir();
+    try {
+      await runInit({ cwd: dir }); // no project name
+      const paths = pathsForRoot(dir);
+      expect(readConfig(paths).project).toBeUndefined();
+
+      await runInit({ cwd: dir, project: 'Week 5 Parser' }); // re-run sets it
+      expect(readConfig(paths).project).toBe('Week 5 Parser');
+      expect(buildReportData(paths).displayName).toBe('Week 5 Parser');
+
+      await runInit({ cwd: dir, project: 'Week 6 Parser' }); // re-run updates it
+      expect(readConfig(paths).project).toBe('Week 6 Parser');
     } finally {
       cleanup(dir);
     }

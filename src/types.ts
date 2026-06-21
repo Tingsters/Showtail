@@ -238,7 +238,13 @@ export interface Contributor {
 
 /** The structured (JSON) form of a generated report. */
 export interface ReportData {
+  /** The *configured* project name (from `config.project`), or null if unset. */
   project: string | null;
+  /**
+   * The descriptive subject shown in the report title, always present. Resolved
+   * as: an explicit `--title` override → `config.project` → the repo/folder name.
+   */
+  displayName: string;
   generatedAt: string;
   /**
    * The single author this report is scoped to, or null for the combined team
