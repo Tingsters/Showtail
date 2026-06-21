@@ -103,11 +103,9 @@ function turnsHtml(data: ReportData): string {
     }
     // AI replies, decisions, and code changes interleaved in the order they
     // happened. The card already means "this prompt → its reply", so a reply
-    // needs no label; consecutive replies are separated by a thin divider.
-    let prevKind: string | undefined;
+    // needs no label; consecutive replies are separated by plain spacing.
     for (const item of turnTimeline(turn)) {
       if (item.kind === 'ai') {
-        if (prevKind === 'ai') out.push('<hr class="ai-sep">');
         out.push(`<div class="ai-text">${renderRichText(item.event.text)}</div>`);
       } else if (item.kind === 'decision') {
         // The student's mid-exchange choice, labelled so it's never mistaken for
@@ -138,7 +136,6 @@ function turnsHtml(data: ReportData): string {
           out.push(`<div class="code code-file">${fileLink}${escapeHtml(stat2)}</div>`);
         }
       }
-      prevKind = item.kind;
     }
 
     out.push('</div>'); // end .turn-body
