@@ -1,13 +1,14 @@
 import { describe, expect, test } from 'bun:test';
-import { writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseClaudeTranscript } from '../src/core/claudeCode.ts';
-import { readAllEvents } from '../src/core/events.ts';
-import { buildReportData, renderMarkdown } from '../src/core/report.ts';
+import { logEvent, readAllEvents } from '../src/core/events.ts';
+import { addArtifact } from '../src/core/artifacts.ts';
+import { buildReportData, renderHtml, renderMarkdown } from '../src/core/report.ts';
 import { runInit } from '../src/commands/init.ts';
 import { runImportClaudeCode } from '../src/commands/importClaude.ts';
 import { pathsForRoot } from '../src/core/storage.ts';
-import { cleanup, makeTempDir } from './helpers.ts';
+import { authorFor, cleanup, makeTempDir } from './helpers.ts';
 
 /**
  * A transcript where Claude pauses with `AskUserQuestion` (two questions in one
@@ -173,6 +174,59 @@ describe('claude-code decision import', () => {
       expect(md).toContain('🔀 **Decision**');
       expect(md).toContain('**JWT** ✅');
       expect(md).toContain('1 decision(s)'); // summary line
+
+      // The collapsed HTML card surfaces the decision count in its stat (under the
+      // date), so a reviewer sees a decision happened without expanding the card.
+      const html = renderHtml(data);
+      const stat = /<span class="stat">([^<]*)<\/span>/.exec(html)?.[1] ?? '';
+      expect(stat).toContain('1 decision(s)');
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('a turn with both an edit and a decision shows both in the card stat', async () => {
+    const dir = makeTempDir();
+    try {
+      await runInit({ cwd: dir });
+      const paths = pathsForRoot(dir);
+      const author = authorFor(paths);
+
+      // A real file to snapshot — live capture records edits as file snapshots.
+      mkdirSync(join(dir, 'src'), { recursive: true });
+      writeFileSync(join(dir, 'src', 'app.ts'), 'export const db = "sqlite";\n', 'utf8');
+
+      // One exchange (as live capture builds it): a prompt, then a file snapshot
+      // AND a decision, both linked to that prompt's turn.
+      const { event: prompt } = await logEvent(author, {
+        type: 'prompt',
+        text: 'Set up the database.',
+        tool: 'claude-code',
+      });
+      await addArtifact(author, {
+        filePath: join(dir, 'src', 'app.ts'),
+        tool: 'claude-code',
+        turnId: prompt.id,
+      });
+      await logEvent(author, {
+        type: 'decision',
+        text: '**Claude asked:** Which DB?\n\n- **SQLite** ✅ _(your choice)_\n- Postgres',
+        tool: 'claude-code',
+        turnId: prompt.id,
+      });
+
+      const data = buildReportData(paths);
+      const turn = data.turns.find(
+        (t) => t.codeChanges.length > 0 && t.decisions.length > 0,
+      );
+      expect(turn).toBeDefined(); // the edit and the decision share one turn
+
+      const html = renderHtml(data);
+      const stat = /<span class="stat">([^<]*)<\/span>/.exec(html)?.[1] ?? '';
+      // Both counts appear on the one stat line, joined — no conflict.
+      expect(stat).toContain('edited 1 file(s)');
+      expect(stat).toContain('1 decision(s)');
+      expect(stat).toContain(' · ');
     } finally {
       cleanup(dir);
     }

@@ -58,12 +58,18 @@ function turnsHtml(data: ReportData): string {
   for (const turn of data.turns) {
     const fileCount = turn.codeChanges.length;
     const lineCount = turn.codeChanges.reduce((n, c) => n + (c.diffLines ?? 0), 0);
-    // Only surface the edit count when there were edits; "no edits" is noise in
-    // a tight summary row.
-    const stat =
-      fileCount === 0
-        ? ''
-        : `edited ${fileCount} file(s)${lineCount ? `, ~${lineCount} line(s)` : ''}`;
+    const decisionCount = turn.decisions.length;
+    // Surface what happened in this exchange as a compact stat under the date, so
+    // a reviewer can see edits and decisions without expanding the card. Each part
+    // appears only when it occurred; edits and decisions coexist (joined by " · ").
+    const statParts: string[] = [];
+    if (fileCount > 0) {
+      statParts.push(
+        `edited ${fileCount} file(s)${lineCount ? `, ~${lineCount} line(s)` : ''}`,
+      );
+    }
+    if (decisionCount > 0) statParts.push(`${decisionCount} decision(s)`);
+    const stat = statParts.join(' · ');
     const authorName = showAuthor
       ? (nameBySlug.get(turn.actorSlug) ?? turn.actorSlug)
       : '';
