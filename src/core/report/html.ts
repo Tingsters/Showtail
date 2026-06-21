@@ -65,9 +65,13 @@ function turnsHtml(data: ReportData): string {
     out.push(
       '<summary>' +
         `<span class="prompt-text">${escapeHtml(firstLine(turn.prompt.text))}</span>` +
+        '<span class="meta">' +
+        '<span class="meta-top">' +
         `<span class="badge badge--${escapeHtml(turn.tool)}">${escapeHtml(toolLabel(turn.tool))}</span>` +
         `<span class="time">${timeTag(turn.prompt.timestamp)}</span>` +
+        '</span>' +
         (stat ? `<span class="stat">${escapeHtml(stat)}</span>` : '') +
+        '</span>' +
         '</summary>',
     );
     out.push('<div class="turn-body">');
