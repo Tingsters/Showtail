@@ -1,5 +1,5 @@
 import type { ReportData, Turn } from '../../types.ts';
-import { toolLabel } from './data.ts';
+import { toolLabel, turnTimeline } from './data.ts';
 import { staticUtc, timeToken } from './time.ts';
 
 /** A unique token swapped for the interactive turns HTML after Markdown→HTML. */
@@ -120,23 +120,25 @@ function turnMarkdown(lines: string[], turn: Turn, author?: string): void {
   const meta = `\`${staticUtc(turn.prompt.timestamp)}\` · \`${toolLabel(turn.tool)}\`${who}`;
   lines.push(`**Prompt** · ${meta}`, '');
   lines.push(turn.prompt.text, '');
-  for (const ai of turn.aiOutputs) {
-    lines.push('_AI response:_', '');
-    lines.push(ai.text, '');
-  }
-  for (const decision of turn.decisions) {
-    lines.push('🔀 **Decision** · _you chose from the options Claude offered_', '');
-    lines.push(decision.text, '');
-  }
-  for (const code of turn.codeChanges) {
-    const stat = code.diffLines ? ` (~${code.diffLines} line(s))` : '';
-    const link = `[\`${code.path}\`](${fileHref(code.path)})`;
-    if (code.diff) {
-      lines.push(`_Suggested code — ${link}${stat}:_`, '');
-      lines.push('```diff', code.diff, '```', '');
+  // AI replies, decisions, and code changes interleaved in the order they happened.
+  for (const item of turnTimeline(turn)) {
+    if (item.kind === 'ai') {
+      lines.push('_AI response:_', '');
+      lines.push(item.event.text, '');
+    } else if (item.kind === 'decision') {
+      lines.push('🔀 **Decision** · _you chose from the options Claude offered_', '');
+      lines.push(item.event.text, '');
     } else {
-      // No diff captured — name the changed file without promising code below it.
-      lines.push(`_Changed file — ${link}${stat}._`, '');
+      const code = item.change;
+      const stat = code.diffLines ? ` (~${code.diffLines} line(s))` : '';
+      const link = `[\`${code.path}\`](${fileHref(code.path)})`;
+      if (code.diff) {
+        lines.push(`_Suggested code — ${link}${stat}:_`, '');
+        lines.push('```diff', code.diff, '```', '');
+      } else {
+        // No diff captured — name the changed file without promising code below it.
+        lines.push(`_Changed file — ${link}${stat}._`, '');
+      }
     }
   }
 }

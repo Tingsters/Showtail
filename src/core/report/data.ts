@@ -8,6 +8,7 @@ import type {
   ToolBlock,
   ToolUsage,
   Turn,
+  TurnCodeChange,
 } from '../../types.ts';
 import { TOOL_LABELS } from '../../types.ts';
 import { readAllArtifacts } from '../artifacts.ts';
@@ -218,6 +219,38 @@ export function buildTurns(
   }
 
   return turns;
+}
+
+/** One rendered item inside a turn, tagged for the renderer. */
+export type TurnItem =
+  | { kind: 'ai'; event: Event }
+  | { kind: 'decision'; event: Event }
+  | { kind: 'code'; change: TurnCodeChange };
+
+/**
+ * A turn's AI replies, code changes, and decisions merged into one chronological
+ * sequence, so the report interleaves them as they happened instead of grouping
+ * by type. Stable-sorted by timestamp; items sharing a timestamp (text plus a
+ * tool call in one message) keep their insertion order — AI text, then code,
+ * then decision — so text reads before the tools it introduced.
+ */
+export function turnTimeline(turn: Turn): TurnItem[] {
+  const dated: { at: string; item: TurnItem }[] = [
+    ...turn.aiOutputs.map((event) => ({
+      at: event.timestamp,
+      item: { kind: 'ai', event } as TurnItem,
+    })),
+    ...turn.codeChanges.map((change) => ({
+      at: change.timestamp,
+      item: { kind: 'code', change } as TurnItem,
+    })),
+    ...turn.decisions.map((event) => ({
+      at: event.timestamp,
+      item: { kind: 'decision', event } as TurnItem,
+    })),
+  ];
+  dated.sort((a, b) => a.at.localeCompare(b.at));
+  return dated.map((d) => d.item);
 }
 
 /** Count events per tool, busiest first. */

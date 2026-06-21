@@ -3,7 +3,7 @@ import TIMEZONE_JS from '../../../assets/report/timezone.js' with { type: 'text'
 import type { ReportData } from '../../types.ts';
 import { escapeHtml, firstLine } from '../html.ts';
 import { highlightCode } from '../highlight.ts';
-import { toolLabel } from './data.ts';
+import { toolLabel, turnTimeline } from './data.ts';
 import { buildMarkdown, fileHref, TURNS_PLACEHOLDER } from './markdown.ts';
 import { markdownToHtml, renderRichText } from './mdToHtml.ts';
 import { TIME_TOKEN, timeTag } from './time.ts';
@@ -101,40 +101,44 @@ function turnsHtml(data: ReportData): string {
           `<div class="ai-text">${renderRichText(turn.prompt.text)}</div></div>`,
       );
     }
-    // The card already means "this prompt → its reply", so the reply needs no
-    // label; multiple replies in one turn are separated by a thin divider.
-    turn.aiOutputs.forEach((ai, i) => {
-      if (i > 0) out.push('<hr class="ai-sep">');
-      out.push(`<div class="ai-text">${renderRichText(ai.text)}</div>`);
-    });
-    // Decisions the student made mid-exchange, in their own labelled block so a
-    // reviewer can't mistake them for a prompt or an AI reply.
-    for (const decision of turn.decisions) {
-      out.push(
-        '<div class="decision">' +
-          '<span class="role-tag decision-tag">🔀 Decision</span>' +
-          `<div class="ai-text">${renderRichText(decision.text)}</div>` +
-          '</div>',
-      );
-    }
-    for (const code of turn.codeChanges) {
-      const stat2 = code.diffLines ? ` (~${code.diffLines} line(s))` : '';
-      const fileLink =
-        `<a class="file-link" href="${escapeHtml(fileHref(code.path))}" ` +
-        'target="_blank" rel="noopener" onclick="event.stopPropagation()">' +
-        `${escapeHtml(code.path)}</a>`;
-      if (code.diff) {
-        // A diff was captured — show it in an expandable card.
-        out.push('<details class="code">');
-        out.push(`<summary>${fileLink}${escapeHtml(stat2)}</summary>`);
-        out.push(diffHtml(code.diff));
-        out.push('</details>');
+    // AI replies, decisions, and code changes interleaved in the order they
+    // happened. The card already means "this prompt → its reply", so a reply
+    // needs no label; consecutive replies are separated by a thin divider.
+    let prevKind: string | undefined;
+    for (const item of turnTimeline(turn)) {
+      if (item.kind === 'ai') {
+        if (prevKind === 'ai') out.push('<hr class="ai-sep">');
+        out.push(`<div class="ai-text">${renderRichText(item.event.text)}</div>`);
+      } else if (item.kind === 'decision') {
+        // The student's mid-exchange choice, labelled so it's never mistaken for
+        // a prompt or an AI reply.
+        out.push(
+          '<div class="decision">' +
+            '<span class="role-tag decision-tag">🔀 Decision</span>' +
+            `<div class="ai-text">${renderRichText(item.event.text)}</div>` +
+            '</div>',
+        );
       } else {
-        // No inline diff (e.g. a file snapshot with no suggested code, or a Codex
-        // shell edit). Render a plain file row — not an expander that opens to
-        // nothing. The file link still works.
-        out.push(`<div class="code code-file">${fileLink}${escapeHtml(stat2)}</div>`);
+        const code = item.change;
+        const stat2 = code.diffLines ? ` (~${code.diffLines} line(s))` : '';
+        const fileLink =
+          `<a class="file-link" href="${escapeHtml(fileHref(code.path))}" ` +
+          'target="_blank" rel="noopener" onclick="event.stopPropagation()">' +
+          `${escapeHtml(code.path)}</a>`;
+        if (code.diff) {
+          // A diff was captured — show it in an expandable card.
+          out.push('<details class="code">');
+          out.push(`<summary>${fileLink}${escapeHtml(stat2)}</summary>`);
+          out.push(diffHtml(code.diff));
+          out.push('</details>');
+        } else {
+          // No inline diff (e.g. a file snapshot with no suggested code, or a
+          // Codex shell edit). Render a plain file row — not an expander that
+          // opens to nothing. The file link still works.
+          out.push(`<div class="code code-file">${fileLink}${escapeHtml(stat2)}</div>`);
+        }
       }
+      prevKind = item.kind;
     }
 
     out.push('</div>'); // end .turn-body

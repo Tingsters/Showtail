@@ -5,6 +5,8 @@ import { parseClaudeTranscript } from '../src/core/claudeCode.ts';
 import { logEvent, readAllEvents } from '../src/core/events.ts';
 import { addArtifact } from '../src/core/artifacts.ts';
 import { buildReportData, renderHtml, renderMarkdown } from '../src/core/report.ts';
+import { turnTimeline } from '../src/core/report/data.ts';
+import type { Event, ReportData, Turn } from '../src/types.ts';
 import { runInit } from '../src/commands/init.ts';
 import { runImportClaudeCode } from '../src/commands/importClaude.ts';
 import { pathsForRoot } from '../src/core/storage.ts';
@@ -422,5 +424,83 @@ describe('claude-code decision import', () => {
     } finally {
       cleanup(dir);
     }
+  });
+});
+
+describe('turn timeline (chronological interleaving)', () => {
+  const ev = (id: string, ts: string, type: Event['type'], text: string): Event => ({
+    id,
+    timestamp: ts,
+    type,
+    text,
+    tool: 'claude-code',
+    actorSlug: 'x',
+  });
+
+  // A turn whose items happened in the order: reply, edit, reply, edit, decision.
+  const interleavedTurn = (): Turn => ({
+    prompt: ev('p', '2026-01-01T00:00:00.000Z', 'prompt', 'do it'),
+    aiOutputs: [
+      ev('a1', '2026-01-01T00:00:01.000Z', 'ai_output', 'first reply'),
+      ev('a2', '2026-01-01T00:00:03.000Z', 'ai_output', 'second reply'),
+    ],
+    codeChanges: [
+      { path: 'first.ts', timestamp: '2026-01-01T00:00:02.000Z', diff: '+one' },
+      { path: 'second.ts', timestamp: '2026-01-01T00:00:04.000Z', diff: '+two' },
+    ],
+    decisions: [
+      ev('d', '2026-01-01T00:00:05.000Z', 'decision', '**Claude asked:** which?'),
+    ],
+    tool: 'claude-code',
+    actorSlug: 'x',
+  });
+
+  test('merges replies, code, and decisions in timestamp order', () => {
+    const order = turnTimeline(interleavedTurn()).map((i) =>
+      i.kind === 'code' ? `code:${i.change.path}` : `${i.kind}:${i.event.id}`,
+    );
+    expect(order).toEqual([
+      'ai:a1',
+      'code:first.ts',
+      'ai:a2',
+      'code:second.ts',
+      'decision:d',
+    ]);
+  });
+
+  test('keeps text before tools that share its timestamp', () => {
+    const t = '2026-01-01T00:00:01.000Z';
+    const turn: Turn = {
+      prompt: ev('p', '2026-01-01T00:00:00.000Z', 'prompt', 'do it'),
+      aiOutputs: [ev('a', t, 'ai_output', 'reply')],
+      codeChanges: [{ path: 'x.ts', timestamp: t, diff: '+x' }],
+      decisions: [ev('d', t, 'decision', 'q')],
+      tool: 'claude-code',
+      actorSlug: 'x',
+    };
+    expect(turnTimeline(turn).map((i) => i.kind)).toEqual(['ai', 'code', 'decision']);
+  });
+
+  test('the rendered Markdown report places code/decisions between the replies', () => {
+    const data: ReportData = {
+      project: 'P',
+      displayName: 'P',
+      generatedAt: '2026-01-01T00:00:06.000Z',
+      scope: null,
+      summary: { sessions: 1, events: 3, artifacts: 2, decisions: 1 },
+      contributors: [{ slug: 'x', name: 'X', events: 3, artifacts: 2 }],
+      tools: [{ tool: 'claude-code', events: 3 }],
+      toolTimeline: [],
+      turns: [interleavedTurn()],
+      redactionCount: 0,
+      authorship: 'mine',
+    };
+    const md = renderMarkdown(data);
+    const at = (s: string) => md.indexOf(s);
+    // first reply → first.ts → second reply → second.ts → decision
+    expect(at('first reply')).toBeLessThan(at('first.ts'));
+    expect(at('first.ts')).toBeLessThan(at('second reply'));
+    expect(at('second reply')).toBeLessThan(at('second.ts'));
+    expect(at('second.ts')).toBeLessThan(at('🔀 **Decision**'));
   });
 });

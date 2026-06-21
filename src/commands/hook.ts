@@ -344,6 +344,9 @@ async function handleStop(
         type: 'ai_output',
         text: msg.text,
         tool,
+        // Stamp with the transcript message time (not now, the Stop time), so the
+        // reply orders chronologically against edits in the report.
+        timestamp: msg.timestamp,
         turnId: currentTurn,
         sourceId: msg.sourceId,
         sessionId,
@@ -357,6 +360,7 @@ async function handleStop(
         type: 'decision',
         text: msg.text,
         tool,
+        timestamp: msg.timestamp, // message time, so it interleaves chronologically
         turnId: currentTurn,
         sourceId: msg.sourceId,
         sessionId,
