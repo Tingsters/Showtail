@@ -82,6 +82,32 @@ export function activate(context: vscode.ExtensionContext): void {
 }
 
 /**
+ * Make sure this workspace is a tracked Showtail project, honoring the global
+ * opt-in. Returns true if a `.showtail/` exists (already, or after a silent
+ * auto-init). When the folder is untracked, asks the CLI what to do via
+ * `capabilities --json`: if automatic tracking is on, run `showtail ensure` to
+ * start a trail at the right anchor; if it's off, do nothing (return false) so
+ * we never create folders for a student who hasn't run `showtail setup`.
+ */
+async function ensureTracked(cwd: string): Promise<boolean> {
+  if (existsSync(join(cwd, '.showtail'))) return true;
+  const capsRaw = await runShowtail(['capabilities', '--json'], cwd);
+  if (!capsRaw) return false;
+  let caps: { initialized?: boolean; autoInit?: boolean };
+  try {
+    caps = JSON.parse(capsRaw);
+  } catch {
+    return false;
+  }
+  if (caps.initialized) return true;
+  if (!caps.autoInit) return false; // opt-in off — respect it
+  await runShowtail(['ensure'], cwd);
+  if (!existsSync(join(cwd, '.showtail'))) return false;
+  output.appendLine('Showtail started a trail for this project (automatic tracking is on).');
+  return true;
+}
+
+/**
  * Keep the Copilot instructions (`.github/copilot-instructions.md`) set up and
  * current, so opening the project in VS Code is all the student needs to do:
  *   - if the instructions are already present, refresh them to the latest
@@ -94,7 +120,11 @@ export function activate(context: vscode.ExtensionContext): void {
 async function maybeAutoInstallCopilot(context: vscode.ExtensionContext): Promise<void> {
   const cwd = folderFor(undefined);
   if (!cwd) return;
-  if (!existsSync(join(cwd, '.showtail'))) return; // not a Showtail project
+  // Automatic tracking: if the student has opted in (via `showtail setup`),
+  // silently start a trail on first open of an untracked project, mirroring the
+  // hook auto-init in editor tools. Gated on the opt-in so we never create
+  // folders for someone who hasn't run setup.
+  if (!(await ensureTracked(cwd))) return; // not tracked and not opted in
 
   const KEY = 'showtail.autoInstalledCopilot';
   // Sentinel: our path-specific instructions file. If present, it's installed.

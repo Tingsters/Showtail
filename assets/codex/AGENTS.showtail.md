@@ -27,8 +27,10 @@ showtail status --json
 
   (Better: suggest the student turn hooks on so this is automatic.)
 
-If there is no `.showtail/` folder yet, have the student run `showtail init` **inside their
-project folder**, then `showtail start` to open a session.
+Tracking is normally automatic once the student has run `showtail setup` (a one-time step): a
+trail is created on first use and sessions open and close on their own. If a project somehow has
+no `.showtail/` folder, run `showtail ensure` — it initializes at the right place (the git repo
+root, or the working folder) and opens a session. It is safe to run anytime.
 
 ## Principles
 
@@ -38,5 +40,7 @@ project folder**, then `showtail start` to open a session.
 - **Privacy.** Never log secrets, tokens, or personal information — the trail may be committed.
 - **The student is the author.** Showtail documents their process; it does not replace it.
 
-When the work block is done, offer to run `showtail report` (the report for the educator) and
-`showtail verify` (checks the trail is complete and consistent).
+When the student asks to **"generate a report"**, **"show my work"**, or **"wrap up"** (or the
+work block is clearly done), run it **for** them — don't make them switch to the command line:
+`showtail report` (the report for the educator) and `showtail verify` (checks the trail is
+complete and consistent). Then point them at the generated file.

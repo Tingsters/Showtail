@@ -1,5 +1,6 @@
 import { requirePaths } from '../core/storage.ts';
 import { activeAuthorPaths } from '../core/authors.ts';
+import { autoInitEnabled } from '../core/globalConfig.ts';
 import { currentSession } from '../core/sessions.ts';
 import { readSessionEvents } from '../core/events.ts';
 import { connectedToolsLines, toolStatuses } from '../core/tools.ts';
@@ -33,9 +34,11 @@ export async function runStatus(options: StatusOptions = {}): Promise<void> {
   const claudeHooks = tools.find((t) => t.tool === 'claude')?.hooksActive ?? false;
 
   if (options.json) {
+    const autoInit = autoInitEnabled();
     console.log(
       JSON.stringify(
         {
+          initialized: true,
           session: session
             ? {
                 id: session.id,
@@ -46,6 +49,8 @@ export async function runStatus(options: StatusOptions = {}): Promise<void> {
               }
             : null,
           hooksActive: claudeHooks,
+          autoInit,
+          nextAction: events.length > 0 ? 'report' : 'work',
           tools,
         },
         null,

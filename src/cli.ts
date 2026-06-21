@@ -1,6 +1,9 @@
 #!/usr/bin/env bun
 import { Command } from 'commander';
 import { runInit } from './commands/init.ts';
+import { runEnsure } from './commands/ensure.ts';
+import { runSetup } from './commands/setup.ts';
+import { runCapabilities } from './commands/capabilities.ts';
 import { runStart } from './commands/start.ts';
 import { runEnd } from './commands/end.ts';
 import { runLog } from './commands/log.ts';
@@ -18,6 +21,8 @@ import { runImportChatgpt, runImportUndo } from './commands/import.ts';
 import { runImportGemini } from './commands/importGemini.ts';
 import { runImportClaudeCode } from './commands/importClaude.ts';
 import { eventTypeList } from './core/schema.ts';
+import { ShowtailError } from './core/errors.ts';
+import { NotInitializedError } from './core/storage.ts';
 import type { Tool } from './types.ts';
 
 const VERSION = '0.9.8';
@@ -28,14 +33,23 @@ const G_CAPTURE = 'Capture your work:';
 const G_REVIEW = 'Review your trail:';
 const G_CONNECT = 'Connect your tools:';
 
-/** Wrap a command action so errors print a clean message and set exit code 1. */
+/**
+ * Wrap a command action so errors print a clean message and set a stable exit
+ * code agents can branch on: 2 = not initialized, the `code` on a
+ * {@link ShowtailError}, otherwise 1.
+ */
 function action<A extends unknown[]>(fn: (...args: A) => Promise<unknown>) {
   return async (...args: A): Promise<void> => {
     try {
       await fn(...args);
     } catch (err) {
       console.error(`\nError: ${(err as Error).message}`);
-      process.exitCode = 1;
+      process.exitCode =
+        err instanceof NotInitializedError
+          ? 2
+          : err instanceof ShowtailError
+            ? err.code
+            : 1;
     }
   };
 }
@@ -54,26 +68,59 @@ program
 // --- Get started ----------------------------------------------------------
 
 program
+  .command('setup')
+  .description(
+    'One-time guided setup: connect your AI tools and turn on automatic tracking.',
+  )
+  .helpGroup(G_START)
+  .option('--off', 'turn automatic tracking back off')
+  .option('--yes', 'run without prompts')
+  .option('--json', 'output machine-readable JSON')
+  .action(
+    action(async (opts: { off?: boolean; yes?: boolean; json?: boolean }) =>
+      runSetup({ off: opts.off, yes: opts.yes, json: opts.json }),
+    ),
+  );
+
+program
   .command('init')
   .description('Set up Showtail in this project (creates the .showtail/ folder).')
   .helpGroup(G_START)
   .option('-p, --project <name>', 'a name for this project')
+  .option('--json', 'output machine-readable JSON')
   .action(
-    action(async (opts: { project?: string }) => runInit({ project: opts.project })),
+    action(async (opts: { project?: string; json?: boolean }) =>
+      runInit({ project: opts.project, json: opts.json }),
+    ),
   );
+
+program
+  .command('ensure')
+  .description(
+    'Make sure this project is initialized and a session is open (safe to re-run).',
+  )
+  .helpGroup(G_START)
+  .option('--json', 'output machine-readable JSON')
+  .action(action(async (opts: { json?: boolean }) => runEnsure({ json: opts.json })));
 
 program
   .command('start')
   .description('Begin a new work session (run this each time you sit down to work).')
   .helpGroup(G_START)
   .option('-l, --label <label>', 'a short label for the session')
-  .action(action(async (opts: { label?: string }) => runStart({ label: opts.label })));
+  .option('--json', 'output machine-readable JSON')
+  .action(
+    action(async (opts: { label?: string; json?: boolean }) =>
+      runStart({ label: opts.label, json: opts.json }),
+    ),
+  );
 
 program
   .command('end')
   .description('Close the current work session.')
   .helpGroup(G_START)
-  .action(action(async () => runEnd()));
+  .option('--json', 'output machine-readable JSON')
+  .action(action(async (opts: { json?: boolean }) => runEnd({ json: opts.json })));
 
 // --- Capture your work ----------------------------------------------------
 
@@ -139,6 +186,15 @@ program
   );
 
 program
+  .command('capabilities')
+  .description('Report this folder’s tracking state and what to do next (for AI agents).')
+  .helpGroup(G_REVIEW)
+  .option('--json', 'output machine-readable JSON')
+  .action(
+    action(async (opts: { json?: boolean }) => runCapabilities({ json: opts.json })),
+  );
+
+program
   .command('report')
   .description(
     'Generate a shareable report (HTML by default) summarizing your work trail.',
@@ -148,6 +204,7 @@ program
   .option('--open', 'open the generated report in your default app')
   .option('--author <slug>', 'generate only this contributor’s report')
   .option('--team', 'generate only the combined team report')
+  .option('--json', 'output machine-readable JSON (the written paths + summary)')
   .action(
     action(
       async (opts: {
@@ -155,6 +212,7 @@ program
         open?: boolean;
         author?: string;
         team?: boolean;
+        json?: boolean;
       }) => runReport(opts),
     ),
   );
@@ -168,7 +226,7 @@ program
   .action(
     action(async () => {
       const ok = await runVerify();
-      if (!ok) process.exitCode = 1;
+      if (!ok) process.exitCode = 3;
     }),
   );
 
@@ -431,7 +489,7 @@ importCmd
 program
   .command('hook <event>', { hidden: true })
   .description(
-    'Internal: handle a hook event (session-start, user-prompt, post-edit, stop).',
+    'Internal: handle a hook event (session-start, user-prompt, post-edit, stop, session-end).',
   )
   .option('--tool <tool>', 'which tool fired the hook (claude-code [default] or codex)')
   .action(

@@ -158,6 +158,15 @@ export interface Config {
   project?: string;
   /** ISO-8601 timestamp the project was initialized. */
   createdAt: string;
+  /**
+   * Absolute path this trail was anchored at when created (git repo root or the
+   * working dir). Informational — `findRoot` still drives resolution — but lets
+   * `status`/`verify` explain why the folder lives where it does. Absent on
+   * trails created before anchoring was recorded.
+   */
+  anchor?: string;
+  /** Whether {@link anchor} was chosen from the git repo root or the working dir. */
+  anchorKind?: 'git' | 'cwd';
   settings: {
     /** Whether to try to capture git commit hashes. */
     git: boolean;
@@ -165,6 +174,11 @@ export interface Config {
     captureAiOutput?: boolean;
     /** Capture AI-suggested code/diffs alongside edits. Default on. */
     captureCode?: boolean;
+    /**
+     * Minutes of inactivity after which an open session is automatically closed
+     * (stamped at its last event). Defaults to 60 when absent.
+     */
+    idleTimeoutMinutes?: number;
     /** Sensitive-data redaction settings (default on). */
     redact?: RedactConfig;
   };

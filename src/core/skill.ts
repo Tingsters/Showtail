@@ -34,6 +34,7 @@ export const HOOK_EVENTS: HookEvents = {
     },
   ],
   Stop: [{ hooks: [{ type: 'command', command: 'showtail hook stop' }] }],
+  SessionEnd: [{ hooks: [{ type: 'command', command: 'showtail hook session-end' }] }],
 };
 
 /** The exact JSON text of the plugin's `hooks/hooks.json` (for sync checks). */

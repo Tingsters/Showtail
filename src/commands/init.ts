@@ -1,11 +1,18 @@
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { resolve } from 'node:path';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import type { Config } from '../types.ts';
 import { establishIdentity } from '../core/authors.ts';
-import { isGitRepo } from '../core/git.ts';
-import { CONFIG_VERSION, pathsForRoot, writeJson, writeState } from '../core/storage.ts';
+import { gitToplevel } from '../core/git.ts';
+import { emitJson } from '../core/output.ts';
+import {
+  CONFIG_VERSION,
+  pathsForRoot,
+  readConfig,
+  writeJson,
+  writeState,
+  type ShowtailPaths,
+} from '../core/storage.ts';
 
 /**
  * Mark the whole trail as binary so git never normalizes line endings: the
@@ -31,6 +38,69 @@ export interface InitOptions {
   project?: string;
   /** Project root; defaults to cwd. */
   cwd?: string;
+  /** Emit machine-readable JSON instead of the human banner. */
+  json?: boolean;
+}
+
+export interface EnsureInitOptions {
+  project?: string;
+}
+
+/**
+ * Create the shared `.showtail/` folder structure and config at `root` if it
+ * isn't there yet, and report whether it was just created. This is the
+ * idempotent core shared by the interactive `showtail init`, `showtail ensure`,
+ * and the hook auto-init path. It prints nothing and does NOT establish an author
+ * identity — callers own any user-facing output and identity resolution. Per-
+ * author folders are created on demand (by `ensureAuthor`), not here.
+ *
+ * Concurrency: two near-simultaneous first hooks for the same new project can
+ * both pass the config check. `writeJson` is an atomic temp+rename so config is
+ * never torn; and `state` is written only when still absent, so a racing hook
+ * that already recorded the active author isn't reset.
+ */
+export async function ensureInitialized(
+  root: string,
+  options: EnsureInitOptions = {},
+): Promise<{ created: boolean; paths: ShowtailPaths }> {
+  const paths = pathsForRoot(root);
+  if (existsSync(paths.config)) return { created: false, paths };
+
+  // Create the shared directory tree (per-author folders are created on demand).
+  for (const dir of [paths.base, paths.authorsDir, paths.objectsDir, paths.reportsDir]) {
+    mkdirSync(dir, { recursive: true });
+  }
+
+  // One git probe drives both the commit-capture flag and the anchor record:
+  // a repo whose top-level *is* this root was anchored at the repo; otherwise
+  // the trail sits at a plain working dir.
+  const top = await gitToplevel(root);
+  const git = top !== undefined;
+  const anchorKind: 'git' | 'cwd' =
+    git && resolve(top) === resolve(root) ? 'git' : 'cwd';
+
+  const config: Config = {
+    version: CONFIG_VERSION,
+    createdAt: new Date().toISOString(),
+    anchor: resolve(root),
+    anchorKind,
+    settings: {
+      git,
+      captureAiOutput: true,
+      captureCode: true,
+      redact: { enabled: true, secrets: true, pii: true },
+    },
+  };
+  if (options.project) config.project = options.project;
+
+  writeJson(paths.config, config);
+  if (!existsSync(paths.state)) {
+    writeState(paths, { currentSessionId: null, currentPromptId: null });
+  }
+  writeFileSync(join(paths.base, '.gitattributes'), GITATTRIBUTES, 'utf8');
+  writeFileSync(join(paths.base, '.gitignore'), GITIGNORE, 'utf8');
+
+  return { created: true, paths };
 }
 
 /**
@@ -44,12 +114,24 @@ export async function runInit(options: InitOptions = {}): Promise<void> {
   const paths = pathsForRoot(root);
 
   if (existsSync(paths.config)) {
+    if (options.json) {
+      emitJson({ created: false, root, anchorKind: readConfig(paths).anchorKind ?? null });
+      return;
+    }
     console.log('Showtail is already set up here (.showtail/config.json exists).');
     // Still make sure *this* student has an author folder — a teammate who just
     // cloned the repo runs `init` to register themselves without re-creating it.
     const author = await establishIdentity(paths, { cwd: root, allowPrompt: true });
     if (author) console.log(`You're tracked as ${author.slug}.`);
     console.log('Run `showtail start` to begin a work session.');
+    return;
+  }
+
+  if (options.json) {
+    await ensureInitialized(root, { project: options.project });
+    // Register the local student silently when possible (no prompt in JSON mode).
+    await establishIdentity(paths, { cwd: root, allowPrompt: false });
+    emitJson({ created: true, root, anchorKind: readConfig(paths).anchorKind ?? null });
     return;
   }
 
@@ -63,27 +145,8 @@ export async function runInit(options: InitOptions = {}): Promise<void> {
     console.log('');
   }
 
-  // Create the directory tree (per-author folders are created on demand).
-  for (const dir of [paths.base, paths.authorsDir, paths.objectsDir, paths.reportsDir]) {
-    mkdirSync(dir, { recursive: true });
-  }
-
-  const config: Config = {
-    version: CONFIG_VERSION,
-    createdAt: new Date().toISOString(),
-    settings: {
-      git: await isGitRepo(root),
-      captureAiOutput: true,
-      captureCode: true,
-      redact: { enabled: true, secrets: true, pii: true },
-    },
-  };
-  if (options.project) config.project = options.project;
-
-  writeJson(paths.config, config);
-  writeState(paths, { currentSessionId: null, currentPromptId: null });
-  writeFileSync(join(paths.base, '.gitattributes'), GITATTRIBUTES, 'utf8');
-  writeFileSync(join(paths.base, '.gitignore'), GITIGNORE, 'utf8');
+  await ensureInitialized(root, { project: options.project });
+  const config = readConfig(paths);
 
   // Establish who is working here so their trail is attributed (gh → git → prompt).
   const author = await establishIdentity(paths, { cwd: root, allowPrompt: true });

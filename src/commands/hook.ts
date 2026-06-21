@@ -2,7 +2,12 @@ import { existsSync } from 'node:fs';
 import { addArtifact } from '../core/artifacts.ts';
 import { resolveActiveAuthorForHook } from '../core/authors.ts';
 import { readTranscriptFile } from '../core/claudeCode.ts';
-import { importedSourceIds, logEvent, readSessionEvents } from '../core/events.ts';
+import {
+  importedSourceIds,
+  logEvent,
+  readSessionEvents,
+  sweepIdleSessions,
+} from '../core/events.ts';
 import {
   extractApplyPatchFiles,
   extractEditedFiles,
@@ -13,21 +18,38 @@ import {
   type HookPayload,
 } from '../core/hookInput.ts';
 import { redact } from '../core/redact.ts';
-import { currentSession, sessionForClaudeId, startSession } from '../core/sessions.ts';
+import { autoInitEnabled } from '../core/globalConfig.ts';
+import {
+  closeSession,
+  currentSession,
+  sessionForClaudeId,
+  startSession,
+} from '../core/sessions.ts';
 import {
   findRoot,
+  isEligibleAnchor,
   pathsForRoot,
   readConfig,
   readSessions,
   readState,
+  resolveAnchor,
   setTurnForClaudeSession,
   turnForClaudeSession,
   updateState,
   type AuthorPaths,
 } from '../core/storage.ts';
+import { ensureInitialized } from './init.ts';
 import type { Config, Tool } from '../types.ts';
 
-export type HookEvent = 'session-start' | 'user-prompt' | 'post-edit' | 'stop';
+export type HookEvent =
+  | 'session-start'
+  | 'user-prompt'
+  | 'post-edit'
+  | 'stop'
+  | 'session-end';
+
+/** Default minutes of inactivity before a session auto-closes. */
+const DEFAULT_IDLE_TIMEOUT_MINUTES = 60;
 
 export interface HookOptions {
   cwd?: string;
@@ -58,8 +80,20 @@ export async function runHook(
     const cwd = payload?.cwd ?? options.cwd ?? process.cwd();
     const tool: Tool = options.tool ?? 'claude-code';
 
-    const root = findRoot(cwd);
-    if (!root) return; // Not a Showtail project — nothing to do.
+    let root = findRoot(cwd);
+    if (!root) {
+      // Automatic tracking: silently start a trail on the first real activity in
+      // an eligible project (git repo / dev folder), once the user has opted in
+      // via `showtail setup`. Only a task start may create one — never a stray
+      // edit/stop. `isEligibleAnchor` also refuses HOME, so a whole home dir is
+      // never turned into one shared trail.
+      if (event !== 'session-start' && event !== 'user-prompt') return;
+      if (!autoInitEnabled()) return;
+      const anchor = await resolveAnchor(cwd);
+      if (!isEligibleAnchor(anchor)) return;
+      await ensureInitialized(anchor);
+      root = anchor;
+    }
     const paths = pathsForRoot(root);
     if (!existsSync(paths.config)) return; // Not initialized.
     const config = readConfig(paths);
@@ -70,6 +104,14 @@ export async function runHook(
     const author = await resolveActiveAuthorForHook(paths, { cwd });
     if (!author) return;
 
+    // On any live capture, first close this author's sessions that have gone idle
+    // (stamped at their last event), so a finished task's session doesn't linger
+    // open. Tool-agnostic fallback to the SessionEnd hook below.
+    if (event === 'user-prompt' || event === 'post-edit') {
+      const idleMin = config.settings.idleTimeoutMinutes ?? DEFAULT_IDLE_TIMEOUT_MINUTES;
+      sweepIdleSessions(author, idleMin * 60_000, Date.now());
+    }
+
     switch (event) {
       case 'session-start':
         return handleSessionStart(author, payload, tool);
@@ -79,6 +121,8 @@ export async function runHook(
         return await handlePostEdit(author, payload, tool, config);
       case 'stop':
         return await handleStop(author, payload, tool, config);
+      case 'session-end':
+        return handleSessionEnd(author, payload);
     }
   } catch {
     // Swallow everything — a hook must never break the session.
@@ -105,6 +149,27 @@ function handleSessionStart(
     `Showtail is capturing this session's work trail (session ${session.id}). ` +
       `Your prompts and edits are captured automatically — just work as usual.\n`,
   );
+}
+
+/**
+ * On SessionEnd (the tool's session truly ending — quit, clear, logout), close
+ * the bound session deterministically rather than waiting for the idle sweep.
+ * Keyed to the session that mirrors this tool session_id, else the global
+ * current session. Stamps `endedAt` at the latest captured event (or now).
+ */
+function handleSessionEnd(author: AuthorPaths, payload: HookPayload | null): void {
+  const claudeSessionId = extractSessionId(payload);
+  const sessions = readSessions(author);
+  const session = claudeSessionId
+    ? sessions.find((s) => s.claudeSessionId === claudeSessionId && !s.endedAt)
+    : sessions.find((s) => s.id === readState(author.shared).currentSessionId);
+  if (!session) return;
+  let lastTs = session.startedAt;
+  for (const e of readSessionEvents(author, session.id)) {
+    if (e.timestamp > lastTs) lastTs = e.timestamp;
+  }
+  const at = new Date().toISOString();
+  closeSession(author, session.id, lastTs > at ? lastTs : at);
 }
 
 async function handleUserPrompt(

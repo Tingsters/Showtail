@@ -39,6 +39,17 @@ export async function isGitRepo(cwd: string): Promise<boolean> {
 }
 
 /**
+ * The absolute path of the git working-tree root containing `cwd`, or
+ * `undefined` if `cwd` is not inside a repo (or git is unavailable). Used to
+ * anchor a project's `.showtail/` at the repo root so one repo gets one trail.
+ * Git prints forward slashes even on Windows; callers `resolve()` the result so
+ * it compares equal to `findRoot`'s output.
+ */
+export async function gitToplevel(cwd: string): Promise<string | undefined> {
+  return runGit(['rev-parse', '--show-toplevel'], cwd);
+}
+
+/**
  * Return the current commit hash, or `undefined` if unavailable
  * (no git, not a repo, or a repo with no commits yet).
  */

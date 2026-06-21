@@ -1,6 +1,7 @@
 import { join } from 'node:path';
 import { buildReportData, renderHtml, renderMarkdown } from '../core/report.ts';
 import { authorSlugs } from '../core/authors.ts';
+import { emitJson } from '../core/output.ts';
 import { requirePaths, writeJson } from '../core/storage.ts';
 import { fileLink, openInDefaultApp } from '../core/terminal.ts';
 import { writeFileSync, mkdirSync } from 'node:fs';
@@ -15,6 +16,8 @@ export interface ReportOptions {
   author?: string;
   /** Generate only the combined team report. */
   team?: boolean;
+  /** Emit machine-readable JSON (the written paths + summary) instead of prose. */
+  json?: boolean;
 }
 
 /** A filesystem-safe timestamp for report filenames, e.g. 2026-06-12T140300. */
@@ -26,6 +29,14 @@ function fileStamp(iso: string): string {
 interface ReportTarget {
   key: string;
   scope: { authorSlug?: string };
+}
+
+/** A written report's primary file plus its Markdown source (if any). */
+interface WrittenReport {
+  key: string;
+  format: string;
+  reportPath: string;
+  markdownPath: string | null;
 }
 
 /** Decide which reports to write: a single author, the team, or team + everyone. */
@@ -48,7 +59,8 @@ function reportTargets(options: ReportOptions, slugs: string[]): ReportTarget[] 
  * In a multi-student project this writes a combined team report plus one report
  * per contributor by default; `--author <slug>` or `--team` narrows that. HTML
  * by default; the Markdown it renders from is written alongside as the source of
- * truth, and `--format md`/`--format json` switch the primary output.
+ * truth, and `--format md`/`--format json` switch the primary output. `--json`
+ * emits the written paths + summary for an agent instead of prose.
  */
 export async function runReport(options: ReportOptions): Promise<void> {
   const paths = requirePaths(options.cwd);
@@ -57,19 +69,32 @@ export async function runReport(options: ReportOptions): Promise<void> {
   mkdirSync(paths.reportsDir, { recursive: true });
 
   const targets = reportTargets(options, slugs);
-  let firstPrimary: string | undefined;
+  const written: WrittenReport[] = [];
   let teamData: ReportData | undefined;
 
   for (const target of targets) {
     const data = buildReportData(paths, target.scope);
     if (target.key === 'team') teamData = data;
-    const primary = writeOneReport(paths.reportsDir, target.key, stamp, data, options);
-    firstPrimary ??= primary;
+    written.push(writeOneReport(paths.reportsDir, target.key, stamp, data, options));
   }
 
-  if (firstPrimary) maybeOpen(firstPrimary, options);
-
+  const primary = written[0];
   const summarySource = teamData ?? (await firstData(paths, targets));
+
+  if (options.json) {
+    if (options.open && primary) openInDefaultApp(primary.reportPath);
+    emitJson({
+      format: options.format ?? 'html',
+      reportPath: primary?.reportPath ?? null,
+      markdownPath: primary?.markdownPath ?? null,
+      summary: summarySource?.summary ?? null,
+      reports: written,
+    });
+    return;
+  }
+
+  if (primary) maybeOpen(primary.reportPath, options);
+
   if (summarySource) {
     console.log('');
     console.log(
@@ -85,21 +110,23 @@ export async function runReport(options: ReportOptions): Promise<void> {
   console.log('Open a file above to review the full trail.');
 }
 
-/** Write one report in the requested format; return its primary file path. */
+/** Write one report in the requested format; return its written paths. */
 function writeOneReport(
   reportsDir: string,
   key: string,
   stamp: string,
   data: ReportData,
   options: ReportOptions,
-): string {
+): WrittenReport {
   const base = `report-${key}-${stamp}`;
+  const format = options.format ?? 'html';
+  const quiet = options.json === true;
 
-  if (options.format === 'json') {
+  if (format === 'json') {
     const out = join(reportsDir, `${base}.json`);
     writeJson(out, data);
-    console.log(`Wrote JSON report (${key}): ${fileLink(out)}`);
-    return out;
+    if (!quiet) console.log(`Wrote JSON report (${key}): ${fileLink(out)}`);
+    return { key, format, reportPath: out, markdownPath: null };
   }
 
   // The Markdown is always written: on its own for `--format md`, and as the
@@ -107,14 +134,14 @@ function writeOneReport(
   const mdOut = join(reportsDir, `${base}.md`);
   writeFileSync(mdOut, renderMarkdown(data) + '\n', 'utf8');
 
-  if (options.format === 'md') {
-    console.log(`Wrote report (${key}): ${fileLink(mdOut)}`);
-    return mdOut;
+  if (format === 'md') {
+    if (!quiet) console.log(`Wrote report (${key}): ${fileLink(mdOut)}`);
+    return { key, format, reportPath: mdOut, markdownPath: null };
   }
   const htmlOut = join(reportsDir, `${base}.html`);
   writeFileSync(htmlOut, renderHtml(data), 'utf8');
-  console.log(`Wrote report (${key}): ${fileLink(htmlOut)}`);
-  return htmlOut;
+  if (!quiet) console.log(`Wrote report (${key}): ${fileLink(htmlOut)}`);
+  return { key, format, reportPath: htmlOut, markdownPath: mdOut };
 }
 
 /** Fallback summary source when no team report was generated (e.g. `--author`). */

@@ -34,6 +34,8 @@ extension does that), and don't narrate your own work.
 - **Privacy.** Never log secrets, tokens, or personal information — the trail may be committed.
 - **The student is the author.** Showtail documents their process; it does not replace it.
 
-When the work block is done, offer to run `showtail report` (the report for the educator) and
-`showtail verify` (checks the trail is consistent). The student can also run these from chat
-with `@showtail /report` and `@showtail /verify`.
+When the student asks to **"generate a report"**, **"show my work"**, or **"wrap up"** (or the
+work block is clearly done), run it **for** them with the CLI — don't make them do it by hand:
+`showtail report` (the report for the educator) and `showtail verify` (checks the trail is
+consistent). The student can also run these from chat with `@showtail /report` and
+`@showtail /verify`.

@@ -43,22 +43,45 @@ export function currentSession(author: AuthorPaths): Session | null {
 }
 
 /**
+ * Mark one author's session closed, stamping `endedAt` at `at` (idempotent — a
+ * session already closed keeps its original time). Clears the shared
+ * current-session pointer only when it points at *this* session, so closing one
+ * session never disturbs a different concurrent one.
+ */
+export function closeSession(
+  author: AuthorPaths,
+  sessionId: string,
+  at: string,
+): void {
+  const sessions = readSessions(author);
+  const session = sessions.find((s) => s.id === sessionId);
+  if (session && !session.endedAt) {
+    session.endedAt = at;
+    writeSessions(author, sessions);
+  }
+  const state = readState(author.shared);
+  if (state.currentSessionId === sessionId) {
+    updateState(author.shared, { currentSessionId: null, currentPromptId: null });
+  }
+}
+
+/**
  * The session that mirrors a given Claude Code `session_id` for this author,
- * creating it on first sight. This is the durable 1:1 binding that lets
- * concurrent or resumed Claude sessions each keep their own trail. Because the
- * sessions file is now per-author (one writer per machine), the concurrency
- * window that the re-read below guards is far smaller than before. Does **not**
- * touch `currentSessionId` — the caller decides whether this also becomes the
- * CLI's "current" session.
+ * creating it on first sight. Binds to the *open* session for the id: a session
+ * closed by idle-timeout or SessionEnd is left in place, and the same Claude
+ * session continuing after that is a new task that gets a fresh session (events
+ * stay continuous on the timeline either way). A still-open session is reused —
+ * so resumes/compacts within a session keep one trail. Does **not** touch
+ * `currentSessionId` — the caller decides whether this also becomes the CLI's
+ * "current" session.
  */
 export function sessionForClaudeId(
   author: AuthorPaths,
   claudeSessionId: string,
   opts: { tool?: Session['tool'] } = {},
 ): Session {
-  const existing = readSessions(author).find(
-    (s) => s.claudeSessionId === claudeSessionId,
-  );
+  const open = (s: Session) => s.claudeSessionId === claudeSessionId && !s.endedAt;
+  const existing = readSessions(author).find(open);
   if (existing) return existing;
 
   const session = makeSession();
@@ -67,11 +90,11 @@ export function sessionForClaudeId(
   // Re-read immediately before writing to shrink the window in which a
   // concurrent session-start for a *different* id could clobber this push.
   const sessions = readSessions(author);
-  if (!sessions.some((s) => s.claudeSessionId === claudeSessionId)) {
+  if (!sessions.some(open)) {
     sessions.push(session);
     writeSessions(author, sessions);
     return session;
   }
   // Lost the race: another writer created it. Use theirs.
-  return sessions.find((s) => s.claudeSessionId === claudeSessionId) ?? session;
+  return sessions.find(open) ?? session;
 }

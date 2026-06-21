@@ -18,7 +18,7 @@ import {
   type ShowtailPaths,
 } from './storage.ts';
 import { authorSlugs } from './authors.ts';
-import { makeSession } from './sessions.ts';
+import { closeSession, makeSession } from './sessions.ts';
 import { validateEvent } from './schema.ts';
 import { oneLine } from './text.ts';
 
@@ -176,6 +176,39 @@ export function readSessionEvents(author: AuthorPaths, sessionId: string): Event
   return eventEntries(author)
     .filter((e) => e.conv === sessionId)
     .map((e) => eventFromEntry(author.shared, e, author.slug));
+}
+
+/**
+ * Auto-close any of one author's still-open sessions whose most recent event is
+ * older than `idleMs`, stamping `endedAt` at that last-event time (not `now`) —
+ * so a session swept long after the fact reads as having ended when the work
+ * actually stopped. A session with no events falls back to its `startedAt`.
+ * Returns the ids that were closed. This is the tool-agnostic safety net that
+ * closes sessions when no explicit end signal arrives (a crash, or Copilot which
+ * has no session-end hook). Cheap enough to run on each capture.
+ */
+export function sweepIdleSessions(
+  author: AuthorPaths,
+  idleMs: number,
+  now: number,
+): string[] {
+  const closed: string[] = [];
+  for (const session of readSessions(author)) {
+    if (session.endedAt) continue;
+    // Latest activity by timestamp (events are in write order, and back-dated
+    // imports can land out of order), falling back to the session start.
+    let lastTs = session.startedAt;
+    for (const e of readSessionEvents(author, session.id)) {
+      if (e.timestamp > lastTs) lastTs = e.timestamp;
+    }
+    const lastMs = Date.parse(lastTs);
+    if (Number.isNaN(lastMs)) continue;
+    if (now - lastMs > idleMs) {
+      closeSession(author, session.id, lastTs);
+      closed.push(session.id);
+    }
+  }
+  return closed;
 }
 
 /**

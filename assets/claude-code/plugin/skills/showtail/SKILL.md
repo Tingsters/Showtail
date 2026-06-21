@@ -16,10 +16,15 @@ student works. Everything is stored locally under `.showtail/`. Never send it an
 
 ## 1. Make sure it's set up
 
-- If there is no `.showtail/` folder yet, have the student run `showtail init` **inside their
-  project folder** — not their home directory (initializing in `~` makes every folder look
-  like one project).
-- Connect Claude Code so capture is automatic: `showtail connect claude`.
+Tracking is normally **automatic**: once the student has run `showtail setup` (a one-time step),
+a trail is created for them the first time they use AI in a project, and sessions open and close
+on their own. You usually don't have to do anything here.
+
+- If a project somehow has no `.showtail/` folder, run `showtail ensure` — it initializes the
+  trail at the right place (the git repo root, or the working folder) and opens a session. It is
+  safe to run anytime.
+- Not sure of the state? `showtail capabilities --json` reports whether tracking is on and what to
+  do next, and never errors even in an untracked folder.
 
 ## 2. Check the capture mode
 
@@ -43,8 +48,16 @@ showtail status --json
 
 ## 3. Wrap up
 
-Offer to run `showtail report` (the report for the educator) and `showtail verify`
-(checks the trail is complete and consistent).
+When the student asks to **"generate a report"**, **"show my work"**, **"wrap up"**, or anything
+similar, run it **for** them — don't make them switch to the command line:
+
+```bash
+showtail report      # the report for the educator (writes HTML + Markdown under .showtail/reports/)
+showtail verify      # checks the trail is complete and consistent
+```
+
+Then point them at the generated file. You can also offer this proactively when a chunk of work
+looks finished.
 
 ## Principles
 
@@ -59,13 +72,15 @@ Offer to run `showtail report` (the report for the educator) and `showtail verif
 
 | Command | What it does |
 |---|---|
+| `showtail setup` | One-time: connect tools and turn on automatic tracking |
+| `showtail ensure [--json]` | Make sure the project is initialized and a session is open (idempotent) |
+| `showtail capabilities [--json]` | Report tracking state and what to do next (never errors) |
 | `showtail status [--json]` | Current session + whether auto-capture hooks are active |
-| `showtail init` | Create the `.showtail/` folder (run in the project folder) |
 | `showtail connect claude` | Turn on automatic capture for Claude Code |
-| `showtail start` | Begin a work session |
-| `showtail end` | Close the current session |
-| `showtail sessions` | List your work sessions |
-| `showtail report [--format json]` | Generate the report |
+| `showtail start [--json]` | Begin a work session |
+| `showtail end [--json]` | Close the current session |
+| `showtail sessions [--json]` | List your work sessions |
+| `showtail report [--format json] [--json]` | Generate the report (`--json` prints the written paths) |
 | `showtail verify` | Check the trail is valid and consistent |
 | `showtail trace <file>` | Show a file's provenance trail |
 

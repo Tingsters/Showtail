@@ -8,8 +8,10 @@ import {
   writeFileSync,
   appendFileSync,
 } from 'node:fs';
+import { homedir } from 'node:os';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import type { Config, JournalEntry, Session, State } from '../types.ts';
+import { gitToplevel } from './git.ts';
 
 export const SHOWTAIL_DIR = '.showtail';
 /** Bumped to 3 for the per-author layout (one folder per student). */
@@ -151,6 +153,47 @@ export function requirePaths(startDir: string = process.cwd()): ShowtailPaths {
   const root = findRoot(startDir);
   if (!root) throw new NotInitializedError();
   return pathsForRoot(root);
+}
+
+/**
+ * The folder a new trail should be anchored at for work happening in `cwd`: the
+ * git repo root when `cwd` is inside one, else `cwd` itself. This is the single
+ * source of truth that keeps auto-init and {@link findRoot} in agreement — the
+ * repo root is an ancestor of every subdir, so once `.showtail/` exists there
+ * every subdir's `findRoot` resolves to it and no nested/duplicate trail is made.
+ */
+export async function resolveAnchor(cwd: string = process.cwd()): Promise<string> {
+  const top = await gitToplevel(cwd);
+  return top ? resolve(top) : resolve(cwd);
+}
+
+/** Files that mark a directory as a real development workspace. */
+const DEV_MARKERS = [
+  '.git',
+  'package.json',
+  'tsconfig.json',
+  'pyproject.toml',
+  'requirements.txt',
+  'go.mod',
+  'Cargo.toml',
+  'pom.xml',
+  'build.gradle',
+  'Gemfile',
+  'composer.json',
+  'CMakeLists.txt',
+  'Makefile',
+];
+
+/**
+ * Whether `dir` is somewhere automatic tracking should create a trail: a real
+ * project folder (git repo or one carrying a dev marker), and never the user's
+ * HOME (which would turn every subfolder into one shared trail). Keeps silent
+ * auto-init from littering `.showtail/` into arbitrary unrelated directories.
+ */
+export function isEligibleAnchor(dir: string): boolean {
+  const resolved = resolve(dir);
+  if (resolved === resolve(homedir())) return false;
+  return DEV_MARKERS.some((marker) => existsSync(join(resolved, marker)));
 }
 
 // --- JSON helpers ---------------------------------------------------------
