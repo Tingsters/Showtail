@@ -120,6 +120,96 @@ describe('parseClaudeTranscript — decisions', () => {
       cleanup(dir);
     }
   });
+
+  test('reads answers from the clarify/reject result format (preset, typed, none)', () => {
+    const dir = makeTempDir();
+    try {
+      // An AskUserQuestion answered through the "clarify" flow: the result echoes
+      // each question with `Answer: …` or `(No answer provided)`, not `"Q"="A"`.
+      const lines: unknown[] = [
+        {
+          type: 'user',
+          uuid: 'u1',
+          timestamp: '2026-06-10T10:00:00.000Z',
+          promptSource: 'typed',
+          sessionId: 'sess-1',
+          message: { role: 'user', content: 'Build it.' },
+        },
+        {
+          type: 'assistant',
+          uuid: 'u2',
+          timestamp: '2026-06-10T10:01:00.000Z',
+          message: {
+            role: 'assistant',
+            model: 'claude-opus-4-8',
+            content: [
+              {
+                type: 'tool_use',
+                id: 'tq1',
+                name: 'AskUserQuestion',
+                input: {
+                  questions: [
+                    {
+                      question: 'Which DB?',
+                      options: [{ label: 'SQLite' }, { label: 'Postgres' }],
+                    },
+                    {
+                      question: 'Name the function?',
+                      options: [{ label: 'authenticate' }, { label: 'login' }],
+                    },
+                    {
+                      question: 'Which port?',
+                      options: [{ label: '3000' }, { label: '8080' }],
+                    },
+                  ],
+                },
+              },
+            ],
+          },
+        },
+        {
+          type: 'user',
+          uuid: 'u3',
+          timestamp: '2026-06-10T10:02:00.000Z',
+          message: {
+            role: 'user',
+            content: [
+              {
+                type: 'tool_result',
+                tool_use_id: 'tq1',
+                content:
+                  "The user doesn't want to proceed with this tool use. " +
+                  'To tell you how to proceed, the user said:\n' +
+                  'The user wants to clarify these questions.\n\n' +
+                  '    Questions asked:\n' +
+                  '- "Which DB?"\n  Answer: SQLite\n' +
+                  '- "Name the function?"\n  Answer: makeWidget\n' +
+                  '- "Which port?"\n  (No answer provided)',
+              },
+            ],
+          },
+        },
+      ];
+      const transcript = lines.map((l) => JSON.stringify(l)).join('\n') + '\n';
+      const { messages } = parseClaudeTranscript(transcript, dir);
+      const d = messages.find((m) => m.role === 'decision')!;
+      expect(d).toBeDefined();
+
+      // Q1: preset option marked chosen.
+      expect(d.questions![0]!.options.find((o) => o.label === 'SQLite')!.chosen).toBe(
+        true,
+      );
+      expect(d.text).toContain('**SQLite** ✅');
+      // Q2: custom typed answer surfaced.
+      expect(d.questions![1]!.custom).toBe(true);
+      expect(d.text).toContain('**You typed:** makeWidget');
+      // Q3: unanswered → flagged, nothing marked.
+      expect(d.questions![2]!.options.some((o) => o.chosen)).toBe(false);
+      expect(d.text).toContain('_(no option selected)_');
+    } finally {
+      cleanup(dir);
+    }
+  });
 });
 
 describe('claude-code decision import', () => {

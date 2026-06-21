@@ -486,17 +486,41 @@ function collectDecisionAnswers(obj: unknown, into: Map<string, string>): void {
 }
 
 /**
- * Pull the answer *values* out of the result string, in order. The harness
- * formats answers as `"<question>"="<answer>" selected preview:\n…`, so we match
- * each `"…"="(answer)"` value positionally (the question text in the result can
- * differ slightly from the asked text, so we don't key on it).
+ * Pull the student's answer *values* out of the result string, in question order
+ * (`undefined` for an unanswered question, so later answers stay aligned). The
+ * harness returns one of two shapes; we don't key on the question text (it can
+ * differ slightly from the asked text), only on position:
+ *
+ *  - Normal submit: `Your questions have been answered: "Q"="A" selected preview:…`
+ *    A preset choice carries a preview; a free-typed ("Other") answer is the same
+ *    `"Q"="A"` shape without one — both are captured here.
+ *  - Clarify/reject: `…Questions asked:\n- "Q"\n  Answer: A` (or `(No answer
+ *    provided)`), which the normal regex can't see — so a decision answered this
+ *    way would otherwise lose every answer.
  */
-function parseAnswerValues(blob: string): string[] {
-  const out: string[] = [];
+function parseAnswerValues(blob: string): (string | undefined)[] {
+  // Normal submit. (Known minor edge: a custom answer containing a literal `"`
+  // truncates at that quote.)
+  const normal: (string | undefined)[] = [];
   const re = /"[^"]*"\s*=\s*"([^"]*)"(?=\s+selected preview|\s*[,.]|\s*$)/g;
   let m: RegExpExecArray | null;
-  while ((m = re.exec(blob)) !== null) out.push(m[1]!);
-  return out;
+  while ((m = re.exec(blob)) !== null) normal.push(m[1]!);
+  if (normal.length > 0) return normal;
+
+  // Clarify/reject: split at each `- "…"` question marker and read its answer.
+  const idx = blob.indexOf('Questions asked:');
+  if (idx < 0) return [];
+  return blob
+    .slice(idx)
+    .split(/\r?\n-\s+"/)
+    .slice(1) // drop the `Questions asked:` preamble before the first marker
+    .map((chunk) => {
+      // The answer follows `Answer:` up to a blank line or the chunk's end;
+      // `(No answer provided)` has no `Answer:` and stays undefined.
+      const am = /Answer:\s*([\s\S]*?)(?:\r?\n\s*\r?\n|$)/.exec(chunk);
+      const a = am?.[1]?.trim();
+      return a ? a : undefined;
+    });
 }
 
 /** Fill in which option each question's student chose, or flag a typed answer. */
@@ -527,7 +551,13 @@ function renderDecisionText(questions: DecisionQuestion[]): string {
     for (const o of q.options) {
       lines.push(o.chosen ? `- **${o.label}** ✅ _(your choice)_` : `- ${o.label}`);
     }
-    if (q.custom && q.answer) lines.push('', `**You typed:** ${q.answer}`);
+    if (q.custom && q.answer) {
+      lines.push('', `**You typed:** ${q.answer}`);
+    } else if (!q.options.some((o) => o.chosen)) {
+      // No preset chosen and nothing typed — the student was asked but didn't pick
+      // (e.g. they clarified instead). Say so rather than leaving it ambiguous.
+      lines.push('', '_(no option selected)_');
+    }
     blocks.push(lines.join('\n'));
   }
   return blocks.join('\n\n');
