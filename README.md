@@ -9,11 +9,15 @@
 Showtail writes that record to a plain `.showtail/` folder inside your project. There are no accounts, no cloud service, and no telemetry. It is just local files that you and your educator can open, review, and commit with the rest of your work.
 
 ```bash
-showtail init                 # set up Showtail in your project
-showtail connect claude       # turn on automatic capture for your AI tool
+showtail setup                # one-time: connect your AI tools and turn on tracking
+showtail init                 # set up Showtail in a specific project (creates .showtail/)
 # ...now just work — your prompts and edits are captured automatically...
 showtail report               # generate the report for your educator
 ```
+
+`showtail setup` is the fastest start: it connects the AI tools it finds and turns on automatic
+tracking for every project. Prefer to wire up one project by hand? Use `showtail init` followed by
+`showtail connect <tool>` instead.
 
 ---
 
@@ -23,6 +27,7 @@ showtail report               # generate the report for your educator
 - A **hands-free** way to document your process: your prompts and edits are captured automatically as you work with AI.
 - A **local, file-based trail** that is easy to commit to git and easy for a human to review.
 - **Evidence of your process**, showing how you worked with AI to build the project.
+- **Team-aware.** On a group project, each student gets their own folder under one shared `.showtail/`, so trails merge through git without conflicts and the report can be per-student or a combined team view.
 
 ## What Showtail is not
 
@@ -100,17 +105,20 @@ showtail init --project "Week 5 Parser"
 
 # 2. Connect your AI tool so capture is automatic (one time).
 showtail connect claude         # or: copilot, codex
+#    (Already ran `showtail setup`? Tracking is on everywhere — skip steps 1–2.)
 
 # 3. Just work. Your prompts and the files your tool edits are captured for you.
 #    Check where you are any time:
 showtail status                 # current session, event count, connected tools
-showtail sessions               # list every session
+showtail sessions               # list your work sessions  (--all for the whole team)
 showtail trace src/parser.ts    # the full trail for one file
 
 # 4. Generate a report for your educator.
-showtail report                 # HTML and Markdown in .showtail/reports/
+showtail report                 # HTML + Markdown in .showtail/reports/ (team + per-student)
 showtail report --format md     # Markdown only
 showtail report --format json   # Machine-readable JSON
+showtail report --team          # just the combined team report
+showtail report --author <slug> # just one student's report
 
 # 5. Check the trail before you submit, then close the session.
 showtail verify
@@ -139,8 +147,31 @@ Every event records:
 - `type`
 - `text`
 - optional `files`
+- the `tool` it came through (e.g. `claude-code`, `github-copilot`, `codex`, `chatgpt`, `google-gemini`)
+- optional `tags`
 - the current git commit hash, if your project is a git repository
 - `actor: "student"`
+
+Captured text is scrubbed for secrets and personal data before it is stored (see [Privacy notes](#privacy-notes)).
+
+---
+
+## Working as a team
+
+Showtail supports group projects out of the box. Everyone shares one `.showtail/` folder, but each
+student's trail is written into their own `authors/<slug>/` folder, so two people working on
+different branches never collide — their trails **merge through git with no conflicts**.
+
+- **Identity is automatic.** The first time you work in a project, Showtail figures out who you are from
+  `gh auth`, then `git config user.email`, falling back to a one-time prompt. Your work lands in
+  `authors/<your-slug>/`.
+- **Reporting is per-student and combined.** `showtail report` writes a combined **team** report plus one
+  report per contributor by default. Narrow it with `showtail report --team` or
+  `showtail report --author <slug>`. The team report opens with a **Contributors** section.
+- **Sessions stay yours by default.** `showtail sessions` lists your own sessions; add `--all` to see
+  every contributor's.
+
+Solo? Nothing changes — you are simply the only author, and the team report is just your report.
 
 ---
 
@@ -401,13 +432,15 @@ Re-importing the same link is safe. Showtail skips messages it has already impor
 
 ### If the share link does not work
 
-A share link may not work if your school blocks public links, you do not want to make the conversation public, or the fetch is blocked. In that case, paste the conversation instead:
+A share link may not work if your school blocks public links, you do not want to make the conversation public, or the fetch is blocked. In that case, copy the conversation and import it from your clipboard:
 
 ```bash
-showtail import chatgpt --paste
+showtail import chatgpt --paste     # reads your clipboard, shows a preview to confirm
 ```
 
-Then paste the conversation and press Ctrl-D. On Windows, press Ctrl-Z and Enter.
+Copy the conversation first, then run the command — Showtail reads it from your clipboard and prints
+back what it recorded so you can skim it. Add `-y` to skip the confirmation prompt. (Piping still
+works for scripts: `cat my-chat.txt | showtail import chatgpt --paste`.)
 
 You can also import from a saved text file:
 
@@ -468,7 +501,7 @@ As a backup — your school blocks the link, or you'd rather not make a chat pub
 conversation instead:
 
 ```bash
-showtail import gemini --paste         # then paste the conversation and press Ctrl-D (Ctrl-Z↵ on Windows)
+showtail import gemini --paste         # copy the conversation first; reads your clipboard (add -y to skip the preview)
 # or from a saved transcript file:
 showtail import gemini --file my-chat.txt
 ```
@@ -487,10 +520,10 @@ import it, then delete the link. The import itself stays local like everything e
 ## Example classroom workflow
 
 1. **Teacher:** Ask students to use Showtail for a project and commit `.showtail/` with their work.
-2. **Student:** Run `showtail init`, then `showtail connect <tool>` to turn on automatic capture.
-3. **Student:** Work on the project as usual — prompts and edits are captured for you.
-4. **Student:** Before submitting, run `showtail report` and `showtail verify`, then commit everything, including `.showtail/`.
-5. **Teacher:** Open `.showtail/reports/report-*.html` in a browser to review the trail. The Markdown source sits beside it.
+2. **Student:** Run `showtail setup` once (or `showtail init` then `showtail connect <tool>` per project) to turn on automatic capture.
+3. **Student:** Work on the project as usual — prompts and edits are captured for you. On a group project, each teammate's trail lands in their own `authors/<slug>/` folder and merges through git without conflicts.
+4. **Student:** Before submitting, run `showtail verify`, then commit everything, including `.showtail/`. (Reports are regenerable and git-ignored by default — no need to commit them.)
+5. **Teacher:** Run `showtail report` to (re)generate the trail, then open `.showtail/reports/report-team-*.html` for the whole group, or a `report-<student>-*.html` for one student. The Markdown source sits beside each.
 6. **Teacher:** Run `showtail verify` or `showtail trace <file>` when a deeper review is needed.
 
 The goal is not to catch anyone. The goal is to make the process visible and give students a structured way to demonstrate genuine understanding.
@@ -528,7 +561,7 @@ _AI response:_
 
 Start by splitting the file on newlines, then parse each row into fields.
 
-_Suggested code — `src/parser.ts` (~6 line(s)):_
+_Suggested code — [`src/parser.ts`](../../src/parser.ts) (~6 line(s)):_
 
 ```diff
 +export function parse(csv: string): string[][] {
@@ -546,6 +579,10 @@ _Suggested code — `src/parser.ts` (~6 line(s)):_
 > records each. The work and understanding represented here are my own.
 ````
 
+On a group project, the combined **team** report adds a **Contributors** section listing each student
+and how much they contributed, and the timeline shows who did what. If any secrets or personal details
+were scrubbed before storage, the report notes how many.
+
 ---
 
 ## Privacy notes
@@ -555,40 +592,54 @@ Showtail is privacy-first by design:
 - **Everything is local.** All data lives in the `.showtail/` folder in your project.
 - **No telemetry, no analytics, no external API calls.** Ever.
 - **You control what is recorded.** Showtail only logs what you explicitly run, unless you enable one of the optional capture integrations.
+- **Secrets are scrubbed before storage.** Showtail makes a best-effort pass to redact provider keys, tokens, passwords, and personal data (email, phone, card, SSN) from captured text *before* it is written, and the report notes how many it removed. It is a safety net, not a guarantee — still avoid putting secrets in prompts. Tune it under `settings.redact` in `config.json`.
 - **The files are plain and inspectable.** They are JSON and JSONL files that you can open in any editor.
 
 ### Committing `.showtail/`
 
-Showtail is designed to be committed into your repository so your educator can review it. The default `.gitignore` does not ignore `.showtail/`.
+Showtail is designed to be committed into your repository so your educator can review it. The project-root `.gitignore` does not ignore `.showtail/`.
 
-Before you commit, remember that your captured prompts become part of your git history. Do not put passwords, private personal information, or anything you would not want shared into your prompts while capture is on.
+Showtail writes its own `.showtail/.gitignore` that excludes only the regenerable, machine-local bits — `state.json` and `reports/`. Everything else, including every student's `authors/<slug>/` folder and the shared `objects/` store, is committed, which is what lets teammates' trails merge through git. (Reports are regenerated with `showtail report`, so they do not need to be committed.)
 
-If a project is sensitive, you can add `.showtail/` to your `.gitignore` and share reports another way.
+Before you commit, remember that your captured prompts become part of your git history. Redaction helps, but do not rely on it — keep passwords, private personal information, and anything you would not want shared out of your prompts while capture is on.
+
+If a project is sensitive, you can add `.showtail/` to your project-root `.gitignore` and share reports another way.
 
 ---
 
 ## Data layout
 
+Each student's writable files are partitioned into their own `authors/<slug>/` folder, while the
+content store and project config are shared. That split is what lets two students merge their trails
+through git without a conflict.
+
 ```text
 .showtail/
-  config.json                # project settings: version, name, git on/off
-  state.json                 # which session new events go to
-  sessions/
-    index.json               # list of sessions
-    <sessionId>.jsonl        # one JSON event per line
-  artifacts/
-    index.json               # append-only history of file snapshots and hashes
-  reports/
-    report-<timestamp>.html  # generated report, open in a browser
-    report-<timestamp>.md    # Markdown source the HTML is rendered from
-    report-<timestamp>.json
+  config.json                    # shared project settings (version, name, git, capture & redaction)
+  state.json                     # machine-local: active session/author (git-ignored)
+  authors/                       # one folder per student, keyed by a slug of their email
+    <slug>/
+      author.json                # that student's identity (name, email, github login)
+      sessions.json              # their list of work sessions
+      journal/                   # their append-only log of events + file snapshots (JSONL segments)
+  objects/                       # shared, content-addressed store: prompt/response text & code diffs, deduped
+  reports/                       # generated reports (git-ignored — regenerate with `showtail report`)
+    report-team-<timestamp>.html       # combined team report (open in a browser)
+    report-<slug>-<timestamp>.html     # one per student
+    report-*-<timestamp>.md            # Markdown source each HTML is rendered from
+    report-*-<timestamp>.json          # machine-readable JSON
+  .gitattributes                 # marks the trail binary so EOL rewrites can't break content hashes
+  .gitignore                     # ignores state.json and reports/
 ```
+
+Identity is resolved automatically the first time you work in a project — from `gh auth`, then your
+`git config user.email`, falling back to a one-time prompt — and cached per machine.
 
 ---
 
 ## Development
 
-Showtail is built with TypeScript on the [Bun](https://bun.sh) runtime. It has minimal dependencies: `commander` for the CLI, with hashing and git handled through the standard library.
+Showtail is built with TypeScript on the [Bun](https://bun.sh) runtime. It keeps dependencies small: `commander` for the CLI and `turbo-stream` for decoding shared-chat transcripts, with hashing and git handled through the standard library.
 
 ```bash
 bun install
@@ -610,6 +661,8 @@ Showtail's MVP is a local CLI with a small core that can grow over time:
 - Completed: **ChatGPT import** to bring selected conversations into the same trail. See [ChatGPT integration](#chatgpt-integration).
 - Completed: **Google Gemini import** to bring conversations into the same trail from a share link or a paste. See [Google Gemini integration](#google-gemini-integration).
 - Completed: **OpenAI Codex integration** to capture Codex prompts and edits through `AGENTS.md` and hooks. See [OpenAI Codex integration](#openai-codex-integration).
+- Completed: **Team trails** so several students share one `.showtail/`, merge their work through git conflict-free, and get a combined team report. See [Working as a team](#working-as-a-team).
+- Completed: **Automatic secret/PII redaction** that scrubs captured text before it is stored. See [Privacy notes](#privacy-notes).
 - Planned: **GitHub Action** to verify a submission's trail automatically in CI.
 - Planned: **Signed provenance records** for stronger guarantees.
 - Planned: **Educator dashboard** to review many students' trails at a glance.
