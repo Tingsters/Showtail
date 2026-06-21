@@ -27,10 +27,31 @@ import { importedSourceIds, logEvent } from './events.ts';
 import { asArray, asString, isObject, prop } from './parse.ts';
 import { toRepoRelative, type AuthorPaths } from './storage.ts';
 
+/** One option the AI offered for a decision, and whether the student picked it. */
+export interface DecisionOption {
+  label: string;
+  description?: string;
+  chosen: boolean;
+}
+
+/** One question in an AskUserQuestion decision, with its options and the answer. */
+export interface DecisionQuestion {
+  question: string;
+  header?: string;
+  options: DecisionOption[];
+  /** The student's answer text (a chosen label, or free-typed text). */
+  answer?: string;
+  /** True when the answer was typed in, matching no offered option. */
+  custom: boolean;
+}
+
 /** A normalized message recovered from a transcript. */
 export interface ClaudeMessage {
-  /** "user" (a typed prompt), "assistant" (a text reply), or "edit" (a file the AI changed). */
-  role: 'user' | 'assistant' | 'edit';
+  /**
+   * "user" (a typed prompt), "assistant" (a text reply), "edit" (a file the AI
+   * changed), or "decision" (a choice the student made when the AI paused to ask).
+   */
+  role: 'user' | 'assistant' | 'edit' | 'decision';
   text: string;
   /** ISO-8601 timestamp from the transcript line, if present. */
   timestamp?: string;
@@ -38,6 +59,12 @@ export interface ClaudeMessage {
   sourceId: string;
   /** For edits: the repo-relative file path(s) the AI touched. */
   files?: string[];
+  /**
+   * For decisions: the parsed questions + options. The answer is filled in a
+   * second pass (the student's reply is a later transcript line), after which
+   * `text` is rendered from this.
+   */
+  questions?: DecisionQuestion[];
 }
 
 /** A normalized transcript: just the messages we care about, in order. */
@@ -278,6 +305,10 @@ export function readTranscriptFile(path: string, root: string): ClaudeTranscript
 export function parseClaudeTranscript(content: string, root: string): ClaudeTranscript {
   const messages: ClaudeMessage[] = [];
   let sessionId: string | undefined;
+  // The student's answers to AskUserQuestion arrive as `tool_result` blocks on
+  // *later* user lines, keyed by the question's `tool_use` id. Collect them as we
+  // go, then resolve each decision's answer in a second pass below.
+  const answersByToolId = new Map<string, string>();
 
   for (const rawLine of content.split(/\r?\n/)) {
     const line = rawLine.trim();
@@ -304,11 +335,20 @@ export function parseClaudeTranscript(content: string, root: string): ClaudeTran
 
     const type = prop(obj, 'type');
     if (type === 'user') {
+      collectDecisionAnswers(obj, answersByToolId);
       const msg = handleUser(obj);
       if (msg) messages.push(msg);
     } else if (type === 'assistant') {
       messages.push(...handleAssistant(obj, root));
     }
+  }
+
+  // Second pass: pair each decision with the student's answer and (re-)render it.
+  for (const m of messages) {
+    if (m.role !== 'decision' || !m.questions) continue;
+    const blob = answersByToolId.get(m.sourceId);
+    if (blob) resolveDecisionAnswers(m.questions, blob);
+    m.text = renderDecisionText(m.questions);
   }
 
   return {
@@ -371,6 +411,20 @@ function handleAssistant(obj: unknown, root: string): ClaudeMessage[] {
         timestamp,
         sourceId: partId ? partId : `${uuid}:${out.length}`,
       });
+    } else if (type === 'tool_use' && name === 'AskUserQuestion') {
+      // The AI paused to ask the student to choose. Capture the question(s) and
+      // options now; the student's answer is a later transcript line and is
+      // resolved in a second pass (see parseClaudeTranscript).
+      const questions = parseDecisionQuestions(prop(part, 'input'));
+      if (questions.length === 0) continue;
+      const partId = asString(prop(part, 'id'));
+      out.push({
+        role: 'decision',
+        text: renderDecisionText(questions), // provisional; re-rendered with the answer
+        questions,
+        timestamp,
+        sourceId: partId ? partId : `${uuid}:${out.length}`,
+      });
     }
   }
 
@@ -394,6 +448,91 @@ function relForEdit(filePath: unknown, root: string): string | null {
   return rel;
 }
 
+// --- Decisions (AskUserQuestion) -------------------------------------------
+
+/** Parse the `input` of an AskUserQuestion tool_use into structured questions. */
+function parseDecisionQuestions(input: unknown): DecisionQuestion[] {
+  const questions = asArray(prop(input, 'questions'));
+  if (!questions) return [];
+  const out: DecisionQuestion[] = [];
+  for (const q of questions) {
+    const question = asString(prop(q, 'question'));
+    if (!question) continue;
+    const options: DecisionOption[] = [];
+    for (const o of asArray(prop(q, 'options')) ?? []) {
+      const label = asString(prop(o, 'label'));
+      if (!label) continue;
+      options.push({
+        label,
+        description: asString(prop(o, 'description')),
+        chosen: false,
+      });
+    }
+    out.push({ question, header: asString(prop(q, 'header')), options, custom: false });
+  }
+  return out;
+}
+
+/** Collect any AskUserQuestion answers carried on a user line's tool_result blocks. */
+function collectDecisionAnswers(obj: unknown, into: Map<string, string>): void {
+  const content = asArray(prop(prop(obj, 'message'), 'content'));
+  if (!content) return;
+  for (const part of content) {
+    if (prop(part, 'type') !== 'tool_result') continue;
+    const id = asString(prop(part, 'tool_use_id'));
+    const text = asString(prop(part, 'content'));
+    if (id && text) into.set(id, text);
+  }
+}
+
+/**
+ * Pull the answer *values* out of the result string, in order. The harness
+ * formats answers as `"<question>"="<answer>" selected preview:\n…`, so we match
+ * each `"…"="(answer)"` value positionally (the question text in the result can
+ * differ slightly from the asked text, so we don't key on it).
+ */
+function parseAnswerValues(blob: string): string[] {
+  const out: string[] = [];
+  const re = /"[^"]*"\s*=\s*"([^"]*)"(?=\s+selected preview|\s*[,.]|\s*$)/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(blob)) !== null) out.push(m[1]!);
+  return out;
+}
+
+/** Fill in which option each question's student chose, or flag a typed answer. */
+function resolveDecisionAnswers(questions: DecisionQuestion[], blob: string): void {
+  const answers = parseAnswerValues(blob);
+  questions.forEach((q, i) => {
+    const answer = answers[i];
+    if (answer === undefined) return;
+    q.answer = answer;
+    // multiSelect answers are comma-joined labels; single answers match one label.
+    const picked = answer.split(/,\s*/);
+    let matched = false;
+    for (const o of q.options) {
+      if (o.label === answer || picked.includes(o.label)) {
+        o.chosen = true;
+        matched = true;
+      }
+    }
+    q.custom = !matched; // no option matched → the student typed their own answer
+  });
+}
+
+/** Render a decision as readable Markdown: the question, every option, the choice. */
+function renderDecisionText(questions: DecisionQuestion[]): string {
+  const blocks: string[] = [];
+  for (const q of questions) {
+    const lines: string[] = [`**Claude asked:** ${q.question}`, ''];
+    for (const o of q.options) {
+      lines.push(o.chosen ? `- **${o.label}** ✅ _(your choice)_` : `- ${o.label}`);
+    }
+    if (q.custom && q.answer) lines.push('', `**You typed:** ${q.answer}`);
+    blocks.push(lines.join('\n'));
+  }
+  return blocks.join('\n\n');
+}
+
 // --- Importing -------------------------------------------------------------
 
 export interface ClaudeImportOptions {
@@ -409,6 +548,7 @@ export interface ClaudeImportResult {
   prompts: number;
   responses: number;
   edits: number;
+  decisions: number;
   skipped: number;
   first?: string;
   last?: string;
@@ -417,10 +557,11 @@ export interface ClaudeImportResult {
 /**
  * Import a parsed transcript into the trail. User prompts become `prompt`
  * events, assistant replies become `ai_output` (only with `withResponses`),
- * and each AI edit becomes a back-dated `artifact` event noting the file —
- * not a hash snapshot, since a past file's hash can't be recovered. Every
- * event is tagged `tool: claude-code` and `imported`, stamped with the original
- * time, and deduped by `sourceId` so re-importing the same transcript adds nothing.
+ * each AI edit becomes a back-dated `artifact` event noting the file (not a hash
+ * snapshot, since a past file's hash can't be recovered), and each AskUserQuestion
+ * choice becomes a `decision` event (always imported — it's the student's own
+ * work). Every event is tagged `tool: claude-code` and `imported`, stamped with
+ * the original time, and deduped by `sourceId` so re-importing adds nothing.
  */
 export async function importClaudeTranscript(
   author: AuthorPaths,
@@ -433,6 +574,7 @@ export async function importClaudeTranscript(
     prompts: 0,
     responses: 0,
     edits: 0,
+    decisions: 0,
     skipped: 0,
   };
 
@@ -453,7 +595,9 @@ export async function importClaudeTranscript(
         ? 'prompt'
         : msg.role === 'assistant'
           ? 'ai_output'
-          : 'artifact';
+          : msg.role === 'decision'
+            ? 'decision'
+            : 'artifact';
 
     const { event } = await logEvent(author, {
       type,
@@ -471,6 +615,7 @@ export async function importClaudeTranscript(
 
     if (msg.role === 'user') result.prompts += 1;
     else if (msg.role === 'assistant') result.responses += 1;
+    else if (msg.role === 'decision') result.decisions += 1;
     else result.edits += 1;
 
     if (msg.timestamp) {

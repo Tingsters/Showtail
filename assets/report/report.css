@@ -149,6 +149,16 @@ blockquote {
   color: #8a8a94;
 }
 .prompt-block .ai-text { margin: 0.1rem 0 0; }
+/* A decision the student made when the AI paused to ask — a warm accent so it
+   reads as distinct from a prompt (blue) or an AI reply (plain). */
+.decision {
+  margin: 0.4rem 0 0.6rem;
+  padding: 0.2rem 0 0.2rem 0.7rem;
+  border-left: 3px solid #d99a2b;
+  background: #fbf4e6;
+}
+.decision-tag { color: #a06a12; }
+.decision .ai-text { margin: 0.1rem 0 0; }
 .code { margin: 0.4rem 0; }
 .code > summary { cursor: pointer; font-size: 0.85rem; color: #3a3f6b; }
 /* A code change with no captured diff: a plain file row, no disclosure arrow. */
@@ -246,4 +256,6 @@ pre.codeblock code { background: none; padding: 0; font-size: inherit; border-ra
   .ai-sep { border-top-color: #34343a; }
   .turn-close { color: #b8b8c2; background: #242429; border-top-color: #34343a; }
   .turn-close:hover { background: #2c2c33; color: #e4e4ea; }
+  .decision { background: #2b2519; border-left-color: #b9842a; }
+  .decision-tag { color: #e0b257; }
 }

@@ -84,4 +84,5 @@ looks finished.
 | `showtail verify` | Check the trail is valid and consistent |
 | `showtail trace <file>` | Show a file's provenance trail |
 
-Event types: `prompt`, `ai_output`, `artifact` — all captured automatically when hooks are on.
+Event types: `prompt`, `ai_output`, `artifact`, `decision` (the student's choice when you pause to
+ask via AskUserQuestion) — all captured automatically when hooks are on.

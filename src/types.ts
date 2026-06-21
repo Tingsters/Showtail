@@ -14,6 +14,7 @@ export const EVENT_TYPES = [
   'prompt', // a prompt the student gave to an AI tool
   'ai_output', // an AI response
   'artifact', // a file that was created or changed (usually auto-logged)
+  'decision', // a choice the student made when the AI paused to ask (AskUserQuestion)
 ] as const;
 
 export type EventType = (typeof EVENT_TYPES)[number];
@@ -255,6 +256,8 @@ export interface ReportData {
     sessions: number;
     events: number;
     artifacts: number;
+    /** How many `decision` events (AskUserQuestion choices) the student made. */
+    decisions: number;
   };
   /** Everyone who contributed to the trail (one entry for a single-author report). */
   contributors: Contributor[];
@@ -287,6 +290,8 @@ export interface Turn {
   prompt: Event;
   aiOutputs: Event[];
   codeChanges: TurnCodeChange[];
+  /** Decisions the student made mid-exchange (the AI paused to ask). */
+  decisions: Event[];
   tool: Tool;
   /** Which author this exchange belongs to — used to attribute/color turns. */
   actorSlug: ActorSlug;

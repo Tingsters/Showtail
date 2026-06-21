@@ -94,6 +94,7 @@ export function buildReportData(
       sessions: sessionCount,
       events: events.length,
       artifacts: artifacts.length,
+      decisions: events.filter((e) => e.type === 'decision').length,
     },
     contributors,
     tools,
@@ -162,6 +163,7 @@ export function buildTurns(
     prompt: event,
     aiOutputs: [],
     codeChanges: [],
+    decisions: [],
     tool: toolOf(event),
     actorSlug: event.actorSlug,
   }));
@@ -188,6 +190,16 @@ export function buildTurns(
       (event.turnId ? turnByPrompt.get(event.turnId) : undefined) ??
       fallback(event.timestamp, actorSlug, sessionId);
     if (turn) turn.aiOutputs.push(event);
+  }
+
+  // Decisions (AskUserQuestion choices) attach to the turn they happened within,
+  // the same way replies do.
+  for (const { event, sessionId, actorSlug } of withSession) {
+    if (event.type !== 'decision') continue;
+    const turn =
+      (event.turnId ? turnByPrompt.get(event.turnId) : undefined) ??
+      fallback(event.timestamp, actorSlug, sessionId);
+    if (turn) turn.decisions.push(event);
   }
 
   for (const a of artifacts) {

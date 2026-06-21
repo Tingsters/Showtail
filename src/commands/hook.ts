@@ -258,9 +258,11 @@ async function handleStop(
   tool: Tool,
   config: Config,
 ): Promise<void> {
-  if (config.settings.captureAiOutput === false) return;
   const transcriptPath = payload?.transcript_path;
   if (typeof transcriptPath !== 'string' || !existsSync(transcriptPath)) return;
+  // AI text replies obey `captureAiOutput`; prompts and decisions are the
+  // student's own work and are captured regardless.
+  const captureAi = config.settings.captureAiOutput !== false;
 
   let transcript;
   try {
@@ -337,9 +339,22 @@ async function handleStop(
       currentTurn = id;
     } else if (msg.role === 'assistant') {
       // A reply only belongs to the trail if it follows an in-window prompt.
-      if (!currentTurn || seen.has(msg.sourceId)) continue;
+      if (!captureAi || !currentTurn || seen.has(msg.sourceId)) continue;
       await logEvent(author, {
         type: 'ai_output',
+        text: msg.text,
+        tool,
+        turnId: currentTurn,
+        sourceId: msg.sourceId,
+        sessionId,
+      });
+      seen.add(msg.sourceId);
+    } else if (msg.role === 'decision') {
+      // The student chose between options the AI offered — their own work, so
+      // it's captured even when AI-output capture is off. Attach to the open turn.
+      if (!currentTurn || seen.has(msg.sourceId)) continue;
+      await logEvent(author, {
+        type: 'decision',
         text: msg.text,
         tool,
         turnId: currentTurn,

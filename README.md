@@ -132,13 +132,14 @@ See [the integrations below](#claude-code-integration) for importing a conversat
 
 ## Event types
 
-Showtail records three kinds of event, all captured automatically while you work:
+Showtail records four kinds of event, all captured automatically while you work:
 
 | Type | What it is |
 | ---- | ---------- |
 | `prompt` | A prompt you sent to an AI tool |
 | `ai_output` | An AI response |
 | `artifact` | A file you created or changed |
+| `decision` | A choice you made when the AI paused to ask you to pick between options |
 
 Every event records:
 
@@ -199,6 +200,7 @@ What this gives you:
 | ---- | ------------------ |
 | You submit a prompt | Logs it as a `prompt` event |
 | Claude edits or writes a file | Snapshots that file as an `artifact` |
+| Claude pauses to ask you to choose between options | Logs your choice as a `decision` |
 | A session starts | Ensures a work session exists |
 
 If you install with `--no-hooks`, the skill can still check `showtail status --json` and log prompts and file snapshots itself. That mode is model-driven rather than guaranteed, but it still gives you a useful trail.

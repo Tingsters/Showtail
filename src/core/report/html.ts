@@ -101,6 +101,16 @@ function turnsHtml(data: ReportData): string {
       if (i > 0) out.push('<hr class="ai-sep">');
       out.push(`<div class="ai-text">${renderRichText(ai.text)}</div>`);
     });
+    // Decisions the student made mid-exchange, in their own labelled block so a
+    // reviewer can't mistake them for a prompt or an AI reply.
+    for (const decision of turn.decisions) {
+      out.push(
+        '<div class="decision">' +
+          '<span class="role-tag decision-tag">🔀 Decision</span>' +
+          `<div class="ai-text">${renderRichText(decision.text)}</div>` +
+          '</div>',
+      );
+    }
     for (const code of turn.codeChanges) {
       const stat2 = code.diffLines ? ` (~${code.diffLines} line(s))` : '';
       const fileLink =

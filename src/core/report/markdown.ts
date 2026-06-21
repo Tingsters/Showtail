@@ -39,9 +39,12 @@ export function buildMarkdown(data: ReportData, turnsPlaceholder = false): strin
 
   lines.push(`# ${title}`, '');
   lines.push(`_Generated ${fmt(data.generatedAt)}_`, '');
+  const decisionsPart =
+    data.summary.decisions > 0 ? `, ${data.summary.decisions} decision(s)` : '';
   lines.push(
     `**Summary:** ${data.summary.sessions} session(s), ` +
-      `${data.summary.events} event(s), ${data.summary.artifacts} artifact record(s).`,
+      `${data.summary.events} event(s), ${data.summary.artifacts} artifact record(s)` +
+      `${decisionsPart}.`,
     '',
   );
   if (data.redactionCount > 0) {
@@ -120,6 +123,10 @@ function turnMarkdown(lines: string[], turn: Turn, author?: string): void {
   for (const ai of turn.aiOutputs) {
     lines.push('_AI response:_', '');
     lines.push(ai.text, '');
+  }
+  for (const decision of turn.decisions) {
+    lines.push('🔀 **Decision** · _you chose from the options Claude offered_', '');
+    lines.push(decision.text, '');
   }
   for (const code of turn.codeChanges) {
     const stat = code.diffLines ? ` (~${code.diffLines} line(s))` : '';
