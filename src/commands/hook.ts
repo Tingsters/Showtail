@@ -1,5 +1,6 @@
 import { existsSync } from 'node:fs';
 import { addArtifact } from '../core/artifacts.ts';
+import { resolveActiveAuthorForHook } from '../core/authors.ts';
 import { readTranscriptFile } from '../core/claudeCode.ts';
 import { importedSourceIds, logEvent, readSessionEvents } from '../core/events.ts';
 import {
@@ -22,7 +23,7 @@ import {
   setTurnForClaudeSession,
   turnForClaudeSession,
   updateState,
-  type ShowtailPaths,
+  type AuthorPaths,
 } from '../core/storage.ts';
 import type { Config, Tool } from '../types.ts';
 
@@ -44,9 +45,9 @@ export function isInternalPath(p: string): boolean {
 
 /**
  * Handle one hook event (from Claude Code or Codex). This is intentionally
- * bulletproof: any problem (no project, malformed input, missing file) results
- * in a silent no-op with exit code 0, so a student's session is never
- * interrupted.
+ * bulletproof: any problem (no project, malformed input, missing file, or no
+ * resolvable student identity) results in a silent no-op with exit code 0, so a
+ * student's session is never interrupted.
  */
 export async function runHook(
   event: HookEvent,
@@ -63,15 +64,21 @@ export async function runHook(
     if (!existsSync(paths.config)) return; // Not initialized.
     const config = readConfig(paths);
 
+    // Resolve who is writing this trail. Cache-only / git-config at worst — never
+    // prompts or hits the network, so the hook stays fast and non-blocking. If
+    // identity can't be settled silently, no-op rather than guess.
+    const author = await resolveActiveAuthorForHook(paths, { cwd });
+    if (!author) return;
+
     switch (event) {
       case 'session-start':
-        return handleSessionStart(paths, payload, tool);
+        return handleSessionStart(author, payload, tool);
       case 'user-prompt':
-        return await handleUserPrompt(paths, payload, tool);
+        return await handleUserPrompt(author, payload, tool);
       case 'post-edit':
-        return await handlePostEdit(paths, payload, tool, config);
+        return await handlePostEdit(author, payload, tool, config);
       case 'stop':
-        return await handleStop(paths, payload, tool, config);
+        return await handleStop(author, payload, tool, config);
     }
   } catch {
     // Swallow everything — a hook must never break the session.
@@ -80,19 +87,19 @@ export async function runHook(
 }
 
 function handleSessionStart(
-  paths: ShowtailPaths,
+  author: AuthorPaths,
   payload: HookPayload | null,
   tool: Tool,
 ): void {
-  // Bind this Showtail session to Claude's session_id when we have one, so a
+  // Bind this session to Claude's session_id when we have one, so a
   // resume/compact reuses the *same* trail instead of spawning a new session
   // each time. Without an id (older clients), fall back to the single current
   // session. Either way this becomes the CLI's "current" session.
   const claudeSessionId = extractSessionId(payload);
   const session = claudeSessionId
-    ? sessionForClaudeId(paths, claudeSessionId, { tool })
-    : (currentSession(paths) ?? startSession(paths));
-  updateState(paths, { currentSessionId: session.id });
+    ? sessionForClaudeId(author, claudeSessionId, { tool })
+    : (currentSession(author) ?? startSession(author));
+  updateState(author.shared, { currentSessionId: session.id });
   // SessionStart stdout is injected into Claude's context — keep it to one line.
   process.stdout.write(
     `Showtail is capturing this session's work trail (session ${session.id}). ` +
@@ -101,7 +108,7 @@ function handleSessionStart(
 }
 
 async function handleUserPrompt(
-  paths: ShowtailPaths,
+  author: AuthorPaths,
   payload: HookPayload | null,
   tool: Tool,
 ): Promise<void> {
@@ -113,22 +120,22 @@ async function handleUserPrompt(
   // session is used (unchanged behavior).
   const claudeSessionId = extractSessionId(payload);
   const sessionId = claudeSessionId
-    ? sessionForClaudeId(paths, claudeSessionId, { tool }).id
+    ? sessionForClaudeId(author, claudeSessionId, { tool }).id
     : undefined;
-  const { event } = await logEvent(paths, { type: 'prompt', text, tool, sessionId });
+  const { event } = await logEvent(author, { type: 'prompt', text, tool, sessionId });
   // Open a new "turn": edits and AI output that follow link back to this prompt.
   // Track it per Claude session so interleaved sessions don't share one turn.
   if (claudeSessionId) {
-    updateState(paths, { currentSessionId: sessionId });
-    setTurnForClaudeSession(paths, claudeSessionId, event.id);
+    updateState(author.shared, { currentSessionId: sessionId });
+    setTurnForClaudeSession(author.shared, claudeSessionId, event.id);
   } else {
-    updateState(paths, { currentPromptId: event.id });
+    updateState(author.shared, { currentPromptId: event.id });
   }
   // Print nothing: this path must not add anything to the session's context.
 }
 
 async function handlePostEdit(
-  paths: ShowtailPaths,
+  author: AuthorPaths,
   payload: HookPayload | null,
   tool: Tool,
   config: Config,
@@ -138,8 +145,10 @@ async function handlePostEdit(
   // which one fired; otherwise the global current turn (unchanged behavior).
   const claudeSessionId = extractSessionId(payload);
   const turnId =
-    (claudeSessionId ? turnForClaudeSession(paths, claudeSessionId) : undefined) ??
-    readState(paths).currentPromptId ??
+    (claudeSessionId
+      ? turnForClaudeSession(author.shared, claudeSessionId)
+      : undefined) ??
+    readState(author.shared).currentPromptId ??
     undefined;
   // Capture the AI-suggested code (unless code capture is turned off).
   const diff =
@@ -150,7 +159,7 @@ async function handlePostEdit(
   for (const file of files) {
     if (isInternalPath(file)) continue;
     try {
-      await addArtifact(paths, { filePath: file, tool, turnId, diff });
+      await addArtifact(author, { filePath: file, tool, turnId, diff });
     } catch {
       // File may have been moved/deleted by now — skip it quietly.
     }
@@ -166,9 +175,9 @@ async function handlePostEdit(
  * back-filled here (never dropped); the `Stop` and `user-prompt` hooks are
  * separate, so a prompt can be absent even though the student really sent it.
  *
- * Replies are attributed to the Showtail session that mirrors *this transcript's
- * own* Claude `session_id` — never a single global "current" session, which
- * under concurrent/resumed sessions points at the wrong one and silently drops
+ * Replies are attributed to the session that mirrors *this transcript's own*
+ * Claude `session_id` — never a single global "current" session, which under
+ * concurrent/resumed sessions points at the wrong one and silently drops
  * legitimate replies.
  *
  * The only thing excluded is content from *before this session started watching*
@@ -179,7 +188,7 @@ async function handlePostEdit(
  * no transcript (e.g. Codex) means a silent no-op.
  */
 async function handleStop(
-  paths: ShowtailPaths,
+  author: AuthorPaths,
   payload: HookPayload | null,
   tool: Tool,
   config: Config,
@@ -190,7 +199,7 @@ async function handleStop(
 
   let transcript;
   try {
-    transcript = readTranscriptFile(transcriptPath, paths.root);
+    transcript = readTranscriptFile(transcriptPath, author.shared.root);
   } catch {
     return; // Unknown/unsupported transcript format — nothing to capture.
   }
@@ -201,10 +210,12 @@ async function handleStop(
   const claudeSessionId = transcript.sessionId ?? extractSessionId(payload);
   let session;
   if (claudeSessionId) {
-    session = sessionForClaudeId(paths, claudeSessionId, { tool });
+    session = sessionForClaudeId(author, claudeSessionId, { tool });
   } else {
-    const currentId = readState(paths).currentSessionId;
-    session = currentId ? readSessions(paths).find((s) => s.id === currentId) : undefined;
+    const currentId = readState(author.shared).currentSessionId;
+    session = currentId
+      ? readSessions(author).find((s) => s.id === currentId)
+      : undefined;
   }
   if (!session) return; // No session to attribute to.
   const sessionId = session.id;
@@ -215,7 +226,7 @@ async function handleStop(
   // (a prompt logged live), so duplicate prompt texts line up in order.
   const bySourceId = new Map<string, string>();
   const byText = new Map<string, string[]>();
-  for (const p of readSessionEvents(paths, sessionId)) {
+  for (const p of readSessionEvents(author, sessionId)) {
     if (p.type !== 'prompt') continue;
     if (p.sourceId) bySourceId.set(p.sourceId, p.id);
     const queue = byText.get(p.text) ?? [];
@@ -223,7 +234,7 @@ async function handleStop(
     byText.set(p.text, queue);
   }
 
-  const seen = importedSourceIds(paths);
+  const seen = importedSourceIds(author);
   const redactCfg = config.settings.redact;
   let currentTurn: string | undefined; // The prompt id replies attach to.
 
@@ -247,7 +258,7 @@ async function handleStop(
           currentTurn = undefined;
           continue;
         }
-        const { event } = await logEvent(paths, {
+        const { event } = await logEvent(author, {
           type: 'prompt',
           text: msg.text,
           tool,
@@ -262,7 +273,7 @@ async function handleStop(
     } else if (msg.role === 'assistant') {
       // A reply only belongs to the trail if it follows an in-window prompt.
       if (!currentTurn || seen.has(msg.sourceId)) continue;
-      await logEvent(paths, {
+      await logEvent(author, {
         type: 'ai_output',
         text: msg.text,
         tool,

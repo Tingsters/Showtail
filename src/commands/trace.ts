@@ -1,5 +1,5 @@
 import type { Artifact, Event } from '../types.ts';
-import { artifactsForPath } from '../core/artifacts.ts';
+import { readAllArtifacts } from '../core/artifacts.ts';
 import { readAllEvents } from '../core/events.ts';
 import { requirePaths, toRepoRelative } from '../core/storage.ts';
 
@@ -26,9 +26,10 @@ function collectTrace(cwd: string | undefined, file: string): TraceResult {
   const paths = requirePaths(cwd);
   const repoPath = toRepoRelative(paths.root, file);
 
-  const artifacts = artifactsForPath(paths, repoPath).sort((a, b) =>
-    a.timestamp.localeCompare(b.timestamp),
-  );
+  // A file may have been touched by several teammates, so trace across all authors.
+  const artifacts = readAllArtifacts(paths)
+    .filter((a) => a.path === repoPath)
+    .sort((a, b) => a.timestamp.localeCompare(b.timestamp));
 
   const events = readAllEvents(paths)
     .filter((e) => e.files?.includes(repoPath))

@@ -12,8 +12,8 @@ import { dirname, join, relative, resolve, sep } from 'node:path';
 import type { Config, JournalEntry, Session, State } from '../types.ts';
 
 export const SHOWTAIL_DIR = '.showtail';
-/** Bumped to 2 for the object-store + journal layout. */
-export const CONFIG_VERSION = 2;
+/** Bumped to 3 for the per-author layout (one folder per student). */
+export const CONFIG_VERSION = 3;
 
 /** Roll to a new journal segment once the active one passes this size. */
 const JOURNAL_SEGMENT_MAX_BYTES = 8 * 1024 * 1024;
@@ -21,7 +21,15 @@ const JOURNAL_SEGMENT_MAX_BYTES = 8 * 1024 * 1024;
 export const JOURNAL_ENTRY_VERSION = 1;
 
 /**
- * A resolved view of a project's `.showtail/` layout. All paths are absolute.
+ * A resolved view of a project's *shared* `.showtail/` layout. All paths are
+ * absolute. These are the files every student in a repo shares (`config.json`),
+ * the conflict-free content store (`objects/`), local-only runtime
+ * (`state.json`, `reports/`), and the `authors/` directory under which each
+ * student's own trail lives.
+ *
+ * Per-author paths (journal, sessions) are resolved separately via
+ * {@link authorPaths} — partitioning every *writable* file per author is what
+ * lets two students merge their trails through git without a conflict.
  */
 export interface ShowtailPaths {
   /** The directory that contains `.showtail/` (the project root). */
@@ -30,13 +38,38 @@ export interface ShowtailPaths {
   base: string;
   config: string;
   state: string;
-  sessionsDir: string;
-  sessionsIndex: string;
-  /** Content-addressed object store (prompt/response text, code diffs). */
+  /** Parent of every per-author folder (`authors/<slug>/`). */
+  authorsDir: string;
+  /** Content-addressed object store (prompt/response text, code diffs). Shared. */
   objectsDir: string;
-  /** Append-only journal segments (event + artifact metadata). */
-  journalDir: string;
   reportsDir: string;
+}
+
+/**
+ * A resolved view of one author's per-author trail under `authors/<slug>/`.
+ * Carries a back-reference to the {@link ShowtailPaths} so a single value
+ * threaded through the write path can reach both the author's own
+ * journal/sessions and the shared object store / config / state.
+ */
+export interface AuthorPaths {
+  /** The shared project paths this author belongs to. */
+  shared: ShowtailPaths;
+  /** The author's folder key (slugified email). */
+  slug: string;
+  /**
+   * This machine's id, used to shard the journal so the *same* student writing
+   * from two machines never collides on one segment file. Required to *append*;
+   * omitted for read-only views built when aggregating across authors.
+   */
+  machineId?: string;
+  /** `authors/<slug>/`. */
+  dir: string;
+  /** `authors/<slug>/author.json`. */
+  authorFile: string;
+  /** `authors/<slug>/sessions.json`. */
+  sessionsIndex: string;
+  /** `authors/<slug>/journal/` (segments live under `<machineId>/` subdirs). */
+  journalDir: string;
 }
 
 /** Error thrown when a command needs an initialized project but none is found. */
@@ -49,7 +82,7 @@ export class NotInitializedError extends Error {
   }
 }
 
-/** Build the set of `.showtail/` paths rooted at a given project directory. */
+/** Build the set of shared `.showtail/` paths rooted at a given project directory. */
 export function pathsForRoot(root: string): ShowtailPaths {
   const base = join(root, SHOWTAIL_DIR);
   return {
@@ -57,11 +90,31 @@ export function pathsForRoot(root: string): ShowtailPaths {
     base,
     config: join(base, 'config.json'),
     state: join(base, 'state.json'),
-    sessionsDir: join(base, 'sessions'),
-    sessionsIndex: join(base, 'sessions', 'index.json'),
+    authorsDir: join(base, 'authors'),
     objectsDir: join(base, 'objects'),
-    journalDir: join(base, 'journal'),
     reportsDir: join(base, 'reports'),
+  };
+}
+
+/**
+ * Build the per-author paths for one student under `authors/<slug>/`. Pass the
+ * local `machineId` when this view will be used to *append* to the journal; it
+ * may be omitted for read-only aggregation across authors.
+ */
+export function authorPaths(
+  paths: ShowtailPaths,
+  slug: string,
+  machineId?: string,
+): AuthorPaths {
+  const dir = join(paths.authorsDir, slug);
+  return {
+    shared: paths,
+    slug,
+    machineId,
+    dir,
+    authorFile: join(dir, 'author.json'),
+    sessionsIndex: join(dir, 'sessions.json'),
+    journalDir: join(dir, 'journal'),
   };
 }
 
@@ -192,37 +245,71 @@ export function turnForClaudeSession(
   return readState(paths).turnByClaudeSession?.[claudeSessionId];
 }
 
-export function readSessions(paths: ShowtailPaths): Session[] {
-  if (!existsSync(paths.sessionsIndex)) return [];
-  return readJson<Session[]>(paths.sessionsIndex);
+// --- Sessions (per author) ------------------------------------------------
+
+export function readSessions(author: AuthorPaths): Session[] {
+  if (!existsSync(author.sessionsIndex)) return [];
+  return readJson<Session[]>(author.sessionsIndex);
 }
 
-export function writeSessions(paths: ShowtailPaths, sessions: Session[]): void {
-  writeJson(paths.sessionsIndex, sessions);
+export function writeSessions(author: AuthorPaths, sessions: Session[]): void {
+  writeJson(author.sessionsIndex, sessions);
 }
 
-// --- Journal (append-only metadata log) -----------------------------------
+// --- Journal (per author, append-only, machine-sharded) -------------------
 
-/** Journal segment file names, oldest first. */
-function journalSegments(paths: ShowtailPaths): string[] {
-  if (!existsSync(paths.journalDir)) return [];
-  return readdirSync(paths.journalDir)
-    .filter((f) => /^\d+\.log$/.test(f))
-    .sort();
+/**
+ * The machine-shard directory new entries are written under. Sharding the
+ * journal by machine means the *same* student working from two machines writes
+ * to two different segment files, so even that case never produces a git merge
+ * conflict on the journal.
+ */
+function machineShardDir(author: AuthorPaths): string {
+  if (!author.machineId) {
+    throw new Error('Cannot append to the journal without a machineId.');
+  }
+  return join(author.journalDir, author.machineId);
 }
 
-/** The segment new entries should append to (creating the first one if needed). */
-function activeSegment(paths: ShowtailPaths): string {
-  const segments = journalSegments(paths);
-  const last = segments[segments.length - 1];
-  if (!last) return '0001.log';
-  const file = join(paths.journalDir, last);
+/** Every journal segment file (across all machine shards), oldest first. */
+function journalSegments(author: AuthorPaths): string[] {
+  if (!existsSync(author.journalDir)) return [];
+  const out: string[] = [];
+  for (const shard of readdirSync(author.journalDir)) {
+    const shardDir = join(author.journalDir, shard);
+    let entries: string[];
+    try {
+      entries = readdirSync(shardDir);
+    } catch {
+      continue; // Not a directory (defensive) — skip.
+    }
+    for (const f of entries) {
+      if (/^\d+\.log$/.test(f)) out.push(join(shardDir, f));
+    }
+  }
+  // Sort by shard then segment number — deterministic across reads. Cross-shard
+  // ordering is otherwise irrelevant: readers re-sort events by timestamp.
+  return out.sort();
+}
+
+/** The segment file new entries should append to (in this machine's shard). */
+function activeSegment(author: AuthorPaths): string {
+  const shardDir = machineShardDir(author);
+  let names: string[] = [];
+  if (existsSync(shardDir)) {
+    names = readdirSync(shardDir)
+      .filter((f) => /^\d+\.log$/.test(f))
+      .sort();
+  }
+  const last = names[names.length - 1];
+  if (!last) return join(shardDir, '0001.log');
+  const file = join(shardDir, last);
   // Roll to a fresh segment once the current one passes the size cap.
   if (statSync(file).size >= JOURNAL_SEGMENT_MAX_BYTES) {
     const n = Number(last.replace('.log', '')) + 1;
-    return `${String(n).padStart(4, '0')}.log`;
+    return join(shardDir, `${String(n).padStart(4, '0')}.log`);
   }
-  return last;
+  return file;
 }
 
 /** Bring an older/looser entry up to the current shape. Additive-only so far. */
@@ -234,16 +321,16 @@ export function normalizeEntry(raw: Record<string, unknown>): JournalEntry {
   };
 }
 
-/** Append one journal entry to the active segment (O(1), append-only). */
-export function appendJournal(paths: ShowtailPaths, entry: JournalEntry): void {
-  appendJsonl(join(paths.journalDir, activeSegment(paths)), entry);
+/** Append one journal entry to this author+machine's active segment. */
+export function appendJournal(author: AuthorPaths, entry: JournalEntry): void {
+  appendJsonl(activeSegment(author), entry);
 }
 
-/** Read every journal entry across all segments, in write order. */
-export function readJournal(paths: ShowtailPaths): JournalEntry[] {
+/** Read every journal entry for one author across all segments, in write order. */
+export function readJournal(author: AuthorPaths): JournalEntry[] {
   const out: JournalEntry[] = [];
-  for (const seg of journalSegments(paths)) {
-    for (const raw of readJsonl<Record<string, unknown>>(join(paths.journalDir, seg))) {
+  for (const seg of journalSegments(author)) {
+    for (const raw of readJsonl<Record<string, unknown>>(seg)) {
       out.push(normalizeEntry(raw));
     }
   }
@@ -251,17 +338,16 @@ export function readJournal(paths: ShowtailPaths): JournalEntry[] {
 }
 
 /**
- * Rewrite the journal, keeping only entries for which `keep` returns true, and
- * return how many were dropped. Used to remove a batch (e.g. `import undo`).
- * Rewrites affected segments only; objects are left for a future GC.
+ * Rewrite one author's journal, keeping only entries for which `keep` returns
+ * true, and return how many were dropped. Used to remove a batch (e.g. `import
+ * undo`). Rewrites affected segments only; objects are left for a future GC.
  */
 export function rewriteJournal(
-  paths: ShowtailPaths,
+  author: AuthorPaths,
   keep: (entry: JournalEntry) => boolean,
 ): number {
   let removed = 0;
-  for (const seg of journalSegments(paths)) {
-    const file = join(paths.journalDir, seg);
+  for (const file of journalSegments(author)) {
     const entries = readJsonl<Record<string, unknown>>(file).map(normalizeEntry);
     const kept = entries.filter(keep);
     if (kept.length !== entries.length) {

@@ -2,9 +2,10 @@ import {
   readSessions,
   readState,
   requirePaths,
+  updateState,
   writeSessions,
-  writeState,
 } from '../core/storage.ts';
+import { activeAuthorPaths } from '../core/authors.ts';
 
 export interface EndOptions {
   cwd?: string;
@@ -19,18 +20,20 @@ export async function runEnd(options: EndOptions = {}): Promise<void> {
   const paths = requirePaths(options.cwd);
   const state = readState(paths);
 
-  if (!state.currentSessionId) {
+  const author = activeAuthorPaths(paths);
+  if (!state.currentSessionId || !author) {
     console.log('No open session to close. Run `showtail start` to begin one.');
     return;
   }
 
-  const sessions = readSessions(paths);
+  const sessions = readSessions(author);
   const session = sessions.find((s) => s.id === state.currentSessionId);
   if (session && !session.endedAt) {
     session.endedAt = new Date().toISOString();
-    writeSessions(paths, sessions);
+    writeSessions(author, sessions);
   }
-  writeState(paths, { currentSessionId: null, currentPromptId: null });
+  // Clear the open session/turn but keep the active-author slug.
+  updateState(paths, { currentSessionId: null, currentPromptId: null });
 
   const label = session?.label ? ` "${session.label}"` : '';
   console.log(`Closed session ${state.currentSessionId}${label}.`);

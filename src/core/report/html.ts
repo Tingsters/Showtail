@@ -50,6 +50,9 @@ ${TIMEZONE_JS}</script>
 /** Render the interactive exchange cards (escaped; no scripts). */
 function turnsHtml(data: ReportData): string {
   if (data.turns.length === 0) return '<p><em>No prompts recorded.</em></p>';
+  // On the combined team report, attribute each card to its author.
+  const showAuthor = data.scope === null && data.contributors.length > 1;
+  const nameBySlug = new Map(data.contributors.map((c) => [c.slug, c.name]));
   const out: string[] = [];
   for (const turn of data.turns) {
     const fileCount = turn.codeChanges.length;
@@ -60,6 +63,12 @@ function turnsHtml(data: ReportData): string {
       fileCount === 0
         ? ''
         : `edited ${fileCount} file(s)${lineCount ? `, ~${lineCount} line(s)` : ''}`;
+    const authorName = showAuthor
+      ? (nameBySlug.get(turn.actorSlug) ?? turn.actorSlug)
+      : '';
+    const authorBadge = authorName
+      ? `<span class="badge badge--author" data-author="${escapeHtml(turn.actorSlug)}">${escapeHtml(authorName)}</span>`
+      : '';
 
     out.push('<details class="turn">');
     out.push(
@@ -67,6 +76,7 @@ function turnsHtml(data: ReportData): string {
         `<span class="prompt-text">${escapeHtml(firstLine(turn.prompt.text))}</span>` +
         '<span class="meta">' +
         '<span class="meta-top">' +
+        authorBadge +
         `<span class="badge badge--${escapeHtml(turn.tool)}">${escapeHtml(toolLabel(turn.tool))}</span>` +
         `<span class="time">${timeTag(turn.prompt.timestamp)}</span>` +
         '</span>' +

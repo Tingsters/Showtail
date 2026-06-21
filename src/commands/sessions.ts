@@ -1,26 +1,40 @@
-import { readSessions, readState, requirePaths } from '../core/storage.ts';
+import { authorPaths, readSessions, readState, requirePaths } from '../core/storage.ts';
+import { activeAuthorPaths, authorSlugs } from '../core/authors.ts';
 import { readSessionEvents } from '../core/events.ts';
 
 export interface SessionsOptions {
   /** Emit machine-readable JSON. */
   json?: boolean;
+  /** List sessions for every author in the project (not just the active one). */
+  all?: boolean;
   cwd?: string;
 }
 
-/** List every work session, marking the currently open one. */
+/** List work sessions, marking the currently open one. */
 export async function runSessions(options: SessionsOptions = {}): Promise<void> {
   const paths = requirePaths(options.cwd);
-  const sessions = readSessions(paths);
   const currentId = readState(paths).currentSessionId;
 
-  const rows = sessions.map((s) => ({
-    id: s.id,
-    label: s.label ?? null,
-    startedAt: s.startedAt,
-    endedAt: s.endedAt ?? null,
-    events: readSessionEvents(paths, s.id).length,
-    current: s.id === currentId,
-  }));
+  // Default to the active author's sessions; `--all` aggregates everyone's.
+  const authors = options.all
+    ? authorSlugs(paths).map((slug) => authorPaths(paths, slug))
+    : (() => {
+        const a = activeAuthorPaths(paths);
+        return a ? [a] : [];
+      })();
+
+  const rows = authors.flatMap((author) =>
+    readSessions(author).map((s) => ({
+      id: s.id,
+      author: author.slug,
+      label: s.label ?? null,
+      startedAt: s.startedAt,
+      endedAt: s.endedAt ?? null,
+      events: readSessionEvents(author, s.id).length,
+      current: s.id === currentId,
+    })),
+  );
+  rows.sort((a, b) => a.startedAt.localeCompare(b.startedAt));
 
   if (options.json) {
     console.log(JSON.stringify(rows, null, 2));
@@ -37,9 +51,10 @@ export async function runSessions(options: SessionsOptions = {}): Promise<void> 
   for (const r of rows) {
     const marker = r.current ? '*' : ' ';
     const label = r.label ? ` "${r.label}"` : '';
+    const who = options.all ? ` · ${r.author}` : '';
     const when = new Date(r.startedAt).toLocaleString();
     const ended = r.endedAt ? ' (ended)' : '';
-    console.log(`${marker} ${r.id}${label}`);
+    console.log(`${marker} ${r.id}${label}${who}`);
     console.log(`    ${when} · ${r.events} event${r.events === 1 ? '' : 's'}${ended}`);
   }
   console.log('');

@@ -12,7 +12,7 @@ import {
 } from '../src/core/report.ts';
 import { startSession } from '../src/core/sessions.ts';
 import { pathsForRoot } from '../src/core/storage.ts';
-import { cleanup, makeTempDir } from './helpers.ts';
+import { authorFor, cleanup, makeTempDir } from './helpers.ts';
 
 describe('report', () => {
   test('aggregates events and artifacts into structured data and markdown', async () => {
@@ -20,22 +20,24 @@ describe('report', () => {
     try {
       await runInit({ cwd: dir, project: 'Parser Project' });
       const paths = pathsForRoot(dir);
-      startSession(paths);
+      const author = authorFor(paths);
+      startSession(author);
 
-      await logEvent(paths, { type: 'prompt', text: 'How do I structure this parser?' });
-      await logEvent(paths, {
+      await logEvent(author, { type: 'prompt', text: 'How do I structure this parser?' });
+      await logEvent(author, {
         type: 'ai_output',
         text: 'Split the input on newlines, then parse each row into fields.',
       });
 
       writeFileSync(join(dir, 'parser.ts'), 'export const parse = () => {};');
-      await addArtifact(paths, { filePath: 'parser.ts' });
+      await addArtifact(author, { filePath: 'parser.ts' });
 
       const data = buildReportData(paths);
       expect(data.project).toBe('Parser Project');
       expect(data.turns).toHaveLength(1);
       expect(data.summary.artifacts).toBe(1);
-      expect(data.authorship).toContain('my own');
+      // Team report with a single contributor attests the work is their own.
+      expect(data.authorship).toContain('their own');
 
       const md = renderMarkdown(data);
       expect(md).toContain('# Showtail Report — Parser Project');
@@ -70,8 +72,9 @@ describe('report', () => {
     try {
       await runInit({ cwd: dir, project: 'Parser Project' });
       const paths = pathsForRoot(dir);
-      startSession(paths);
-      await logEvent(paths, { type: 'prompt', text: 'How do I structure this parser?' });
+      const author = authorFor(paths);
+      startSession(author);
+      await logEvent(author, { type: 'prompt', text: 'How do I structure this parser?' });
 
       const html = renderHtml(buildReportData(paths));
       expect(html.toLowerCase().startsWith('<!doctype html')).toBe(true);
@@ -91,8 +94,9 @@ describe('report', () => {
     try {
       await runInit({ cwd: dir, project: 'Parser Project' });
       const paths = pathsForRoot(dir);
-      startSession(paths);
-      await logEvent(paths, { type: 'prompt', text: 'How do I structure this parser?' });
+      const author = authorFor(paths);
+      startSession(author);
+      await logEvent(author, { type: 'prompt', text: 'How do I structure this parser?' });
 
       const data = buildReportData(paths);
       const html = renderHtml(data);
@@ -122,8 +126,9 @@ describe('report', () => {
     try {
       await runInit({ cwd: dir, project: 'Parser Project' });
       const paths = pathsForRoot(dir);
-      startSession(paths);
-      await logEvent(paths, { type: 'prompt', text: 'How do I structure this parser?' });
+      const author = authorFor(paths);
+      startSession(author);
+      await logEvent(author, { type: 'prompt', text: 'How do I structure this parser?' });
 
       const md = renderMarkdown(buildReportData(paths));
       // Readable UTC like "20 Jun 2026, 21:30 UTC", and no <time> tags or tokens.
@@ -140,8 +145,9 @@ describe('report', () => {
     try {
       await runInit({ cwd: dir, project: 'XSS Project' });
       const paths = pathsForRoot(dir);
-      startSession(paths);
-      await logEvent(paths, {
+      const author = authorFor(paths);
+      startSession(author);
+      await logEvent(author, {
         type: 'prompt',
         text: '<script>alert(1)</script> tom & jerry',
       });
@@ -174,15 +180,16 @@ describe('report', () => {
     try {
       await runInit({ cwd: dir, project: 'Parser Project' });
       const paths = pathsForRoot(dir);
-      const session = startSession(paths);
-      await logEvent(paths, { type: 'prompt', text: 'Help me structure a CSV parser.' });
+      const author = authorFor(paths);
+      const session = startSession(author);
+      await logEvent(author, { type: 'prompt', text: 'Help me structure a CSV parser.' });
 
       // A normal path and one with a space, both edited in this turn. Passing the
       // session id is what links the artifact to the prompt's turn (as the hooks do).
       writeFileSync(join(dir, 'src-parser.ts'), 'export const parse = () => {};');
-      await addArtifact(paths, { filePath: 'src-parser.ts', sessionId: session.id });
+      await addArtifact(author, { filePath: 'src-parser.ts', sessionId: session.id });
       writeFileSync(join(dir, 'my file.ts'), 'export const x = 1;');
-      await addArtifact(paths, { filePath: 'my file.ts', sessionId: session.id });
+      await addArtifact(author, { filePath: 'my file.ts', sessionId: session.id });
 
       const data = buildReportData(paths);
       const html = renderHtml(data);

@@ -45,8 +45,8 @@ export function validateEvent(value: unknown): ValidationIssue[] {
   if (typeof e.text !== 'string') {
     issues.push({ field: 'text', message: 'missing text' });
   }
-  if (e.actor !== 'student') {
-    issues.push({ field: 'actor', message: 'actor must be "student"' });
+  if (typeof e.actorSlug !== 'string' || e.actorSlug.length === 0) {
+    issues.push({ field: 'actorSlug', message: 'missing or empty actorSlug' });
   }
   if (e.files !== undefined && !isStringArray(e.files)) {
     issues.push({ field: 'files', message: 'files must be an array of strings' });

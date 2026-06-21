@@ -1,5 +1,6 @@
 import type { Tool } from '../types.ts';
 import { logEvent } from '../core/events.ts';
+import { requireActiveAuthor } from '../core/authors.ts';
 import { eventTypeList, isEventType } from '../core/schema.ts';
 import { requirePaths, toRepoRelative } from '../core/storage.ts';
 
@@ -55,11 +56,12 @@ export async function runLog(options: LogOptions): Promise<void> {
   }
 
   const paths = requirePaths(options.cwd);
+  const author = await requireActiveAuthor(paths, { cwd: paths.root });
 
   // Normalize any referenced files to clean repo-relative paths.
   const files = splitList(options.files).map((f) => toRepoRelative(paths.root, f));
 
-  const { event, session } = await logEvent(paths, {
+  const { event, session } = await logEvent(author, {
     type,
     text,
     files,

@@ -24,11 +24,17 @@ export function fileHref(repoRelPath: string): string {
  */
 export function buildMarkdown(data: ReportData, turnsPlaceholder = false): string {
   const lines: string[] = [];
-  const title = data.project ? `Showtail Report — ${data.project}` : 'Showtail Report';
+  const base = data.project ? `Showtail Report — ${data.project}` : 'Showtail Report';
+  // A per-student report names whose work it is; the team report doesn't.
+  const title = data.scope ? `${base} — ${data.scope.name}` : base;
 
   // In HTML mode, timestamps are emitted as tokens that {@link renderHtml} swaps
   // for interactive <time> elements; the canonical Markdown export uses static UTC.
   const fmt = turnsPlaceholder ? timeToken : staticUtc;
+
+  // On the combined team report, label each exchange with its author.
+  const showAuthor = data.scope === null && data.contributors.length > 1;
+  const nameBySlug = new Map(data.contributors.map((c) => [c.slug, c.name]));
 
   lines.push(`# ${title}`, '');
   lines.push(`_Generated ${fmt(data.generatedAt)}_`, '');
@@ -43,6 +49,18 @@ export function buildMarkdown(data: ReportData, turnsPlaceholder = false): strin
         `before saving._`,
       '',
     );
+  }
+
+  // Contributors — who worked on this, and how much. Shown on the team report;
+  // a single-student report omits it (it's just them).
+  if (showAuthor) {
+    lines.push('## Contributors', '');
+    for (const c of data.contributors) {
+      lines.push(
+        `- **${c.name}** (\`${c.slug}\`) — ${c.events} event(s), ${c.artifacts} file record(s)`,
+      );
+    }
+    lines.push('');
   }
 
   // Tools used — up front so a reviewer can see, at a glance, which tools the
@@ -74,7 +92,10 @@ export function buildMarkdown(data: ReportData, turnsPlaceholder = false): strin
     lines.push('_No prompts recorded._', '');
   } else {
     for (const turn of data.turns) {
-      turnMarkdown(lines, turn);
+      const author = showAuthor
+        ? (nameBySlug.get(turn.actorSlug) ?? turn.actorSlug)
+        : undefined;
+      turnMarkdown(lines, turn, author);
     }
   }
 
@@ -90,8 +111,9 @@ export function renderMarkdown(data: ReportData): string {
 }
 
 /** Append one turn as readable Markdown (used for the canonical text export). */
-function turnMarkdown(lines: string[], turn: Turn): void {
-  const meta = `\`${staticUtc(turn.prompt.timestamp)}\` · \`${toolLabel(turn.tool)}\``;
+function turnMarkdown(lines: string[], turn: Turn, author?: string): void {
+  const who = author ? ` · **${author}**` : '';
+  const meta = `\`${staticUtc(turn.prompt.timestamp)}\` · \`${toolLabel(turn.tool)}\`${who}`;
   lines.push(`**Prompt** · ${meta}`, '');
   lines.push(turn.prompt.text, '');
   for (const ai of turn.aiOutputs) {

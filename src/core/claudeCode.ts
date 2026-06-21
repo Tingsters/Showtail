@@ -25,7 +25,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { importedSourceIds, logEvent } from './events.ts';
 import { asArray, asString, isObject, prop } from './parse.ts';
-import { toRepoRelative, type ShowtailPaths } from './storage.ts';
+import { toRepoRelative, type AuthorPaths } from './storage.ts';
 
 /** A normalized message recovered from a transcript. */
 export interface ClaudeMessage {
@@ -197,9 +197,10 @@ export function findProjectTranscripts(root: string): TranscriptInfo[] {
  * so it can be tried via `--file`. `importState` is computed against the source
  * ids already in the trail so the picker can flag already-imported sessions.
  */
-export function summarizeTranscripts(paths: ShowtailPaths): TranscriptSummary[] {
-  const seen = importedSourceIds(paths);
-  return findProjectTranscripts(paths.root).map((info) => {
+export function summarizeTranscripts(author: AuthorPaths): TranscriptSummary[] {
+  const seen = importedSourceIds(author);
+  const root = author.shared.root;
+  return findProjectTranscripts(root).map((info) => {
     const summary: TranscriptSummary = {
       info,
       promptCount: 0,
@@ -211,7 +212,7 @@ export function summarizeTranscripts(paths: ShowtailPaths): TranscriptSummary[] 
 
     let parsed: ClaudeTranscript;
     try {
-      parsed = parseClaudeTranscript(readFileSync(info.path, 'utf8'), paths.root);
+      parsed = parseClaudeTranscript(readFileSync(info.path, 'utf8'), root);
     } catch {
       return summary; // Couldn't parse — list it bare so --file can still reach it.
     }
@@ -422,11 +423,11 @@ export interface ClaudeImportResult {
  * time, and deduped by `sourceId` so re-importing the same transcript adds nothing.
  */
 export async function importClaudeTranscript(
-  paths: ShowtailPaths,
+  author: AuthorPaths,
   transcript: ClaudeTranscript,
   options: ClaudeImportOptions = {},
 ): Promise<ClaudeImportResult> {
-  const seen = importedSourceIds(paths);
+  const seen = importedSourceIds(author);
   const result: ClaudeImportResult = {
     title: transcript.title,
     prompts: 0,
@@ -454,7 +455,7 @@ export async function importClaudeTranscript(
           ? 'ai_output'
           : 'artifact';
 
-    const { event } = await logEvent(paths, {
+    const { event } = await logEvent(author, {
       type,
       text: msg.text,
       tool: 'claude-code',

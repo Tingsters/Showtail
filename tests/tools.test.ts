@@ -7,7 +7,7 @@ import { logEvent } from '../src/core/events.ts';
 import { buildReportData, buildToolBlocks, renderMarkdown } from '../src/core/report.ts';
 import { pathsForRoot } from '../src/core/storage.ts';
 import type { Event } from '../src/types.ts';
-import { cleanup, makeTempDir } from './helpers.ts';
+import { authorFor, cleanup, makeTempDir } from './helpers.ts';
 
 function evt(tool: string, ts: string): Event {
   return {
@@ -16,7 +16,7 @@ function evt(tool: string, ts: string): Event {
     type: 'prompt',
     text: 't',
     tool: tool as Event['tool'],
-    actor: 'student',
+    actorSlug: 'tester-at-example-com',
   };
 }
 
@@ -26,8 +26,9 @@ describe('cross-tool attribution', () => {
     try {
       await runInit({ cwd: dir });
       const paths = pathsForRoot(dir);
-      const a = await logEvent(paths, { type: 'prompt', text: 'hi' });
-      const b = await logEvent(paths, {
+      const author = authorFor(paths);
+      const a = await logEvent(author, { type: 'prompt', text: 'hi' });
+      const b = await logEvent(author, {
         type: 'ai_output',
         text: 'here is x',
         tool: 'github-copilot',
@@ -44,8 +45,9 @@ describe('cross-tool attribution', () => {
     try {
       await runInit({ cwd: dir });
       const paths = pathsForRoot(dir);
+      const author = authorFor(paths);
       writeFileSync(join(dir, 'a.txt'), 'x');
-      const { artifact: art } = await addArtifact(paths, {
+      const { artifact: art } = await addArtifact(author, {
         filePath: 'a.txt',
         tool: 'github-copilot',
       });
@@ -79,9 +81,10 @@ describe('cross-tool attribution', () => {
     try {
       await runInit({ cwd: dir, project: 'Mixed' });
       const paths = pathsForRoot(dir);
-      await logEvent(paths, { type: 'prompt', text: 'q1', tool: 'github-copilot' });
-      await logEvent(paths, { type: 'ai_output', text: 'd1', tool: 'claude-code' });
-      await logEvent(paths, { type: 'prompt', text: 'q2', tool: 'codex' });
+      const author = authorFor(paths);
+      await logEvent(author, { type: 'prompt', text: 'q1', tool: 'github-copilot' });
+      await logEvent(author, { type: 'ai_output', text: 'd1', tool: 'claude-code' });
+      await logEvent(author, { type: 'prompt', text: 'q2', tool: 'codex' });
 
       const data = buildReportData(paths);
       const tools = data.tools.map((t) => t.tool).sort();

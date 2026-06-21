@@ -1,5 +1,6 @@
 import type { Tool } from '../types.ts';
 import { addArtifact } from '../core/artifacts.ts';
+import { requireActiveAuthor } from '../core/authors.ts';
 import { logEvent, resolveOrStartSession } from '../core/events.ts';
 import { requirePaths } from '../core/storage.ts';
 
@@ -18,13 +19,14 @@ export async function runArtifactAdd(
   options: ArtifactAddOptions,
 ): Promise<void> {
   const paths = requirePaths(options.cwd);
+  const author = await requireActiveAuthor(paths, { cwd: paths.root });
 
   // Make sure there is a session to attach the timeline event to.
-  const session = resolveOrStartSession(paths, options.session);
+  const session = resolveOrStartSession(author, options.session);
 
   const tool = options.tool as Tool | undefined;
 
-  const { artifact, created } = await addArtifact(paths, {
+  const { artifact, created } = await addArtifact(author, {
     filePath: file,
     sessionId: session.id,
     tool,
@@ -38,7 +40,7 @@ export async function runArtifactAdd(
   }
 
   // Add a matching timeline event referencing the file.
-  await logEvent(paths, {
+  await logEvent(author, {
     type: 'artifact',
     text: `Recorded artifact ${artifact.path} (sha256 ${artifact.sha256.slice(0, 10)})`,
     files: [artifact.path],

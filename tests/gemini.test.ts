@@ -12,7 +12,7 @@ import { readAllEvents } from '../src/core/events.ts';
 import { runInit } from '../src/commands/init.ts';
 import { runImportGemini } from '../src/commands/importGemini.ts';
 import { pathsForRoot } from '../src/core/storage.ts';
-import { cleanup, makeTempDir } from './helpers.ts';
+import { authorFor, cleanup, makeTempDir } from './helpers.ts';
 
 describe('gemini paste import', () => {
   test('parseTranscript splits user/assistant turns at You said:/Gemini said: markers', () => {
@@ -40,11 +40,12 @@ describe('gemini paste import', () => {
     try {
       await runInit({ cwd: dir });
       const paths = pathsForRoot(dir);
+      const author = authorFor(paths);
       const { conversation } = parseTranscript(
         'You said:\nQ1\nGemini said:\nA1\nYou said:\nQ2',
       );
 
-      const res = await importConversation(paths, conversation, 'google-gemini');
+      const res = await importConversation(author, conversation, 'google-gemini');
       expect(res.prompts).toBe(2);
       expect(res.responses).toBe(0);
 
@@ -52,11 +53,11 @@ describe('gemini paste import', () => {
       expect(prompts).toHaveLength(2);
       expect(prompts.every((e) => e.tool === 'google-gemini')).toBe(true);
 
-      const again = await importConversation(paths, conversation, 'google-gemini');
+      const again = await importConversation(author, conversation, 'google-gemini');
       expect(again.prompts).toBe(0);
       expect(again.skipped).toBeGreaterThan(0);
 
-      const withResp = await importConversation(paths, conversation, 'google-gemini', {
+      const withResp = await importConversation(author, conversation, 'google-gemini', {
         withResponses: true,
       });
       expect(withResp.responses).toBe(1);
@@ -172,8 +173,9 @@ describe('gemini paste import', () => {
     try {
       await runInit({ cwd: dir });
       const paths = pathsForRoot(dir);
+      const author = authorFor(paths);
       const { conversation } = parseTranscript('You said:\nQ about arrays');
-      await importConversation(paths, conversation, 'google-gemini');
+      await importConversation(author, conversation, 'google-gemini');
 
       const md = renderMarkdown(buildReportData(paths));
       expect(md).toContain('Q about arrays');

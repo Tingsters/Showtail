@@ -18,8 +18,13 @@ export const EVENT_TYPES = [
 
 export type EventType = (typeof EVENT_TYPES)[number];
 
-/** Who created an event. The MVP only records the student. */
-export type Actor = 'student';
+/**
+ * Who created an event, as a denormalized author slug (the folder key under
+ * `authors/<slug>/`). The full identity (email, display name, GitHub login)
+ * lives in that folder's `author.json`; carrying only the slug on each record
+ * keeps journal lines small and never bakes in a name that could later change.
+ */
+export type ActorSlug = string;
 
 /**
  * Which tool the work flowed through when an event was recorded. This is what
@@ -75,8 +80,8 @@ export interface Event {
    * Absent on older trails — the report falls back to timestamp adjacency.
    */
   turnId?: string;
-  /** Who recorded it. Always "student" in the MVP. */
-  actor: Actor;
+  /** Which author recorded it (folder slug under `authors/<slug>/`). */
+  actorSlug: ActorSlug;
 }
 
 /** A recorded snapshot of a file (its hash at a point in time). */
@@ -93,6 +98,8 @@ export interface Artifact {
   gitCommit?: string;
   /** The session this artifact was captured in, if any. */
   sessionId?: string;
+  /** Which author captured it (folder slug). Filled when read for a report. */
+  actorSlug?: ActorSlug;
   /** Which tool the work flowed through when this snapshot was taken. */
   tool?: Tool;
   /** The prompt's turn this edit belongs to (see {@link Event.turnId}). */
@@ -112,8 +119,6 @@ export interface Session {
   id: string;
   /** ISO-8601 timestamp the session started. */
   startedAt: string;
-  /** Path to the session's JSONL file, relative to `.showtail/`. */
-  file: string;
   /** Optional short label the student gave the session. */
   label?: string;
   /** Which tool opened this session, if known. */
@@ -169,6 +174,12 @@ export interface Config {
 export interface State {
   currentSessionId: string | null;
   /**
+   * The active author on *this machine* — the folder under `authors/<slug>/`
+   * that local captures write into. Resolved once (gh → git → prompt) and
+   * cached; `state.json` is gitignored, so this never travels between students.
+   */
+  currentAuthorSlug?: string;
+  /**
    * The prompt event id that opened the current turn, if any. Used by the CLI
    * and as the fallback turn pointer when a hook payload carries no
    * `session_id` (older transcripts, manual `showtail log`, Codex).
@@ -199,15 +210,34 @@ export interface ToolBlock {
   count: number;
 }
 
+/** One student's contribution totals, shown on the combined team report. */
+export interface Contributor {
+  /** Folder slug under `authors/<slug>/`. */
+  slug: string;
+  /** Display name (from `author.json`), falling back to the slug. */
+  name: string;
+  email?: string;
+  githubLogin?: string;
+  events: number;
+  artifacts: number;
+}
+
 /** The structured (JSON) form of a generated report. */
 export interface ReportData {
   project: string | null;
   generatedAt: string;
+  /**
+   * The single author this report is scoped to, or null for the combined team
+   * report that spans every contributor.
+   */
+  scope: { slug: string; name: string } | null;
   summary: {
     sessions: number;
     events: number;
     artifacts: number;
   };
+  /** Everyone who contributed to the trail (one entry for a single-author report). */
+  contributors: Contributor[];
   /** Per-tool event totals. */
   tools: ToolUsage[];
   /** Chronological blocks of tool usage; boundaries are tool switches. */
@@ -238,6 +268,8 @@ export interface Turn {
   aiOutputs: Event[];
   codeChanges: TurnCodeChange[];
   tool: Tool;
+  /** Which author this exchange belongs to — used to attribute/color turns. */
+  actorSlug: ActorSlug;
 }
 
 /**
@@ -270,7 +302,8 @@ export interface JournalEntry {
   turn?: string;
   /** Import batch id (retained so a specific import can be removed later). */
   batch?: string;
-  actor?: Actor;
+  /** Which author recorded it. Optional on read (defaults to the folder slug). */
+  actorSlug?: ActorSlug;
   // --- event content (referenced, not inlined) ---
   /** Object-store addresses for this entry's content (e.g. the event text). */
   refs?: string[];

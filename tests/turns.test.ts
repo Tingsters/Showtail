@@ -7,7 +7,7 @@ import { logEvent } from '../src/core/events.ts';
 import { buildReportData, renderHtml } from '../src/core/report.ts';
 import { startSession } from '../src/core/sessions.ts';
 import { pathsForRoot } from '../src/core/storage.ts';
-import { cleanup, makeTempDir } from './helpers.ts';
+import { authorFor, cleanup, makeTempDir } from './helpers.ts';
 
 describe('turns', () => {
   test('groups a prompt with its AI output and code change by turnId', async () => {
@@ -15,21 +15,22 @@ describe('turns', () => {
     try {
       await runInit({ cwd: dir });
       const paths = pathsForRoot(dir);
-      startSession(paths);
+      const author = authorFor(paths);
+      startSession(author);
 
-      const { event: prompt } = await logEvent(paths, {
+      const { event: prompt } = await logEvent(author, {
         type: 'prompt',
         text: 'add a hello function',
         tool: 'claude-code',
       });
-      await logEvent(paths, {
+      await logEvent(author, {
         type: 'ai_output',
         text: 'Here is a hello function.',
         tool: 'claude-code',
         turnId: prompt.id,
       });
       writeFileSync(join(dir, 'hello.ts'), 'export const hello = () => "hi";');
-      await addArtifact(paths, {
+      await addArtifact(author, {
         filePath: 'hello.ts',
         tool: 'claude-code',
         turnId: prompt.id,
@@ -53,10 +54,11 @@ describe('turns', () => {
     try {
       await runInit({ cwd: dir });
       const paths = pathsForRoot(dir);
-      startSession(paths);
+      const author = authorFor(paths);
+      startSession(author);
 
-      await logEvent(paths, { type: 'prompt', text: 'first prompt', tool: 'chatgpt' });
-      await logEvent(paths, {
+      await logEvent(author, { type: 'prompt', text: 'first prompt', tool: 'chatgpt' });
+      await logEvent(author, {
         type: 'ai_output',
         text: 'an answer with no turn id',
         tool: 'chatgpt',
@@ -75,13 +77,14 @@ describe('turns', () => {
     try {
       await runInit({ cwd: dir });
       const paths = pathsForRoot(dir);
-      startSession(paths);
-      const { event: prompt } = await logEvent(paths, {
+      const author = authorFor(paths);
+      startSession(author);
+      const { event: prompt } = await logEvent(author, {
         type: 'prompt',
         text: 'hello world in python',
         tool: 'chatgpt',
       });
-      await logEvent(paths, {
+      await logEvent(author, {
         type: 'ai_output',
         text: 'Here you go:\n```python\nprint("Hello, world!")\n```\nRun with `python hi.py`.',
         tool: 'chatgpt',
@@ -108,13 +111,14 @@ describe('turns', () => {
     try {
       await runInit({ cwd: dir });
       const paths = pathsForRoot(dir);
-      startSession(paths);
-      const { event: prompt } = await logEvent(paths, {
+      const author = authorFor(paths);
+      startSession(author);
+      const { event: prompt } = await logEvent(author, {
         type: 'prompt',
         text: 'explain',
         tool: 'chatgpt',
       });
-      await logEvent(paths, {
+      await logEvent(author, {
         type: 'ai_output',
         text:
           '## Steps\nUse **bold** and *italic*.\n- one\n- two\n\nSee [docs](https://example.com).\n' +
@@ -146,14 +150,15 @@ describe('turns', () => {
     try {
       await runInit({ cwd: dir });
       const paths = pathsForRoot(dir);
-      startSession(paths);
-      const { event: prompt } = await logEvent(paths, {
+      const author = authorFor(paths);
+      startSession(author);
+      const { event: prompt } = await logEvent(author, {
         type: 'prompt',
         text: 'write a test',
         tool: 'claude-code',
       });
       writeFileSync(join(dir, 'a.ts'), 'const a = 2;');
-      await addArtifact(paths, {
+      await addArtifact(author, {
         filePath: 'a.ts',
         tool: 'claude-code',
         turnId: prompt.id,
@@ -187,8 +192,9 @@ describe('turns', () => {
     try {
       await runInit({ cwd: dir });
       const paths = pathsForRoot(dir);
-      startSession(paths);
-      const { event: prompt } = await logEvent(paths, {
+      const author = authorFor(paths);
+      startSession(author);
+      const { event: prompt } = await logEvent(author, {
         type: 'prompt',
         text: 'why does SHOWTAILTIME@2026-01-01T00:00:00.000Z@ appear?',
         tool: 'claude-code',
@@ -197,7 +203,7 @@ describe('turns', () => {
       // the timestamp sentinel. Here it spans some `inline code` — the global token
       // regex used to match across it and swallow the </code>, orphaning the tag
       // (monospace tail) and producing a <time> with markup in its datetime.
-      await logEvent(paths, {
+      await logEvent(author, {
         type: 'ai_output',
         text: 'Token talk: SHOWTAILTIME@ then `inline code` then SHOWTAILTIME@2026-01-01T00:00:00.000Z@ done.',
         tool: 'claude-code',

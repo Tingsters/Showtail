@@ -1,26 +1,28 @@
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { resolve } from 'node:path';
+import { join } from 'node:path';
 import type { Config } from '../types.ts';
+import { establishIdentity } from '../core/authors.ts';
 import { isGitRepo } from '../core/git.ts';
-import {
-  CONFIG_VERSION,
-  pathsForRoot,
-  writeJson,
-  writeSessions,
-  writeState,
-} from '../core/storage.ts';
+import { CONFIG_VERSION, pathsForRoot, writeJson, writeState } from '../core/storage.ts';
 
 /**
  * Mark the whole trail as binary so git never normalizes line endings: the
  * object store is content-addressed, and an EOL rewrite (common on Windows)
- * would change bytes and break a file's own hash / the integrity check.
+ * would change bytes and break a file's own hash / the integrity check. This
+ * also keeps the shared object store byte-identical across machines, which is
+ * what makes a merge of two students' trails conflict-free.
  */
 const GITATTRIBUTES = `# Showtail stores content-addressed objects; keep bytes byte-exact.
 * -text
 `;
 
-/** Ephemeral/regenerable bits don't belong in version control. */
+/**
+ * Ephemeral/regenerable and machine-local bits don't belong in version control.
+ * Everything else under .showtail/ — including every author's folder and the
+ * shared object store — IS committed, so teammates' trails merge through git.
+ */
 const GITIGNORE = `state.json
 reports/
 `;
@@ -32,8 +34,10 @@ export interface InitOptions {
 }
 
 /**
- * Create the `.showtail/` folder structure and config. Safe to re-run: it will
- * not overwrite an existing config, just report that the project is ready.
+ * Create the `.showtail/` folder structure and config, then establish the local
+ * student's identity (so their work lands in `authors/<slug>/`). Safe to re-run:
+ * it won't overwrite an existing config, and a teammate re-running it in a repo
+ * that's already set up just bootstraps *their own* author folder.
  */
 export async function runInit(options: InitOptions = {}): Promise<void> {
   const root = options.cwd ?? process.cwd();
@@ -41,6 +45,10 @@ export async function runInit(options: InitOptions = {}): Promise<void> {
 
   if (existsSync(paths.config)) {
     console.log('Showtail is already set up here (.showtail/config.json exists).');
+    // Still make sure *this* student has an author folder — a teammate who just
+    // cloned the repo runs `init` to register themselves without re-creating it.
+    const author = await establishIdentity(paths, { cwd: root, allowPrompt: true });
+    if (author) console.log(`You're tracked as ${author.slug}.`);
     console.log('Run `showtail start` to begin a work session.');
     return;
   }
@@ -55,14 +63,8 @@ export async function runInit(options: InitOptions = {}): Promise<void> {
     console.log('');
   }
 
-  // Create the directory tree.
-  for (const dir of [
-    paths.base,
-    paths.sessionsDir,
-    paths.objectsDir,
-    paths.journalDir,
-    paths.reportsDir,
-  ]) {
+  // Create the directory tree (per-author folders are created on demand).
+  for (const dir of [paths.base, paths.authorsDir, paths.objectsDir, paths.reportsDir]) {
     mkdirSync(dir, { recursive: true });
   }
 
@@ -80,18 +82,32 @@ export async function runInit(options: InitOptions = {}): Promise<void> {
 
   writeJson(paths.config, config);
   writeState(paths, { currentSessionId: null, currentPromptId: null });
-  writeSessions(paths, []);
   writeFileSync(join(paths.base, '.gitattributes'), GITATTRIBUTES, 'utf8');
   writeFileSync(join(paths.base, '.gitignore'), GITIGNORE, 'utf8');
+
+  // Establish who is working here so their trail is attributed (gh → git → prompt).
+  const author = await establishIdentity(paths, { cwd: root, allowPrompt: true });
 
   console.log('Created .showtail/ — your work trail lives here.');
   console.log('');
   console.log('  .showtail/');
-  console.log('    config.json      project settings');
-  console.log('    sessions/        your work sessions (index of conversations)');
-  console.log('    journal/         append-only log of prompts, AI output, and edits');
-  console.log('    objects/         content (prompts, AI responses, diffs), deduped');
+  console.log('    config.json      project settings (shared)');
+  console.log('    authors/         one folder per student: their sessions + journal');
+  console.log(
+    '    objects/         content (prompts, AI responses, diffs), deduped & shared',
+  );
   console.log('    reports/         generated reports for your educator');
+  console.log('');
+  if (author) {
+    console.log(
+      `You're set up as ${author.slug}. Your teammates each get their own folder.`,
+    );
+  } else {
+    console.log(
+      "Couldn't determine your identity yet — set git user.email or run `gh auth login`,",
+    );
+    console.log('then run `showtail start` to register yourself.');
+  }
   console.log('');
   if (config.settings.git) {
     console.log('Git detected: commit hashes will be captured automatically.');

@@ -14,6 +14,7 @@ import {
   type HtmlParseConfig,
 } from '../core/pasteHtml.ts';
 import { latestBatchId, readAllEvents, removeEventsByBatch } from '../core/events.ts';
+import { activeAuthorPaths, requireActiveAuthor } from '../core/authors.ts';
 import { makeId } from '../core/ids.ts';
 import { requirePaths } from '../core/storage.ts';
 import { oneLine } from '../core/text.ts';
@@ -150,6 +151,7 @@ export async function runImportChatgpt(
   options: ImportChatgptOptions,
 ): Promise<void> {
   const paths = requirePaths(options.cwd);
+  const author = await requireActiveAuthor(paths, { cwd: paths.root });
 
   let conversation: ParsedConversation;
   let isPaste = false;
@@ -230,7 +232,7 @@ export async function runImportChatgpt(
   }
 
   const batchId = makeId('imp');
-  const res = await importConversation(paths, conversation, 'chatgpt', {
+  const res = await importConversation(author, conversation, 'chatgpt', {
     withResponses: options.withResponses,
     sessionId: options.session,
     batchId,
@@ -318,11 +320,12 @@ function printPasteResult(
 /** Undo the most recent import in one step (removes that batch's events). */
 export async function runImportUndo(options: { cwd?: string } = {}): Promise<void> {
   const paths = requirePaths(options.cwd);
-  const batchId = latestBatchId(paths);
-  if (!batchId) {
+  const author = activeAuthorPaths(paths);
+  const batchId = author ? latestBatchId(author) : undefined;
+  if (!author || !batchId) {
     console.log('Nothing to undo — no imported events found.');
     return;
   }
-  const removed = removeEventsByBatch(paths, batchId);
+  const removed = removeEventsByBatch(author, batchId);
   console.log(`Undid the last import — removed ${removed} event(s).`);
 }

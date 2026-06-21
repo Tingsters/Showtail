@@ -9,7 +9,7 @@ import { runImportUndo } from '../src/commands/import.ts';
 import { claudeProjectsDir } from '../src/core/claudeCode.ts';
 import { mkdirSync } from 'node:fs';
 import { pathsForRoot } from '../src/core/storage.ts';
-import { cleanup, makeTempDir } from './helpers.ts';
+import { authorFor, cleanup, makeTempDir } from './helpers.ts';
 
 /**
  * Build a realistic Claude Code transcript (one JSON object per line) mixing the
@@ -170,13 +170,14 @@ describe('summarizeTranscripts', () => {
     try {
       await runInit({ cwd: dir });
       const paths = pathsForRoot(dir);
+      const author = authorFor(paths);
 
       // Drop a transcript where Claude Code would store it (matched by cwd).
       const projDir = join(claudeProjectsDir(), 'encoded-project');
       mkdirSync(projDir, { recursive: true });
       writeFileSync(join(projDir, 'sess-1.jsonl'), makeTranscript(dir), 'utf8');
 
-      let summaries = summarizeTranscripts(paths);
+      let summaries = summarizeTranscripts(author);
       expect(summaries.length).toBe(1);
       const s = summaries[0]!;
       expect(s.info.sessionId).toBe('sess-1');
@@ -194,7 +195,7 @@ describe('summarizeTranscripts', () => {
         withResponses: true,
         cwd: dir,
       });
-      summaries = summarizeTranscripts(paths);
+      summaries = summarizeTranscripts(author);
       expect(summaries[0]!.importState).toBe('full');
     } finally {
       if (prevConfig === undefined) delete process.env.CLAUDE_CONFIG_DIR;

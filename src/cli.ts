@@ -131,7 +131,12 @@ program
   .description('List your work sessions.')
   .helpGroup(G_REVIEW)
   .option('--json', 'output machine-readable JSON')
-  .action(action(async (opts: { json?: boolean }) => runSessions({ json: opts.json })));
+  .option('--all', "list every contributor's sessions, not just yours")
+  .action(
+    action(async (opts: { json?: boolean; all?: boolean }) =>
+      runSessions({ json: opts.json, all: opts.all }),
+    ),
+  );
 
 program
   .command('report')
@@ -141,7 +146,18 @@ program
   .helpGroup(G_REVIEW)
   .option('--format <format>', 'output format: html (default), md, or json', 'html')
   .option('--open', 'open the generated report in your default app')
-  .action(action(async (opts: { format?: string; open?: boolean }) => runReport(opts)));
+  .option('--author <slug>', 'generate only this contributor’s report')
+  .option('--team', 'generate only the combined team report')
+  .action(
+    action(
+      async (opts: {
+        format?: string;
+        open?: boolean;
+        author?: string;
+        team?: boolean;
+      }) => runReport(opts),
+    ),
+  );
 
 program
   .command('verify')

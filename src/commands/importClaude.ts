@@ -9,7 +9,8 @@ import {
   type TranscriptSummary,
 } from '../core/claudeCode.ts';
 import { makeId } from '../core/ids.ts';
-import { requirePaths, type ShowtailPaths } from '../core/storage.ts';
+import { requireActiveAuthor } from '../core/authors.ts';
+import { requirePaths, type AuthorPaths } from '../core/storage.ts';
 import { oneLine } from '../core/text.ts';
 
 export interface ImportClaudeOptions {
@@ -90,22 +91,23 @@ export async function runImportClaudeCode(
   options: ImportClaudeOptions,
 ): Promise<void> {
   const paths = requirePaths(options.cwd);
+  const author = await requireActiveAuthor(paths, { cwd: paths.root });
 
   if (options.list) {
-    listTranscripts(paths);
+    listTranscripts(author);
     return;
   }
 
   // Explicit single-transcript paths (a file or an id) keep their direct behavior.
   if (options.file || target) {
-    const path = resolveTranscriptPath(paths, target, options);
+    const path = resolveTranscriptPath(author, target, options);
     if (!path) return; // A message was already printed.
-    await importPaths(paths, [path], options);
+    await importPaths(author, [path], options);
     return;
   }
 
   // No target: discover this project's sessions and let the student choose.
-  const summaries = summarizeTranscripts(paths);
+  const summaries = summarizeTranscripts(author);
   if (summaries.length === 0) {
     console.log('No Claude Code transcripts were found for this project on disk.');
     console.log('If you have a transcript elsewhere, point at it with --file <path>.');
@@ -119,7 +121,7 @@ export async function runImportClaudeCode(
       `Importing the most recent session (${latest.info.sessionId}). ` +
         'Run in a terminal to pick from the full list.',
     );
-    await importPaths(paths, [latest.info.path], options);
+    await importPaths(author, [latest.info.path], options);
     return;
   }
 
@@ -129,7 +131,7 @@ export async function runImportClaudeCode(
     return;
   }
   await importPaths(
-    paths,
+    author,
     chosen.map((s) => s.info.path),
     options,
   );
@@ -137,7 +139,7 @@ export async function runImportClaudeCode(
 
 /** Resolve which single transcript file to import, printing guidance when it can't. */
 function resolveTranscriptPath(
-  paths: ShowtailPaths,
+  author: AuthorPaths,
   target: string | undefined,
   options: ImportClaudeOptions,
 ): string | null {
@@ -148,7 +150,7 @@ function resolveTranscriptPath(
     return options.file;
   }
 
-  const found = findProjectTranscripts(paths.root);
+  const found = findProjectTranscripts(author.shared.root);
   if (found.length === 0) {
     console.log('No Claude Code transcripts were found for this project on disk.');
     console.log('If you have a transcript elsewhere, point at it with --file <path>.');
@@ -177,7 +179,7 @@ function resolveTranscriptPath(
  * are deduped automatically because every import re-reads the trail's source ids.
  */
 async function importPaths(
-  paths: ShowtailPaths,
+  author: AuthorPaths,
   filePaths: string[],
   options: ImportClaudeOptions,
 ): Promise<void> {
@@ -192,9 +194,9 @@ async function importPaths(
   let imported = 0;
 
   for (const path of filePaths) {
-    const transcript = readTranscriptFile(path, paths.root);
+    const transcript = readTranscriptFile(path, author.shared.root);
     if (transcript.messages.length === 0) continue;
-    const res = await importClaudeTranscript(paths, transcript, {
+    const res = await importClaudeTranscript(author, transcript, {
       withResponses: options.withResponses,
       sessionId: options.session,
       batchId,
@@ -296,8 +298,8 @@ export function parseSelection(input: string, count: number): number[] | null {
 }
 
 /** Print the available transcripts so a student can pick one by id. */
-function listTranscripts(paths: ShowtailPaths): void {
-  const summaries = summarizeTranscripts(paths);
+function listTranscripts(author: AuthorPaths): void {
+  const summaries = summarizeTranscripts(author);
   if (summaries.length === 0) {
     console.log('No Claude Code transcripts were found for this project on disk.');
     return;

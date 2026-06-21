@@ -1,4 +1,5 @@
 import { requirePaths } from '../core/storage.ts';
+import { requireActiveAuthor } from '../core/authors.ts';
 import { startSession } from '../core/sessions.ts';
 import { connectedToolsLines, toolStatuses } from '../core/tools.ts';
 
@@ -13,9 +14,10 @@ const LOG_PROMPT_EXAMPLE =
 /** Start a new work session and make it the active one for `log`. */
 export async function runStart(options: StartOptions = {}): Promise<void> {
   const paths = requirePaths(options.cwd);
-  const session = startSession(paths, options.label);
+  const author = await requireActiveAuthor(paths, { cwd: paths.root });
+  const session = startSession(author, options.label);
 
-  console.log(`Started a new work session: ${session.id}`);
+  console.log(`Started a new work session: ${session.id} (as ${author.slug})`);
   if (session.label) console.log(`  Label: ${session.label}`);
 
   // Orient the user around how their work gets captured: show which tools are

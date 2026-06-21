@@ -7,6 +7,7 @@ import {
   type ParsedConversation,
 } from '../core/gemini.ts';
 import { readAllEvents } from '../core/events.ts';
+import { requireActiveAuthor } from '../core/authors.ts';
 import { makeId } from '../core/ids.ts';
 import { requirePaths } from '../core/storage.ts';
 import { GEMINI_HTML } from '../core/pasteHtml.ts';
@@ -61,6 +62,7 @@ export async function runImportGemini(
   options: ImportGeminiOptions,
 ): Promise<void> {
   const paths = requirePaths(options.cwd);
+  const author = await requireActiveAuthor(paths, { cwd: paths.root });
 
   let conversation: ParsedConversation;
   let isPaste = false;
@@ -147,7 +149,7 @@ export async function runImportGemini(
   }
 
   const batchId = makeId('imp');
-  const res = await importConversation(paths, conversation, 'google-gemini', {
+  const res = await importConversation(author, conversation, 'google-gemini', {
     withResponses: options.withResponses,
     sessionId: options.session,
     batchId,

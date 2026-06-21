@@ -1,4 +1,5 @@
 import { requirePaths } from '../core/storage.ts';
+import { activeAuthorPaths } from '../core/authors.ts';
 import { currentSession } from '../core/sessions.ts';
 import { readSessionEvents } from '../core/events.ts';
 import { connectedToolsLines, toolStatuses } from '../core/tools.ts';
@@ -17,8 +18,9 @@ export interface StatusOptions {
  */
 export async function runStatus(options: StatusOptions = {}): Promise<void> {
   const paths = requirePaths(options.cwd);
-  const session = currentSession(paths);
-  const events = session ? readSessionEvents(paths, session.id) : [];
+  const author = activeAuthorPaths(paths);
+  const session = author ? currentSession(author) : null;
+  const events = author && session ? readSessionEvents(author, session.id) : [];
 
   const counts: Partial<Record<string, number>> = {};
   for (const e of events) counts[e.type] = (counts[e.type] ?? 0) + 1;

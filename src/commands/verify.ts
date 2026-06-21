@@ -1,9 +1,11 @@
 import { existsSync } from 'node:fs';
 import { checkArtifactHashes } from '../core/artifacts.ts';
+import { authorSlugs } from '../core/authors.ts';
 import { eventFromEntry } from '../core/events.ts';
 import { buildReportData, renderMarkdown } from '../core/report.ts';
 import { validateEvent } from '../core/schema.ts';
 import {
+  authorPaths,
   readConfig,
   readJournal,
   requirePaths,
@@ -59,24 +61,26 @@ export async function verifyProject(paths: ShowtailPaths): Promise<VerifyResult>
     details: [],
   };
   try {
-    const entries = readJournal(paths);
     let i = 0;
-    for (const entry of entries) {
-      i += 1;
-      if (entry.kind === 'artifact') {
-        if (!entry.path || !entry.sha256) {
-          eventsCheck.ok = false;
-          eventsCheck.details.push(
-            `entry ${i} (${entry.id}): artifact missing path/sha256.`,
-          );
+    for (const slug of authorSlugs(paths)) {
+      const author = authorPaths(paths, slug);
+      for (const entry of readJournal(author)) {
+        i += 1;
+        if (entry.kind === 'artifact') {
+          if (!entry.path || !entry.sha256) {
+            eventsCheck.ok = false;
+            eventsCheck.details.push(
+              `${slug} entry ${i} (${entry.id}): artifact missing path/sha256.`,
+            );
+          }
+          continue;
         }
-        continue;
-      }
-      const issues = validateEvent(eventFromEntry(paths, entry));
-      if (issues.length > 0) {
-        eventsCheck.ok = false;
-        const summary = issues.map((x) => `${x.field}: ${x.message}`).join('; ');
-        eventsCheck.details.push(`entry ${i} (${entry.id}): ${summary}`);
+        const issues = validateEvent(eventFromEntry(paths, entry, slug));
+        if (issues.length > 0) {
+          eventsCheck.ok = false;
+          const summary = issues.map((x) => `${x.field}: ${x.message}`).join('; ');
+          eventsCheck.details.push(`${slug} entry ${i} (${entry.id}): ${summary}`);
+        }
       }
     }
   } catch (err) {

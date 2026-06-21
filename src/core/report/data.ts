@@ -1,5 +1,6 @@
 import type {
   Artifact,
+  Contributor,
   Event,
   ReportData,
   Tool,
@@ -8,10 +9,17 @@ import type {
   Turn,
 } from '../../types.ts';
 import { TOOL_LABELS } from '../../types.ts';
-import { readArtifacts } from '../artifacts.ts';
-import { readAllEventsWithSession } from '../events.ts';
+import { readAllArtifacts } from '../artifacts.ts';
+import {
+  authorPaths,
+  readConfig,
+  readJournal,
+  readSessions,
+  type ShowtailPaths,
+} from '../storage.ts';
+import { authorSlugs, readAllAuthors } from '../authors.ts';
+import { readAllEventsWithSession, type EventWithSession } from '../events.ts';
 import { readObject } from '../objects.ts';
-import { readConfig, readJournal, readSessions, type ShowtailPaths } from '../storage.ts';
 
 /** The tool an event flowed through (defaults to "cli" for older/manual events). */
 export function toolOf(event: Event): Tool {
@@ -22,33 +30,68 @@ export function toolLabel(tool: Tool): string {
   return TOOL_LABELS[tool] ?? tool;
 }
 
-/** One event paired with the id of the session it belongs to. */
-type EventWithSession = { event: Event; sessionId: string };
+/** Options controlling the scope of a generated report. */
+export interface ReportScope {
+  /** Limit the report to a single author (per-student report). Omit for the team report. */
+  authorSlug?: string;
+}
 
-/** Build the structured report data from everything recorded in the project. */
-export function buildReportData(paths: ShowtailPaths): ReportData {
+/**
+ * Build the structured report data from everything recorded in the project.
+ * With no `authorSlug`, this is the combined *team* report spanning every
+ * contributor; with one, it's that single student's report.
+ */
+export function buildReportData(
+  paths: ShowtailPaths,
+  scope: ReportScope = {},
+): ReportData {
   const config = readConfig(paths);
-  const sessions = readSessions(paths);
-  const artifacts = readArtifacts(paths);
-  const withSession = readAllEventsWithSession(paths);
+  const authors = readAllAuthors(paths);
+  const nameBySlug = new Map(authors.map((a) => [a.slug, a.name]));
+
+  // Pull everything, then narrow to the scoped author when one is requested.
+  const onlySlug = scope.authorSlug;
+  const withSession = readAllEventsWithSession(paths).filter(
+    (x) => !onlySlug || x.actorSlug === onlySlug,
+  );
   const events = withSession.map((x) => x.event);
+  const artifacts = readAllArtifacts(paths).filter(
+    (a) => !onlySlug || a.actorSlug === onlySlug,
+  );
 
   const tools = buildToolUsage(events);
   const sorted = sortByTime(events);
 
+  const slugsInScope = onlySlug ? [onlySlug] : authorSlugs(paths);
+  const contributors = buildContributors(
+    slugsInScope,
+    nameBySlug,
+    withSession,
+    artifacts,
+  );
+
+  // Count the actual session records (a session can exist before it has events).
+  const sessionCount = slugsInScope.reduce(
+    (n, slug) => n + readSessions(authorPaths(paths, slug)).length,
+    0,
+  );
+  const scopeName = onlySlug ? (nameBySlug.get(onlySlug) ?? onlySlug) : null;
+
   return {
     project: config.project ?? null,
     generatedAt: new Date().toISOString(),
+    scope: onlySlug ? { slug: onlySlug, name: scopeName ?? onlySlug } : null,
     summary: {
-      sessions: sessions.length,
+      sessions: sessionCount,
       events: events.length,
       artifacts: artifacts.length,
     },
+    contributors,
     tools,
     toolTimeline: buildToolBlocks(sorted),
     turns: buildTurns(withSession, artifacts, paths),
-    redactionCount: countRedactions(paths),
-    authorship: buildAuthorshipStatement(config.project, tools),
+    redactionCount: countRedactions(paths, slugsInScope),
+    authorship: buildAuthorshipStatement(config.project, contributors, scopeName),
   };
 }
 
@@ -56,18 +99,46 @@ function sortByTime(events: Event[]): Event[] {
   return [...events].sort((a, b) => a.timestamp.localeCompare(b.timestamp));
 }
 
-/** Total number of secrets/PII Showtail scrubbed across the whole trail. */
-function countRedactions(paths: ShowtailPaths): number {
+/** Per-author contribution totals for the contributors list. */
+function buildContributors(
+  slugs: string[],
+  nameBySlug: Map<string, string>,
+  withSession: EventWithSession[],
+  artifacts: Artifact[],
+): Contributor[] {
+  const eventsBy = new Map<string, number>();
+  for (const x of withSession) {
+    eventsBy.set(x.actorSlug, (eventsBy.get(x.actorSlug) ?? 0) + 1);
+  }
+  const artifactsBy = new Map<string, number>();
+  for (const a of artifacts) {
+    const slug = a.actorSlug ?? '';
+    artifactsBy.set(slug, (artifactsBy.get(slug) ?? 0) + 1);
+  }
+  return slugs
+    .map((slug) => ({
+      slug,
+      name: nameBySlug.get(slug) ?? slug,
+      events: eventsBy.get(slug) ?? 0,
+      artifacts: artifactsBy.get(slug) ?? 0,
+    }))
+    .sort((a, b) => b.events - a.events || a.slug.localeCompare(b.slug));
+}
+
+/** Total number of secrets/PII Showtail scrubbed across the in-scope authors. */
+function countRedactions(paths: ShowtailPaths, slugs: string[]): number {
   let total = 0;
-  for (const e of readJournal(paths)) total += e.redacted ?? 0;
+  for (const slug of slugs) {
+    for (const e of readJournal(authorPaths(paths, slug))) total += e.redacted ?? 0;
+  }
   return total;
 }
 
 /**
  * Group the event stream into "turns": each prompt plus the AI text outputs and
  * code changes it produced. A turn is linked by `turnId` where present, and by
- * timestamp adjacency (within the same session) otherwise, so older trails still
- * group sensibly.
+ * `(author, session)` timestamp adjacency otherwise — keying the fallback on the
+ * author too so turns never bleed across students in the combined report.
  */
 export function buildTurns(
   withSession: EventWithSession[],
@@ -83,16 +154,17 @@ export function buildTurns(
     aiOutputs: [],
     codeChanges: [],
     tool: toolOf(event),
+    actorSlug: event.actorSlug,
   }));
   const turnByPrompt = new Map<string, Turn>();
   prompts.forEach((p, i) => turnByPrompt.set(p.event.id, turns[i]!));
 
-  // The latest prompt at-or-before `ts` in the same session (adjacency fallback).
-  const fallback = (ts: string, session: string): Turn | undefined => {
+  // The latest prompt at-or-before `ts` by the same author in the same session.
+  const fallback = (ts: string, slug: string, session: string): Turn | undefined => {
     let best: Turn | undefined;
     let bestTs = '';
     for (const p of prompts) {
-      if (p.sessionId !== session) continue;
+      if (p.actorSlug !== slug || p.sessionId !== session) continue;
       if (p.event.timestamp <= ts && p.event.timestamp >= bestTs) {
         best = turnByPrompt.get(p.event.id);
         bestTs = p.event.timestamp;
@@ -101,18 +173,18 @@ export function buildTurns(
     return best;
   };
 
-  for (const { event, sessionId } of withSession) {
+  for (const { event, sessionId, actorSlug } of withSession) {
     if (event.type !== 'ai_output') continue;
     const turn =
       (event.turnId ? turnByPrompt.get(event.turnId) : undefined) ??
-      fallback(event.timestamp, sessionId);
+      fallback(event.timestamp, actorSlug, sessionId);
     if (turn) turn.aiOutputs.push(event);
   }
 
   for (const a of artifacts) {
     const turn =
       (a.turnId ? turnByPrompt.get(a.turnId) : undefined) ??
-      fallback(a.timestamp, a.sessionId ?? '');
+      fallback(a.timestamp, a.actorSlug ?? '', a.sessionId ?? '');
     if (!turn) continue;
     const diff = a.diffHash ? (readObject(paths, a.diffHash) ?? undefined) : undefined;
     turn.codeChanges.push({
@@ -159,21 +231,40 @@ export function buildToolBlocks(sortedEvents: Event[]): ToolBlock[] {
   return blocks;
 }
 
+/**
+ * The authorship statement. For a single-student report it's that student's
+ * first-person attestation; for the combined team report it names every
+ * contributor and attests the work is the team's own.
+ */
 function buildAuthorshipStatement(
   project: string | undefined,
-  tools: ToolUsage[],
+  contributors: Contributor[],
+  scopeName: string | null,
 ): string {
   const name = project ? `"${project}"` : 'this project';
-  const toolList =
-    tools.length > 0
-      ? ' I worked through ' +
-        joinAnd(tools.map((t) => toolLabel(t.tool))) +
-        ', and this trail records each.'
-      : '';
+
+  if (scopeName) {
+    return (
+      `I, ${scopeName}, recorded this trail while working on ${name}. It shows the ` +
+      `prompts I used and the files I built along the way. The work and ` +
+      `understanding represented here are my own.`
+    );
+  }
+
+  const names = contributors.map((c) => c.name);
+  if (names.length === 0) {
+    return `This trail records the prompts and files produced while working on ${name}.`;
+  }
+  if (names.length === 1) {
+    return (
+      `${names[0]} recorded this trail while working on ${name}. The work and ` +
+      `understanding represented here are their own.`
+    );
+  }
   return (
-    `I recorded this trail while working on ${name}. It shows the prompts I used ` +
-    `and the files I built along the way.${toolList} The work and understanding ` +
-    `represented here are my own.`
+    `This trail was recorded by ${joinAnd(names)} while working together on ${name}. ` +
+    `Each contributor's prompts and edits are attributed to them, and the work and ` +
+    `understanding represented here are the team's own.`
   );
 }
 

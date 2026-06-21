@@ -9,11 +9,14 @@ import { redact } from './redact.ts';
 import {
   JOURNAL_ENTRY_VERSION,
   appendJournal,
+  authorPaths,
   readConfig,
   readJournal,
   toRepoRelative,
+  type AuthorPaths,
   type ShowtailPaths,
 } from './storage.ts';
+import { authorSlugs } from './authors.ts';
 
 /** Cap a single captured diff so one huge edit can't bloat the store. */
 const MAX_DIFF_BYTES = 64 * 1024;
@@ -74,6 +77,7 @@ export function artifactFromEntry(entry: JournalEntry): Artifact {
   };
   if (entry.gitCommit) artifact.gitCommit = entry.gitCommit;
   if (entry.conv) artifact.sessionId = entry.conv;
+  if (entry.actorSlug) artifact.actorSlug = entry.actorSlug;
   if (entry.tool) artifact.tool = entry.tool;
   if (entry.turn) artifact.turnId = entry.turn;
   if (entry.diffHash) artifact.diffHash = entry.diffHash;
@@ -81,23 +85,37 @@ export function artifactFromEntry(entry: JournalEntry): Artifact {
   return artifact;
 }
 
-/** Every recorded artifact (file snapshot), oldest first. */
-export function readArtifacts(paths: ShowtailPaths): Artifact[] {
-  return readJournal(paths)
+/** Every recorded artifact for one author (file snapshots), oldest first. */
+export function readArtifacts(author: AuthorPaths): Artifact[] {
+  return readJournal(author)
     .filter((e) => e.kind === 'artifact')
     .map(artifactFromEntry);
 }
 
+/** Every recorded artifact across every author in the project, oldest first per author. */
+export function readAllArtifacts(paths: ShowtailPaths): Artifact[] {
+  const out: Artifact[] = [];
+  for (const slug of authorSlugs(paths)) {
+    for (const a of readArtifacts(authorPaths(paths, slug))) {
+      // Attribute by the folder it came from when the entry didn't denormalize it.
+      if (!a.actorSlug) a.actorSlug = slug;
+      out.push(a);
+    }
+  }
+  return out;
+}
+
 /**
  * Record a snapshot (hash + metadata, and optionally the AI-suggested diff) of a
- * file. Artifacts build a hash history over time, but recording the *same*
- * content as the latest snapshot is a no-op (deduped) — so repeated saves and
- * double-captures don't pile up duplicates.
+ * file into one author's trail. Artifacts build a hash history over time, but
+ * recording the *same* content as the latest snapshot is a no-op (deduped) — so
+ * repeated saves and double-captures don't pile up duplicates.
  */
 export async function addArtifact(
-  paths: ShowtailPaths,
+  author: AuthorPaths,
   input: AddArtifactInput,
 ): Promise<AddArtifactResult> {
+  const paths = author.shared;
   // Resolve the real on-disk file (absolute from the hook, or relative to the
   // trail root) separately from the display path — a worktree edit lives outside
   // the trail root, so we can't reconstruct it by re-joining root + repoPath.
@@ -112,9 +130,9 @@ export async function addArtifact(
   const config = readConfig(paths);
   const sha256 = await sha256OfFile(absPath);
 
-  // Dedupe: if the most recent snapshot of this path has the same hash, the
-  // file hasn't changed since — don't record it again.
-  const history = artifactsForPath(paths, repoPath);
+  // Dedupe: if the most recent snapshot of this path (in this author's trail) has
+  // the same hash, the file hasn't changed since — don't record it again.
+  const history = artifactsForPath(author, repoPath);
   const latest = history[history.length - 1];
   if (latest && latest.sha256 === sha256) {
     return { artifact: latest, created: false };
@@ -129,6 +147,7 @@ export async function addArtifact(
     ts: new Date().toISOString(),
     type: 'artifact',
     conv: input.sessionId,
+    actorSlug: author.slug,
     path: repoPath,
     sha256,
   };
@@ -136,7 +155,7 @@ export async function addArtifact(
   if (input.tool) entry.tool = input.tool;
   if (input.turnId) entry.turn = input.turnId;
 
-  // Capture the AI-suggested code into the object store (scrubbed, capped).
+  // Capture the AI-suggested code into the (shared) object store (scrubbed, capped).
   if (input.diff && config.settings.captureCode !== false) {
     let diff = input.diff;
     if (Buffer.byteLength(diff) > MAX_DIFF_BYTES) {
@@ -148,18 +167,19 @@ export async function addArtifact(
     if (hits > 0) entry.redacted = hits;
   }
 
-  appendJournal(paths, entry);
+  appendJournal(author, entry);
   return { artifact: artifactFromEntry(entry), created: true };
 }
 
-/** All artifact records for a given repo-relative path, oldest first. */
-export function artifactsForPath(paths: ShowtailPaths, repoPath: string): Artifact[] {
-  return readArtifacts(paths).filter((a) => a.path === repoPath);
+/** All artifact records for a given repo-relative path in one author's trail, oldest first. */
+export function artifactsForPath(author: AuthorPaths, repoPath: string): Artifact[] {
+  return readArtifacts(author).filter((a) => a.path === repoPath);
 }
 
 /**
- * Check recorded artifacts against the files currently on disk.
- * For each path, the *latest* recorded hash is compared to the live file.
+ * Check recorded artifacts against the files currently on disk, across every
+ * author. For each path, the *latest* recorded hash (project-wide) is compared
+ * to the live file.
  */
 export interface HashCheck {
   path: string;
@@ -169,7 +189,7 @@ export interface HashCheck {
 }
 
 export async function checkArtifactHashes(paths: ShowtailPaths): Promise<HashCheck[]> {
-  const artifacts = readArtifacts(paths);
+  const artifacts = readAllArtifacts(paths);
 
   // Keep only the most recent record per path.
   const latest = new Map<string, Artifact>();

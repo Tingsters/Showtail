@@ -6,7 +6,7 @@ import { logEvent } from '../src/core/events.ts';
 import { readObject, writeObject } from '../src/core/objects.ts';
 import { appendJournal, pathsForRoot, readJournal } from '../src/core/storage.ts';
 import { buildReportData, renderHtml } from '../src/core/report.ts';
-import { cleanup, makeTempDir } from './helpers.ts';
+import { authorFor, cleanup, makeTempDir } from './helpers.ts';
 
 /** Recursively list files under a directory. */
 function walk(dir: string): string[] {
@@ -50,23 +50,27 @@ describe('object store + journal', () => {
     try {
       await runInit({ cwd: dir });
       const paths = pathsForRoot(dir);
-      appendJournal(paths, {
+      const author = authorFor(paths);
+      appendJournal(author, {
         v: 1,
         kind: 'event',
         id: 'a',
         ts: '2026-01-01T00:00:00Z',
         type: 'prompt',
       });
-      appendJournal(paths, {
+      appendJournal(author, {
         v: 1,
         kind: 'event',
         id: 'b',
         ts: '2026-01-01T00:01:00Z',
         type: 'prompt',
       });
-      const entries = readJournal(paths);
+      const entries = readJournal(author);
       expect(entries.map((e) => e.id)).toEqual(['a', 'b']);
-      expect(existsSync(join(paths.journalDir, '0001.log'))).toBe(true);
+      // Segments live under authors/<slug>/journal/<machineId>/0001.log.
+      expect(existsSync(join(author.journalDir, author.machineId!, '0001.log'))).toBe(
+        true,
+      );
     } finally {
       cleanup(dir);
     }
@@ -77,15 +81,16 @@ describe('object store + journal', () => {
     try {
       await runInit({ cwd: dir });
       const paths = pathsForRoot(dir);
+      const author = authorFor(paths);
       const secret = 'AKIAIOSFODNN7EXAMPLE';
-      await logEvent(paths, { type: 'prompt', text: `deploy with key ${secret}` });
+      await logEvent(author, { type: 'prompt', text: `deploy with key ${secret}` });
 
       // Not in any object file...
       for (const f of walk(paths.objectsDir)) {
         expect(readFileSync(f, 'utf8')).not.toContain(secret);
       }
       // ...not in the journal...
-      expect(JSON.stringify(readJournal(paths))).not.toContain(secret);
+      expect(JSON.stringify(readJournal(author))).not.toContain(secret);
       // ...and not in the rendered report (which counts the redaction).
       const data = buildReportData(paths);
       expect(data.redactionCount).toBeGreaterThan(0);
@@ -100,7 +105,8 @@ describe('object store + journal', () => {
     try {
       await runInit({ cwd: dir });
       const paths = pathsForRoot(dir);
-      await logEvent(paths, {
+      const author = authorFor(paths);
+      await logEvent(author, {
         type: 'prompt',
         text: 'a memorable unique phrase zylophone',
       });

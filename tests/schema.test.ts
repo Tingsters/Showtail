@@ -7,7 +7,7 @@ const validEvent: Event = {
   timestamp: '2026-06-12T14:03:00.000Z',
   type: 'prompt',
   text: 'How do I structure this parser?',
-  actor: 'student',
+  actorSlug: 'tester-at-example-com',
 };
 
 describe('schema', () => {
@@ -36,7 +36,7 @@ describe('schema', () => {
     expect(fields).toContain('id');
     expect(fields).toContain('timestamp');
     expect(fields).toContain('text');
-    expect(fields).toContain('actor');
+    expect(fields).toContain('actorSlug');
   });
 
   test('bad type is reported', () => {
@@ -49,9 +49,9 @@ describe('schema', () => {
     expect(issues.some((i) => i.field === 'timestamp')).toBe(true);
   });
 
-  test('actor other than student is reported', () => {
-    const issues = validateEvent({ ...validEvent, actor: 'teacher' });
-    expect(issues.some((i) => i.field === 'actor')).toBe(true);
+  test('a missing or empty actorSlug is reported', () => {
+    const issues = validateEvent({ ...validEvent, actorSlug: '' });
+    expect(issues.some((i) => i.field === 'actorSlug')).toBe(true);
   });
 
   test('non-object input is reported', () => {

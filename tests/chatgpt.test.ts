@@ -11,7 +11,7 @@ import { readAllEvents } from '../src/core/events.ts';
 import { runInit } from '../src/commands/init.ts';
 import { runImportChatgpt } from '../src/commands/import.ts';
 import { pathsForRoot } from '../src/core/storage.ts';
-import { cleanup, makeTempDir } from './helpers.ts';
+import { authorFor, cleanup, makeTempDir } from './helpers.ts';
 
 function msg(
   id: string,
@@ -89,9 +89,10 @@ describe('chatgpt share import', () => {
     try {
       await runInit({ cwd: dir });
       const paths = pathsForRoot(dir);
+      const author = authorFor(paths);
       const c = extractConversation(payload())!;
 
-      const res = await importConversation(paths, c, 'chatgpt');
+      const res = await importConversation(author, c, 'chatgpt');
       expect(res.prompts).toBe(2);
       expect(res.responses).toBe(0);
 
@@ -110,14 +111,15 @@ describe('chatgpt share import', () => {
     try {
       await runInit({ cwd: dir });
       const paths = pathsForRoot(dir);
+      const author = authorFor(paths);
       const c = extractConversation(payload())!;
 
-      await importConversation(paths, c, 'chatgpt');
-      const again = await importConversation(paths, c, 'chatgpt');
+      await importConversation(author, c, 'chatgpt');
+      const again = await importConversation(author, c, 'chatgpt');
       expect(again.prompts).toBe(0);
       expect(again.skipped).toBeGreaterThan(0);
 
-      const withResp = await importConversation(paths, c, 'chatgpt', {
+      const withResp = await importConversation(author, c, 'chatgpt', {
         withResponses: true,
       });
       expect(withResp.responses).toBe(1); // the one assistant message, newly added

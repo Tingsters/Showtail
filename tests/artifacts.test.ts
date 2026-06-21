@@ -7,24 +7,26 @@ import {
   artifactsForPath,
   checkArtifactHashes,
 } from '../src/core/artifacts.ts';
-import { pathsForRoot } from '../src/core/storage.ts';
-import { cleanup, makeTempDir } from './helpers.ts';
+import { pathsForRoot, type AuthorPaths } from '../src/core/storage.ts';
+import { authorFor, cleanup, makeTempDir } from './helpers.ts';
 
 async function initProject(): Promise<{
   dir: string;
   paths: ReturnType<typeof pathsForRoot>;
+  author: AuthorPaths;
 }> {
   const dir = makeTempDir();
   await runInit({ cwd: dir });
-  return { dir, paths: pathsForRoot(dir) };
+  const paths = pathsForRoot(dir);
+  return { dir, paths, author: authorFor(paths) };
 }
 
 describe('artifacts', () => {
   test('recording an artifact stores path, hash, and timestamp', async () => {
-    const { dir, paths } = await initProject();
+    const { dir, paths, author } = await initProject();
     try {
       writeFileSync(join(dir, 'essay.md'), '# My Essay\nFirst draft.');
-      const { artifact } = await addArtifact(paths, { filePath: 'essay.md' });
+      const { artifact } = await addArtifact(author, { filePath: 'essay.md' });
       expect(artifact.path).toBe('essay.md');
       expect(artifact.sha256).toMatch(/^[a-f0-9]{64}$/);
       expect(Number.isNaN(Date.parse(artifact.timestamp))).toBe(false);
@@ -34,15 +36,15 @@ describe('artifacts', () => {
   });
 
   test('recording the same file twice builds a hash history', async () => {
-    const { dir, paths } = await initProject();
+    const { dir, paths, author } = await initProject();
     try {
       const file = join(dir, 'essay.md');
       writeFileSync(file, 'draft one');
-      const { artifact: first } = await addArtifact(paths, { filePath: 'essay.md' });
+      const { artifact: first } = await addArtifact(author, { filePath: 'essay.md' });
       writeFileSync(file, 'draft two — revised');
-      const { artifact: second } = await addArtifact(paths, { filePath: 'essay.md' });
+      const { artifact: second } = await addArtifact(author, { filePath: 'essay.md' });
 
-      const history = artifactsForPath(paths, 'essay.md');
+      const history = artifactsForPath(author, 'essay.md');
       expect(history.length).toBe(2);
       expect(first.sha256).not.toBe(second.sha256);
     } finally {
@@ -51,28 +53,28 @@ describe('artifacts', () => {
   });
 
   test('recording unchanged content twice is deduped to one record', async () => {
-    const { dir, paths } = await initProject();
+    const { dir, paths, author } = await initProject();
     try {
       writeFileSync(join(dir, 'essay.md'), 'same content');
-      const a = await addArtifact(paths, { filePath: 'essay.md' });
-      const b = await addArtifact(paths, { filePath: 'essay.md' });
+      const a = await addArtifact(author, { filePath: 'essay.md' });
+      const b = await addArtifact(author, { filePath: 'essay.md' });
       expect(a.created).toBe(true);
       expect(b.created).toBe(false);
-      expect(artifactsForPath(paths, 'essay.md').length).toBe(1);
+      expect(artifactsForPath(author, 'essay.md').length).toBe(1);
     } finally {
       cleanup(dir);
     }
   });
 
   test('a worktree edit is recorded relative to the worktree root', async () => {
-    const { dir, paths } = await initProject();
+    const { dir, paths, author } = await initProject();
     try {
       // Edits made inside .claude/worktrees/<name>/ are real work, captured and
       // recorded by their logical repo path — not the ephemeral worktree path.
       const wtFile = join(dir, '.claude', 'worktrees', 'wt', 'src', 'foo.ts');
       mkdirSync(dirname(wtFile), { recursive: true });
       writeFileSync(wtFile, 'export const foo = 1;');
-      const { artifact } = await addArtifact(paths, {
+      const { artifact } = await addArtifact(author, {
         filePath: wtFile,
         diff: '+ export const foo = 1;',
       });
@@ -84,7 +86,7 @@ describe('artifacts', () => {
       const normal = join(dir, 'src', 'bar.ts');
       mkdirSync(dirname(normal), { recursive: true });
       writeFileSync(normal, 'export const bar = 2;');
-      const { artifact: n } = await addArtifact(paths, { filePath: normal });
+      const { artifact: n } = await addArtifact(author, { filePath: normal });
       expect(n.path).toBe('src/bar.ts');
     } finally {
       cleanup(dir);
@@ -92,9 +94,9 @@ describe('artifacts', () => {
   });
 
   test('adding a missing file throws a clear error', async () => {
-    const { dir, paths } = await initProject();
+    const { dir, paths, author } = await initProject();
     try {
-      await expect(addArtifact(paths, { filePath: 'ghost.md' })).rejects.toThrow(
+      await expect(addArtifact(author, { filePath: 'ghost.md' })).rejects.toThrow(
         /File not found/,
       );
     } finally {
@@ -103,11 +105,11 @@ describe('artifacts', () => {
   });
 
   test('hash check reports match, changed, and missing', async () => {
-    const { dir, paths } = await initProject();
+    const { dir, paths, author } = await initProject();
     try {
       const file = join(dir, 'code.ts');
       writeFileSync(file, 'export const x = 1;');
-      await addArtifact(paths, { filePath: 'code.ts' });
+      await addArtifact(author, { filePath: 'code.ts' });
 
       let checks = await checkArtifactHashes(paths);
       expect(checks).toHaveLength(1);
@@ -115,7 +117,7 @@ describe('artifacts', () => {
 
       // Latest recorded hash should follow the latest snapshot.
       writeFileSync(file, 'export const x = 2;');
-      await addArtifact(paths, { filePath: 'code.ts' });
+      await addArtifact(author, { filePath: 'code.ts' });
       checks = await checkArtifactHashes(paths);
       expect(checks[0]!.status).toBe('match');
 

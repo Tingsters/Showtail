@@ -10,7 +10,7 @@
  */
 import { logEvent, importedSourceIds } from './events.ts';
 import { sha256OfString } from './hash.ts';
-import type { ShowtailPaths } from './storage.ts';
+import type { AuthorPaths } from './storage.ts';
 import type { Tool } from '../types.ts';
 
 export interface ParsedMessage {
@@ -153,12 +153,12 @@ export interface ImportResult {
  * source message id so re-importing the same conversation adds nothing.
  */
 export async function importConversation(
-  paths: ShowtailPaths,
+  author: AuthorPaths,
   conversation: ParsedConversation,
   tool: Tool,
   options: ImportOptions = {},
 ): Promise<ImportResult> {
-  const seen = importedSourceIds(paths);
+  const seen = importedSourceIds(author);
   const result: ImportResult = {
     title: conversation.title,
     prompts: 0,
@@ -187,7 +187,7 @@ export async function importConversation(
       ? new Date(msg.createTime * 1000).toISOString()
       : undefined;
 
-    const { event } = await logEvent(paths, {
+    const { event } = await logEvent(author, {
       type,
       text: msg.text,
       tool,
