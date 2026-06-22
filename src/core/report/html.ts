@@ -62,9 +62,7 @@ function renderTurnSummary(
   // appears only when it occurred; edits and decisions coexist (joined by " · ").
   const statParts: string[] = [];
   if (fileCount > 0) {
-    statParts.push(
-      `edited ${fileCount} file(s)${lineCount ? `, ~${lineCount} line(s)` : ''}`,
-    );
+    statParts.push(`${fileCount} file(s)${lineCount ? `, ~${lineCount} line(s)` : ''}`);
   }
   if (turn.decisions.length > 0) statParts.push(`${turn.decisions.length} decision(s)`);
   if (turn.plans.length > 0) statParts.push(`${turn.plans.length} plan(s)`);

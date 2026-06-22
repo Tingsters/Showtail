@@ -418,7 +418,7 @@ describe('claude-code decision import', () => {
       const html = renderHtml(data);
       const stat = /<span class="stat">([^<]*)<\/span>/.exec(html)?.[1] ?? '';
       // Both counts appear on the one stat line, joined — no conflict.
-      expect(stat).toContain('edited 1 file(s)');
+      expect(stat).toContain('1 file(s)');
       expect(stat).toContain('1 decision(s)');
       expect(stat).toContain(' · ');
     } finally {
