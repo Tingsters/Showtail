@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseClaudeTranscript } from '../src/core/claudeCode.ts';
+import { renderPlanText, splitPlanText } from '../src/core/plans.ts';
 import { readAllEvents } from '../src/core/events.ts';
 import { buildReportData, renderHtml, renderMarkdown } from '../src/core/report.ts';
 import { runInit } from '../src/commands/init.ts';
@@ -120,7 +121,7 @@ describe('plan import + report', () => {
     }
   });
 
-  test('a revised plan is tagged plan-revised and badged Revised', async () => {
+  test('a revised plan shows its feedback on the collapsed summary', async () => {
     const dir = makeTempDir();
     try {
       await runInit({ cwd: dir });
@@ -133,10 +134,31 @@ describe('plan import + report', () => {
       expect(plans[0]!.tags).toContain('plan-revised');
 
       const html = renderHtml(buildReportData(paths));
-      expect(html).toContain('↩ Revised');
-      expect(html).toContain('You sent this back asking');
+      // The collapsed <summary> carries the badge AND the feedback message.
+      const summary =
+        /<details class="plan">\s*<summary>([\s\S]*?)<\/summary>/.exec(html)?.[1] ?? '';
+      expect(summary).toContain('↩ Revised');
+      expect(summary).toContain('use approach B instead');
+      // The "You sent this back asking:" prefix is split out, not rendered.
+      expect(html).not.toContain('You sent this back asking');
+      // The plan itself is still in the body.
+      expect(html).toContain('My Plan');
     } finally {
       cleanup(dir);
     }
+  });
+});
+
+describe('splitPlanText', () => {
+  test('is the inverse of renderPlanText', () => {
+    const text = renderPlanText('# Plan body', false, 'change X to Y');
+    expect(splitPlanText(text)).toEqual({
+      feedback: 'change X to Y',
+      plan: '# Plan body',
+    });
+    // Approved (no feedback) → no prefix, plan unchanged.
+    expect(splitPlanText(renderPlanText('# Plan body', true))).toEqual({
+      plan: '# Plan body',
+    });
   });
 });

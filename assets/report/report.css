@@ -180,6 +180,8 @@ blockquote {
 }
 .plan-badge.approved { background: #d4f0e2; color: #1d6b4c; }
 .plan-badge.revised { background: #ececf1; color: #6b6b76; }
+/* The "what to change" feedback, shown on the collapsed summary; wraps if long. */
+.plan-feedback { font-size: 0.85rem; font-style: italic; color: #5a5f7a; }
 .plan .ai-text { margin: 0.3rem 0 0; }
 .code { margin: 0.4rem 0; }
 .code > summary { cursor: pointer; font-size: 0.85rem; color: #3a3f6b; }
@@ -283,4 +285,5 @@ pre.codeblock code { background: none; padding: 0; font-size: inherit; border-ra
   .plan-tag { color: #aab0ff; }
   .plan-badge.approved { background: #1c3a2c; color: #7fd1a6; }
   .plan-badge.revised { background: #2a2a30; color: #a0a0aa; }
+  .plan-feedback { color: #b8b8c2; }
 }
