@@ -1,15 +1,6 @@
-import { detectTools } from '../core/detect.ts';
-import {
-  codexHooksFeatureEnabled,
-  enableCodexHooksFeature,
-  installCodexHooks,
-  resolveCodexTarget,
-  writeCodexInstructions,
-} from '../core/codex.ts';
 import { readGlobalConfig, writeGlobalConfig } from '../core/globalConfig.ts';
 import { emitJson } from '../core/output.ts';
-import { installHooks, resolveTarget, writeSkill } from '../core/skill.ts';
-import { TOOL_LABELS } from '../types.ts';
+import { connectPlugins } from '../plugins/registry.ts';
 
 export interface SetupOptions {
   /** Run without any prompts (setup is non-interactive regardless; kept for symmetry). */
@@ -21,7 +12,8 @@ export interface SetupOptions {
 }
 
 interface ConnectedTool {
-  tool: 'claude' | 'codex';
+  tool: string;
+  label: string;
   scope: 'user';
   hooks: boolean;
 }
@@ -32,8 +24,10 @@ interface ConnectedTool {
  * never has to run a Showtail command again — trails create themselves on first
  * AI use and sessions close themselves. Idempotent: safe to re-run.
  *
- * Connects via the core install helpers directly (not the chatty `connect`
- * wrappers) so output stays concise and `--json` emits a single clean object.
+ * Detection and connection are driven entirely by the plugin registry; this
+ * command names no tool. Each connect plugin reports whether it's installed
+ * (`detect`) and either auto-connects at user scope (`autoConnect`) or supplies
+ * guidance to print (`setupGuidance`, e.g. Copilot's VS Code extension).
  */
 export async function runSetup(options: SetupOptions = {}): Promise<void> {
   if (options.off) {
@@ -48,28 +42,26 @@ export async function runSetup(options: SetupOptions = {}): Promise<void> {
     return;
   }
 
-  const detected = detectTools();
-  const connected: ConnectedTool[] = [];
+  const detected = connectPlugins().map((plugin) => ({
+    plugin,
+    installed: plugin.connect.detect(),
+  }));
 
-  for (const d of detected) {
-    if (!d.installed) continue;
-    if (d.tool === 'claude') {
-      const target = resolveTarget('user', options.cwd);
-      writeSkill(target);
-      installHooks(target);
-      connected.push({ tool: 'claude', scope: 'user', hooks: true });
-    } else if (d.tool === 'codex') {
-      const target = resolveCodexTarget('user', options.cwd);
-      writeCodexInstructions(target, {});
-      installCodexHooks(target);
-      if (!codexHooksFeatureEnabled(target.configToml)) {
-        enableCodexHooksFeature(target.configToml);
-      }
-      connected.push({ tool: 'codex', scope: 'user', hooks: true });
+  const connected: ConnectedTool[] = [];
+  const guidance: string[] = [];
+  for (const { plugin, installed } of detected) {
+    if (!installed) continue;
+    const result = plugin.connect.autoConnect?.(options.cwd);
+    if (result) {
+      connected.push({
+        tool: plugin.cliName,
+        label: plugin.label,
+        scope: 'user',
+        hooks: result.hooks,
+      });
+    } else if (plugin.connect.setupGuidance) {
+      guidance.push(...plugin.connect.setupGuidance);
     }
-    // Copilot is project-scoped (.github/ lives in each repo) and the VS Code
-    // extension auto-installs its instructions on first open, so there's nothing
-    // to connect globally here — only guidance to install the extension.
   }
 
   // The single switch that turns automatic tracking on everywhere.
@@ -81,11 +73,9 @@ export async function runSetup(options: SetupOptions = {}): Promise<void> {
     setupCompletedAt,
   });
 
-  const copilotDetected = detected.find((d) => d.tool === 'copilot')?.installed ?? false;
-
   if (options.json) {
     emitJson({
-      detected: detected.map((d) => ({ tool: d.tool, installed: d.installed })),
+      detected: detected.map((d) => ({ tool: d.plugin.cliName, installed: d.installed })),
       connected,
       autoInit: true,
       setupCompletedAt,
@@ -98,17 +88,20 @@ export async function runSetup(options: SetupOptions = {}): Promise<void> {
   if (connected.length > 0) {
     console.log('Connected your AI tools (for all projects):');
     for (const c of connected) {
-      console.log(`  ${TOOL_LABELS[`${c.tool}-code`] ?? c.tool} · hooks on`);
+      console.log(`  ${c.label} · hooks ${c.hooks ? 'on' : 'off'}`);
     }
   } else {
+    const names = connectPlugins()
+      .filter((p) => p.connect.autoConnect)
+      .map((p) => p.cliName);
     console.log('No AI tools were detected to connect automatically.');
-    console.log('  Connect one anytime with `showtail connect claude` (or codex).');
+    console.log(
+      `  Connect one anytime with \`showtail connect ${names[0] ?? 'claude'}\`.`,
+    );
   }
-  if (copilotDetected) {
+  if (guidance.length > 0) {
     console.log('');
-    console.log('VS Code detected. For GitHub Copilot capture, install the extension:');
-    console.log('  code --install-extension Tingsters.showtail');
-    console.log('  (It sets up each project automatically the first time you open it.)');
+    for (const line of guidance) console.log(line);
   }
   console.log('');
   console.log('Automatic tracking is ON. From now on, just work:');

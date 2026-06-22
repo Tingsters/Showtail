@@ -1,0 +1,102 @@
+/**
+ * Claude Code — the only environment with both capabilities: live capture
+ * (skill + hooks in `.claude/`) and transcript import (`.jsonl` sessions on
+ * disk). All Claude-specific install/state logic stays in core/skill.ts and
+ * commands/skill.ts; this module just exposes it through the plugin contract.
+ */
+import { existsSync } from 'node:fs';
+import { runSkillInstall, runSkillUninstall } from '../commands/skill.ts';
+import { runImportClaudeCode } from '../commands/importClaude.ts';
+import {
+  autoCaptureActive,
+  installHooks,
+  resolveTarget,
+  writeSkill,
+} from '../core/skill.ts';
+import { commandOnPath, homeDirExists } from '../core/detect.ts';
+import type { EnvironmentPlugin } from './types.ts';
+
+/** Is the skill installed at either scope? */
+function skillInstalled(cwd?: string): boolean {
+  return (
+    existsSync(resolveTarget('project', cwd).skillFile) ||
+    existsSync(resolveTarget('user', cwd).skillFile)
+  );
+}
+
+export const claudeCodePlugin: EnvironmentPlugin = {
+  id: 'claude-code',
+  cliName: 'claude',
+  aliases: ['claude-code'],
+  label: 'Claude Code',
+
+  connect: {
+    scopes: ['user', 'project'],
+    flags: [
+      {
+        name: 'user',
+        flag: '--user',
+        description: 'install for your user, all projects',
+      },
+      {
+        name: 'project',
+        flag: '--project',
+        description: 'install for this project only [default]',
+      },
+      {
+        name: 'hooks',
+        flag: '--no-hooks',
+        description: 'skip auto-capture hooks; log prompts/edits yourself via the skill',
+      },
+      {
+        name: 'force',
+        flag: '--force',
+        description: 'overwrite existing instructions/skill (take the latest)',
+      },
+    ],
+    applicableFlags: ['user', 'project', 'hooks', 'force'],
+
+    detect: () => commandOnPath('claude') || homeDirExists('.claude'),
+
+    autoConnect(cwd) {
+      const target = resolveTarget('user', cwd);
+      writeSkill(target);
+      installHooks(target);
+      return { hooks: true };
+    },
+
+    install: (opts) =>
+      runSkillInstall({
+        user: opts.user,
+        project: opts.project,
+        hooks: opts.hooks,
+        force: opts.force,
+        cwd: opts.cwd,
+      }),
+
+    uninstall: (opts) => runSkillUninstall({ user: opts.user, cwd: opts.cwd }),
+
+    status(cwd) {
+      const hooksActive = autoCaptureActive(cwd);
+      return { connected: skillInstalled(cwd) || hooksActive, hooksActive };
+    },
+  },
+
+  import: {
+    command: 'claude',
+    aliases: ['claude-code'],
+    description:
+      'Import an existing Claude Code session transcript from disk into your trail.\n' +
+      "With no target, opens an interactive picker of this project's sessions " +
+      '(choose one or several); --list prints the same list non-interactively.',
+    shape: 'transcript',
+    run: (source, opts) =>
+      runImportClaudeCode(source, {
+        list: opts.list,
+        withResponses: opts.withResponses,
+        file: opts.file,
+        session: opts.session,
+        cwd: opts.cwd,
+      }),
+  },
+};

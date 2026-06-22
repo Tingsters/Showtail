@@ -1,52 +1,28 @@
-import { existsSync } from 'node:fs';
-import { autoCaptureActive, resolveTarget } from './skill.ts';
-import { copilotState, resolveCopilotTarget } from './copilot.ts';
-import {
-  codexAutoCaptureActive,
-  codexInstructionsState,
-  resolveCodexTarget,
-} from './codex.ts';
+import { connectPlugins } from '../plugins/registry.ts';
 
 export interface ToolStatus {
-  tool: 'claude' | 'copilot' | 'codex';
+  /** The tool's CLI name (e.g. 'claude', 'gemini-cli'). */
+  tool: string;
+  /** Human-friendly label (e.g. 'Claude Code'). */
+  label: string;
   connected: boolean;
-  /** Whether auto-capture hooks are active (claude, codex). */
+  /** Whether auto-capture hooks are active (tools that install hooks). */
   hooksActive?: boolean;
-  /** Whether the managed instructions are behind the latest (copilot, codex). */
+  /** Whether the managed instructions are behind the latest. */
   updateAvailable?: boolean;
 }
 
-/** Is the Showtail Claude Code skill installed at either scope? */
-function skillInstalled(cwd?: string): boolean {
-  return (
-    existsSync(resolveTarget('project', cwd).skillFile) ||
-    existsSync(resolveTarget('user', cwd).skillFile)
-  );
-}
-
-/** Connection state of every tool Showtail can integrate with. Shared by `status` and `start`. */
+/**
+ * Connection state of every tool Showtail can integrate with, from the plugin
+ * registry. Shared by `status` and `start`. No tool is named here — each
+ * connect plugin reports its own state.
+ */
 export function toolStatuses(cwd?: string): ToolStatus[] {
-  const claudeHooks = autoCaptureActive(cwd);
-  const copilot = copilotState(resolveCopilotTarget(cwd));
-  const codex = codexInstructionsState(resolveCodexTarget('project', cwd));
-  return [
-    {
-      tool: 'claude',
-      connected: skillInstalled(cwd) || claudeHooks,
-      hooksActive: claudeHooks,
-    },
-    {
-      tool: 'copilot',
-      connected: copilot.installed,
-      updateAvailable: copilot.installed ? copilot.updateAvailable : undefined,
-    },
-    {
-      tool: 'codex',
-      connected: codex.installed,
-      hooksActive: codexAutoCaptureActive(cwd),
-      updateAvailable: codex.installed ? codex.updateAvailable : undefined,
-    },
-  ];
+  return connectPlugins().map((p) => ({
+    tool: p.cliName,
+    label: p.label,
+    ...p.connect.status(cwd),
+  }));
 }
 
 /** One-line state label for a tool, e.g. `connected · hooks active`. */

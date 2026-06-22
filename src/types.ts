@@ -30,28 +30,16 @@ export type ActorSlug = string;
 /**
  * Which tool the work flowed through when an event was recorded. This is what
  * lets a single trail span Claude Code and GitHub Copilot and lets a professor
- * follow a student switching between them. Kept as a plain string union so new
- * tools can be added without breaking older trails.
+ * follow a student switching between them.
+ *
+ * Kept as a plain string (not an enum) on purpose: the set of integrations lives
+ * in the plugin registry (`src/plugins/`), not here, so the core data model has
+ * no knowledge of individual tools and old trails never break when tools change.
+ * Known ids today: `claude-code`, `github-copilot`, `codex`, `gemini-cli`,
+ * `chatgpt`, `google-gemini`, and `cli` (manual logging). Use `labelForTool`
+ * from the registry for a human-friendly name.
  */
-export const TOOLS = [
-  'claude-code',
-  'github-copilot',
-  'chatgpt',
-  'google-gemini',
-  'codex',
-  'cli',
-] as const;
-export type Tool = (typeof TOOLS)[number];
-
-/** Human-friendly label for a tool (falls back to the raw value). */
-export const TOOL_LABELS: Record<string, string> = {
-  'claude-code': 'Claude Code',
-  'github-copilot': 'GitHub Copilot',
-  chatgpt: 'ChatGPT',
-  'google-gemini': 'Google Gemini',
-  codex: 'OpenAI Codex',
-  cli: 'CLI',
-};
+export type Tool = string;
 
 /** A single recorded event in a work session. One JSONL line = one Event. */
 export interface Event {

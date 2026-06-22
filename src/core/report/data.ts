@@ -10,7 +10,7 @@ import type {
   Turn,
   TurnCodeChange,
 } from '../../types.ts';
-import { TOOL_LABELS } from '../../types.ts';
+import { labelForTool } from '../../plugins/registry.ts';
 import { readAllArtifacts } from '../artifacts.ts';
 import {
   authorPaths,
@@ -29,7 +29,7 @@ export function toolOf(event: Event): Tool {
 }
 
 export function toolLabel(tool: Tool): string {
-  return TOOL_LABELS[tool] ?? tool;
+  return labelForTool(tool);
 }
 
 /** Options controlling the scope of a generated report. */

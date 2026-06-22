@@ -13,16 +13,17 @@ import { runReport } from './commands/report.ts';
 import { runVerify } from './commands/verify.ts';
 import { runStatus } from './commands/status.ts';
 import { runSessions } from './commands/sessions.ts';
-import { runSkillInstall, runSkillUninstall } from './commands/skill.ts';
-import { runCopilotInstall, runCopilotUninstall } from './commands/copilot.ts';
-import { runCodexInstall, runCodexUninstall } from './commands/codex.ts';
 import { runHook, type HookEvent } from './commands/hook.ts';
-import { runImportChatgpt, runImportUndo } from './commands/import.ts';
-import { runImportGemini } from './commands/importGemini.ts';
-import { runImportClaudeCode } from './commands/importClaude.ts';
+import { runImportUndo } from './commands/import.ts';
 import { eventTypeList } from './core/schema.ts';
 import { ShowtailError } from './core/errors.ts';
 import { NotInitializedError } from './core/storage.ts';
+import {
+  connectPluginOrThrow,
+  connectPlugins,
+  importPlugins,
+} from './plugins/registry.ts';
+import type { ConnectFlag, ImportRunOptions } from './plugins/types.ts';
 import type { Tool } from './types.ts';
 
 const VERSION = '0.10.1';
@@ -245,49 +246,22 @@ program
   );
 
 // --- Connect your tools ---------------------------------------------------
-
-/** Tools that `connect`/`disconnect` understand, plus accepted aliases. */
-const TOOL_ALIASES: Record<string, 'claude' | 'copilot' | 'codex'> = {
-  claude: 'claude',
-  'claude-code': 'claude',
-  copilot: 'copilot',
-  'github-copilot': 'copilot',
-  codex: 'codex',
-};
-
-function resolveConnectTool(raw: string): 'claude' | 'copilot' | 'codex' {
-  const tool = TOOL_ALIASES[raw.toLowerCase()];
-  if (!tool) {
-    throw new Error(`Unknown tool "${raw}". Choose one of: claude, copilot, codex.`);
-  }
-  return tool;
-}
-
-/** Friendly flag spelling for an option key, for error messages. */
-const FLAG_LABEL: Record<string, string> = {
-  hooks: '--no-hooks',
-  extension: '--no-extension',
-};
+//
+// Both `connect`/`disconnect` and `import` dispatch through the plugin registry
+// (src/plugins/). cli.ts holds no tool names and no per-tool flag knowledge —
+// each plugin declares the flags it understands and how to install/import.
 
 /**
- * Reject options the user explicitly passed that don't apply to the chosen
- * tool, so a typo like `connect copilot --user` fails loudly instead of being
- * silently ignored. Only flags actually typed on the CLI are checked.
+ * The union of connect flags across all plugins (deduped by option name; the
+ * first plugin's spelling/help wins). Registered once on the `connect` command.
  */
-function rejectInapplicable(
-  command: Command,
-  tool: string,
-  applicable: readonly string[],
-): void {
-  const all = ['user', 'project', 'hooks', 'extension', 'yes', 'force'];
-  for (const name of all) {
-    if (applicable.includes(name)) continue;
-    if (command.getOptionValueSource(name) === 'cli') {
-      const flag = FLAG_LABEL[name] ?? `--${name}`;
-      throw new Error(`${flag} is not valid for \`connect ${tool}\`.`);
-    }
+const CONNECT_FLAGS: ConnectFlag[] = (() => {
+  const seen = new Map<string, ConnectFlag>();
+  for (const p of connectPlugins()) {
+    for (const f of p.connect.flags) if (!seen.has(f.name)) seen.set(f.name, f);
   }
-}
+  return [...seen.values()];
+})();
 
 interface ConnectOptions {
   user?: boolean;
@@ -298,53 +272,48 @@ interface ConnectOptions {
   force?: boolean;
 }
 
-program
+/**
+ * Reject options the user explicitly typed that don't apply to the chosen tool,
+ * so a typo like `connect copilot --user` fails loudly instead of being silently
+ * ignored. Only flags actually typed on the CLI are checked.
+ */
+function rejectInapplicable(
+  command: Command,
+  plugin: { cliName: string; connect: { applicableFlags: readonly string[] } },
+): void {
+  for (const f of CONNECT_FLAGS) {
+    if (plugin.connect.applicableFlags.includes(f.name)) continue;
+    if (command.getOptionValueSource(f.name) === 'cli') {
+      throw new Error(`${f.flag} is not valid for \`connect ${plugin.cliName}\`.`);
+    }
+  }
+}
+
+const connectNames = connectPlugins()
+  .map((p) => p.cliName)
+  .join(' | ');
+
+const connectCmd = program
   .command('connect <tool>')
   .description(
-    'Connect an AI tool so your prompts and edits are captured as you work (claude | copilot | codex).',
+    `Connect an AI tool so your prompts and edits are captured as you work (${connectNames}).`,
   )
-  .helpGroup(G_CONNECT)
-  .option('--user', 'install for your user, all projects (claude, codex)')
-  .option('--project', 'install for this project only [default] (claude, codex)')
-  .option(
-    '--no-hooks',
-    'skip auto-capture hooks; log prompts/edits yourself via the skill (claude, codex)',
-  )
-  .option('--no-extension', 'skip the VS Code extension guidance (copilot)')
-  .option('--yes', 'enable Codex hooks in config.toml without prompting (codex)')
-  .option('--force', 'overwrite existing instructions/skill (take the latest)')
-  .action(
-    action(async (raw: string, opts: ConnectOptions, command: Command) => {
-      const tool = resolveConnectTool(raw);
-      if (tool === 'claude') {
-        rejectInapplicable(command, 'claude', ['user', 'project', 'hooks', 'force']);
-        await runSkillInstall({
-          user: opts.user,
-          project: opts.project,
-          hooks: opts.hooks,
-          force: opts.force,
-        });
-      } else if (tool === 'copilot') {
-        rejectInapplicable(command, 'copilot', ['extension', 'force']);
-        await runCopilotInstall({ extension: opts.extension, force: opts.force });
-      } else {
-        rejectInapplicable(command, 'codex', [
-          'user',
-          'project',
-          'hooks',
-          'yes',
-          'force',
-        ]);
-        await runCodexInstall({
-          user: opts.user,
-          project: opts.project,
-          hooks: opts.hooks,
-          yes: opts.yes,
-          force: opts.force,
-        });
-      }
-    }),
-  );
+  .helpGroup(G_CONNECT);
+for (const f of CONNECT_FLAGS) connectCmd.option(f.flag, f.description);
+connectCmd.action(
+  action(async (raw: string, opts: ConnectOptions, command: Command) => {
+    const plugin = connectPluginOrThrow(raw);
+    rejectInapplicable(command, plugin);
+    await plugin.connect.install({
+      user: opts.user,
+      project: opts.project,
+      hooks: opts.hooks,
+      extension: opts.extension,
+      yes: opts.yes,
+      force: opts.force,
+    });
+  }),
+);
 
 program
   .command('disconnect <tool>')
@@ -352,18 +321,12 @@ program
     'Disconnect an AI tool (removes its instructions/skill and any auto-capture hooks).',
   )
   .helpGroup(G_CONNECT)
-  .option('--user', 'remove from your user scope (claude, codex)')
-  .option('--project', 'remove from this project [default] (claude, codex)')
+  .option('--user', 'remove from your user scope (where the tool supports it)')
+  .option('--project', 'remove from this project [default]')
   .action(
     action(async (raw: string, opts: { user?: boolean }) => {
-      const tool = resolveConnectTool(raw);
-      if (tool === 'claude') {
-        await runSkillUninstall({ user: opts.user });
-      } else if (tool === 'copilot') {
-        await runCopilotUninstall();
-      } else {
-        await runCodexUninstall({ user: opts.user });
-      }
+      const plugin = connectPluginOrThrow(raw);
+      await plugin.connect.uninstall({ user: opts.user });
     }),
   );
 
@@ -374,115 +337,64 @@ const importCmd = program
   )
   .helpGroup(G_CONNECT);
 
-importCmd
-  .command('chatgpt [share-url]')
-  .description(
-    'Import a ChatGPT conversation. A share link is easiest; if it will not work,\n' +
-      'paste the conversation instead with --paste (or --file a saved page/transcript).',
-  )
-  .option('--no-responses', "don't import ChatGPT's responses, only your prompts")
-  .option('--paste', 'import a copied conversation (reads your clipboard)')
-  .option('--clipboard', 'import the conversation from your clipboard')
-  .option('-y, --yes', 'skip the clipboard preview/confirmation prompt')
-  .option('--file <path>', 'parse a saved share page or a saved transcript file')
-  .option('--date <yyyy-mm-dd>', 'date a pasted conversation so it lands on the timeline')
-  .option('-s, --session <id>', 'import into a specific session id')
-  .action(
-    action(
-      async (
-        shareUrl: string | undefined,
-        opts: {
-          responses?: boolean;
-          paste?: boolean;
-          clipboard?: boolean;
-          yes?: boolean;
-          file?: string;
-          date?: string;
-          session?: string;
-        },
-      ) =>
-        runImportChatgpt(shareUrl, {
-          withResponses: opts.responses !== false,
-          paste: opts.paste,
-          clipboard: opts.clipboard,
-          yes: opts.yes,
-          file: opts.file,
-          date: opts.date,
-          session: opts.session,
-        }),
-    ),
-  );
+/** Commander option bag for an import subcommand (both shapes). */
+interface ImportCliOptions {
+  responses?: boolean;
+  paste?: boolean;
+  clipboard?: boolean;
+  yes?: boolean;
+  file?: string;
+  date?: string;
+  session?: string;
+  list?: boolean;
+}
 
-importCmd
-  .command('gemini [share-url]')
-  .description(
-    'Import a Google Gemini conversation from a share link (gemini.google.com/share/…).\n' +
-      'If a link will not work, paste the conversation with --paste (or --file a transcript).',
-  )
-  .option('--no-responses', "don't import Gemini's responses, only your prompts")
-  .option('--paste', 'import a copied conversation (reads your clipboard)')
-  .option('--clipboard', 'import the conversation from your clipboard')
-  .option('-y, --yes', 'skip the clipboard preview/confirmation prompt')
-  .option('--file <path>', 'parse a saved share page or a saved transcript file')
-  .option('--date <yyyy-mm-dd>', 'date a pasted conversation so it lands on the timeline')
-  .option('-s, --session <id>', 'import into a specific session id')
-  .action(
-    action(
-      async (
-        shareUrl: string | undefined,
-        opts: {
-          responses?: boolean;
-          paste?: boolean;
-          clipboard?: boolean;
-          yes?: boolean;
-          file?: string;
-          date?: string;
-          session?: string;
-        },
-      ) =>
-        runImportGemini(shareUrl, {
-          withResponses: opts.responses !== false,
-          paste: opts.paste,
-          clipboard: opts.clipboard,
-          yes: opts.yes,
-          file: opts.file,
-          date: opts.date,
-          session: opts.session,
-        }),
-    ),
-  );
+function toImportOptions(o: ImportCliOptions): ImportRunOptions {
+  return {
+    withResponses: o.responses !== false,
+    paste: o.paste,
+    clipboard: o.clipboard,
+    yes: o.yes,
+    file: o.file,
+    date: o.date,
+    session: o.session,
+    list: o.list,
+  };
+}
 
-importCmd
-  .command('claude [target]')
-  .alias('claude-code')
-  .description(
-    'Import an existing Claude Code session transcript from disk into your trail.\n' +
-      "With no target, opens an interactive picker of this project's sessions " +
-      '(choose one or several); --list prints the same list non-interactively.',
-  )
-  .option('--list', "list this project's Claude Code transcripts and exit")
-  .option('--no-responses', "don't import Claude's text responses, only your prompts")
-  .option('--file <path>', 'import a specific transcript .jsonl by path')
-  .option('-s, --session <id>', 'import into a specific Showtail session id')
-  .action(
-    action(
-      async (
-        target: string | undefined,
-        opts: {
-          list?: boolean;
-          responses?: boolean;
-          file?: string;
-          session?: string;
-        },
-      ) =>
-        runImportClaudeCode(target, {
-          list: opts.list,
-          withResponses: opts.responses !== false,
-          file: opts.file,
-          session: opts.session,
-        }),
+// One subcommand per import-capable plugin, its flag-set chosen by its shape.
+for (const p of importPlugins()) {
+  const sub = importCmd
+    .command(`${p.import.command} [source]`)
+    .description(p.import.description);
+  for (const alias of p.import.aliases ?? []) sub.alias(alias);
+
+  if (p.import.shape === 'share') {
+    sub
+      .option('--no-responses', "don't import the AI's responses, only your prompts")
+      .option('--paste', 'import a copied conversation (reads your clipboard)')
+      .option('--clipboard', 'import the conversation from your clipboard')
+      .option('-y, --yes', 'skip the clipboard preview/confirmation prompt')
+      .option('--file <path>', 'parse a saved share page or a saved transcript file')
+      .option(
+        '--date <yyyy-mm-dd>',
+        'date a pasted conversation so it lands on the timeline',
+      )
+      .option('-s, --session <id>', 'import into a specific session id');
+  } else {
+    sub
+      .option('--list', "list this project's transcripts and exit")
+      .option('--no-responses', "don't import the AI's text responses, only your prompts")
+      .option('--file <path>', 'import a specific transcript file by path')
+      .option('-s, --session <id>', 'import into a specific Showtail session id');
+  }
+
+  sub.action(
+    action(async (source: string | undefined, opts: ImportCliOptions) =>
+      p.import.run(source, toImportOptions(opts)),
     ),
   );
+}
 
 importCmd
   .command('undo')

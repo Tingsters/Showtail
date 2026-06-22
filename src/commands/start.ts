@@ -3,6 +3,7 @@ import { requireActiveAuthor } from '../core/authors.ts';
 import { emitJson } from '../core/output.ts';
 import { startSession } from '../core/sessions.ts';
 import { connectedToolsLines, toolStatuses } from '../core/tools.ts';
+import { connectPlugins } from '../plugins/registry.ts';
 
 export interface StartOptions {
   label?: string;
@@ -56,9 +57,9 @@ export async function runStart(options: StartOptions = {}): Promise<void> {
   } else {
     console.log('No AI tools connected yet. Connect one so your prompts and edits are');
     console.log('captured automatically as you work:');
-    console.log('  showtail connect claude     (Claude Code)');
-    console.log('  showtail connect copilot    (GitHub Copilot)');
-    console.log('  showtail connect codex      (OpenAI Codex)');
+    for (const p of connectPlugins()) {
+      console.log(`  showtail connect ${p.cliName.padEnd(11)}(${p.label})`);
+    }
     console.log('');
     console.log('Prefer to log by hand? Record your prompts as you go:');
     console.log(LOG_PROMPT_EXAMPLE);
