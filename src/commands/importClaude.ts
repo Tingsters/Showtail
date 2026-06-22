@@ -190,6 +190,7 @@ async function importPaths(
     responses: 0,
     edits: 0,
     decisions: 0,
+    plans: 0,
     skipped: 0,
   };
   let imported = 0;
@@ -207,6 +208,7 @@ async function importPaths(
     totals.responses += res.responses;
     totals.edits += res.edits;
     totals.decisions += res.decisions;
+    totals.plans += res.plans;
     totals.skipped += res.skipped;
     if (res.first && (!totals.first || res.first < totals.first))
       totals.first = res.first;
@@ -319,7 +321,7 @@ function printResult(
   withResponses: boolean,
   sessionCount: number,
 ): void {
-  const total = res.prompts + res.responses + res.edits + res.decisions;
+  const total = res.prompts + res.responses + res.edits + res.decisions + res.plans;
   if (total === 0) {
     console.log(
       res.skipped > 0
@@ -333,6 +335,7 @@ function printResult(
   if (withResponses) parts.push(`${res.responses} response(s)`);
   parts.push(`${res.edits} edit(s)`);
   if (res.decisions) parts.push(`${res.decisions} decision(s)`);
+  if (res.plans) parts.push(`${res.plans} plan(s)`);
   const from =
     sessionCount > 1
       ? `${sessionCount} Claude Code sessions`

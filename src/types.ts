@@ -15,6 +15,7 @@ export const EVENT_TYPES = [
   'ai_output', // an AI response
   'artifact', // a file that was created or changed (usually auto-logged)
   'decision', // a choice the student made when the AI paused to ask (AskUserQuestion)
+  'plan', // a plan the AI proposed in plan mode (ExitPlanMode), and its approval
 ] as const;
 
 export type EventType = (typeof EVENT_TYPES)[number];
@@ -255,6 +256,8 @@ export interface ReportData {
     artifacts: number;
     /** How many `decision` events (AskUserQuestion choices) the student made. */
     decisions: number;
+    /** How many `plan` events (plan-mode plans the AI proposed) were captured. */
+    plans: number;
   };
   /** Everyone who contributed to the trail (one entry for a single-author report). */
   contributors: Contributor[];
@@ -291,6 +294,8 @@ export interface Turn {
   codeChanges: TurnCodeChange[];
   /** Decisions the student made mid-exchange (the AI paused to ask). */
   decisions: Event[];
+  /** Plans the AI proposed in plan mode (with their approval status). */
+  plans: Event[];
   tool: Tool;
   /** Which author this exchange belongs to — used to attribute/color turns. */
   actorSlug: ActorSlug;

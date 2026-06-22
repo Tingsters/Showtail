@@ -1,5 +1,6 @@
 import { existsSync } from 'node:fs';
 import { addArtifact } from '../core/artifacts.ts';
+import { PLAN_APPROVED_TAG, PLAN_REVISED_TAG } from '../core/plans.ts';
 import { resolveActiveAuthorForHook } from '../core/authors.ts';
 import {
   importedSourceIds,
@@ -408,6 +409,21 @@ async function reconcileTranscript(
         turnId: currentTurn,
         sourceId: msg.sourceId,
         sessionId,
+      });
+      seen.add(msg.sourceId);
+    } else if (msg.role === 'plan') {
+      // A plan the AI proposed (and the student approved/revised) — captured
+      // regardless of AI-output capture, with its approval status as a tag.
+      if (!currentTurn || seen.has(msg.sourceId)) continue;
+      await logEvent(author, {
+        type: 'plan',
+        text: msg.text,
+        tool,
+        timestamp: msg.timestamp,
+        turnId: currentTurn,
+        sourceId: msg.sourceId,
+        sessionId,
+        tags: [msg.approved ? PLAN_APPROVED_TAG : PLAN_REVISED_TAG],
       });
       seen.add(msg.sourceId);
     }

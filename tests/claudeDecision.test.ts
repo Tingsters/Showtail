@@ -451,6 +451,7 @@ describe('turn timeline (chronological interleaving)', () => {
     decisions: [
       ev('d', '2026-01-01T00:00:05.000Z', 'decision', '**Claude asked:** which?'),
     ],
+    plans: [],
     tool: 'claude-code',
     actorSlug: 'x',
   });
@@ -475,6 +476,7 @@ describe('turn timeline (chronological interleaving)', () => {
       aiOutputs: [ev('a', t, 'ai_output', 'reply')],
       codeChanges: [{ path: 'x.ts', timestamp: t, diff: '+x' }],
       decisions: [ev('d', t, 'decision', 'q')],
+      plans: [],
       tool: 'claude-code',
       actorSlug: 'x',
     };
@@ -487,7 +489,7 @@ describe('turn timeline (chronological interleaving)', () => {
       displayName: 'P',
       generatedAt: '2026-01-01T00:00:06.000Z',
       scope: null,
-      summary: { sessions: 1, events: 3, artifacts: 2, decisions: 1 },
+      summary: { sessions: 1, events: 3, artifacts: 2, decisions: 1, plans: 0 },
       contributors: [{ slug: 'x', name: 'X', events: 3, artifacts: 2 }],
       tools: [{ tool: 'claude-code', events: 3 }],
       toolTimeline: [],
@@ -510,7 +512,7 @@ describe('turn timeline (chronological interleaving)', () => {
       displayName: 'P',
       generatedAt: '2026-01-01T00:00:06.000Z',
       scope: null,
-      summary: { sessions: 1, events: 1, artifacts: 1, decisions: 0 },
+      summary: { sessions: 1, events: 1, artifacts: 1, decisions: 0, plans: 0 },
       contributors: [{ slug: 'x', name: 'X', events: 1, artifacts: 1 }],
       tools: [{ tool: 'claude-code', events: 1 }],
       toolTimeline: [],
@@ -527,6 +529,7 @@ describe('turn timeline (chronological interleaving)', () => {
             },
           ],
           decisions: [],
+          plans: [],
           tool: 'claude-code',
           actorSlug: 'x',
         },

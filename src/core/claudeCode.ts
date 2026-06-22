@@ -34,6 +34,13 @@ import {
   type DecisionQuestion,
   type DecisionResult,
 } from './decisions.ts';
+import {
+  parsePlanInput,
+  renderPlanText,
+  resolvePlanResult,
+  PLAN_APPROVED_TAG,
+  PLAN_REVISED_TAG,
+} from './plans.ts';
 
 // The decision types are part of this module's public surface (they appear on
 // ClaudeMessage); re-export them so any importer keeps its existing path.
@@ -43,9 +50,10 @@ export type { DecisionOption, DecisionQuestion } from './decisions.ts';
 export interface ClaudeMessage {
   /**
    * "user" (a typed prompt), "assistant" (a text reply), "edit" (a file the AI
-   * changed), or "decision" (a choice the student made when the AI paused to ask).
+   * changed), "decision" (a choice the student made when the AI paused to ask),
+   * or "plan" (a plan the AI proposed in plan mode).
    */
-  role: 'user' | 'assistant' | 'edit' | 'decision';
+  role: 'user' | 'assistant' | 'edit' | 'decision' | 'plan';
   text: string;
   /** ISO-8601 timestamp from the transcript line, if present. */
   timestamp?: string;
@@ -59,6 +67,8 @@ export interface ClaudeMessage {
    * `text` is rendered from this.
    */
   questions?: DecisionQuestion[];
+  /** For plans: whether the student approved it (resolved in the second pass). */
+  approved?: boolean;
 }
 
 /** A normalized transcript: just the messages we care about, in order. */
@@ -339,10 +349,18 @@ export function parseClaudeTranscript(content: string, root: string): ClaudeTran
 
   // Second pass: pair each decision with the student's answer + note and re-render.
   for (const m of messages) {
-    if (m.role !== 'decision' || !m.questions) continue;
-    const rec = answersByToolId.get(m.sourceId);
-    if (rec) resolveDecisionAnswers(m.questions, rec);
-    m.text = renderDecisionText(m.questions);
+    if (m.role === 'decision' && m.questions) {
+      const rec = answersByToolId.get(m.sourceId);
+      if (rec) resolveDecisionAnswers(m.questions, rec);
+      m.text = renderDecisionText(m.questions);
+    } else if (m.role === 'plan') {
+      // Resolve the plan's approval + revision feedback from its result line.
+      const { approved, feedback } = resolvePlanResult(
+        answersByToolId.get(m.sourceId)?.blob,
+      );
+      m.approved = approved;
+      m.text = renderPlanText(m.text, approved, feedback);
+    }
   }
 
   return {
@@ -419,6 +437,19 @@ function handleAssistant(obj: unknown, root: string): ClaudeMessage[] {
         timestamp,
         sourceId: partId ? partId : `${uuid}:${out.length}`,
       });
+    } else if (type === 'tool_use' && name === 'ExitPlanMode') {
+      // The AI proposed a plan. Capture the plan markdown now; its approval and
+      // revision feedback arrive on a later result line (resolved in the second
+      // pass, see parseClaudeTranscript).
+      const plan = parsePlanInput(prop(part, 'input'));
+      if (!plan) continue;
+      const partId = asString(prop(part, 'id'));
+      out.push({
+        role: 'plan',
+        text: plan, // re-rendered with feedback in the second pass when revised
+        timestamp,
+        sourceId: partId ? partId : `${uuid}:${out.length}`,
+      });
     }
   }
 
@@ -458,6 +489,7 @@ export interface ClaudeImportResult {
   responses: number;
   edits: number;
   decisions: number;
+  plans: number;
   skipped: number;
   first?: string;
   last?: string;
@@ -484,6 +516,7 @@ export async function importClaudeTranscript(
     responses: 0,
     edits: 0,
     decisions: 0,
+    plans: 0,
     skipped: 0,
   };
 
@@ -506,7 +539,15 @@ export async function importClaudeTranscript(
           ? 'ai_output'
           : msg.role === 'decision'
             ? 'decision'
-            : 'artifact';
+            : msg.role === 'plan'
+              ? 'plan'
+              : 'artifact';
+
+    // Plans carry their approval status as a tag (in addition to `imported`).
+    const tags =
+      msg.role === 'plan'
+        ? ['imported', msg.approved ? PLAN_APPROVED_TAG : PLAN_REVISED_TAG]
+        : ['imported'];
 
     const { event } = await logEvent(author, {
       type,
@@ -517,7 +558,7 @@ export async function importClaudeTranscript(
       batchId: options.batchId,
       sessionId: options.sessionId,
       files: msg.files,
-      tags: ['imported'],
+      tags,
       turnId: msg.role === 'user' ? undefined : currentTurnId,
     });
     if (msg.role === 'user') currentTurnId = event.id;
@@ -525,6 +566,7 @@ export async function importClaudeTranscript(
     if (msg.role === 'user') result.prompts += 1;
     else if (msg.role === 'assistant') result.responses += 1;
     else if (msg.role === 'decision') result.decisions += 1;
+    else if (msg.role === 'plan') result.plans += 1;
     else result.edits += 1;
 
     if (msg.timestamp) {

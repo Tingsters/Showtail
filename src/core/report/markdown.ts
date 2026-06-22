@@ -1,4 +1,5 @@
 import type { ReportData, Turn } from '../../types.ts';
+import { PLAN_APPROVED_TAG } from '../plans.ts';
 import { nameBySlugMap, shouldShowAuthor, toolLabel, turnTimeline } from './data.ts';
 import { staticUtc, timeToken } from './time.ts';
 
@@ -43,6 +44,7 @@ function metadataSection(data: ReportData, fmt: (iso: string) => string): string
   const title = data.scope ? `${base} — ${data.scope.name}` : base;
   const decisionsPart =
     data.summary.decisions > 0 ? `, ${data.summary.decisions} decision(s)` : '';
+  const plansPart = data.summary.plans > 0 ? `, ${data.summary.plans} plan(s)` : '';
   const lines = [
     `# ${title}`,
     '',
@@ -50,7 +52,7 @@ function metadataSection(data: ReportData, fmt: (iso: string) => string): string
     '',
     `**Summary:** ${data.summary.sessions} session(s), ` +
       `${data.summary.events} event(s), ${data.summary.artifacts} artifact record(s)` +
-      `${decisionsPart}.`,
+      `${decisionsPart}${plansPart}.`,
     '',
   ];
   if (data.redactionCount > 0) {
@@ -151,6 +153,10 @@ function turnMarkdown(lines: string[], turn: Turn, author?: string): void {
       lines.push(item.event.text, '');
     } else if (item.kind === 'decision') {
       lines.push('🔀 **Decision** · _you chose from the options Claude offered_', '');
+      lines.push(item.event.text, '');
+    } else if (item.kind === 'plan') {
+      const approved = item.event.tags?.includes(PLAN_APPROVED_TAG);
+      lines.push(`📋 **Plan** · _${approved ? 'approved' : 'revised'}_`, '');
       lines.push(item.event.text, '');
     } else {
       const code = item.change;

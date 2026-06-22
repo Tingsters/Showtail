@@ -122,11 +122,13 @@ export interface NormalizedHookEvent {
 
 /** One message of a normalized transcript used for stop-time reconciliation. */
 export interface HookTranscriptMessage {
-  /** 'user' | 'assistant' | 'decision' (others, e.g. 'edit', are ignored). */
+  /** 'user' | 'assistant' | 'decision' | 'plan' (others, e.g. 'edit', are ignored). */
   role: string;
   text: string;
   timestamp?: string;
   sourceId: string;
+  /** For a 'plan' message: whether the student approved it. */
+  approved?: boolean;
 }
 
 /** A normalized conversation transcript, in order. */

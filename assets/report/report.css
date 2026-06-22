@@ -158,6 +158,29 @@ blockquote {
 }
 .decision-tag { color: #a06a12; }
 .decision .ai-text { margin: 0.1rem 0 0; }
+/* A plan the AI proposed in plan mode — collapsible, with an indigo accent and an
+   approval badge so a reviewer sees which plans were adopted before expanding. */
+.plan {
+  margin: 0.4rem 0 0.6rem;
+  padding: 0.2rem 0 0.2rem 0.7rem;
+  border-left: 3px solid #6b6fc7;
+  background: #f1f1fb;
+}
+.plan > summary { cursor: pointer; list-style: none; }
+.plan > summary::-webkit-details-marker { display: none; }
+.plan > summary::before { content: '▸ '; color: #6b6fc7; }
+.plan[open] > summary::before { content: '▾ '; }
+.plan-tag { color: #4a4f9b; }
+.plan-badge {
+  font-size: 0.68rem;
+  font-weight: 600;
+  padding: 0.05rem 0.4rem;
+  border-radius: 0.7rem;
+  margin-left: 0.3rem;
+}
+.plan-badge.approved { background: #d4f0e2; color: #1d6b4c; }
+.plan-badge.revised { background: #ececf1; color: #6b6b76; }
+.plan .ai-text { margin: 0.3rem 0 0; }
 .code { margin: 0.4rem 0; }
 .code > summary { cursor: pointer; font-size: 0.85rem; color: #3a3f6b; }
 /* A code change with no captured diff: a plain file row, no disclosure arrow. */
@@ -256,4 +279,8 @@ pre.codeblock code { background: none; padding: 0; font-size: inherit; border-ra
   .turn-close:hover { background: #2c2c33; color: #e4e4ea; }
   .decision { background: #2b2519; border-left-color: #b9842a; }
   .decision-tag { color: #e0b257; }
+  .plan { background: #1f1f2b; border-left-color: #7b7fd0; }
+  .plan-tag { color: #aab0ff; }
+  .plan-badge.approved { background: #1c3a2c; color: #7fd1a6; }
+  .plan-badge.revised { background: #2a2a30; color: #a0a0aa; }
 }

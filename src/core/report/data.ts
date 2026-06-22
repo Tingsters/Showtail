@@ -104,6 +104,7 @@ export function buildReportData(
       events: events.length,
       artifacts: artifacts.length,
       decisions: events.filter((e) => e.type === 'decision').length,
+      plans: events.filter((e) => e.type === 'plan').length,
     },
     contributors,
     tools,
@@ -173,6 +174,7 @@ export function buildTurns(
     aiOutputs: [],
     codeChanges: [],
     decisions: [],
+    plans: [],
     tool: toolOf(event),
     actorSlug: event.actorSlug,
   }));
@@ -229,6 +231,15 @@ export function buildTurns(
     if (turn) turn.decisions.push(event);
   }
 
+  // Plans (ExitPlanMode) attach to their turn the same way.
+  for (const { event, sessionId, actorSlug } of withSession) {
+    if (event.type !== 'plan') continue;
+    const turn =
+      (event.turnId ? turnByPrompt.get(event.turnId) : undefined) ??
+      fallback(event.timestamp, actorSlug, sessionId);
+    if (turn) turn.plans.push(event);
+  }
+
   for (const a of artifacts) {
     const turn =
       (a.turnId ? turnByPrompt.get(a.turnId) : undefined) ??
@@ -252,14 +263,15 @@ export function buildTurns(
 export type TurnItem =
   | { kind: 'ai'; event: Event }
   | { kind: 'decision'; event: Event }
+  | { kind: 'plan'; event: Event }
   | { kind: 'code'; change: TurnCodeChange };
 
 /**
- * A turn's AI replies, code changes, and decisions merged into one chronological
- * sequence, so the report interleaves them as they happened instead of grouping
- * by type. Stable-sorted by timestamp; items sharing a timestamp (text plus a
- * tool call in one message) keep their insertion order — AI text, then code,
- * then decision — so text reads before the tools it introduced.
+ * A turn's AI replies, code changes, decisions, and plans merged into one
+ * chronological sequence, so the report interleaves them as they happened instead
+ * of grouping by type. Stable-sorted by timestamp; items sharing a timestamp (text
+ * plus a tool call in one message) keep their insertion order — AI text, then
+ * code, then decision/plan — so text reads before the tools it introduced.
  */
 export function turnTimeline(turn: Turn): TurnItem[] {
   const dated: { at: string; item: TurnItem }[] = [
@@ -274,6 +286,10 @@ export function turnTimeline(turn: Turn): TurnItem[] {
     ...turn.decisions.map((event) => ({
       at: event.timestamp,
       item: { kind: 'decision', event } as TurnItem,
+    })),
+    ...turn.plans.map((event) => ({
+      at: event.timestamp,
+      item: { kind: 'plan', event } as TurnItem,
     })),
   ];
   dated.sort((a, b) => a.at.localeCompare(b.at));

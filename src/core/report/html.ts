@@ -4,6 +4,7 @@ import type { ReportData, Turn } from '../../types.ts';
 import { escapeHtml, firstLine } from '../html.ts';
 import { highlightCode } from '../highlight.ts';
 import { nameBySlugMap, shouldShowAuthor, toolLabel, turnTimeline } from './data.ts';
+import { PLAN_APPROVED_TAG } from '../plans.ts';
 import { buildMarkdown, fileHref, TURNS_PLACEHOLDER } from './markdown.ts';
 import { markdownToHtml, renderRichText } from './mdToHtml.ts';
 import { TIME_TOKEN, timeTag } from './time.ts';
@@ -66,6 +67,7 @@ function renderTurnSummary(
     );
   }
   if (turn.decisions.length > 0) statParts.push(`${turn.decisions.length} decision(s)`);
+  if (turn.plans.length > 0) statParts.push(`${turn.plans.length} plan(s)`);
   const stat = statParts.join(' · ');
   const authorName = showAuthor ? (nameBySlug.get(turn.actorSlug) ?? turn.actorSlug) : '';
   const authorBadge = authorName
@@ -100,6 +102,20 @@ function renderTimelineItem(item: ReturnType<typeof turnTimeline>[number]): stri
       `<div class="ai-text">${renderRichText(item.event.text)}</div>` +
       '</div>'
     );
+  }
+  if (item.kind === 'plan') {
+    // A plan the AI proposed — collapsible (plans are long), with its approval
+    // status on the summary so it reads before expanding.
+    const approved = item.event.tags?.includes(PLAN_APPROVED_TAG);
+    const badge = approved
+      ? '<span class="plan-badge approved">✅ Approved</span>'
+      : '<span class="plan-badge revised">↩ Revised</span>';
+    return [
+      '<details class="plan">',
+      `<summary><span class="role-tag plan-tag">📋 Plan</span> ${badge}</summary>`,
+      `<div class="ai-text">${renderRichText(item.event.text)}</div>`,
+      '</details>',
+    ].join('\n');
   }
   const code = item.change;
   const stat = code.diffLines ? ` (~${code.diffLines} line(s))` : '';
