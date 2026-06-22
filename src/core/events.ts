@@ -4,19 +4,21 @@ import { makeId } from './ids.ts';
 import { readObject, writeObject } from './objects.ts';
 import { redact } from './redact.ts';
 import {
-  JOURNAL_ENTRY_VERSION,
-  appendJournal,
   authorPaths,
   readConfig,
-  readJournal,
   readSessions,
   readState,
-  rewriteJournal,
   updateState,
   writeSessions,
   type AuthorPaths,
   type ShowtailPaths,
 } from './storage.ts';
+import {
+  JOURNAL_ENTRY_VERSION,
+  appendJournal,
+  readJournal,
+  rewriteJournal,
+} from './journal.ts';
 import { authorSlugs } from './authors.ts';
 import { closeSession, makeSession } from './sessions.ts';
 import { validateEvent } from './schema.ts';

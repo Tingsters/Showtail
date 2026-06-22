@@ -1,5 +1,5 @@
 import type { ReportData, Turn } from '../../types.ts';
-import { toolLabel, turnTimeline } from './data.ts';
+import { nameBySlugMap, shouldShowAuthor, toolLabel, turnTimeline } from './data.ts';
 import { staticUtc, timeToken } from './time.ts';
 
 /** A unique token swapped for the interactive turns HTML after Markdown→HTML. */
@@ -23,30 +23,36 @@ export function fileHref(repoRelPath: string): string {
  * exchanges render as readable Markdown for the canonical text export.
  */
 export function buildMarkdown(data: ReportData, turnsPlaceholder = false): string {
-  const lines: string[] = [];
+  // In HTML mode, timestamps are emitted as tokens that {@link renderHtml} swaps
+  // for interactive <time> elements; the canonical Markdown export uses static UTC.
+  const fmt = turnsPlaceholder ? timeToken : staticUtc;
+  return [
+    ...metadataSection(data, fmt),
+    ...contributorsSection(data),
+    ...toolsSection(data, fmt),
+    ...turnsSection(data, turnsPlaceholder),
+    ...authorshipSection(data),
+  ].join('\n');
+}
+
+/** Title, generation note, one-line summary, and the redaction note. */
+function metadataSection(data: ReportData, fmt: (iso: string) => string): string[] {
   // The subject is always present (override → project name → folder name).
   const base = `Showtail Report — ${data.displayName}`;
   // A per-student report names whose work it is; the team report doesn't.
   const title = data.scope ? `${base} — ${data.scope.name}` : base;
-
-  // In HTML mode, timestamps are emitted as tokens that {@link renderHtml} swaps
-  // for interactive <time> elements; the canonical Markdown export uses static UTC.
-  const fmt = turnsPlaceholder ? timeToken : staticUtc;
-
-  // On the combined team report, label each exchange with its author.
-  const showAuthor = data.scope === null && data.contributors.length > 1;
-  const nameBySlug = new Map(data.contributors.map((c) => [c.slug, c.name]));
-
-  lines.push(`# ${title}`, '');
-  lines.push(`_Generated ${fmt(data.generatedAt)}_`, '');
   const decisionsPart =
     data.summary.decisions > 0 ? `, ${data.summary.decisions} decision(s)` : '';
-  lines.push(
+  const lines = [
+    `# ${title}`,
+    '',
+    `_Generated ${fmt(data.generatedAt)}_`,
+    '',
     `**Summary:** ${data.summary.sessions} session(s), ` +
       `${data.summary.events} event(s), ${data.summary.artifacts} artifact record(s)` +
       `${decisionsPart}.`,
     '',
-  );
+  ];
   if (data.redactionCount > 0) {
     lines.push(
       `_Showtail removed ${data.redactionCount} secret(s)/personal detail(s) ` +
@@ -54,59 +60,77 @@ export function buildMarkdown(data: ReportData, turnsPlaceholder = false): strin
       '',
     );
   }
+  return lines;
+}
 
-  // Contributors — who worked on this, and how much. Shown on the team report;
-  // a single-student report omits it (it's just them).
-  if (showAuthor) {
-    lines.push('## Contributors', '');
-    for (const c of data.contributors) {
-      lines.push(
-        `- **${c.name}** (\`${c.slug}\`) — ${c.events} event(s), ${c.artifacts} file record(s)`,
-      );
-    }
-    lines.push('');
+/**
+ * Contributors — who worked on this, and how much. Shown on the team report;
+ * a single-student report omits it (it's just them).
+ */
+function contributorsSection(data: ReportData): string[] {
+  if (!shouldShowAuthor(data)) return [];
+  const lines = ['## Contributors', ''];
+  for (const c of data.contributors) {
+    lines.push(
+      `- **${c.name}** (\`${c.slug}\`) — ${c.events} event(s), ${c.artifacts} file record(s)`,
+    );
   }
+  lines.push('');
+  return lines;
+}
 
-  // Tools used — up front so a reviewer can see, at a glance, which tools the
-  // student used and when they switched between them.
-  lines.push('## Tools used', '');
+/**
+ * Tools used — up front so a reviewer can see, at a glance, which tools the
+ * student used and when they switched between them.
+ */
+function toolsSection(data: ReportData, fmt: (iso: string) => string): string[] {
+  const lines = ['## Tools used', ''];
   if (data.tools.length === 0) {
     lines.push('_No tool activity recorded._', '');
-  } else {
-    for (const t of data.tools) {
-      lines.push(`- **${toolLabel(t.tool)}** — ${t.events} event(s)`);
+    return lines;
+  }
+  for (const t of data.tools) {
+    lines.push(`- **${toolLabel(t.tool)}** — ${t.events} event(s)`);
+  }
+  lines.push('');
+  if (data.toolTimeline.length > 1) {
+    lines.push('Tool timeline (each arrow is a switch):', '');
+    for (const b of data.toolTimeline) {
+      const span = b.from === b.to ? fmt(b.from) : `${fmt(b.from)} → ${fmt(b.to)}`;
+      lines.push(`- **${toolLabel(b.tool)}** · ${span} · ${b.count} event(s)`);
     }
     lines.push('');
-    if (data.toolTimeline.length > 1) {
-      lines.push('Tool timeline (each arrow is a switch):', '');
-      for (const b of data.toolTimeline) {
-        const span = b.from === b.to ? fmt(b.from) : `${fmt(b.from)} → ${fmt(b.to)}`;
-        lines.push(`- **${toolLabel(b.tool)}** · ${span} · ${b.count} event(s)`);
-      }
-      lines.push('');
-    }
   }
+  return lines;
+}
 
-  // Prompts & AI exchanges — the heart of the report. In HTML this becomes
-  // collapsible cards; in Markdown it reads top-to-bottom.
-  lines.push('## Prompts & AI exchanges', '');
+/**
+ * Prompts & AI exchanges — the heart of the report. In HTML this becomes
+ * collapsible cards; in Markdown it reads top-to-bottom.
+ */
+function turnsSection(data: ReportData, turnsPlaceholder: boolean): string[] {
+  const lines = ['## Prompts & AI exchanges', ''];
   if (turnsPlaceholder) {
     lines.push(TURNS_PLACEHOLDER, '');
-  } else if (data.turns.length === 0) {
-    lines.push('_No prompts recorded._', '');
-  } else {
-    for (const turn of data.turns) {
-      const author = showAuthor
-        ? (nameBySlug.get(turn.actorSlug) ?? turn.actorSlug)
-        : undefined;
-      turnMarkdown(lines, turn, author);
-    }
+    return lines;
   }
+  if (data.turns.length === 0) {
+    lines.push('_No prompts recorded._', '');
+    return lines;
+  }
+  const showAuthor = shouldShowAuthor(data);
+  const nameBySlug = nameBySlugMap(data.contributors);
+  for (const turn of data.turns) {
+    const author = showAuthor
+      ? (nameBySlug.get(turn.actorSlug) ?? turn.actorSlug)
+      : undefined;
+    turnMarkdown(lines, turn, author);
+  }
+  return lines;
+}
 
-  lines.push('## Authorship statement', '');
-  lines.push('> ' + data.authorship, '');
-
-  return lines.join('\n');
+function authorshipSection(data: ReportData): string[] {
+  return ['## Authorship statement', '', '> ' + data.authorship, ''];
 }
 
 /** Render a report as student- and educator-friendly Markdown. */

@@ -7,15 +7,13 @@ import { makeId } from './ids.ts';
 import { writeObject } from './objects.ts';
 import { redact } from './redact.ts';
 import {
-  JOURNAL_ENTRY_VERSION,
-  appendJournal,
   authorPaths,
   readConfig,
-  readJournal,
   toRepoRelative,
   type AuthorPaths,
   type ShowtailPaths,
 } from './storage.ts';
+import { JOURNAL_ENTRY_VERSION, appendJournal, readJournal } from './journal.ts';
 import { authorSlugs } from './authors.ts';
 
 /** Cap a single captured diff so one huge edit can't bloat the store. */

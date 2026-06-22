@@ -3,7 +3,7 @@ import TIMEZONE_JS from '../../../assets/report/timezone.js' with { type: 'text'
 import type { ReportData, Turn } from '../../types.ts';
 import { escapeHtml, firstLine } from '../html.ts';
 import { highlightCode } from '../highlight.ts';
-import { toolLabel, turnTimeline } from './data.ts';
+import { nameBySlugMap, shouldShowAuthor, toolLabel, turnTimeline } from './data.ts';
 import { buildMarkdown, fileHref, TURNS_PLACEHOLDER } from './markdown.ts';
 import { markdownToHtml, renderRichText } from './mdToHtml.ts';
 import { TIME_TOKEN, timeTag } from './time.ts';
@@ -126,8 +126,8 @@ function renderTimelineItem(item: ReturnType<typeof turnTimeline>[number]): stri
 function turnsHtml(data: ReportData): string {
   if (data.turns.length === 0) return '<p><em>No prompts recorded.</em></p>';
   // On the combined team report, attribute each card to its author.
-  const showAuthor = data.scope === null && data.contributors.length > 1;
-  const nameBySlug = new Map(data.contributors.map((c) => [c.slug, c.name]));
+  const showAuthor = shouldShowAuthor(data);
+  const nameBySlug = nameBySlugMap(data.contributors);
   const out: string[] = [];
   for (const turn of data.turns) {
     out.push('<details class="turn">');

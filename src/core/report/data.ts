@@ -12,13 +12,8 @@ import type {
 } from '../../types.ts';
 import { labelForTool } from '../../plugins/registry.ts';
 import { readAllArtifacts } from '../artifacts.ts';
-import {
-  authorPaths,
-  readConfig,
-  readJournal,
-  readSessions,
-  type ShowtailPaths,
-} from '../storage.ts';
+import { authorPaths, readConfig, readSessions, type ShowtailPaths } from '../storage.ts';
+import { readJournal } from '../journal.ts';
 import { authorSlugs, readAllAuthors } from '../authors.ts';
 import { readAllEventsWithSession, type EventWithSession } from '../events.ts';
 import { readObject } from '../objects.ts';
@@ -30,6 +25,19 @@ export function toolOf(event: Event): Tool {
 
 export function toolLabel(tool: Tool): string {
   return labelForTool(tool);
+}
+
+/**
+ * Whether to attribute each exchange to its author: only on the combined team
+ * report (no scope) with more than one contributor. Shared by both renderers.
+ */
+export function shouldShowAuthor(data: ReportData): boolean {
+  return data.scope === null && data.contributors.length > 1;
+}
+
+/** A lookup from author slug to display name, for attributing turns. */
+export function nameBySlugMap(contributors: Contributor[]): Map<string, string> {
+  return new Map(contributors.map((c) => [c.slug, c.name]));
 }
 
 /** Options controlling the scope of a generated report. */

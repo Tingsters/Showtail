@@ -4,7 +4,8 @@ import { join } from 'node:path';
 import { runInit } from '../src/commands/init.ts';
 import { logEvent } from '../src/core/events.ts';
 import { readObject, writeObject } from '../src/core/objects.ts';
-import { appendJournal, pathsForRoot, readJournal } from '../src/core/storage.ts';
+import { pathsForRoot } from '../src/core/storage.ts';
+import { appendJournal, readJournal } from '../src/core/journal.ts';
 import { buildReportData, renderHtml } from '../src/core/report.ts';
 import { authorFor, cleanup, makeTempDir } from './helpers.ts';
 

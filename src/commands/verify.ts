@@ -7,10 +7,10 @@ import { validateEvent } from '../core/schema.ts';
 import {
   authorPaths,
   readConfig,
-  readJournal,
   requirePaths,
   type ShowtailPaths,
 } from '../core/storage.ts';
+import { readJournal } from '../core/journal.ts';
 
 export interface VerifyOptions {
   cwd?: string;

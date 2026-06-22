@@ -5,7 +5,8 @@ import { join } from 'node:path';
 import { runInit } from '../src/commands/init.ts';
 import { logEvent } from '../src/core/events.ts';
 import { startSession } from '../src/core/sessions.ts';
-import { authorPaths, pathsForRoot, readJournal } from '../src/core/storage.ts';
+import { authorPaths, pathsForRoot } from '../src/core/storage.ts';
+import { readJournal } from '../src/core/journal.ts';
 import { authorFor, cleanup, makeTempDir, seedAuthor } from './helpers.ts';
 
 /** Recursively list files under a directory (absolute paths). */
