@@ -1,4 +1,6 @@
 import { describe, expect, test } from 'bun:test';
+import { mkdirSync } from 'node:fs';
+import { join } from 'node:path';
 import {
   PLUGINS,
   connectPluginOrThrow,
@@ -8,6 +10,36 @@ import {
   importPlugins,
   labelForTool,
 } from '../src/plugins/registry.ts';
+import { cleanup, makeTempDir } from './helpers.ts';
+
+/**
+ * Run `fn` with HOME/USERPROFILE pointed at a throwaway dir and PATH emptied, so
+ * a connect plugin's user-scope writes (autoConnect) and detection land in an
+ * isolated sandbox — never the developer's real `~/.claude` etc. — and are
+ * deterministic regardless of what's installed. Restores the env afterward.
+ */
+async function withIsolatedHome(
+  fn: (home: string) => void | Promise<void>,
+): Promise<void> {
+  const home = makeTempDir();
+  const saved: Record<string, string | undefined> = {
+    USERPROFILE: process.env.USERPROFILE,
+    HOME: process.env.HOME,
+    PATH: process.env.PATH,
+  };
+  process.env.USERPROFILE = home;
+  process.env.HOME = home;
+  process.env.PATH = '';
+  try {
+    await fn(home);
+  } finally {
+    for (const [k, v] of Object.entries(saved)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+    cleanup(home);
+  }
+}
 
 describe('plugin registry', () => {
   test('every plugin can be looked up by cliName, id, and each alias', () => {
@@ -65,5 +97,69 @@ describe('plugin registry', () => {
       const declared = new Set(p.connect.flags.map((f) => f.name));
       for (const name of p.connect.applicableFlags) expect(declared.has(name)).toBe(true);
     }
+  });
+});
+
+// These exercise the connect-capability method bodies in-process (install /
+// uninstall / status / detect / autoConnect), which are otherwise only reached
+// through the spawned CLI and so don't show up in coverage.
+describe('plugin connect capabilities', () => {
+  test('install → status connected → uninstall round-trips (project scope)', async () => {
+    await withIsolatedHome(async () => {
+      for (const p of connectPlugins()) {
+        const dir = makeTempDir();
+        try {
+          // Mark the dir a project so project-scope resolution stops here.
+          mkdirSync(join(dir, '.showtail'), { recursive: true });
+          expect(p.connect.status(dir).connected).toBe(false);
+
+          await p.connect.install({
+            project: true,
+            hooks: false,
+            extension: false,
+            cwd: dir,
+          });
+          expect(p.connect.status(dir).connected).toBe(true);
+
+          await p.connect.uninstall({ cwd: dir });
+          expect(p.connect.status(dir).connected).toBe(false);
+        } finally {
+          cleanup(dir);
+        }
+      }
+    });
+  });
+
+  test('detect() is false in an empty sandbox, true once the tool dir appears', async () => {
+    await withIsolatedHome(async (home) => {
+      // Empty PATH + empty home → nothing detected.
+      for (const p of connectPlugins()) expect(p.connect.detect()).toBe(false);
+      // Claude detects its `~/.claude` home dir even with no launcher on PATH.
+      mkdirSync(join(home, '.claude'), { recursive: true });
+      expect(getPluginById('claude-code')!.connect!.detect()).toBe(true);
+      // The others key off different dirs/launchers and stay undetected.
+      expect(getPluginById('codex')!.connect!.detect()).toBe(false);
+      expect(getPluginById('gemini-cli')!.connect!.detect()).toBe(false);
+    });
+  });
+
+  test('autoConnect enables hooks at user scope for hook-based tools', async () => {
+    await withIsolatedHome(async (home) => {
+      const cwd = makeTempDir();
+      try {
+        for (const p of connectPlugins()) {
+          const result = p.connect.autoConnect?.(cwd);
+          if (result) {
+            expect(result).toEqual({ hooks: true });
+            // The user-scope write makes auto-capture active for that tool.
+            expect(p.connect.status(home).hooksActive).toBe(true);
+          }
+        }
+        // Copilot captures via its VS Code extension — no user-scope autoConnect.
+        expect(getPluginById('github-copilot')!.connect!.autoConnect).toBeUndefined();
+      } finally {
+        cleanup(cwd);
+      }
+    });
   });
 });

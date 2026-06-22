@@ -148,6 +148,15 @@ describe('gemini paste import', () => {
     expect(conv.messages[1]!.id).toBe('r_1:r');
   });
 
+  test('parseShareHtml keeps a user turn that has no model reply', async () => {
+    // A turn with no model answer ([3] absent) yields a single user message.
+    const turn = [['c_x', 'r_9'], null, [['just a question']], null];
+    const payload = [[null, [turn], [true, 'T']]];
+    const conv = await parseShareHtml(rpcBody(payload));
+    expect(conv.messages.map((m) => m.role)).toEqual(['user']);
+    expect(conv.messages[0]!.text).toBe('just a question');
+  });
+
   test('shareIdFromUrl extracts the canonical id from share URLs (short links resolve at fetch)', () => {
     expect(shareIdFromUrl('https://gemini.google.com/share/87bdb8f6639c')).toBe(
       '87bdb8f6639c',

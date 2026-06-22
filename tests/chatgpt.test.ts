@@ -156,3 +156,106 @@ describe('chatgpt share import', () => {
     }
   });
 });
+
+describe('chatgpt parsing edge cases', () => {
+  test('parseShareHtml throws clear guidance when the page has no embedded data', async () => {
+    await expect(
+      parseShareHtml('<!doctype html><html><body>no stream here</body></html>'),
+    ).rejects.toThrow(/conversation data/);
+  });
+
+  test('extractConversation returns null when no conversation is present', () => {
+    expect(extractConversation(null)).toBeNull();
+    expect(extractConversation({})).toBeNull();
+    expect(extractConversation({ loaderData: {} })).toBeNull();
+  });
+
+  test('extractConversation reads a `mapping` graph from a root, in order', () => {
+    // No loaderData → the decoded object itself is the bucket; `data` holds the
+    // conversation. Exercises the mapping-graph path (no linear_conversation).
+    const conv = extractConversation({
+      data: {
+        title: 'Mapped chat',
+        conversation_id: 'c-map',
+        mapping: {
+          root: { children: ['u1'] },
+          u1: {
+            parent: 'root',
+            children: ['a1'],
+            message: { id: 'u1', author: { role: 'user' }, content: { parts: ['Q1'] } },
+          },
+          a1: {
+            parent: 'u1',
+            children: [],
+            message: {
+              id: 'a1',
+              author: { role: 'assistant' },
+              content: { parts: ['A1'] },
+            },
+          },
+        },
+      },
+    });
+    expect(conv).not.toBeNull();
+    expect(conv!.title).toBe('Mapped chat');
+    expect(conv!.messages.map((m) => m.role)).toEqual(['user', 'assistant']);
+    expect(conv!.messages.map((m) => m.text)).toEqual(['Q1', 'A1']);
+  });
+
+  test('extractConversation orders a rootless `mapping` by create_time', () => {
+    const conv = extractConversation({
+      serverResponse: {
+        data: {
+          mapping: {
+            a1: {
+              parent: 'x',
+              message: {
+                id: 'a1',
+                author: { role: 'assistant' },
+                content: { parts: ['second'] },
+                create_time: 200,
+              },
+            },
+            u1: {
+              parent: 'x',
+              message: {
+                id: 'u1',
+                author: { role: 'user' },
+                content: { parts: ['first'] },
+                create_time: 100,
+              },
+            },
+          },
+        },
+      },
+    });
+    expect(conv!.messages.map((m) => m.text)).toEqual(['first', 'second']);
+  });
+
+  test('skips tool-directed messages and reads the `text` content fallback', () => {
+    const conv = extractConversation({
+      data: {
+        linear_conversation: [
+          // recipient !== 'all' → an internal tool turn, skipped.
+          {
+            message: {
+              id: 't',
+              author: { role: 'assistant' },
+              recipient: 'web',
+              content: { parts: ['search query'] },
+            },
+          },
+          // No `parts` → the `content.text` fallback is used.
+          {
+            message: {
+              id: 'u',
+              author: { role: 'user' },
+              content: { text: 'from the text field' },
+            },
+          },
+        ],
+      },
+    });
+    expect(conv!.messages.map((m) => m.text)).toEqual(['from the text field']);
+  });
+});
