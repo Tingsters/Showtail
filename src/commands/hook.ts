@@ -1,7 +1,6 @@
 import { existsSync } from 'node:fs';
 import { addArtifact } from '../core/artifacts.ts';
 import { resolveActiveAuthorForHook } from '../core/authors.ts';
-import { readTranscriptFile } from '../core/claudeCode.ts';
 import {
   importedSourceIds,
   logEvent,
@@ -9,11 +8,8 @@ import {
   sweepIdleSessions,
 } from '../core/events.ts';
 import {
-  extractApplyPatchFiles,
-  extractEditedFiles,
   extractPrompt,
   extractSessionId,
-  extractSuggestedCode,
   readHookPayload,
   type HookPayload,
 } from '../core/hookInput.ts';
@@ -22,7 +18,7 @@ import { autoInitEnabled } from '../core/globalConfig.ts';
 import {
   closeSession,
   currentSession,
-  sessionForClaudeId,
+  sessionForNativeSession,
   startSession,
 } from '../core/sessions.ts';
 import {
@@ -33,11 +29,17 @@ import {
   readSessions,
   readState,
   resolveAnchor,
-  setTurnForClaudeSession,
-  turnForClaudeSession,
+  setTurnForNativeSession,
+  turnForNativeSession,
   updateState,
   type AuthorPaths,
 } from '../core/storage.ts';
+import { connectPlugins, getPluginById } from '../plugins/registry.ts';
+import type {
+  HookAdapter,
+  HookTranscript,
+  NormalizedHookEvent,
+} from '../plugins/types.ts';
 import { ensureInitialized } from './init.ts';
 import type { Config, Tool } from '../types.ts';
 
@@ -57,16 +59,52 @@ export interface HookOptions {
   tool?: Tool;
 }
 
-/** Don't snapshot Showtail/Claude/Codex's own bookkeeping files. */
+/** Showtail's own bookkeeping dir — always skipped, independent of any tool. */
+const SHOWTAIL_DIR_RE = /(^|[\\/])\.showtail([\\/]|$)/;
+
+/**
+ * Don't snapshot a tool's (or Showtail's) own bookkeeping files. Registry-driven:
+ * each connect plugin declares the dirs to skip for its edits (`internalPaths`)
+ * and any to force-capture (`includePaths`, e.g. `.claude/worktrees/` checkouts,
+ * which hold real work). No tool name appears here.
+ */
 export function isInternalPath(p: string): boolean {
-  // .claude/worktrees/<name>/ holds isolated code checkouts (real work), so edits
-  // there must be captured; only the tools' own metadata dirs are skipped.
-  if (/(^|[\\/])\.claude[\\/]worktrees[\\/]/.test(p)) return false;
-  return /(^|[\\/])\.(showtail|claude|codex)([\\/]|$)/.test(p);
+  // Force-includes win over any skip rule (real work inside an internal dir).
+  for (const plugin of connectPlugins()) {
+    if (plugin.connect.hooks?.includePaths?.some((re) => re.test(p))) return false;
+  }
+  if (SHOWTAIL_DIR_RE.test(p)) return true;
+  for (const plugin of connectPlugins()) {
+    if (plugin.connect.hooks?.internalPaths.some((re) => re.test(p))) return true;
+  }
+  return false;
+}
+
+/** The runtime hook adapter for a tool, if it has one (Copilot/cli/unknown: none). */
+function adapterFor(tool: Tool): HookAdapter | undefined {
+  return getPluginById(tool)?.connect?.hooks;
 }
 
 /**
- * Handle one hook event (from Claude Code or Codex). This is intentionally
+ * Normalize a raw hook payload into a tool-agnostic event. With an adapter the
+ * plugin owns the parsing; without one (manual `cli`, or an unknown tool) we
+ * read only the common `prompt`/`session_id` fields and capture no edits.
+ */
+function parseEvent(
+  adapter: HookAdapter | undefined,
+  payload: HookPayload | null,
+): NormalizedHookEvent {
+  if (!payload) return { editedFiles: [] };
+  if (adapter) return adapter.parse(payload);
+  return {
+    nativeSessionId: extractSessionId(payload),
+    prompt: extractPrompt(payload) ?? undefined,
+    editedFiles: [],
+  };
+}
+
+/**
+ * Handle one hook event (from any connected tool). This is intentionally
  * bulletproof: any problem (no project, malformed input, missing file, or no
  * resolvable student identity) results in a silent no-op with exit code 0, so a
  * student's session is never interrupted.
@@ -122,7 +160,7 @@ export async function runHook(
       case 'stop':
         return await handleStop(author, payload, tool, config);
       case 'session-end':
-        return handleSessionEnd(author, payload);
+        return handleSessionEnd(author, payload, tool);
     }
   } catch {
     // Swallow everything — a hook must never break the session.
@@ -135,13 +173,13 @@ function handleSessionStart(
   payload: HookPayload | null,
   tool: Tool,
 ): void {
-  // Bind this session to Claude's session_id when we have one, so a
+  // Bind this session to the tool's own session id when we have one, so a
   // resume/compact reuses the *same* trail instead of spawning a new session
   // each time. Without an id (older clients), fall back to the single current
   // session. Either way this becomes the CLI's "current" session.
-  const claudeSessionId = extractSessionId(payload);
-  const session = claudeSessionId
-    ? sessionForClaudeId(author, claudeSessionId, { tool })
+  const nativeSessionId = parseEvent(adapterFor(tool), payload).nativeSessionId;
+  const session = nativeSessionId
+    ? sessionForNativeSession(author, nativeSessionId, { tool })
     : (currentSession(author) ?? startSession(author));
   updateState(author.shared, { currentSessionId: session.id });
   // SessionStart stdout is injected into Claude's context — keep it to one line.
@@ -154,14 +192,18 @@ function handleSessionStart(
 /**
  * On SessionEnd (the tool's session truly ending — quit, clear, logout), close
  * the bound session deterministically rather than waiting for the idle sweep.
- * Keyed to the session that mirrors this tool session_id, else the global
+ * Keyed to the session that mirrors this tool session id, else the global
  * current session. Stamps `endedAt` at the latest captured event (or now).
  */
-function handleSessionEnd(author: AuthorPaths, payload: HookPayload | null): void {
-  const claudeSessionId = extractSessionId(payload);
+function handleSessionEnd(
+  author: AuthorPaths,
+  payload: HookPayload | null,
+  tool: Tool,
+): void {
+  const nativeSessionId = parseEvent(adapterFor(tool), payload).nativeSessionId;
   const sessions = readSessions(author);
-  const session = claudeSessionId
-    ? sessions.find((s) => s.claudeSessionId === claudeSessionId && !s.endedAt)
+  const session = nativeSessionId
+    ? sessions.find((s) => s.nativeSessionId === nativeSessionId && !s.endedAt)
     : sessions.find((s) => s.id === readState(author.shared).currentSessionId);
   if (!session) return;
   let lastTs = session.startedAt;
@@ -178,21 +220,22 @@ async function handleUserPrompt(
   tool: Tool,
 ): Promise<void> {
   if (!payload) return;
-  const text = extractPrompt(payload);
+  const ev = parseEvent(adapterFor(tool), payload);
+  const text = ev.prompt;
   if (!text) return;
-  // Log the prompt into the session that owns this Claude session_id (creating
+  // Log the prompt into the session that owns this tool's session id (creating
   // it if the session-start hook never fired); without an id, the current
   // session is used (unchanged behavior).
-  const claudeSessionId = extractSessionId(payload);
-  const sessionId = claudeSessionId
-    ? sessionForClaudeId(author, claudeSessionId, { tool }).id
+  const nativeSessionId = ev.nativeSessionId;
+  const sessionId = nativeSessionId
+    ? sessionForNativeSession(author, nativeSessionId, { tool }).id
     : undefined;
   const { event } = await logEvent(author, { type: 'prompt', text, tool, sessionId });
   // Open a new "turn": edits and AI output that follow link back to this prompt.
-  // Track it per Claude session so interleaved sessions don't share one turn.
-  if (claudeSessionId) {
+  // Track it per tool session so interleaved sessions don't share one turn.
+  if (nativeSessionId) {
     updateState(author.shared, { currentSessionId: sessionId });
-    setTurnForClaudeSession(author.shared, claudeSessionId, event.id);
+    setTurnForNativeSession(author.shared, nativeSessionId, event.id);
   } else {
     updateState(author.shared, { currentPromptId: event.id });
   }
@@ -206,22 +249,18 @@ async function handlePostEdit(
   config: Config,
 ): Promise<void> {
   if (!payload) return;
-  // Attach the edit to the open turn of *its* Claude session when we can tell
+  const ev = parseEvent(adapterFor(tool), payload);
+  // Attach the edit to the open turn of *its* tool session when we can tell
   // which one fired; otherwise the global current turn (unchanged behavior).
-  const claudeSessionId = extractSessionId(payload);
   const turnId =
-    (claudeSessionId
-      ? turnForClaudeSession(author.shared, claudeSessionId)
+    (ev.nativeSessionId
+      ? turnForNativeSession(author.shared, ev.nativeSessionId)
       : undefined) ??
     readState(author.shared).currentPromptId ??
     undefined;
   // Capture the AI-suggested code (unless code capture is turned off).
-  const diff =
-    config.settings.captureCode === false ? undefined : extractSuggestedCode(payload);
-  // Codex edits via apply_patch; Claude via Edit/Write/MultiEdit.
-  const files =
-    tool === 'codex' ? extractApplyPatchFiles(payload) : extractEditedFiles(payload);
-  for (const file of files) {
+  const diff = config.settings.captureCode === false ? undefined : ev.suggestedDiff;
+  for (const file of ev.editedFiles) {
     if (isInternalPath(file)) continue;
     try {
       await addArtifact(author, { filePath: file, tool, turnId, diff });
@@ -232,25 +271,13 @@ async function handlePostEdit(
 }
 
 /**
- * On Stop, reconcile the trail against Claude Code's transcript — the complete,
- * truthful record of the session. We walk the transcript in order and attribute
- * each assistant reply to the prompt it actually followed, so every reply lands
- * under the right turn no matter how many prompts happened between Stops. Any
- * prompt the student typed but that the live `user-prompt` hook missed is
- * back-filled here (never dropped); the `Stop` and `user-prompt` hooks are
- * separate, so a prompt can be absent even though the student really sent it.
- *
- * Replies are attributed to the session that mirrors *this transcript's own*
- * Claude `session_id` — never a single global "current" session, which under
- * concurrent/resumed sessions points at the wrong one and silently drops
- * legitimate replies.
- *
- * The only thing excluded is content from *before this session started watching*
- * (pre-trail backlog from a resumed transcript), which must not be dumped onto a
- * later turn. A transcript prompt counts as in-window if it matches a prompt we
- * already logged this session (checked first, so it can never be mistaken for
- * backlog), or it carries a timestamp at/after the session start. Best-effort:
- * no transcript (e.g. Codex) means a silent no-op.
+ * On Stop, the tool's adapter supplies a transcript (Claude Code reads its
+ * `.jsonl`; tools without one return null and Stop is a no-op). We reconcile the
+ * trail against that transcript — the complete, truthful record of the session —
+ * walking it in order and attributing each assistant reply to the prompt it
+ * actually followed, so every reply lands under the right turn no matter how many
+ * prompts happened between Stops. Any prompt the student typed but that the live
+ * `user-prompt` hook missed is back-filled here (never dropped).
  */
 async function handleStop(
   author: AuthorPaths,
@@ -258,26 +285,43 @@ async function handleStop(
   tool: Tool,
   config: Config,
 ): Promise<void> {
-  const transcriptPath = payload?.transcript_path;
-  if (typeof transcriptPath !== 'string' || !existsSync(transcriptPath)) return;
+  const adapter = adapterFor(tool);
+  const transcript = adapter?.getTranscript?.(payload, author.shared.root);
+  if (!transcript) return; // No transcript for this tool — nothing to reconcile.
+  const fallbackNativeId = parseEvent(adapter, payload).nativeSessionId;
+  await reconcileTranscript(author, transcript, tool, config, fallbackNativeId);
+}
+
+/**
+ * Reconcile a normalized transcript into the trail. Tool-agnostic: it operates
+ * only on {@link HookTranscript} messages, never a raw payload.
+ *
+ * Replies are attributed to the session that mirrors *this transcript's own*
+ * session id — never a single global "current" session, which under
+ * concurrent/resumed sessions points at the wrong one and silently drops
+ * legitimate replies. Content from *before this session started watching*
+ * (pre-trail backlog from a resumed transcript) is excluded: a transcript prompt
+ * counts as in-window if it matches a prompt we already logged this session
+ * (checked first), or it carries a timestamp at/after the session start.
+ */
+async function reconcileTranscript(
+  author: AuthorPaths,
+  transcript: HookTranscript,
+  tool: Tool,
+  config: Config,
+  fallbackNativeId?: string,
+): Promise<void> {
   // AI text replies obey `captureAiOutput`; prompts and decisions are the
   // student's own work and are captured regardless.
   const captureAi = config.settings.captureAiOutput !== false;
 
-  let transcript;
-  try {
-    transcript = readTranscriptFile(transcriptPath, author.shared.root);
-  } catch {
-    return; // Unknown/unsupported transcript format — nothing to capture.
-  }
-
   // Resolve the session this transcript belongs to. The transcript's own
-  // session_id is the source of truth; fall back to the payload's, then to the
+  // session id is the source of truth; fall back to the payload's, then to the
   // global current session (older clients that send no id).
-  const claudeSessionId = transcript.sessionId ?? extractSessionId(payload);
+  const nativeSessionId = transcript.sessionId ?? fallbackNativeId;
   let session;
-  if (claudeSessionId) {
-    session = sessionForClaudeId(author, claudeSessionId, { tool });
+  if (nativeSessionId) {
+    session = sessionForNativeSession(author, nativeSessionId, { tool });
   } else {
     const currentId = readState(author.shared).currentSessionId;
     session = currentId

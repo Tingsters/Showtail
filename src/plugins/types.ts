@@ -93,6 +93,61 @@ export interface ConnectCapability {
   uninstall(opts: ConnectUninstallOptions): Promise<void>;
   /** Current installed state for `status`. */
   status(cwd?: string): ConnectStatus;
+  /**
+   * Runtime capture adapter. Present only for tools with auto-capture hooks
+   * (Copilot, which captures via its VS Code extension, has none). This is the
+   * boundary that keeps the hook dispatcher tool-agnostic: it turns the host's
+   * raw payload into a {@link NormalizedHookEvent} and owns all tool-specific
+   * payload/transcript knowledge.
+   */
+  hooks?: HookAdapter;
+}
+
+// --- Runtime capture (the tool-agnostic hook boundary) --------------------
+
+/**
+ * A hook event normalized across tools. The hook dispatcher operates only on
+ * this shape — it never inspects a raw payload or branches on a tool name.
+ */
+export interface NormalizedHookEvent {
+  /** The host tool's own session id (Claude/Gemini `session_id`, …), if any. */
+  nativeSessionId?: string;
+  /** The submitted prompt text (user-prompt event), if any. */
+  prompt?: string;
+  /** Repo paths the edit tool touched (post-edit event). */
+  editedFiles: string[];
+  /** AI-suggested diff/code for the edit, if captured. */
+  suggestedDiff?: string;
+}
+
+/** One message of a normalized transcript used for stop-time reconciliation. */
+export interface HookTranscriptMessage {
+  /** 'user' | 'assistant' | 'decision' (others, e.g. 'edit', are ignored). */
+  role: string;
+  text: string;
+  timestamp?: string;
+  sourceId: string;
+}
+
+/** A normalized conversation transcript, in order. */
+export interface HookTranscript {
+  sessionId?: string;
+  messages: HookTranscriptMessage[];
+}
+
+export interface HookAdapter {
+  /** Parse this host's raw stdin payload into the normalized shape (best-effort). */
+  parse(raw: unknown): NormalizedHookEvent;
+  /** Path patterns whose edits must NOT be snapshotted (this tool's own dirs). */
+  internalPaths: RegExp[];
+  /** Patterns to force-include even if internal (e.g. .claude/worktrees checkouts). */
+  includePaths?: RegExp[];
+  /**
+   * On stop, return a transcript to reconcile AI replies/decisions from, or null
+   * if this tool provides none (then stop is a no-op). Only the "how to obtain a
+   * transcript" step is tool-specific; the reconcile itself is generic.
+   */
+  getTranscript?(raw: unknown, root: string): HookTranscript | null;
 }
 
 // --- Import (transcript) ---------------------------------------------------

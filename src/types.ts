@@ -119,11 +119,13 @@ export interface Session {
   /** Which tool opened this session, if known. */
   tool?: Tool;
   /**
-   * The Claude Code `session_id` this Showtail session mirrors, 1:1, if known.
-   * Lets concurrent/resumed Claude sessions each keep their own trail instead of
-   * sharing the single global `currentSessionId` pointer.
+   * The host tool's own session id this Showtail session mirrors, 1:1, if known
+   * (e.g. a Claude Code or Gemini CLI `session_id`). Lets concurrent/resumed
+   * tool sessions each keep their own trail instead of sharing the single global
+   * `currentSessionId` pointer. Tool-neutral; older trails used `claudeSessionId`
+   * and are normalized on read.
    */
-  claudeSessionId?: string;
+  nativeSessionId?: string;
   /** ISO-8601 timestamp the session was closed with `showtail end`, if it was. */
   endedAt?: string;
 }
@@ -190,15 +192,16 @@ export interface State {
   currentAuthorSlug?: string;
   /**
    * The prompt event id that opened the current turn, if any. Used by the CLI
-   * and as the fallback turn pointer when a hook payload carries no
-   * `session_id` (older transcripts, manual `showtail log`, Codex).
+   * and as the fallback turn pointer when a hook payload carries no native
+   * session id (older transcripts, manual `showtail log`, Codex).
    */
   currentPromptId?: string | null;
   /**
-   * The open turn per Claude Code `session_id`, so edits from concurrent
-   * sessions attach to the right prompt instead of a single global turn.
+   * The open turn per host-tool session id, so edits from concurrent sessions
+   * attach to the right prompt instead of a single global turn. Tool-neutral;
+   * older trails used `turnByClaudeSession` and are normalized on read.
    */
-  turnByClaudeSession?: Record<string, string>;
+  turnByNativeSession?: Record<string, string>;
 }
 
 /** How many events were recorded through a given tool. */

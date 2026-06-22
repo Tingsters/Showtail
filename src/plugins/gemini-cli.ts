@@ -16,6 +16,13 @@ import {
   writeGeminiCliInstructions,
 } from '../core/geminiCli.ts';
 import { commandOnPath, homeDirExists } from '../core/detect.ts';
+import {
+  extractEditedFiles,
+  extractPrompt,
+  extractSessionId,
+  extractSuggestedCode,
+  type HookPayload,
+} from '../core/hookInput.ts';
 import type { EnvironmentPlugin } from './types.ts';
 
 export const geminiCliPlugin: EnvironmentPlugin = {
@@ -78,6 +85,23 @@ export const geminiCliPlugin: EnvironmentPlugin = {
         hooksActive,
         updateAvailable: state.installed ? state.updateAvailable : undefined,
       };
+    },
+
+    hooks: {
+      // Gemini CLI's AfterTool/BeforeAgent payloads use file_path-style edit
+      // tools (write_file/replace), so the same field extractors as Claude apply.
+      // Best-effort: see the validation caveat in the plan if field names differ.
+      parse(raw) {
+        const p = raw as HookPayload;
+        return {
+          nativeSessionId: extractSessionId(p),
+          prompt: extractPrompt(p) ?? undefined,
+          editedFiles: extractEditedFiles(p),
+          suggestedDiff: extractSuggestedCode(p),
+        };
+      },
+      internalPaths: [/(^|[\\/])\.gemini([\\/]|$)/],
+      // Gemini CLI provides no Claude-style transcript, so stop is a no-op.
     },
   },
 };

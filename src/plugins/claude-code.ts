@@ -14,6 +14,14 @@ import {
   writeSkill,
 } from '../core/skill.ts';
 import { commandOnPath, homeDirExists } from '../core/detect.ts';
+import { readTranscriptFile } from '../core/claudeCode.ts';
+import {
+  extractEditedFiles,
+  extractPrompt,
+  extractSessionId,
+  extractSuggestedCode,
+  type HookPayload,
+} from '../core/hookInput.ts';
 import type { EnvironmentPlugin } from './types.ts';
 
 /** Is the skill installed at either scope? */
@@ -79,6 +87,30 @@ export const claudeCodePlugin: EnvironmentPlugin = {
     status(cwd) {
       const hooksActive = autoCaptureActive(cwd);
       return { connected: skillInstalled(cwd) || hooksActive, hooksActive };
+    },
+
+    hooks: {
+      parse(raw) {
+        const p = raw as HookPayload;
+        return {
+          nativeSessionId: extractSessionId(p),
+          prompt: extractPrompt(p) ?? undefined,
+          editedFiles: extractEditedFiles(p), // Edit/Write/MultiEdit set file_path
+          suggestedDiff: extractSuggestedCode(p),
+        };
+      },
+      // .claude is metadata; .claude/worktrees holds real isolated checkouts.
+      internalPaths: [/(^|[\\/])\.claude([\\/]|$)/],
+      includePaths: [/(^|[\\/])\.claude[\\/]worktrees[\\/]/],
+      getTranscript(raw, root) {
+        const tp = (raw as HookPayload)?.transcript_path;
+        if (typeof tp !== 'string' || !existsSync(tp)) return null;
+        try {
+          return readTranscriptFile(tp, root);
+        } catch {
+          return null; // Unknown/unsupported transcript format — nothing to capture.
+        }
+      },
     },
   },
 

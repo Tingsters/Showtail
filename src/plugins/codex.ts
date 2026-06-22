@@ -14,6 +14,13 @@ import {
   writeCodexInstructions,
 } from '../core/codex.ts';
 import { commandOnPath, homeDirExists } from '../core/detect.ts';
+import {
+  extractApplyPatchFiles,
+  extractPrompt,
+  extractSessionId,
+  extractSuggestedCode,
+  type HookPayload,
+} from '../core/hookInput.ts';
 import type { EnvironmentPlugin } from './types.ts';
 
 export const codexPlugin: EnvironmentPlugin = {
@@ -84,6 +91,20 @@ export const codexPlugin: EnvironmentPlugin = {
         hooksActive: codexAutoCaptureActive(cwd),
         updateAvailable: state.installed ? state.updateAvailable : undefined,
       };
+    },
+
+    hooks: {
+      parse(raw) {
+        const p = raw as HookPayload;
+        return {
+          nativeSessionId: extractSessionId(p),
+          prompt: extractPrompt(p) ?? undefined,
+          editedFiles: extractApplyPatchFiles(p), // Codex edits via apply_patch
+          suggestedDiff: extractSuggestedCode(p),
+        };
+      },
+      internalPaths: [/(^|[\\/])\.codex([\\/]|$)/],
+      // Codex provides no Claude-style transcript, so stop is a no-op (no getTranscript).
     },
   },
 };

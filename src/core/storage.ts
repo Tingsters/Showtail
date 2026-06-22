@@ -253,7 +253,17 @@ export function writeConfig(paths: ShowtailPaths, config: Config): void {
 
 export function readState(paths: ShowtailPaths): State {
   if (!existsSync(paths.state)) return { currentSessionId: null };
-  return readJson<State>(paths.state);
+  const state = readJson<State & { turnByClaudeSession?: Record<string, string> }>(
+    paths.state,
+  );
+  // Back-compat: trails written before the tool-neutral rename carry
+  // `turnByClaudeSession`. Surface it under the new name on read so old trails
+  // keep working; only the new key is ever written.
+  if (state.turnByClaudeSession && !state.turnByNativeSession) {
+    state.turnByNativeSession = state.turnByClaudeSession;
+    delete state.turnByClaudeSession;
+  }
+  return state;
 }
 
 export function writeState(paths: ShowtailPaths, state: State): void {
@@ -266,38 +276,48 @@ export function updateState(paths: ShowtailPaths, partial: Partial<State>): void
 }
 
 /**
- * Record the open turn (prompt id) for a Claude Code `session_id`, so a later
+ * Record the open turn (prompt id) for a host tool's session id, so a later
  * edit from that same session attaches to the right prompt even when other
  * sessions are interleaved. Read-modify-write of the per-session map; tolerant
  * of a concurrent writer (worst case a live edit attributes to a slightly stale
  * turn — the Stop-hook transcript pass remains the authority for replies).
  */
-export function setTurnForClaudeSession(
+export function setTurnForNativeSession(
   paths: ShowtailPaths,
-  claudeSessionId: string,
+  nativeSessionId: string,
   promptId: string,
 ): void {
   const state = readState(paths);
-  const turnByClaudeSession = {
-    ...state.turnByClaudeSession,
-    [claudeSessionId]: promptId,
+  const turnByNativeSession = {
+    ...state.turnByNativeSession,
+    [nativeSessionId]: promptId,
   };
-  writeState(paths, { ...state, turnByClaudeSession });
+  writeState(paths, { ...state, turnByNativeSession });
 }
 
-/** The open turn (prompt id) recorded for a Claude `session_id`, if any. */
-export function turnForClaudeSession(
+/** The open turn (prompt id) recorded for a host tool's session id, if any. */
+export function turnForNativeSession(
   paths: ShowtailPaths,
-  claudeSessionId: string,
+  nativeSessionId: string,
 ): string | undefined {
-  return readState(paths).turnByClaudeSession?.[claudeSessionId];
+  return readState(paths).turnByNativeSession?.[nativeSessionId];
 }
 
 // --- Sessions (per author) ------------------------------------------------
 
 export function readSessions(author: AuthorPaths): Session[] {
   if (!existsSync(author.sessionsIndex)) return [];
-  return readJson<Session[]>(author.sessionsIndex);
+  const sessions = readJson<Array<Session & { claudeSessionId?: string }>>(
+    author.sessionsIndex,
+  );
+  // Back-compat: older trails stored the host session id as `claudeSessionId`.
+  for (const s of sessions) {
+    if (s.claudeSessionId && !s.nativeSessionId) {
+      s.nativeSessionId = s.claudeSessionId;
+      delete s.claudeSessionId;
+    }
+  }
+  return sessions;
 }
 
 export function writeSessions(author: AuthorPaths, sessions: Session[]): void {

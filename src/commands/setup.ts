@@ -94,10 +94,9 @@ export async function runSetup(options: SetupOptions = {}): Promise<void> {
     const names = connectPlugins()
       .filter((p) => p.connect.autoConnect)
       .map((p) => p.cliName);
+    const example = names[0] ?? '<tool>';
     console.log('No AI tools were detected to connect automatically.');
-    console.log(
-      `  Connect one anytime with \`showtail connect ${names[0] ?? 'claude'}\`.`,
-    );
+    console.log(`  Connect one anytime with \`showtail connect ${example}\`.`);
   }
   if (guidance.length > 0) {
     console.log('');

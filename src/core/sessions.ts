@@ -62,26 +62,26 @@ export function closeSession(author: AuthorPaths, sessionId: string, at: string)
 }
 
 /**
- * The session that mirrors a given Claude Code `session_id` for this author,
+ * The session that mirrors a given host-tool session id for this author,
  * creating it on first sight. Binds to the *open* session for the id: a session
- * closed by idle-timeout or SessionEnd is left in place, and the same Claude
+ * closed by idle-timeout or SessionEnd is left in place, and the same tool
  * session continuing after that is a new task that gets a fresh session (events
  * stay continuous on the timeline either way). A still-open session is reused —
  * so resumes/compacts within a session keep one trail. Does **not** touch
  * `currentSessionId` — the caller decides whether this also becomes the CLI's
  * "current" session.
  */
-export function sessionForClaudeId(
+export function sessionForNativeSession(
   author: AuthorPaths,
-  claudeSessionId: string,
+  nativeSessionId: string,
   opts: { tool?: Session['tool'] } = {},
 ): Session {
-  const open = (s: Session) => s.claudeSessionId === claudeSessionId && !s.endedAt;
+  const open = (s: Session) => s.nativeSessionId === nativeSessionId && !s.endedAt;
   const existing = readSessions(author).find(open);
   if (existing) return existing;
 
   const session = makeSession();
-  session.claudeSessionId = claudeSessionId;
+  session.nativeSessionId = nativeSessionId;
   if (opts.tool) session.tool = opts.tool;
   // Re-read immediately before writing to shrink the window in which a
   // concurrent session-start for a *different* id could clobber this push.
