@@ -131,7 +131,7 @@ function turnMarkdown(lines: string[], turn: Turn, author?: string): void {
     } else {
       const code = item.change;
       const stat = code.diffLines ? ` (~${code.diffLines} line(s))` : '';
-      const link = `[\`${code.path}\`](${fileHref(code.path)})`;
+      const link = `[\`${code.path}\`](${fileHref(code.linkPath ?? code.path)})`;
       if (code.diff) {
         lines.push(`_Suggested code — ${link}${stat}:_`, '');
         lines.push('```diff', code.diff, '```', '');

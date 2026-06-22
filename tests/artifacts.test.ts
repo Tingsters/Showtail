@@ -129,4 +129,33 @@ describe('artifacts', () => {
       cleanup(dir);
     }
   });
+
+  test('a worktree edit keeps a clean display path plus a resolvable link path', async () => {
+    const { dir, author } = await initProject();
+    try {
+      const wtFile = join(dir, '.claude', 'worktrees', 'wt', 'src', 'foo.ts');
+      mkdirSync(dirname(wtFile), { recursive: true });
+      writeFileSync(wtFile, 'export const x = 1;\n');
+      const { artifact } = await addArtifact(author, { filePath: wtFile });
+      // Display path is stripped to the repo-logical form…
+      expect(artifact.path).toBe('src/foo.ts');
+      // …but the link path keeps the full trail-root-relative location, so the
+      // report's `../../<linkPath>` actually reaches the file.
+      expect(artifact.linkPath).toBe('.claude/worktrees/wt/src/foo.ts');
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('a plain edit records no separate link path', async () => {
+    const { dir, author } = await initProject();
+    try {
+      writeFileSync(join(dir, 'notes.md'), 'hi');
+      const { artifact } = await addArtifact(author, { filePath: 'notes.md' });
+      expect(artifact.path).toBe('notes.md');
+      expect(artifact.linkPath).toBeUndefined();
+    } finally {
+      cleanup(dir);
+    }
+  });
 });

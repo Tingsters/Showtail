@@ -503,4 +503,43 @@ describe('turn timeline (chronological interleaving)', () => {
     expect(at('second reply')).toBeLessThan(at('second.ts'));
     expect(at('second.ts')).toBeLessThan(at('🔀 **Decision**'));
   });
+
+  test('a worktree code change links from linkPath but shows the clean path', () => {
+    const data: ReportData = {
+      project: 'P',
+      displayName: 'P',
+      generatedAt: '2026-01-01T00:00:06.000Z',
+      scope: null,
+      summary: { sessions: 1, events: 1, artifacts: 1, decisions: 0 },
+      contributors: [{ slug: 'x', name: 'X', events: 1, artifacts: 1 }],
+      tools: [{ tool: 'claude-code', events: 1 }],
+      toolTimeline: [],
+      turns: [
+        {
+          prompt: ev('p', '2026-01-01T00:00:00.000Z', 'prompt', 'do it'),
+          aiOutputs: [],
+          codeChanges: [
+            {
+              path: 'src/foo.ts',
+              linkPath: '.claude/worktrees/wt/src/foo.ts',
+              diff: '+x',
+              timestamp: '2026-01-01T00:00:01.000Z',
+            },
+          ],
+          decisions: [],
+          tool: 'claude-code',
+          actorSlug: 'x',
+        },
+      ],
+      redactionCount: 0,
+      authorship: 'mine',
+    };
+    // Link resolves from the full link path; the label stays the clean path.
+    expect(renderMarkdown(data)).toContain(
+      '[`src/foo.ts`](../../.claude/worktrees/wt/src/foo.ts)',
+    );
+    const html = renderHtml(data);
+    expect(html).toContain('href="../../.claude/worktrees/wt/src/foo.ts"');
+    expect(html).toContain('>src/foo.ts</a>');
+  });
 });

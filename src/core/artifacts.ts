@@ -75,6 +75,7 @@ export function artifactFromEntry(entry: JournalEntry): Artifact {
     sha256: entry.sha256 ?? '',
     timestamp: entry.ts,
   };
+  if (entry.linkPath) artifact.linkPath = entry.linkPath;
   if (entry.gitCommit) artifact.gitCommit = entry.gitCommit;
   if (entry.conv) artifact.sessionId = entry.conv;
   if (entry.actorSlug) artifact.actorSlug = entry.actorSlug;
@@ -126,6 +127,10 @@ export async function addArtifact(
     );
   }
   const repoPath = reportRelativePath(paths.root, absPath);
+  // The path the report link resolves from: relative to the trail root, un-
+  // stripped. For a worktree edit this differs from the (stripped) display path,
+  // and is what lets `../../<linkPath>` actually reach the file from .showtail/.
+  const linkPath = toRepoRelative(paths.root, absPath);
 
   const config = readConfig(paths);
   const sha256 = await sha256OfFile(absPath);
@@ -151,6 +156,8 @@ export async function addArtifact(
     path: repoPath,
     sha256,
   };
+  // Only record the link path when the display path was stripped (worktree edits).
+  if (linkPath !== repoPath) entry.linkPath = linkPath;
   if (gitCommit) entry.gitCommit = gitCommit;
   if (input.tool) entry.tool = input.tool;
   if (input.turnId) entry.turn = input.turnId;

@@ -120,7 +120,7 @@ function turnsHtml(data: ReportData): string {
         const code = item.change;
         const stat2 = code.diffLines ? ` (~${code.diffLines} line(s))` : '';
         const fileLink =
-          `<a class="file-link" href="${escapeHtml(fileHref(code.path))}" ` +
+          `<a class="file-link" href="${escapeHtml(fileHref(code.linkPath ?? code.path))}" ` +
           'target="_blank" rel="noopener" onclick="event.stopPropagation()">' +
           `${escapeHtml(code.path)}</a>`;
         if (code.diff) {

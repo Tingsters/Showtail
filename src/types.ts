@@ -89,8 +89,14 @@ export interface Event {
 export interface Artifact {
   /** Short unique id, e.g. "art_lqz3k8_a1b2". */
   id: string;
-  /** Repo-relative path to the file. */
+  /** Repo-relative path to the file (the clean display path). */
   path: string;
+  /**
+   * The file's path relative to the trail root, when it differs from `path`
+   * (e.g. a worktree edit whose display `path` is stripped to the repo-logical
+   * form). Used to build a report link that actually resolves from `.showtail/`.
+   */
+  linkPath?: string;
   /** SHA-256 hash of the file contents at capture time. */
   sha256: string;
   /** ISO-8601 timestamp of capture. */
@@ -275,6 +281,8 @@ export interface ReportData {
 /** One AI-suggested code change within a turn (diff text resolved for rendering). */
 export interface TurnCodeChange {
   path: string;
+  /** Trail-root-relative path for the report link, when it differs from `path`. */
+  linkPath?: string;
   /** The suggested diff/new-content, resolved from the object store (if captured). */
   diff?: string;
   diffLines?: number;
@@ -344,6 +352,8 @@ export interface JournalEntry {
   sourceId?: string;
   // --- artifact-specific ---
   path?: string;
+  /** Trail-root-relative path for the report link, when it differs from `path`. */
+  linkPath?: string;
   sha256?: string;
   diffHash?: string;
   diffLines?: number;

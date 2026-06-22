@@ -211,6 +211,7 @@ export function buildTurns(
     const diff = a.diffHash ? (readObject(paths, a.diffHash) ?? undefined) : undefined;
     turn.codeChanges.push({
       path: a.path,
+      linkPath: a.linkPath,
       diff,
       diffLines: a.diffLines,
       tool: a.tool as Tool | undefined,
