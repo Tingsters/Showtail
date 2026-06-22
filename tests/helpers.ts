@@ -1,4 +1,12 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { activeAuthorPaths, ensureAuthor } from '../src/core/authors.ts';
@@ -12,6 +20,58 @@ import {
 /** The deterministic test identity seeded in tests/setup.ts. */
 export const TEST_EMAIL = 'tester@example.com';
 export const TEST_SLUG = 'tester-at-example-com';
+
+/** Path to the CLI entry, for spawning the real binary from a test. */
+export const CLI = join(import.meta.dir, '..', 'src', 'cli.ts');
+
+export interface RunResult {
+  stdout: string;
+  stderr: string;
+  code: number;
+}
+
+/**
+ * Spawn the real CLI in `cwd` and return its captured output. `input` is piped
+ * to stdin; `env` defaults to {@link spawnEnv}. This is the single spawner the
+ * end-to-end test files share (each keeps a thin local `run` wrapper).
+ */
+export function runCli(
+  cwd: string,
+  args: string[],
+  opts: { input?: string; env?: NodeJS.ProcessEnv } = {},
+): RunResult {
+  const res = spawnSync(process.execPath, ['run', CLI, ...args], {
+    cwd,
+    encoding: 'utf8',
+    input: opts.input,
+    env: opts.env ?? spawnEnv(),
+  });
+  return { stdout: res.stdout ?? '', stderr: res.stderr ?? '', code: res.status ?? 0 };
+}
+
+/** Read the structured JSON report `showtail report --format json` wrote into `dir`. */
+export function readJsonReport(dir: string): any {
+  const reportsDir = join(dir, '.showtail', 'reports');
+  const file = readdirSync(reportsDir).find((f) => f.endsWith('.json'));
+  if (!file) throw new Error(`No JSON report found in ${reportsDir}`);
+  return JSON.parse(readFileSync(join(reportsDir, file), 'utf8'));
+}
+
+/** A spawn env with an isolated global home, so the auto-init opt-in is per-test. */
+export function envWithHome(home: string): NodeJS.ProcessEnv {
+  return { ...spawnEnv(), SHOWTAIL_HOME: home };
+}
+
+/**
+ * Turn the global auto-init opt-in on by writing the global config directly.
+ * Pass `setupCompletedAt` for tests that assert the stamp is present.
+ */
+export function enableAutoInit(home: string, setupCompletedAt?: string): void {
+  mkdirSync(home, { recursive: true });
+  const config: Record<string, unknown> = { version: 1, autoInit: true };
+  if (setupCompletedAt) config.setupCompletedAt = setupCompletedAt;
+  writeFileSync(join(home, 'config.json'), JSON.stringify(config) + '\n', 'utf8');
+}
 
 /** Create a throwaway temp directory and return its path. */
 export function makeTempDir(): string {

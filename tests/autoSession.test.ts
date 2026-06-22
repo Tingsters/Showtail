@@ -1,23 +1,15 @@
 import { describe, expect, test } from 'bun:test';
-import { spawnSync } from 'node:child_process';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { cleanup, makeTempDir, seedAuthor, spawnEnv, TEST_EMAIL } from './helpers.ts';
+import { cleanup, makeTempDir, runCli, seedAuthor, TEST_EMAIL } from './helpers.ts';
 import { ensureInitialized } from '../src/commands/init.ts';
 import { logEvent, sweepIdleSessions } from '../src/core/events.ts';
 import { readSessions } from '../src/core/storage.ts';
 
 const HOUR = 60 * 60 * 1000;
-const CLI = join(import.meta.dir, '..', 'src', 'cli.ts');
 
 function run(cwd: string, args: string[], input = '') {
-  const res = spawnSync(process.execPath, ['run', CLI, ...args], {
-    cwd,
-    encoding: 'utf8',
-    input,
-    env: spawnEnv(),
-  });
-  return { stdout: res.stdout ?? '', stderr: res.stderr ?? '', code: res.status ?? 0 };
+  return runCli(cwd, args, { input });
 }
 
 describe('automatic session lifecycle', () => {

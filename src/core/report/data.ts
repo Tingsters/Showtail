@@ -171,18 +171,36 @@ export function buildTurns(
   const turnByPrompt = new Map<string, Turn>();
   prompts.forEach((p, i) => turnByPrompt.set(p.event.id, turns[i]!));
 
-  // The latest prompt at-or-before `ts` by the same author in the same session.
+  // Per (author, session), the prompts' timestamps + turns in ascending order
+  // (`prompts` is already sorted by timestamp, so each per-key list is too). This
+  // lets `fallback` binary-search instead of rescanning every prompt per event.
+  const promptsByKey = new Map<string, { ts: string; turn: Turn }[]>();
+  prompts.forEach((p, i) => {
+    const key = `${p.actorSlug}|${p.sessionId}`;
+    const list = promptsByKey.get(key);
+    const entry = { ts: p.event.timestamp, turn: turns[i]! };
+    if (list) list.push(entry);
+    else promptsByKey.set(key, [entry]);
+  });
+
+  // The latest prompt at-or-before `ts` by the same author in the same session
+  // (rightmost entry with `ts <= target`, so equal timestamps keep last-wins).
   const fallback = (ts: string, slug: string, session: string): Turn | undefined => {
-    let best: Turn | undefined;
-    let bestTs = '';
-    for (const p of prompts) {
-      if (p.actorSlug !== slug || p.sessionId !== session) continue;
-      if (p.event.timestamp <= ts && p.event.timestamp >= bestTs) {
-        best = turnByPrompt.get(p.event.id);
-        bestTs = p.event.timestamp;
+    const list = promptsByKey.get(`${slug}|${session}`);
+    if (!list) return undefined;
+    let lo = 0;
+    let hi = list.length - 1;
+    let ans = -1;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      if (list[mid]!.ts <= ts) {
+        ans = mid;
+        lo = mid + 1;
+      } else {
+        hi = mid - 1;
       }
     }
-    return best;
+    return ans >= 0 ? list[ans]!.turn : undefined;
   };
 
   for (const { event, sessionId, actorSlug } of withSession) {

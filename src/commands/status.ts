@@ -5,6 +5,7 @@ import { currentSession } from '../core/sessions.ts';
 import { readSessionEvents } from '../core/events.ts';
 import { connectedToolsLines, toolStatuses } from '../core/tools.ts';
 import { emitJson } from '../core/output.ts';
+import { pluralS } from '../core/text.ts';
 import { EVENT_TYPES } from '../types.ts';
 
 export interface StatusOptions {
@@ -59,7 +60,7 @@ export async function runStatus(options: StatusOptions = {}): Promise<void> {
     const label = session.label ? `  "${session.label}"` : '';
     console.log(`Session  ${session.id}${label}`);
     const when = new Date(session.startedAt).toLocaleString();
-    console.log(`  started ${when} · ${events.length} event${plural(events.length)}`);
+    console.log(`  started ${when} · ${events.length} event${pluralS(events.length)}`);
     if (breakdown.length > 0) {
       console.log('  ' + breakdown.map((b) => `${b.count} ${b.type}`).join(' · '));
     }
@@ -70,8 +71,4 @@ export async function runStatus(options: StatusOptions = {}): Promise<void> {
   console.log('');
   console.log('Connected tools');
   for (const line of connectedToolsLines(tools)) console.log(line);
-}
-
-function plural(n: number): string {
-  return n === 1 ? '' : 's';
 }

@@ -1,36 +1,20 @@
 import { describe, expect, test } from 'bun:test';
-import { spawnSync } from 'node:child_process';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { cleanup, makeTempDir, spawnEnv } from './helpers.ts';
-
-const CLI = join(import.meta.dir, '..', 'src', 'cli.ts');
-
-function envWith(home: string): NodeJS.ProcessEnv {
-  return { ...spawnEnv(), SHOWTAIL_HOME: home };
-}
+import {
+  cleanup,
+  enableAutoInit as setAutoInit,
+  envWithHome as envWith,
+  makeTempDir,
+  runCli,
+} from './helpers.ts';
 
 function run(cwd: string, args: string[], env: NodeJS.ProcessEnv, input = '') {
-  const res = spawnSync(process.execPath, ['run', CLI, ...args], {
-    cwd,
-    encoding: 'utf8',
-    input,
-    env,
-  });
-  return { stdout: res.stdout ?? '', stderr: res.stderr ?? '', code: res.status ?? 0 };
+  return runCli(cwd, args, { env, input });
 }
 
 function enableAutoInit(home: string): void {
-  mkdirSync(home, { recursive: true });
-  writeFileSync(
-    join(home, 'config.json'),
-    JSON.stringify({
-      version: 1,
-      autoInit: true,
-      setupCompletedAt: '2026-06-20T00:00:00.000Z',
-    }) + '\n',
-    'utf8',
-  );
+  setAutoInit(home, '2026-06-20T00:00:00.000Z');
 }
 
 describe('capabilities', () => {

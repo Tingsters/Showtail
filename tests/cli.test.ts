@@ -1,30 +1,10 @@
 import { describe, expect, test } from 'bun:test';
-import { spawnSync } from 'node:child_process';
 import { existsSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { cleanup, makeTempDir, spawnEnv } from './helpers.ts';
-
-const CLI = join(import.meta.dir, '..', 'src', 'cli.ts');
-
-interface RunResult {
-  stdout: string;
-  stderr: string;
-  code: number;
-}
+import { cleanup, makeTempDir, runCli } from './helpers.ts';
 
 /** Run the real CLI (through bun) in a given directory. */
-function run(cwd: string, args: string[]): RunResult {
-  const res = spawnSync(process.execPath, ['run', CLI, ...args], {
-    cwd,
-    encoding: 'utf8',
-    env: spawnEnv(),
-  });
-  return {
-    stdout: res.stdout ?? '',
-    stderr: res.stderr ?? '',
-    code: res.status ?? 0,
-  };
-}
+const run = runCli;
 
 describe('cli (end-to-end acceptance sequence)', () => {
   test('runs the full documented workflow successfully', () => {
@@ -122,13 +102,10 @@ describe('cli (end-to-end acceptance sequence)', () => {
     const dir = makeTempDir();
     try {
       run(dir, ['init']);
-      const res = spawnSync(process.execPath, ['run', CLI, 'log', '--type', 'prompt'], {
-        cwd: dir,
-        encoding: 'utf8',
+      const res = run(dir, ['log', '--type', 'prompt'], {
         input: 'How do parsers tokenize input?',
-        env: spawnEnv(),
       });
-      expect(res.status).toBe(0);
+      expect(res.code).toBe(0);
       expect(res.stdout).toContain('Logged prompt');
     } finally {
       cleanup(dir);

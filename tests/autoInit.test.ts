@@ -2,33 +2,16 @@ import { describe, expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { cleanup, makeTempDir, spawnEnv } from './helpers.ts';
-
-const CLI = join(import.meta.dir, '..', 'src', 'cli.ts');
-
-/** A spawn env with an isolated global home, so the auto-init opt-in is per-test. */
-function envWith(home: string): NodeJS.ProcessEnv {
-  return { ...spawnEnv(), SHOWTAIL_HOME: home };
-}
+import {
+  cleanup,
+  enableAutoInit,
+  envWithHome as envWith,
+  makeTempDir,
+  runCli,
+} from './helpers.ts';
 
 function run(cwd: string, args: string[], input: string, env: NodeJS.ProcessEnv) {
-  const res = spawnSync(process.execPath, ['run', CLI, ...args], {
-    cwd,
-    encoding: 'utf8',
-    input,
-    env,
-  });
-  return { stdout: res.stdout ?? '', stderr: res.stderr ?? '', code: res.status ?? 0 };
-}
-
-/** Turn the global auto-init opt-in on by writing the global config directly. */
-function enableAutoInit(home: string): void {
-  mkdirSync(home, { recursive: true });
-  writeFileSync(
-    join(home, 'config.json'),
-    JSON.stringify({ version: 1, autoInit: true }) + '\n',
-    'utf8',
-  );
+  return runCli(cwd, args, { input, env });
 }
 
 function userPrompt(cwd: string, prompt = 'help me build a parser', sessionId = 's1') {

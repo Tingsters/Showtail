@@ -1,28 +1,12 @@
 import { describe, expect, test } from 'bun:test';
-import { spawnSync } from 'node:child_process';
-import { readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { cleanup, makeTempDir, spawnEnv } from './helpers.ts';
+import { cleanup, makeTempDir, readJsonReport, runCli } from './helpers.ts';
 import { isInternalPath } from '../src/commands/hook.ts';
-
-/** Read the structured JSON report `showtail report --format json` wrote. */
-function readJsonReport(dir: string): any {
-  const reportsDir = join(dir, '.showtail', 'reports');
-  const file = readdirSync(reportsDir).find((f) => f.endsWith('.json'));
-  return JSON.parse(readFileSync(join(reportsDir, file!), 'utf8'));
-}
-
-const CLI = join(import.meta.dir, '..', 'src', 'cli.ts');
 
 /** Run `showtail <args>` in `cwd`, optionally piping `input` to stdin. */
 function run(cwd: string, args: string[], input?: string) {
-  const res = spawnSync(process.execPath, ['run', CLI, ...args], {
-    cwd,
-    encoding: 'utf8',
-    input,
-    env: spawnEnv(),
-  });
-  return { stdout: res.stdout ?? '', stderr: res.stderr ?? '', code: res.status ?? 0 };
+  return runCli(cwd, args, { input });
 }
 
 function initProject(dir: string) {

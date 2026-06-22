@@ -18,6 +18,7 @@ import {
   stripManagedBlock,
 } from './managedBlock.ts';
 import { findRoot, readJson, writeJson } from './storage.ts';
+import { dirOf } from './text.ts';
 
 export { AGENTS_BODY };
 
@@ -94,13 +95,9 @@ export function writeCodexInstructions(
   target: CodexTarget,
   options: WriteOptions = {},
 ): void {
-  mkdirSync(findDir(target.agentsFile), { recursive: true });
+  mkdirSync(dirOf(target.agentsFile), { recursive: true });
   // AGENTS.md has no frontmatter, so the preamble is empty.
   applyManagedBlock(target.agentsFile, AGENTS_BODY, '', options.force ?? false);
-}
-
-function findDir(file: string): string {
-  return file.slice(0, Math.max(file.lastIndexOf('/'), file.lastIndexOf('\\')));
 }
 
 export interface CodexInstructionsState {
@@ -239,7 +236,7 @@ export type EnableResult = 'created' | 'updated' | 'unchanged';
  */
 export function enableCodexHooksFeature(configToml: string): EnableResult {
   if (!existsSync(configToml)) {
-    mkdirSync(findDir(configToml), { recursive: true });
+    mkdirSync(dirOf(configToml), { recursive: true });
     writeFileSync(configToml, '[features]\nhooks = true\n', 'utf8');
     return 'created';
   }

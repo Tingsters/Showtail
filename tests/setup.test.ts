@@ -1,10 +1,7 @@
 import { describe, expect, test } from 'bun:test';
-import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { cleanup, makeTempDir, spawnEnv } from './helpers.ts';
-
-const CLI = join(import.meta.dir, '..', 'src', 'cli.ts');
+import { cleanup, makeTempDir, runCli, spawnEnv } from './helpers.ts';
 
 /**
  * Spawn env with an isolated HOME and global home, and an empty PATH so tool
@@ -23,12 +20,7 @@ function isolatedEnv(home: string, ghome: string): NodeJS.ProcessEnv {
 }
 
 function run(cwd: string, args: string[], env: NodeJS.ProcessEnv) {
-  const res = spawnSync(process.execPath, ['run', CLI, ...args], {
-    cwd,
-    encoding: 'utf8',
-    env,
-  });
-  return { stdout: res.stdout ?? '', stderr: res.stderr ?? '', code: res.status ?? 0 };
+  return runCli(cwd, args, { env });
 }
 
 describe('setup', () => {

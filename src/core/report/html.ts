@@ -1,6 +1,6 @@
 import REPORT_CSS from '../../../assets/report/report.css' with { type: 'text' };
 import TIMEZONE_JS from '../../../assets/report/timezone.js' with { type: 'text' };
-import type { ReportData } from '../../types.ts';
+import type { ReportData, Turn } from '../../types.ts';
 import { escapeHtml, firstLine } from '../html.ts';
 import { highlightCode } from '../highlight.ts';
 import { toolLabel, turnTimeline } from './data.ts';
@@ -48,6 +48,80 @@ ${TIMEZONE_JS}</script>
 `;
 }
 
+/** The collapsed `<summary>` for a turn: prompt line, author/tool badges, time, stat. */
+function renderTurnSummary(
+  turn: Turn,
+  showAuthor: boolean,
+  nameBySlug: Map<string, string>,
+): string {
+  const fileCount = turn.codeChanges.length;
+  const lineCount = turn.codeChanges.reduce((n, c) => n + (c.diffLines ?? 0), 0);
+  // Surface what happened in this exchange as a compact stat under the date, so
+  // a reviewer can see edits and decisions without expanding the card. Each part
+  // appears only when it occurred; edits and decisions coexist (joined by " · ").
+  const statParts: string[] = [];
+  if (fileCount > 0) {
+    statParts.push(
+      `edited ${fileCount} file(s)${lineCount ? `, ~${lineCount} line(s)` : ''}`,
+    );
+  }
+  if (turn.decisions.length > 0) statParts.push(`${turn.decisions.length} decision(s)`);
+  const stat = statParts.join(' · ');
+  const authorName = showAuthor ? (nameBySlug.get(turn.actorSlug) ?? turn.actorSlug) : '';
+  const authorBadge = authorName
+    ? `<span class="badge badge--author" data-author="${escapeHtml(turn.actorSlug)}">${escapeHtml(authorName)}</span>`
+    : '';
+  return (
+    '<summary>' +
+    `<span class="prompt-text">${escapeHtml(firstLine(turn.prompt.text))}</span>` +
+    '<span class="meta">' +
+    '<span class="meta-top">' +
+    authorBadge +
+    `<span class="badge badge--${escapeHtml(turn.tool)}">${escapeHtml(toolLabel(turn.tool))}</span>` +
+    `<span class="time">${timeTag(turn.prompt.timestamp)}</span>` +
+    '</span>' +
+    (stat ? `<span class="stat">${escapeHtml(stat)}</span>` : '') +
+    '</span>' +
+    '</summary>'
+  );
+}
+
+/** One interleaved item (AI reply, decision, or code change) inside a turn body. */
+function renderTimelineItem(item: ReturnType<typeof turnTimeline>[number]): string {
+  if (item.kind === 'ai') {
+    return `<div class="ai-text">${renderRichText(item.event.text)}</div>`;
+  }
+  if (item.kind === 'decision') {
+    // The student's mid-exchange choice, labelled so it's never mistaken for a
+    // prompt or an AI reply.
+    return (
+      '<div class="decision">' +
+      '<span class="role-tag decision-tag">🔀 Decision</span>' +
+      `<div class="ai-text">${renderRichText(item.event.text)}</div>` +
+      '</div>'
+    );
+  }
+  const code = item.change;
+  const stat = code.diffLines ? ` (~${code.diffLines} line(s))` : '';
+  const fileLink =
+    `<a class="file-link" href="${escapeHtml(fileHref(code.linkPath ?? code.path))}" ` +
+    'target="_blank" rel="noopener" onclick="event.stopPropagation()">' +
+    `${escapeHtml(code.path)}</a>`;
+  if (code.diff) {
+    // A diff was captured — show it in an expandable card. The pieces join with
+    // newlines to match the surrounding card markup exactly.
+    return [
+      '<details class="code">',
+      `<summary>${fileLink}${escapeHtml(stat)}</summary>`,
+      diffHtml(code.diff),
+      '</details>',
+    ].join('\n');
+  }
+  // No inline diff (e.g. a file snapshot with no suggested code, or a Codex shell
+  // edit). Render a plain file row — not an expander that opens to nothing.
+  return `<div class="code code-file">${fileLink}${escapeHtml(stat)}</div>`;
+}
+
 /** Render the interactive exchange cards (escaped; no scripts). */
 function turnsHtml(data: ReportData): string {
   if (data.turns.length === 0) return '<p><em>No prompts recorded.</em></p>';
@@ -56,41 +130,8 @@ function turnsHtml(data: ReportData): string {
   const nameBySlug = new Map(data.contributors.map((c) => [c.slug, c.name]));
   const out: string[] = [];
   for (const turn of data.turns) {
-    const fileCount = turn.codeChanges.length;
-    const lineCount = turn.codeChanges.reduce((n, c) => n + (c.diffLines ?? 0), 0);
-    const decisionCount = turn.decisions.length;
-    // Surface what happened in this exchange as a compact stat under the date, so
-    // a reviewer can see edits and decisions without expanding the card. Each part
-    // appears only when it occurred; edits and decisions coexist (joined by " · ").
-    const statParts: string[] = [];
-    if (fileCount > 0) {
-      statParts.push(
-        `edited ${fileCount} file(s)${lineCount ? `, ~${lineCount} line(s)` : ''}`,
-      );
-    }
-    if (decisionCount > 0) statParts.push(`${decisionCount} decision(s)`);
-    const stat = statParts.join(' · ');
-    const authorName = showAuthor
-      ? (nameBySlug.get(turn.actorSlug) ?? turn.actorSlug)
-      : '';
-    const authorBadge = authorName
-      ? `<span class="badge badge--author" data-author="${escapeHtml(turn.actorSlug)}">${escapeHtml(authorName)}</span>`
-      : '';
-
     out.push('<details class="turn">');
-    out.push(
-      '<summary>' +
-        `<span class="prompt-text">${escapeHtml(firstLine(turn.prompt.text))}</span>` +
-        '<span class="meta">' +
-        '<span class="meta-top">' +
-        authorBadge +
-        `<span class="badge badge--${escapeHtml(turn.tool)}">${escapeHtml(toolLabel(turn.tool))}</span>` +
-        `<span class="time">${timeTag(turn.prompt.timestamp)}</span>` +
-        '</span>' +
-        (stat ? `<span class="stat">${escapeHtml(stat)}</span>` : '') +
-        '</span>' +
-        '</summary>',
-    );
+    out.push(renderTurnSummary(turn, showAuthor, nameBySlug));
     out.push('<div class="turn-body">');
 
     // Show the full prompt only when it has more than the one line in the summary,
@@ -104,39 +145,7 @@ function turnsHtml(data: ReportData): string {
     // AI replies, decisions, and code changes interleaved in the order they
     // happened. The card already means "this prompt → its reply", so a reply
     // needs no label; consecutive replies are separated by plain spacing.
-    for (const item of turnTimeline(turn)) {
-      if (item.kind === 'ai') {
-        out.push(`<div class="ai-text">${renderRichText(item.event.text)}</div>`);
-      } else if (item.kind === 'decision') {
-        // The student's mid-exchange choice, labelled so it's never mistaken for
-        // a prompt or an AI reply.
-        out.push(
-          '<div class="decision">' +
-            '<span class="role-tag decision-tag">🔀 Decision</span>' +
-            `<div class="ai-text">${renderRichText(item.event.text)}</div>` +
-            '</div>',
-        );
-      } else {
-        const code = item.change;
-        const stat2 = code.diffLines ? ` (~${code.diffLines} line(s))` : '';
-        const fileLink =
-          `<a class="file-link" href="${escapeHtml(fileHref(code.linkPath ?? code.path))}" ` +
-          'target="_blank" rel="noopener" onclick="event.stopPropagation()">' +
-          `${escapeHtml(code.path)}</a>`;
-        if (code.diff) {
-          // A diff was captured — show it in an expandable card.
-          out.push('<details class="code">');
-          out.push(`<summary>${fileLink}${escapeHtml(stat2)}</summary>`);
-          out.push(diffHtml(code.diff));
-          out.push('</details>');
-        } else {
-          // No inline diff (e.g. a file snapshot with no suggested code, or a
-          // Codex shell edit). Render a plain file row — not an expander that
-          // opens to nothing. The file link still works.
-          out.push(`<div class="code code-file">${fileLink}${escapeHtml(stat2)}</div>`);
-        }
-      }
-    }
+    for (const item of turnTimeline(turn)) out.push(renderTimelineItem(item));
 
     out.push('</div>'); // end .turn-body
 

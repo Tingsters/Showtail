@@ -18,6 +18,7 @@ import {
   stripManagedBlock,
 } from './managedBlock.ts';
 import { findRoot, readJson, writeJson } from './storage.ts';
+import { dirOf } from './text.ts';
 
 export { GEMINI_BODY };
 
@@ -100,16 +101,12 @@ export interface WriteOptions {
   force?: boolean;
 }
 
-function findDir(file: string): string {
-  return file.slice(0, Math.max(file.lastIndexOf('/'), file.lastIndexOf('\\')));
-}
-
 /** Install or refresh the Showtail managed block in GEMINI.md. */
 export function writeGeminiCliInstructions(
   target: GeminiCliTarget,
   options: WriteOptions = {},
 ): void {
-  mkdirSync(findDir(target.contextFile), { recursive: true });
+  mkdirSync(dirOf(target.contextFile), { recursive: true });
   // GEMINI.md has no frontmatter, so the preamble is empty.
   applyManagedBlock(target.contextFile, GEMINI_BODY, '', options.force ?? false);
 }

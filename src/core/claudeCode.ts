@@ -521,13 +521,20 @@ function collectDecisionAnswers(obj: unknown, into: Map<string, DecisionResult>)
  *    provided)`), which the normal regex can't see — so a decision answered this
  *    way would otherwise lose every answer.
  */
+/** Clarify/reject: splits the "Questions asked:" block at each `- "…"` marker. */
+const QUESTION_MARKER_SPLIT_RE = /\r?\n-\s+"/;
+/** Clarify/reject: the text after `Answer:` up to a blank line or chunk end. */
+const ANSWER_LINE_RE = /Answer:\s*([\s\S]*?)(?:\r?\n\s*\r?\n|$)/;
+
 function parseAnswerValues(blob: string): (string | undefined)[] {
-  // Normal submit. (Known minor edge: a custom answer containing a literal `"`
-  // truncates at that quote.)
+  // Normal submit: each `"Q"="A"` pair (preset choices carry a preview; a
+  // free-typed "Other" answer is the same shape without one). A fresh `/g` regex
+  // per call avoids any shared `lastIndex` state. (Known minor edge: a custom
+  // answer containing a literal `"` truncates at that quote.)
   const normal: (string | undefined)[] = [];
-  const re = /"[^"]*"\s*=\s*"([^"]*)"(?=\s+selected preview|\s*[,.]|\s*$)/g;
+  const pairRe = /"[^"]*"\s*=\s*"([^"]*)"(?=\s+selected preview|\s*[,.]|\s*$)/g;
   let m: RegExpExecArray | null;
-  while ((m = re.exec(blob)) !== null) normal.push(m[1]!);
+  while ((m = pairRe.exec(blob)) !== null) normal.push(m[1]!);
   if (normal.length > 0) return normal;
 
   // Clarify/reject: split at each `- "…"` question marker and read its answer.
@@ -535,12 +542,11 @@ function parseAnswerValues(blob: string): (string | undefined)[] {
   if (idx < 0) return [];
   return blob
     .slice(idx)
-    .split(/\r?\n-\s+"/)
+    .split(QUESTION_MARKER_SPLIT_RE)
     .slice(1) // drop the `Questions asked:` preamble before the first marker
     .map((chunk) => {
-      // The answer follows `Answer:` up to a blank line or the chunk's end;
       // `(No answer provided)` has no `Answer:` and stays undefined.
-      const am = /Answer:\s*([\s\S]*?)(?:\r?\n\s*\r?\n|$)/.exec(chunk);
+      const am = ANSWER_LINE_RE.exec(chunk);
       const a = am?.[1]?.trim();
       return a ? a : undefined;
     });

@@ -2,6 +2,7 @@ import { authorPaths, readSessions, readState, requirePaths } from '../core/stor
 import { activeAuthorPaths, authorSlugs } from '../core/authors.ts';
 import { readSessionEvents } from '../core/events.ts';
 import { emitJson } from '../core/output.ts';
+import { pluralS } from '../core/text.ts';
 
 export interface SessionsOptions {
   /** Emit machine-readable JSON. */
@@ -47,7 +48,7 @@ export async function runSessions(options: SessionsOptions = {}): Promise<void> 
     return;
   }
 
-  console.log(`${rows.length} session${rows.length === 1 ? '' : 's'}:`);
+  console.log(`${rows.length} session${pluralS(rows.length)}:`);
   console.log('');
   for (const r of rows) {
     const marker = r.current ? '*' : ' ';
@@ -56,7 +57,7 @@ export async function runSessions(options: SessionsOptions = {}): Promise<void> 
     const when = new Date(r.startedAt).toLocaleString();
     const ended = r.endedAt ? ' (ended)' : '';
     console.log(`${marker} ${r.id}${label}${who}`);
-    console.log(`    ${when} · ${r.events} event${r.events === 1 ? '' : 's'}${ended}`);
+    console.log(`    ${when} · ${r.events} event${pluralS(r.events)}${ended}`);
   }
   console.log('');
   console.log('* current session');

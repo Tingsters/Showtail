@@ -2,24 +2,9 @@ import { describe, expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { cleanup, makeTempDir, spawnEnv } from './helpers.ts';
+import { cleanup, makeTempDir, runCli } from './helpers.ts';
 
-const CLI = join(import.meta.dir, '..', 'src', 'cli.ts');
-
-interface RunResult {
-  stdout: string;
-  stderr: string;
-  code: number;
-}
-
-function run(cwd: string, args: string[]): RunResult {
-  const res = spawnSync(process.execPath, ['run', CLI, ...args], {
-    cwd,
-    encoding: 'utf8',
-    env: spawnEnv(),
-  });
-  return { stdout: res.stdout ?? '', stderr: res.stderr ?? '', code: res.status ?? 0 };
-}
+const run = runCli;
 
 describe('ensure', () => {
   test('initializes a trail and opens a session, idempotently', () => {
