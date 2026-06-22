@@ -2,6 +2,7 @@ import type { Artifact, Event } from '../types.ts';
 import { readAllArtifacts } from '../core/artifacts.ts';
 import { readAllEvents } from '../core/events.ts';
 import { requirePaths, toRepoRelative } from '../core/storage.ts';
+import { emitJson } from '../core/output.ts';
 
 export interface TraceOptions {
   format?: string;
@@ -43,7 +44,7 @@ export async function runTrace(file: string, options: TraceOptions): Promise<voi
   const result = collectTrace(options.cwd, file);
 
   if (options.format === 'json') {
-    console.log(JSON.stringify(result, null, 2));
+    emitJson(result);
     return;
   }
 

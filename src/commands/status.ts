@@ -4,6 +4,7 @@ import { autoInitEnabled } from '../core/globalConfig.ts';
 import { currentSession } from '../core/sessions.ts';
 import { readSessionEvents } from '../core/events.ts';
 import { connectedToolsLines, toolStatuses } from '../core/tools.ts';
+import { emitJson } from '../core/output.ts';
 import { EVENT_TYPES } from '../types.ts';
 
 export interface StatusOptions {
@@ -35,28 +36,22 @@ export async function runStatus(options: StatusOptions = {}): Promise<void> {
 
   if (options.json) {
     const autoInit = autoInitEnabled();
-    console.log(
-      JSON.stringify(
-        {
-          initialized: true,
-          session: session
-            ? {
-                id: session.id,
-                label: session.label ?? null,
-                startedAt: session.startedAt,
-                events: events.length,
-                byType: Object.fromEntries(breakdown.map((b) => [b.type, b.count])),
-              }
-            : null,
-          hooksActive: claudeHooks,
-          autoInit,
-          nextAction: events.length > 0 ? 'report' : 'work',
-          tools,
-        },
-        null,
-        2,
-      ),
-    );
+    emitJson({
+      initialized: true,
+      session: session
+        ? {
+            id: session.id,
+            label: session.label ?? null,
+            startedAt: session.startedAt,
+            events: events.length,
+            byType: Object.fromEntries(breakdown.map((b) => [b.type, b.count])),
+          }
+        : null,
+      hooksActive: claudeHooks,
+      autoInit,
+      nextAction: events.length > 0 ? 'report' : 'work',
+      tools,
+    });
     return;
   }
 

@@ -13,10 +13,11 @@ import {
   parseConversationHtml,
   type HtmlParseConfig,
 } from '../core/pasteHtml.ts';
-import { latestBatchId, readAllEvents, removeEventsByBatch } from '../core/events.ts';
+import { latestBatchId, removeEventsByBatch } from '../core/events.ts';
 import { activeAuthorPaths, requireActiveAuthor } from '../core/authors.ts';
 import { makeId } from '../core/ids.ts';
 import { requirePaths } from '../core/storage.ts';
+import { printPasteResult, printShareResult } from '../core/importResults.ts';
 import { oneLine } from '../core/text.ts';
 
 export interface ImportChatgptOptions {
@@ -238,83 +239,19 @@ export async function runImportChatgpt(
     batchId,
   });
 
+  const print = { tool: 'chatgpt', assistantLabel: 'ChatGPT', privacyOrg: 'OpenAI' };
   if (isPaste) {
-    printPasteResult(paths, batchId, res, markersFound, Boolean(options.withResponses));
+    printPasteResult(
+      paths,
+      batchId,
+      res,
+      markersFound,
+      Boolean(options.withResponses),
+      print,
+    );
   } else {
-    printShareResult(res, Boolean(options.withResponses));
+    printShareResult(res, Boolean(options.withResponses), print);
   }
-}
-
-function printShareResult(
-  res: Awaited<ReturnType<typeof importConversation>>,
-  withResponses: boolean,
-): void {
-  const totalNew = res.prompts + res.responses;
-  if (totalNew === 0) {
-    if (res.skipped > 0) {
-      console.log(
-        `Already imported "${res.title}" — nothing new (${res.skipped} message(s) already in your trail).`,
-      );
-    } else {
-      console.log(`No prompts found in "${res.title}".`);
-    }
-  } else {
-    const parts = [`${res.prompts} prompt(s)`];
-    if (withResponses) parts.push(`${res.responses} response(s)`);
-    console.log(`Imported from "${res.title}": ${parts.join(', ')} (tool: chatgpt).`);
-    if (res.skipped) console.log(`  ${res.skipped} already-imported message(s) skipped.`);
-    if (res.first && res.last) console.log(`  Spanned ${res.first} → ${res.last}.`);
-  }
-  console.log('');
-  console.log('Run `showtail report` to see it interleaved with your other tools.');
-  console.log(
-    'Privacy: a share link is public on OpenAI’s servers — delete it once imported.',
-  );
-}
-
-function printPasteResult(
-  paths: ReturnType<typeof requirePaths>,
-  batchId: string,
-  res: Awaited<ReturnType<typeof importConversation>>,
-  markersFound: boolean,
-  withResponses: boolean,
-): void {
-  const recorded = readAllEvents(paths).filter(
-    (e) => e.batchId === batchId && e.type === 'prompt',
-  );
-
-  if (res.prompts + res.responses === 0) {
-    console.log(
-      res.skipped > 0
-        ? `Already imported — nothing new (${res.skipped} message(s) already in your trail).`
-        : 'Nothing new to import.',
-    );
-    return;
-  }
-
-  const parts = [`${res.prompts} prompt(s)`];
-  if (withResponses && res.responses > 0) parts.push(`${res.responses} response(s)`);
-  console.log(`Recorded ${parts.join(' and ')} from your paste (tool: chatgpt).`);
-
-  if (!markersFound) {
-    console.log('');
-    console.log(
-      "No 'You said:/ChatGPT said:' markers were in your paste, so I recorded everything",
-    );
-    console.log(
-      "as YOUR prompts. If any of it was ChatGPT's reply, undo below and re-copy with those",
-    );
-    console.log('markers — or use the share link, which separates them exactly.');
-  }
-
-  console.log('');
-  console.log('Here’s what I recorded — skim it:');
-  recorded.forEach((e, i) => console.log(`  ${i + 1}. ${oneLine(e.text)}`));
-  if (res.skipped) console.log(`  (${res.skipped} already-imported message(s) skipped.)`);
-
-  console.log('');
-  console.log('Not yours? Undo this whole batch:  showtail import undo');
-  console.log('Looks right? Run `showtail report` to see it under “Prompts used”.');
 }
 
 /** Undo the most recent import in one step (removes that batch's events). */

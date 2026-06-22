@@ -55,7 +55,7 @@ const DEFAULT_IDLE_TIMEOUT_MINUTES = 60;
 
 export interface HookOptions {
   cwd?: string;
-  /** Which tool fired the hook (defaults to claude-code). Codex passes 'codex'. */
+  /** Which tool fired the hook; the plugin's id (defaults to claude-code when omitted). */
   tool?: Tool;
 }
 
@@ -80,7 +80,7 @@ export function isInternalPath(p: string): boolean {
   return false;
 }
 
-/** The runtime hook adapter for a tool, if it has one (Copilot/cli/unknown: none). */
+/** The runtime hook adapter for a tool, if it declares one (import-only and unknown tools have none). */
 function adapterFor(tool: Tool): HookAdapter | undefined {
   return getPluginById(tool)?.connect?.hooks;
 }

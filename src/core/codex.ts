@@ -15,7 +15,6 @@ import {
   classify,
   parseBlock,
   shortHash,
-  START_RE,
   stripManagedBlock,
 } from './managedBlock.ts';
 import { findRoot, readJson, writeJson } from './storage.ts';
@@ -143,14 +142,6 @@ export function codexInstructionsState(target: CodexTarget): CodexInstructionsSt
     return { installed: true, upToDate: false, userEdited: false, updateAvailable: true };
   }
   return { installed: true, upToDate: true, userEdited: false, updateAvailable: false };
-}
-
-/** True if the Showtail managed block is present in AGENTS.md. */
-export function codexInstructionsInstalled(target: CodexTarget): boolean {
-  return (
-    existsSync(target.agentsFile) &&
-    START_RE.test(readFileSync(target.agentsFile, 'utf8'))
-  );
 }
 
 /** Remove the Showtail block from AGENTS.md (deletes the file if it empties). */

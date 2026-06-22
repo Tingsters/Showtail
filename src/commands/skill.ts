@@ -5,8 +5,14 @@ import {
   resolveTarget,
   uninstallHooks,
   writeSkill,
-  type InstallScope,
 } from '../core/skill.ts';
+import {
+  printHooksEnabled,
+  printInstallHeader,
+  printPrivacyNote,
+  printUninstallResult,
+  scopeOf,
+} from './installBase.ts';
 
 export interface SkillInstallOptions {
   user?: boolean;
@@ -17,10 +23,6 @@ export interface SkillInstallOptions {
   cwd?: string;
 }
 
-function scopeOf(options: { user?: boolean }): InstallScope {
-  return options.user ? 'user' : 'project';
-}
-
 /** Install the Showtail skill and, by default, the auto-capture hooks. */
 export async function runSkillInstall(options: SkillInstallOptions): Promise<void> {
   const scope = scopeOf(options);
@@ -29,32 +31,12 @@ export async function runSkillInstall(options: SkillInstallOptions): Promise<voi
 
   const existed = existsSync(target.skillFile);
   writeSkill(target);
-
-  console.log(`${existed ? 'Updated' : 'Installed'} the Showtail skill:`);
-  console.log(`  ${target.skillFile}`);
-  console.log(
-    `  scope: ${scope === 'user' ? 'personal (all projects)' : 'this project'}`,
-  );
-  console.log('');
+  printInstallHeader('skill', target.skillFile, scope, existed);
 
   if (withHooks) {
     installHooks(target);
-    console.log('Enabled auto-capture hooks (on by default):');
-    console.log(`  ${target.settingsFile}`);
-    console.log('');
-    console.log('  Privacy note: while these hooks are active, Showtail automatically');
-    console.log(
-      '  logs each prompt you submit and snapshots each file Claude edits, into',
-    );
-    console.log('  your local .showtail/ folder. Nothing leaves your machine. Review it');
-    console.log(
-      '  anytime with `showtail report`. To opt out, re-run with --no-hooks, or',
-    );
-    console.log(
-      '  remove them with `showtail disconnect claude`' +
-        (scope === 'user' ? ' --user' : '') +
-        '.',
-    );
+    printHooksEnabled(target.settingsFile);
+    printPrivacyNote({ editSubject: 'Claude', disconnectName: 'claude', scope });
   } else {
     console.log('Auto-capture hooks were SKIPPED (--no-hooks).');
     console.log('  The skill will instead log prompts and snapshot edits itself as you');
@@ -80,11 +62,12 @@ export async function runSkillUninstall(options: SkillUninstallOptions): Promise
   const removedSkill = removeSkill(target);
   const touchedSettings = uninstallHooks(target);
 
-  if (!removedSkill && !touchedSettings) {
-    console.log('Nothing to remove — no Showtail skill or hooks found for this scope.');
-    return;
-  }
-  if (removedSkill) console.log(`Removed skill: ${target.skillDir}`);
-  if (touchedSettings) console.log(`Removed Showtail hooks from: ${target.settingsFile}`);
-  console.log('Done. Auto-capture is off.');
+  printUninstallResult({
+    nothingMessage:
+      'Nothing to remove — no Showtail skill or hooks found for this scope.',
+    removedLines: [
+      removedSkill ? `Removed skill: ${target.skillDir}` : null,
+      touchedSettings ? `Removed Showtail hooks from: ${target.settingsFile}` : null,
+    ],
+  });
 }

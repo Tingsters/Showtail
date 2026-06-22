@@ -1,6 +1,7 @@
 import { authorPaths, readSessions, readState, requirePaths } from '../core/storage.ts';
 import { activeAuthorPaths, authorSlugs } from '../core/authors.ts';
 import { readSessionEvents } from '../core/events.ts';
+import { emitJson } from '../core/output.ts';
 
 export interface SessionsOptions {
   /** Emit machine-readable JSON. */
@@ -37,7 +38,7 @@ export async function runSessions(options: SessionsOptions = {}): Promise<void> 
   rows.sort((a, b) => a.startedAt.localeCompare(b.startedAt));
 
   if (options.json) {
-    console.log(JSON.stringify(rows, null, 2));
+    emitJson(rows);
     return;
   }
 

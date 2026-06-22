@@ -5,12 +5,14 @@ import {
   resolveGeminiCliTarget,
   uninstallGeminiCliHooks,
   writeGeminiCliInstructions,
-  type InstallScope,
 } from '../core/geminiCli.ts';
-
-function scopeOf(options: { user?: boolean }): InstallScope {
-  return options.user ? 'user' : 'project';
-}
+import {
+  printHooksEnabled,
+  printInstallHeader,
+  printPrivacyNote,
+  printUninstallResult,
+  scopeOf,
+} from './installBase.ts';
 
 export interface GeminiCliInstallOptions {
   user?: boolean;
@@ -31,34 +33,12 @@ export async function runGeminiCliInstall(
 
   const existed = existsSync(target.contextFile);
   writeGeminiCliInstructions(target, { force: options.force });
-
-  console.log(
-    `${existed ? 'Updated' : 'Installed'} the Showtail Gemini CLI instructions:`,
-  );
-  console.log(`  ${target.contextFile}`);
-  console.log(
-    `  scope: ${scope === 'user' ? 'personal (all projects)' : 'this project'}`,
-  );
-  console.log('');
+  printInstallHeader('Gemini CLI instructions', target.contextFile, scope, existed);
 
   if (withHooks) {
     installGeminiCliHooks(target);
-    console.log('Enabled auto-capture hooks (on by default):');
-    console.log(`  ${target.settingsFile}`);
-    console.log('');
-    console.log('  Privacy note: while these hooks are active, Showtail automatically');
-    console.log(
-      '  logs each prompt you submit and snapshots each file Gemini CLI edits, into',
-    );
-    console.log('  your local .showtail/ folder. Nothing leaves your machine. Review it');
-    console.log(
-      '  anytime with `showtail report`. To opt out, re-run with --no-hooks, or',
-    );
-    console.log(
-      '  remove them with `showtail disconnect gemini-cli`' +
-        (scope === 'user' ? ' --user' : '') +
-        '.',
-    );
+    printHooksEnabled(target.settingsFile);
+    printPrivacyNote({ editSubject: 'Gemini CLI', disconnectName: 'gemini-cli', scope });
   } else {
     console.log('Auto-capture hooks were SKIPPED (--no-hooks).');
     console.log(
@@ -91,15 +71,12 @@ export async function runGeminiCliUninstall(
   const removedInstructions = removeGeminiCliInstructions(target);
   const removedHooks = uninstallGeminiCliHooks(target);
 
-  if (!removedInstructions && !removedHooks) {
-    console.log(
+  printUninstallResult({
+    nothingMessage:
       'Nothing to remove — no Showtail Gemini CLI integration found for this scope.',
-    );
-    return;
-  }
-  if (removedInstructions) {
-    console.log(`Removed instructions from: ${target.contextFile}`);
-  }
-  if (removedHooks) console.log(`Removed Showtail hooks from: ${target.settingsFile}`);
-  console.log('Done. Auto-capture is off.');
+    removedLines: [
+      removedInstructions ? `Removed instructions from: ${target.contextFile}` : null,
+      removedHooks ? `Removed Showtail hooks from: ${target.settingsFile}` : null,
+    ],
+  });
 }

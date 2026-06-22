@@ -15,7 +15,6 @@ import {
   classify,
   parseBlock,
   shortHash,
-  START_RE,
   stripManagedBlock,
 } from './managedBlock.ts';
 import { findRoot, readJson, writeJson } from './storage.ts';
@@ -149,14 +148,6 @@ export function geminiCliInstructionsState(
     return { installed: true, upToDate: false, userEdited: false, updateAvailable: true };
   }
   return { installed: true, upToDate: true, userEdited: false, updateAvailable: false };
-}
-
-/** True if the Showtail managed block is present in GEMINI.md. */
-export function geminiCliInstructionsInstalled(target: GeminiCliTarget): boolean {
-  return (
-    existsSync(target.contextFile) &&
-    START_RE.test(readFileSync(target.contextFile, 'utf8'))
-  );
 }
 
 /** Remove the Showtail block from GEMINI.md (deletes the file if it empties). */

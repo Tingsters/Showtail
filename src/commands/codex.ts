@@ -8,12 +8,14 @@ import {
   resolveCodexTarget,
   uninstallCodexHooks,
   writeCodexInstructions,
-  type InstallScope,
 } from '../core/codex.ts';
-
-function scopeOf(options: { user?: boolean }): InstallScope {
-  return options.user ? 'user' : 'project';
-}
+import {
+  printHooksEnabled,
+  printInstallHeader,
+  printPrivacyNote,
+  printUninstallResult,
+  scopeOf,
+} from './installBase.ts';
 
 export interface CodexInstallOptions {
   user?: boolean;
@@ -49,19 +51,11 @@ export async function runCodexInstall(options: CodexInstallOptions): Promise<voi
 
   const existed = existsSync(target.agentsFile);
   writeCodexInstructions(target, { force: options.force });
-
-  console.log(`${existed ? 'Updated' : 'Installed'} the Showtail Codex instructions:`);
-  console.log(`  ${target.agentsFile}`);
-  console.log(
-    `  scope: ${scope === 'user' ? 'personal (all projects)' : 'this project'}`,
-  );
-  console.log('');
+  printInstallHeader('Codex instructions', target.agentsFile, scope, existed);
 
   if (withHooks) {
     installCodexHooks(target);
-    console.log('Enabled auto-capture hooks (on by default):');
-    console.log(`  ${target.hooksFile}`);
-    console.log('');
+    printHooksEnabled(target.hooksFile);
 
     if (codexHooksFeatureEnabled(target.configToml)) {
       console.log(`  Codex hooks are already enabled in ${target.configToml}.`);
@@ -86,19 +80,7 @@ export async function runCodexInstall(options: CodexInstallOptions): Promise<voi
       }
     }
     console.log('');
-    console.log('  Privacy note: while these hooks are active, Showtail automatically');
-    console.log(
-      '  logs each prompt you submit and snapshots each file Codex edits, into',
-    );
-    console.log('  your local .showtail/ folder. Nothing leaves your machine. Review it');
-    console.log(
-      '  anytime with `showtail report`. To opt out, re-run with --no-hooks, or',
-    );
-    console.log(
-      '  remove them with `showtail disconnect codex`' +
-        (scope === 'user' ? ' --user' : '') +
-        '.',
-    );
+    printPrivacyNote({ editSubject: 'Codex', disconnectName: 'codex', scope });
   } else {
     console.log('Auto-capture hooks were SKIPPED (--no-hooks).');
     console.log(
@@ -129,16 +111,13 @@ export async function runCodexUninstall(options: CodexUninstallOptions): Promise
   const removedInstructions = removeCodexInstructions(target);
   const removedHooks = uninstallCodexHooks(target);
 
-  if (!removedInstructions && !removedHooks) {
-    console.log(
+  printUninstallResult({
+    nothingMessage:
       'Nothing to remove — no Showtail Codex integration found for this scope.',
-    );
-    return;
-  }
-  if (removedInstructions) console.log(`Removed instructions from: ${target.agentsFile}`);
-  if (removedHooks) console.log(`Removed Showtail hooks from: ${target.hooksFile}`);
-  console.log('Done. Auto-capture is off.');
-  console.log(
-    `(Left features.hooks in ${target.configToml} alone — it is harmless and may be used by other hooks.)`,
-  );
+    removedLines: [
+      removedInstructions ? `Removed instructions from: ${target.agentsFile}` : null,
+      removedHooks ? `Removed Showtail hooks from: ${target.hooksFile}` : null,
+    ],
+    trailer: `(Left features.hooks in ${target.configToml} alone — it is harmless and may be used by other hooks.)`,
+  });
 }

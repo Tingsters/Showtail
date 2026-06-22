@@ -1,12 +1,14 @@
 /**
- * Parsing for the JSON that Claude Code sends to a hook on **stdin**.
+ * Generic parsing for the JSON a connected tool sends to a hook on **stdin**.
+ * Each plugin's hook adapter calls these helpers; the shapes here are the common
+ * fields most tools share.
  *
  * We only read the few fields we need and treat everything as best-effort: a
- * hook must never crash a Claude session, so callers fall back to safe no-ops
+ * hook must never crash the host session, so callers fall back to safe no-ops
  * when anything is missing or malformed.
  */
 
-/** The subset of a Claude Code hook payload that Showtail cares about. */
+/** The subset of a hook payload that Showtail cares about. */
 export interface HookPayload {
   hook_event_name?: string;
   /** Working directory of the session (the project root, usually). */
@@ -47,7 +49,7 @@ export async function readHookPayload(): Promise<HookPayload | null> {
   }
 }
 
-/** Extract the Claude Code session id, or undefined if absent/empty. */
+/** Extract the host tool's session id, or undefined if absent/empty. */
 export function extractSessionId(payload: HookPayload | null): string | undefined {
   const id = payload?.session_id;
   return typeof id === 'string' && id.length > 0 ? id : undefined;
