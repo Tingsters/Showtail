@@ -5,7 +5,7 @@ import { escapeHtml, firstLine } from '../html.ts';
 import { highlightCode } from '../highlight.ts';
 import { nameBySlugMap, shouldShowAuthor, toolLabel, turnTimeline } from './data.ts';
 import { PLAN_APPROVED_TAG, PLAN_REVISED_TAG, splitPlanText } from '../plans.ts';
-import { buildMarkdown, fileHref, TURNS_PLACEHOLDER } from './markdown.ts';
+import { buildMarkdown, fileHref, planHref, TURNS_PLACEHOLDER } from './markdown.ts';
 import { markdownToHtml, renderRichText } from './mdToHtml.ts';
 import { TIME_TOKEN, timeTag } from './time.ts';
 
@@ -117,9 +117,17 @@ function renderTimelineItem(item: ReturnType<typeof turnTimeline>[number]): stri
     const fb = feedback
       ? ` <span class="plan-feedback">“${escapeHtml(feedback)}”</span>`
       : '';
+    // A link to the saved plan file, when the plan was materialized. The
+    // stopPropagation keeps a click on the link from toggling the <details>.
+    const planLink = item.event.planPath
+      ? `<a class="file-link plan-file-link" href="${escapeHtml(planHref(item.event.planPath))}" ` +
+        'target="_blank" rel="noopener" onclick="event.stopPropagation()">view plan file</a>'
+      : '';
     return [
       '<details class="plan">',
-      `<summary><span class="role-tag plan-tag">📋 Plan</span>${badge}${fb}</summary>`,
+      `<summary><span class="role-tag plan-tag">📋 Plan</span>${badge}${fb}` +
+        (planLink ? ` ${planLink}` : '') +
+        '</summary>',
       `<div class="ai-text">${renderRichText(plan)}</div>`,
       '</details>',
     ].join('\n');

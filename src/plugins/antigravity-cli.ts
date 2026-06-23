@@ -23,6 +23,7 @@ import {
 } from '../core/antigravityCli.ts';
 import { existsSync, readFileSync } from 'node:fs';
 import {
+  antigravityCliPlanFiles,
   locateAntigravityCliTranscript,
   parseAntigravityCliTranscript,
   readAntigravityCliTranscript,
@@ -158,6 +159,12 @@ export const antigravityCliPlugin: EnvironmentPlugin = {
       // ~/.gemini/antigravity-cli/brain; locate it (by session id, else newest)
       // and reconcile prompts/replies/plans from it at Stop.
       getTranscript: antigravityCliGetTranscript,
+      // Antigravity writes the session's plan to brain/<conversationId>/plan.md.
+      // Surface it so the report can link to the saved plan file.
+      planFiles(raw) {
+        const p = raw as AgyHookPayload & HookPayload;
+        return antigravityCliPlanFiles(extractAgySessionId(p) ?? extractSessionId(p));
+      },
     },
   },
 };

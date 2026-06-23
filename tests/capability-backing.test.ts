@@ -10,9 +10,16 @@
  * this one file (which runs before capability-claims) so the gate is order-safe.
  */
 import { beforeAll, describe, expect, test } from 'bun:test';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { authorFor, cleanup, makeTempDir, readJsonReport, runCli } from './helpers.ts';
+import {
+  authorFor,
+  cleanup,
+  makeTempDir,
+  readJsonReport,
+  runCli,
+  spawnEnv,
+} from './helpers.ts';
 import { runInit } from '../src/commands/init.ts';
 import { runImportClaudeCode } from '../src/commands/importClaude.ts';
 import { parseTranscript as parseChatgpt } from '../src/core/chatgpt.ts';
@@ -345,6 +352,138 @@ describe('backing: connect-capability surface (install / detect / status)', () =
       } finally {
         cleanup(dir);
       }
+    }
+  });
+});
+
+describe('backing: plan capture', () => {
+  test('Claude Code: an ExitPlanMode plan is materialized + linked at Stop', () => {
+    const dir = makeTempDir();
+    try {
+      run(dir, ['init', '--project', 'PlanCap']);
+      run(
+        dir,
+        ['hook', 'user-prompt'],
+        JSON.stringify({ cwd: dir, prompt: 'plan it', session_id: 'sp1' }),
+      );
+      const transcript = join(dir, 'plan.jsonl');
+      writeFileSync(
+        transcript,
+        [
+          {
+            type: 'user',
+            uuid: 'u1',
+            timestamp: '2026-06-10T10:00:00.000Z',
+            promptSource: 'typed',
+            sessionId: 'sp1',
+            message: { role: 'user', content: 'plan it' },
+          },
+          {
+            type: 'assistant',
+            uuid: 'u2',
+            timestamp: '2026-06-10T10:01:00.000Z',
+            message: {
+              role: 'assistant',
+              content: [
+                {
+                  type: 'tool_use',
+                  id: 'epc',
+                  name: 'ExitPlanMode',
+                  input: { plan: '# The Plan\n- ship it' },
+                },
+              ],
+            },
+          },
+          {
+            type: 'user',
+            uuid: 'u3',
+            timestamp: '2026-06-10T10:02:00.000Z',
+            message: {
+              role: 'user',
+              content: [
+                {
+                  type: 'tool_result',
+                  tool_use_id: 'epc',
+                  content: 'User has approved your plan.',
+                },
+              ],
+            },
+          },
+        ]
+          .map((l) => JSON.stringify(l))
+          .join('\n'),
+      );
+      run(
+        dir,
+        ['hook', 'stop'],
+        JSON.stringify({ cwd: dir, session_id: 'sp1', transcript_path: transcript }),
+      );
+      run(dir, ['report', '--format', 'json']);
+      const data = readJsonReport(dir);
+      expect(data.plans.length).toBe(1);
+      expect(data.plans[0].planPath).toBe('plans/epc.md');
+      expect(existsSync(join(dir, '.showtail', 'plans', 'epc.md'))).toBe(true);
+      markPassed('plan-capture:claude-code');
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('Antigravity CLI: the on-disk plan.md is linked at Stop', () => {
+    const home = makeTempDir();
+    const dir = makeTempDir();
+    const SID = 'sess-agy-plan';
+    try {
+      const brain = join(home, 'antigravity-cli', 'brain', SID);
+      mkdirSync(join(brain, '.system_generated', 'logs'), { recursive: true });
+      const transcriptPath = join(brain, '.system_generated', 'logs', 'transcript.jsonl');
+      writeFileSync(
+        transcriptPath,
+        [
+          {
+            step_index: 0,
+            source: 'USER_EXPLICIT',
+            type: 'USER_INPUT',
+            status: 'DONE',
+            created_at: '2026-06-10T10:00:00Z',
+            content: '<USER_REQUEST>\nadd retry\n</USER_REQUEST>',
+          },
+          {
+            step_index: 1,
+            source: 'MODEL',
+            type: 'PLANNER_RESPONSE',
+            status: 'DONE',
+            created_at: '2026-06-10T10:01:00Z',
+            tool_calls: [{ name: 'create_plan', args: { plan: '1. a\n2. b' } }],
+          },
+        ]
+          .map((l) => JSON.stringify(l))
+          .join('\n'),
+      );
+      writeFileSync(join(brain, 'plan.md'), '# Plan\n- from disk\n');
+      const env = { ...spawnEnv(), GEMINI_HOME: home };
+
+      runCli(dir, ['init', '--project', 'PlanCap'], { env });
+      runCli(dir, ['hook', 'user-prompt', '--tool', 'antigravity-cli'], {
+        env,
+        input: JSON.stringify({ conversationId: SID, prompt: 'add retry' }),
+      });
+      runCli(dir, ['hook', 'stop', '--tool', 'antigravity-cli'], {
+        env,
+        input: JSON.stringify({ conversationId: SID, transcriptPath }),
+      });
+      runCli(dir, ['report', '--format', 'json'], { env });
+      const data = readJsonReport(dir);
+      const planPath = `plans/agy-plan_${SID}.md`;
+      expect(data.plans.length).toBeGreaterThanOrEqual(1);
+      expect(data.plans[0].planPath).toBe(planPath);
+      expect(readFileSync(join(dir, '.showtail', planPath), 'utf8')).toContain(
+        'from disk',
+      );
+      markPassed('plan-capture:antigravity-cli');
+    } finally {
+      cleanup(home);
+      cleanup(dir);
     }
   });
 });

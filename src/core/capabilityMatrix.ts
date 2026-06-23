@@ -36,6 +36,8 @@ export interface Surface {
   marketplace: boolean;
   /** Runs locally (CLI/IDE/desktop) vs a hosted web app. */
   local: boolean;
+  /** A plan/plan-mode the tool produces (a saved plan file or a transcript plan). */
+  planFiles: boolean;
 }
 
 export interface Integration {
@@ -79,7 +81,8 @@ const surface = (
   transcript: boolean,
   marketplace: boolean,
   local: boolean,
-): Surface => ({ hooks, instructions, transcript, marketplace, local });
+  planFiles = false,
+): Surface => ({ hooks, instructions, transcript, marketplace, local, planFiles });
 
 /**
  * Columns, vendor-ordered. Surface flags reflect what each TOOL exposes (as of
@@ -93,7 +96,7 @@ export const INTEGRATIONS: Integration[] = [
     label: 'Claude Code',
     vendor: 'Anthropic',
     pluginId: 'claude-code',
-    surface: surface(true, true, true, true, true),
+    surface: surface(true, true, true, true, true, true),
   },
   // OpenAI
   {
@@ -101,7 +104,7 @@ export const INTEGRATIONS: Integration[] = [
     label: 'OpenAI Codex',
     vendor: 'OpenAI',
     pluginId: 'codex',
-    surface: surface(true, true, true, true, true),
+    surface: surface(true, true, true, true, true, true),
   },
   {
     id: 'chatgpt',
@@ -137,13 +140,13 @@ export const INTEGRATIONS: Integration[] = [
     label: 'Antigravity CLI',
     vendor: 'Google',
     pluginId: 'antigravity-cli',
-    surface: surface(true, true, true, true, true),
+    surface: surface(true, true, true, true, true, true),
   },
   {
     id: 'antigravity-ide',
     label: 'Antigravity IDE',
     vendor: 'Google',
-    surface: surface(true, true, true, true, true),
+    surface: surface(true, true, true, true, true, true),
   },
   {
     id: 'google-gemini',
@@ -182,6 +185,7 @@ const needLocal: SurfaceRule = (s) => (s.local ? 'planned' : 'unsupported');
 const needMarketplace: SurfaceRule = (s) => (s.marketplace ? 'planned' : 'unsupported');
 const needEventPath: SurfaceRule = (s) =>
   s.hooks || s.instructions || s.transcript ? 'planned' : 'unsupported';
+const needPlanFiles: SurfaceRule = (s) => (s.planFiles ? 'planned' : 'unsupported');
 
 // --- cell constructors for overrides ---------------------------------------
 
@@ -393,6 +397,24 @@ export const CAPABILITIES: Capability[] = [
     overrides: {
       'claude-code': full(),
       'copilot-vscode': full(),
+    },
+  },
+  {
+    id: 'plan-capture',
+    label: 'Plan capture',
+    description:
+      'Plans the AI proposes are captured as a first-class item, with a saved, linkable plan file.',
+    note: 'Full for Claude Code + Antigravity CLI (Antigravity links its real plan.md). Codex captures plan content from the transcript (no native file). Antigravity IDE writes implementation_plan.md but has no plugin yet. Reconciled on the Stop hook, so — like AI-reply capture — it is certified by its contract test, not the headless live run (print mode never raises Stop).',
+    // A plan rides in on the same stop transcript path, so a real claim needs one.
+    requires: hasTranscript,
+    surfaceRule: needPlanFiles,
+    overrides: {
+      'claude-code': full(),
+      'antigravity-cli': full(),
+      codex: partial(
+        'Plan content captured + materialized from the transcript; Codex writes no native plan file.',
+      ),
+      // antigravity-ide → derived 'planned' (planFiles surface, no plugin yet).
     },
   },
 ];

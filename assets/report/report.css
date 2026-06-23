@@ -190,6 +190,13 @@ blockquote {
   color: #3a3a42;
 }
 .plan .ai-text { margin: 0.3rem 0 0; }
+/* The "view plan file" link on a plan's summary — lighter than the role tag so it
+   reads as a secondary action, not the plan title. */
+.plan-file-link {
+  margin-left: 0.4rem;
+  font-size: 0.8rem;
+  font-weight: 500;
+}
 .code { margin: 0.4rem 0; }
 .code > summary { cursor: pointer; font-size: 0.85rem; color: #3a3f6b; }
 /* A code change with no captured diff: a plain file row, no disclosure arrow. */

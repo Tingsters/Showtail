@@ -494,6 +494,7 @@ describe('turn timeline (chronological interleaving)', () => {
       tools: [{ tool: 'claude-code', events: 3 }],
       toolTimeline: [],
       turns: [interleavedTurn()],
+      plans: [],
       redactionCount: 0,
       authorship: 'mine',
     };
@@ -534,6 +535,7 @@ describe('turn timeline (chronological interleaving)', () => {
           actorSlug: 'x',
         },
       ],
+      plans: [],
       redactionCount: 0,
       authorship: 'mine',
     };

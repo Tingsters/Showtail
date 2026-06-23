@@ -6,6 +6,7 @@ import {
   STATUS_EMOJI,
   cellFor,
   fullClaimIsStructural,
+  fullClaims,
   matrixJson,
   renderMatrixMarkdown,
 } from '../src/core/capabilityMatrix.ts';
@@ -98,6 +99,37 @@ describe('capability matrix invariants', () => {
     // Hosted web apps: connect-family unsupported, import full.
     expect(status('host-detection', 'chatgpt')).toBe('unsupported');
     expect(status('session-import', 'chatgpt')).toBe('full');
+  });
+
+  test('plan capture: full for the file-backed tools, partial/planned/unsupported otherwise', () => {
+    const cap = CAPABILITIES.find((c) => c.id === 'plan-capture')!;
+    const status = (intId: string) =>
+      cellFor(cap, INTEGRATIONS.find((i) => i.id === intId)!).status;
+    // The capability row exists and every integration carries the planFiles flag.
+    expect(cap).toBeDefined();
+    expect(INTEGRATIONS.every((i) => typeof i.surface.planFiles === 'boolean')).toBe(
+      true,
+    );
+    // Built, file-backed tools: full. Codex (transcript-only): partial.
+    expect(status('claude-code')).toBe('full');
+    expect(status('antigravity-cli')).toBe('full');
+    expect(status('codex')).toBe('partial');
+    // Antigravity IDE writes a plan file but has no plugin yet → planned.
+    expect(status('antigravity-ide')).toBe('planned');
+    // Tools with no plan surface → unsupported.
+    expect(status('chatgpt')).toBe('unsupported');
+    expect(status('copilot-cli')).toBe('unsupported');
+  });
+
+  test('plan-capture full claims are structural and certified by contract test (not the headless live run)', () => {
+    const claims = fullClaims().filter((c) => c.capabilityId === 'plan-capture');
+    expect(claims.map((c) => c.integration).sort()).toEqual([
+      'antigravity-cli',
+      'claude-code',
+    ]);
+    // Reconciled on the Stop hook (not raised by headless print mode), so — like
+    // auto-ai-output-capture — it is not in the live-certified set.
+    expect(claims.every((c) => !c.liveRequired)).toBe(true);
   });
 });
 

@@ -23,7 +23,7 @@ import {
   extractSuggestedCode,
   type HookPayload,
 } from '../core/hookInput.ts';
-import type { EnvironmentPlugin } from './types.ts';
+import type { DiscoveredPlanFile, EnvironmentPlugin } from './types.ts';
 
 /** Is the skill installed at either scope? */
 function skillInstalled(cwd?: string): boolean {
@@ -119,6 +119,14 @@ export const claudeCodePlugin: EnvironmentPlugin = {
         } catch {
           return null; // Unknown/unsupported transcript format — nothing to capture.
         }
+      },
+      // Claude Code writes plan files to ~/.claude/plans/<slug>.md, but the slug
+      // has no reliable mapping back to a session id, so we can't safely pick the
+      // right file here. Claude plans are instead materialized from the
+      // ExitPlanMode plan text already on the transcript (see the stop reconcile),
+      // which is reliable. Hence: an explicit no-op.
+      planFiles(): DiscoveredPlanFile[] {
+        return [];
       },
     },
   },

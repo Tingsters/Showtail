@@ -137,6 +137,23 @@ export interface HookTranscript {
   messages: HookTranscriptMessage[];
 }
 
+/**
+ * A real on-disk plan file a tool wrote for the session (e.g. Antigravity's
+ * `brain/<id>/plan.md`). The hook dispatcher materializes this into the trail
+ * and links it from the report; the discovery of *where* a tool keeps its plan
+ * files is the only tool-specific part, exactly like {@link HookAdapter.getTranscript}.
+ */
+export interface DiscoveredPlanFile {
+  /** Absolute source path on disk (provenance only; never linked directly). */
+  absPath: string;
+  /** The plan markdown read from disk. */
+  content: string;
+  /** Stable id for the saved copy + dedup, e.g. `agy-plan:<conversationId>`. */
+  sourceId: string;
+  /** The tool's own session id this plan belongs to, for matching to a session. */
+  nativeSessionId?: string;
+}
+
 export interface HookAdapter {
   /** Parse this host's raw stdin payload into the normalized shape (best-effort). */
   parse(raw: unknown): NormalizedHookEvent;
@@ -150,6 +167,14 @@ export interface HookAdapter {
    * transcript" step is tool-specific; the reconcile itself is generic.
    */
   getTranscript?(raw: unknown, root: string): HookTranscript | null;
+  /**
+   * On stop, return the real on-disk plan file(s) this tool wrote for the
+   * session, or `[]` if none. The reconcile then saves them as linkable plan
+   * artifacts; tools that keep their plan only in the transcript (Claude Code's
+   * `ExitPlanMode`, Codex's `update_plan`) omit this and the plan markdown
+   * already on the transcript is materialized instead. Best-effort; never throws.
+   */
+  planFiles?(raw: unknown, root: string): DiscoveredPlanFile[];
 }
 
 // --- Import (transcript) ---------------------------------------------------

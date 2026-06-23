@@ -40,7 +40,11 @@ import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { asArray, asString, isObject, prop } from './parse.ts';
-import type { HookTranscript, HookTranscriptMessage } from '../plugins/types.ts';
+import type {
+  DiscoveredPlanFile,
+  HookTranscript,
+  HookTranscriptMessage,
+} from '../plugins/types.ts';
 
 /** A transcript file found on disk for an Antigravity conversation. */
 export interface AntigravityCliTranscriptInfo {
@@ -173,6 +177,31 @@ export function locateAntigravityCliTranscript(
     if (byId) return byId;
   }
   return all[0]!; // newest first
+}
+
+/**
+ * The on-disk plan file Antigravity wrote for a session, if any. agy keeps the
+ * student's implementation plan / task list at
+ * `~/.gemini/antigravity-cli/brain/<conversationId>/plan.md`, overwriting it as
+ * the plan evolves — so the single file is the session's canonical plan. Returns
+ * `[]` when no session id resolves or no plan.md exists. Best-effort; never throws.
+ */
+export function antigravityCliPlanFiles(
+  sessionId: string | undefined,
+): DiscoveredPlanFile[] {
+  const sid = sessionId || findAntigravityCliTranscripts()[0]?.sessionId;
+  if (!sid) return [];
+  const file = join(antigravityCliBrainDir(), sid, 'plan.md');
+  if (!existsSync(file)) return [];
+  try {
+    const content = readFileSync(file, 'utf8').trim();
+    if (!content) return [];
+    return [
+      { absPath: file, content, sourceId: `agy-plan:${sid}`, nativeSessionId: sid },
+    ];
+  } catch {
+    return [];
+  }
 }
 
 // --- Parsing ---------------------------------------------------------------

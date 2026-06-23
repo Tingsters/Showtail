@@ -2,6 +2,7 @@ import type { Event, EventType, JournalEntry, Session, Tool } from '../types.ts'
 import { maybeCurrentCommit } from './git.ts';
 import { makeId } from './ids.ts';
 import { readObject, writeObject } from './objects.ts';
+import { materializePlan } from './plans.ts';
 import { redact } from './redact.ts';
 import {
   authorPaths,
@@ -40,6 +41,8 @@ export interface NewEventInput {
   batchId?: string;
   /** Links this event to the prompt that opened its turn. */
   turnId?: string;
+  /** For a `plan` event: trail-relative path of the saved plan file (`plans/<id>.md`). */
+  planPath?: string;
   /** Force a specific session; otherwise the current/started session is used. */
   sessionId?: string;
 }
@@ -79,6 +82,18 @@ export async function logEvent(
   const timestamp = input.timestamp ?? new Date().toISOString();
   const id = makeId('evt');
 
+  // Every plan is materialized as a browsable `plans/<id>.md` the report links to.
+  // The caller may pass an explicit `planPath` (the hook stop path, when the host
+  // wrote a real plan file to link instead); otherwise the plan's own text is
+  // saved here — so plans captured live, by import, or manually all get a link.
+  let planPath = input.planPath;
+  if (input.type === 'plan' && !planPath) {
+    planPath = materializePlan(paths, {
+      text: input.text,
+      sourceId: input.sourceId ?? id,
+    }).planPath;
+  }
+
   const entry: JournalEntry = {
     v: JOURNAL_ENTRY_VERSION,
     kind: 'event',
@@ -98,6 +113,7 @@ export async function logEvent(
   if (input.sourceId) entry.sourceId = input.sourceId;
   if (input.batchId) entry.batch = input.batchId;
   if (input.turnId) entry.turn = input.turnId;
+  if (planPath) entry.planPath = planPath;
   if (gitCommit) entry.gitCommit = gitCommit;
 
   appendJournal(author, entry);
@@ -132,6 +148,7 @@ export function eventFromEntry(
   if (entry.sourceId) event.sourceId = entry.sourceId;
   if (entry.batch) event.batchId = entry.batch;
   if (entry.turn) event.turnId = entry.turn;
+  if (entry.planPath) event.planPath = entry.planPath;
   return event;
 }
 

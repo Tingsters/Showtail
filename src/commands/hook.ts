@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs';
 import { addArtifact } from '../core/artifacts.ts';
-import { PLAN_APPROVED_TAG, PLAN_REVISED_TAG } from '../core/plans.ts';
+import { materializePlan, PLAN_APPROVED_TAG, PLAN_REVISED_TAG } from '../core/plans.ts';
 import { resolveActiveAuthorForHook } from '../core/authors.ts';
 import {
   importedSourceIds,
@@ -37,6 +37,7 @@ import {
 } from '../core/storage.ts';
 import { connectPlugins, getPluginById } from '../plugins/registry.ts';
 import type {
+  DiscoveredPlanFile,
   HookAdapter,
   HookTranscript,
   NormalizedHookEvent,
@@ -290,7 +291,22 @@ async function handleStop(
   const transcript = adapter?.getTranscript?.(payload, author.shared.root);
   if (!transcript) return; // No transcript for this tool — nothing to reconcile.
   const fallbackNativeId = parseEvent(adapter, payload).nativeSessionId;
-  await reconcileTranscript(author, transcript, tool, config, fallbackNativeId);
+  // The real on-disk plan file(s) this tool wrote, if any. Tools that keep their
+  // plan only in the transcript return none and the plan text is materialized.
+  let planFiles: DiscoveredPlanFile[] = [];
+  try {
+    planFiles = adapter?.planFiles?.(payload, author.shared.root) ?? [];
+  } catch {
+    planFiles = []; // Plan-file discovery is best-effort; never break the stop.
+  }
+  await reconcileTranscript(
+    author,
+    transcript,
+    tool,
+    config,
+    fallbackNativeId,
+    planFiles,
+  );
 }
 
 /**
@@ -311,6 +327,7 @@ async function reconcileTranscript(
   tool: Tool,
   config: Config,
   fallbackNativeId?: string,
+  planFiles: DiscoveredPlanFile[] = [],
 ): Promise<void> {
   // AI text replies obey `captureAiOutput`; prompts and decisions are the
   // student's own work and are captured regardless.
@@ -349,6 +366,30 @@ async function reconcileTranscript(
   const seen = importedSourceIds(author);
   const redactCfg = config.settings.redact;
   let currentTurn: string | undefined; // The prompt id replies attach to.
+
+  // The session's saved plan file path, resolved lazily on the first new plan so
+  // a stop with no new plans writes nothing. A tool that wrote a real plan file
+  // (Antigravity's `plan.md`) overwrites it per update, so the single discovered
+  // file is the session's canonical plan and every plan event links to it; tools
+  // with no file (Claude, Codex) fall back to materializing each plan's own text.
+  const planFilesForSession = planFiles.filter(
+    (f) => !f.nativeSessionId || f.nativeSessionId === nativeSessionId,
+  );
+  let sessionPlanPath: string | undefined;
+  let sessionPlanResolved = false;
+  const resolveSessionPlanPath = (): string | undefined => {
+    if (!sessionPlanResolved) {
+      sessionPlanResolved = true;
+      const file = planFilesForSession.at(-1);
+      if (file) {
+        sessionPlanPath = materializePlan(author.shared, {
+          text: file.content,
+          sourceId: file.sourceId,
+        }).planPath;
+      }
+    }
+    return sessionPlanPath;
+  };
 
   for (const msg of transcript.messages) {
     if (msg.role === 'user') {
@@ -423,6 +464,8 @@ async function reconcileTranscript(
           : msg.approved === false
             ? [PLAN_REVISED_TAG]
             : [];
+      // When the host wrote a real plan file, link it; otherwise `logEvent`
+      // materializes this plan's transcript text into a linkable file itself.
       await logEvent(author, {
         type: 'plan',
         text: msg.text,
@@ -432,6 +475,7 @@ async function reconcileTranscript(
         sourceId: msg.sourceId,
         sessionId,
         tags: planTags,
+        planPath: resolveSessionPlanPath(),
       });
       seen.add(msg.sourceId);
     }

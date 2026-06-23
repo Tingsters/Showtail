@@ -180,7 +180,7 @@ Solo? Nothing changes — you are simply the only author, and the team report is
 
 Showtail works with many AI coding tools, and support depth varies by tool. This table shows what each integration can do today — every ✅ is backed by an end-to-end test, so it genuinely works against the real tool.
 
-<!-- showtail:start sha=c427b5dc5cb9 -->
+<!-- showtail:start sha=31d3b897b4a3 -->
 | Capability | Claude Code | OpenAI Codex | ChatGPT | Copilot (VS Code) | Copilot CLI | Copilot Desktop | Antigravity CLI | Antigravity IDE | Google Gemini | Zed | Notes |
 | --- | :-: | :-: | :-: | :-: | :-: | :-: | :-: | :-: | :-: | :-: | --- |
 | **Live-capture hooks** | ✅ | ✅ | ⛔ | 🚧 | 🚧 | 🗺️ | ✅ | 🗺️ | ⛔ | ⛔ | Live-certified for Claude Code, Codex, and Antigravity CLI. Copilot CLI needs a token to drive headlessly; Copilot (VS Code) uses its extension; Zed has no hooks. |
@@ -196,6 +196,7 @@ Showtail works with many AI coding tools, and support depth varies by tool. This
 | **Secret/PII redaction** | ✅ | ✅ | ✅ | ✅ | ✅ | 🗺️ | ✅ | 🗺️ | ✅ | 🗺️ | Applies automatically once any capture or import path for the tool exists. |
 | **Cross-tool timeline** | ✅ | ✅ | ✅ | ✅ | ✅ | 🗺️ | ✅ | 🗺️ | ✅ | 🗺️ | Any captured or imported event from the tool joins the shared timeline. |
 | **Marketplace/extension install** | ✅ | 🗺️ | ⛔ | ✅ | 🗺️ | 🗺️ | 🗺️ | 🗺️ | ⛔ | 🗺️ | Codex/Copilot CLI/Antigravity expose a marketplace; a Showtail installer just isn’t published there yet. |
+| **Plan capture** | ✅ | 🚧 | ⛔ | ⛔ | ⛔ | ⛔ | ✅ | 🗺️ | ⛔ | ⛔ | Full for Claude Code + Antigravity CLI (Antigravity links its real plan.md). Codex captures plan content from the transcript (no native file). Antigravity IDE writes implementation_plan.md but has no plugin yet. Reconciled on the Stop hook, so — like AI-reply capture — it is certified by its contract test, not the headless live run (print mode never raises Stop). |
 
 **Key:** ✅ Full · 🚧 Partial · 🗺️ Planned · ⛔ Unsupported
 

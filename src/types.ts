@@ -70,6 +70,12 @@ export interface Event {
    * Absent on older trails — the report falls back to timestamp adjacency.
    */
   turnId?: string;
+  /**
+   * For a `plan` event: the trail-relative path (`plans/<id>.md`) of the saved,
+   * browsable plan file the report links to. Set when the plan was materialized
+   * (every captured plan is); absent on older trails.
+   */
+  planPath?: string;
   /** Which author recorded it (folder slug under `authors/<slug>/`). */
   actorSlug: ActorSlug;
 }
@@ -267,9 +273,30 @@ export interface ReportData {
   toolTimeline: ToolBlock[];
   /** Prompt-and-AI exchanges, each rendered as a collapsible card. */
   turns: Turn[];
+  /**
+   * Every captured plan, as a first-class cross-cutting index (the report's
+   * top-level "Plans" section). The same plans also appear inline in their turn;
+   * this is the at-a-glance list with a link to each saved plan file.
+   */
+  plans: ReportPlan[];
   /** How many secrets/PII Showtail scrubbed before storing (0 when none). */
   redactionCount: number;
   authorship: string;
+}
+
+/** One plan in the report's top-level Plans index (resolved for rendering). */
+export interface ReportPlan {
+  /** The plan markdown (without the revision-feedback prefix). */
+  text: string;
+  /** Approval state: approved/revised for tools that resolve it, else 'none'. */
+  status: 'approved' | 'revised' | 'none';
+  /** The revision feedback the student sent back, when `status` is 'revised'. */
+  feedback?: string;
+  /** Trail-relative path (`plans/<id>.md`) of the saved plan file to link to. */
+  planPath?: string;
+  tool: Tool;
+  timestamp: string;
+  actorSlug: ActorSlug;
 }
 
 /** One AI-suggested code change within a turn (diff text resolved for rendering). */
@@ -346,6 +373,8 @@ export interface JournalEntry {
   tags?: string[];
   gitCommit?: string;
   sourceId?: string;
+  /** For a `plan` event: trail-relative path of the saved plan file (`plans/<id>.md`). */
+  planPath?: string;
   // --- artifact-specific ---
   path?: string;
   /** Trail-root-relative path for the report link, when it differs from `path`. */

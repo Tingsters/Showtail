@@ -4,6 +4,7 @@ import type {
   Contributor,
   Event,
   ReportData,
+  ReportPlan,
   Tool,
   ToolBlock,
   ToolUsage,
@@ -11,6 +12,7 @@ import type {
   TurnCodeChange,
 } from '../../types.ts';
 import { labelForTool } from '../../plugins/registry.ts';
+import { PLAN_APPROVED_TAG, PLAN_REVISED_TAG, splitPlanText } from '../plans.ts';
 import { readAllArtifacts } from '../artifacts.ts';
 import { authorPaths, readConfig, readSessions, type ShowtailPaths } from '../storage.ts';
 import { readJournal } from '../journal.ts';
@@ -110,6 +112,7 @@ export function buildReportData(
     tools,
     toolTimeline: buildToolBlocks(sorted),
     turns: buildTurns(withSession, artifacts, paths),
+    plans: buildReportPlans(sorted),
     redactionCount: countRedactions(paths, slugsInScope),
     authorship: buildAuthorshipStatement(displayName, contributors, scopeName),
   };
@@ -117,6 +120,35 @@ export function buildReportData(
 
 function sortByTime(events: Event[]): Event[] {
   return [...events].sort((a, b) => a.timestamp.localeCompare(b.timestamp));
+}
+
+/**
+ * The report's top-level Plans index: every `plan` event, in time order, with
+ * its approval status, revision feedback, and a link to the saved plan file.
+ * The same plans also render inline in their turn; this is the at-a-glance list.
+ * `events` is expected pre-sorted by time (the caller passes the sorted stream).
+ */
+export function buildReportPlans(events: Event[]): ReportPlan[] {
+  const plans: ReportPlan[] = [];
+  for (const event of events) {
+    if (event.type !== 'plan') continue;
+    const { feedback, plan } = splitPlanText(event.text);
+    const status: ReportPlan['status'] = event.tags?.includes(PLAN_APPROVED_TAG)
+      ? 'approved'
+      : event.tags?.includes(PLAN_REVISED_TAG)
+        ? 'revised'
+        : 'none';
+    plans.push({
+      text: plan,
+      status,
+      feedback,
+      planPath: event.planPath,
+      tool: toolOf(event),
+      timestamp: event.timestamp,
+      actorSlug: event.actorSlug,
+    });
+  }
+  return plans;
 }
 
 /** Per-author contribution totals for the contributors list. */

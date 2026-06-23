@@ -18,6 +18,21 @@ export function fileHref(repoRelPath: string): string {
 }
 
 /**
+ * A link from a report (in `.showtail/reports/`) to a saved plan file (in
+ * `.showtail/plans/`). `planPath` is `plans/<id>.md`, so we step up out of
+ * `reports/` into `.showtail/` and URL-encode each segment.
+ */
+export function planHref(planPath: string): string {
+  return '../' + planPath.split('/').map(encodeURIComponent).join('/');
+}
+
+/** The first non-empty line of a plan, stripped of a leading Markdown heading marker. */
+function planTitle(text: string): string {
+  const line = text.split('\n').find((l) => l.trim().length > 0) ?? '';
+  return line.replace(/^#+\s*/, '').trim() || 'Plan';
+}
+
+/**
  * Render a report as student- and educator-friendly Markdown. When
  * `turnsPlaceholder` is set, the exchanges are emitted as a single placeholder
  * line (swapped for interactive HTML cards by {@link renderHtml}); otherwise the
@@ -31,9 +46,33 @@ export function buildMarkdown(data: ReportData, turnsPlaceholder = false): strin
     ...metadataSection(data, fmt),
     ...contributorsSection(data),
     ...toolsSection(data, fmt),
+    ...plansSection(data),
     ...turnsSection(data, turnsPlaceholder),
     ...authorshipSection(data),
   ].join('\n');
+}
+
+/**
+ * Plans — a first-class, top-level index of every plan the AI proposed, each a
+ * one-line entry (title + approval status) with a link to the saved plan file.
+ * Omitted entirely when no plan was captured. The full plan still renders inline
+ * in its turn below; this is the at-a-glance list a reviewer scans first.
+ */
+function plansSection(data: ReportData): string[] {
+  if (data.plans.length === 0) return [];
+  const lines = [`## Plans (${data.plans.length})`, ''];
+  for (const p of data.plans) {
+    const status =
+      p.status === 'approved'
+        ? ' · _approved_'
+        : p.status === 'revised'
+          ? ' · _revised_'
+          : '';
+    const link = p.planPath ? ` ([view plan file](${planHref(p.planPath)}))` : '';
+    lines.push(`- 📋 ${planTitle(p.text)}${status}${link}`);
+  }
+  lines.push('');
+  return lines;
 }
 
 /** Title, generation note, one-line summary, and the redaction note. */
@@ -162,6 +201,9 @@ function turnMarkdown(lines: string[], turn: Turn, author?: string): void {
       const status = approved ? ' · _approved_' : revised ? ' · _revised_' : '';
       lines.push(`📋 **Plan**${status}`, '');
       lines.push(item.event.text, '');
+      if (item.event.planPath) {
+        lines.push(`_[view plan file](${planHref(item.event.planPath)})_`, '');
+      }
     } else {
       const code = item.change;
       const stat = code.diffLines ? ` (~${code.diffLines} line(s))` : '';

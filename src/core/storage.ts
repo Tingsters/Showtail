@@ -37,6 +37,12 @@ export interface ShowtailPaths {
   authorsDir: string;
   /** Content-addressed object store (prompt/response text, code diffs). Shared. */
   objectsDir: string;
+  /**
+   * Saved, browsable plan files (`plans/<id>.md`). One copy per captured plan so
+   * the report can link to it (the object store is content-addressed and not
+   * meant to be opened directly). Shared, like `objects/`.
+   */
+  plansDir: string;
   reportsDir: string;
 }
 
@@ -87,6 +93,7 @@ export function pathsForRoot(root: string): ShowtailPaths {
     state: join(base, 'state.json'),
     authorsDir: join(base, 'authors'),
     objectsDir: join(base, 'objects'),
+    plansDir: join(base, 'plans'),
     reportsDir: join(base, 'reports'),
   };
 }
