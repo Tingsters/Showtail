@@ -266,6 +266,20 @@ export const CAPABILITIES: Capability[] = [
     },
   },
   {
+    id: 'decision-capture',
+    label: 'Decision capture',
+    description:
+      'Choices you make when the AI pauses to ask (AskUserQuestion-style) are captured as decisions.',
+    note: 'Reconciled from the tool’s transcript on the Stop hook, so — like AI-reply capture — it is certified by its contract test, not the headless live run. Planned wherever a tool has hooks + a transcript but no ask-the-user construct yet.',
+    requires: hasTranscript,
+    surfaceRule: needReplyPath,
+    overrides: {
+      'claude-code': full(),
+      codex: full(),
+      // antigravity-cli / copilot-cli → derived 'planned' (no decision construct yet).
+    },
+  },
+  {
     id: 'session-import',
     label: 'Session import / backfill',
     description:

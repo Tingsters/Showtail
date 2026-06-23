@@ -488,6 +488,146 @@ describe('backing: plan capture', () => {
   });
 });
 
+describe('backing: decision capture', () => {
+  test('Claude Code: an AskUserQuestion choice is captured as a decision at Stop', () => {
+    const dir = makeTempDir();
+    try {
+      run(dir, ['init', '--project', 'DecisionCap']);
+      run(
+        dir,
+        ['hook', 'user-prompt'],
+        JSON.stringify({ cwd: dir, prompt: 'which option?', session_id: 'sd1' }),
+      );
+      const transcript = join(dir, 'decision.jsonl');
+      writeFileSync(
+        transcript,
+        [
+          {
+            type: 'user',
+            uuid: 'u1',
+            timestamp: '2026-06-10T10:00:00.000Z',
+            promptSource: 'typed',
+            sessionId: 'sd1',
+            message: { role: 'user', content: 'which option?' },
+          },
+          {
+            type: 'assistant',
+            uuid: 'u2',
+            timestamp: '2026-06-10T10:01:00.000Z',
+            message: {
+              role: 'assistant',
+              content: [
+                {
+                  type: 'tool_use',
+                  id: 'auq1',
+                  name: 'AskUserQuestion',
+                  input: {
+                    questions: [
+                      {
+                        question: 'Which option?',
+                        header: 'Option',
+                        options: [
+                          { label: 'Option A', description: 'the first' },
+                          { label: 'Option B', description: 'the second' },
+                        ],
+                      },
+                    ],
+                  },
+                },
+              ],
+            },
+          },
+          {
+            type: 'user',
+            uuid: 'u3',
+            timestamp: '2026-06-10T10:02:00.000Z',
+            toolUseResult: { answers: { 'Which option?': 'Option A' } },
+            message: {
+              role: 'user',
+              content: [
+                {
+                  type: 'tool_result',
+                  tool_use_id: 'auq1',
+                  content:
+                    'Your questions have been answered: "Which option?"="Option A"',
+                },
+              ],
+            },
+          },
+        ]
+          .map((l) => JSON.stringify(l))
+          .join('\n'),
+      );
+      run(
+        dir,
+        ['hook', 'stop'],
+        JSON.stringify({ cwd: dir, session_id: 'sd1', transcript_path: transcript }),
+      );
+      const decisions = readAllEvents(pathsForRoot(dir)).filter(
+        (e) => e.type === 'decision',
+      );
+      expect(decisions.length).toBeGreaterThanOrEqual(1);
+      expect(decisions.some((e) => e.tool === 'claude-code')).toBe(true);
+      markPassed('decision-capture:claude-code');
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('Codex: a request_user_input choice parses as a decision', () => {
+    const dir = makeTempDir();
+    try {
+      const rollout = [
+        {
+          timestamp: '2026-06-10T10:00:00.000Z',
+          type: 'session_meta',
+          payload: { id: 's1', cwd: dir },
+        },
+        {
+          timestamp: '2026-06-10T10:00:01.000Z',
+          type: 'event_msg',
+          payload: { type: 'user_message', message: 'codex: which approach?' },
+        },
+        {
+          timestamp: '2026-06-10T10:00:02.000Z',
+          type: 'response_item',
+          payload: {
+            type: 'function_call',
+            name: 'request_user_input',
+            call_id: 'c1',
+            arguments: JSON.stringify({
+              questions: [
+                {
+                  id: 'q1',
+                  question: 'Which approach?',
+                  header: 'Approach',
+                  options: [{ label: 'Approach A' }, { label: 'Approach B' }],
+                },
+              ],
+            }),
+          },
+        },
+        {
+          timestamp: '2026-06-10T10:00:03.000Z',
+          type: 'response_item',
+          payload: {
+            type: 'function_call_output',
+            call_id: 'c1',
+            output: JSON.stringify({ answers: { q1: { answers: ['Approach A'] } } }),
+          },
+        },
+      ]
+        .map((l) => JSON.stringify(l))
+        .join('\n');
+      const t = parseCodexTranscript(rollout, dir);
+      expect(t.messages.some((m) => m.role === 'decision')).toBe(true);
+      markPassed('decision-capture:codex');
+    } finally {
+      cleanup(dir);
+    }
+  });
+});
+
 describe('backing: redaction and the cross-tool timeline', () => {
   test('a tagged prompt per tool is scrubbed before store and lands on the timeline', () => {
     const dir = makeTempDir();
