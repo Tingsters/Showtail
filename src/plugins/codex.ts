@@ -3,7 +3,9 @@
  * `config.toml` `features.hooks` toggle. All of that lives in core/codex.ts and
  * commands/codex.ts; this module exposes it through the plugin contract.
  */
+import { existsSync, readFileSync } from 'node:fs';
 import { runCodexInstall, runCodexUninstall } from '../commands/codex.ts';
+import { runImportCodex } from '../commands/importCodex.ts';
 import {
   codexAutoCaptureActive,
   codexHooksFeatureEnabled,
@@ -13,6 +15,11 @@ import {
   resolveCodexTarget,
   writeCodexInstructions,
 } from '../core/codex.ts';
+import {
+  findRollouts,
+  parseCodexRollout,
+  type CodexRolloutInfo,
+} from '../core/codexTranscript.ts';
 import { commandOnPath, homeDirExists } from '../core/detect.ts';
 import {
   extractApplyPatchFiles,
@@ -21,7 +28,36 @@ import {
   extractSuggestedCode,
   type HookPayload,
 } from '../core/hookInput.ts';
-import type { EnvironmentPlugin } from './types.ts';
+import type { EnvironmentPlugin, HookTranscript } from './types.ts';
+
+/**
+ * Locate the rollout file this hook payload belongs to. Codex hook payloads
+ * don't carry a transcript path, so we find it ourselves: prefer the rollout
+ * whose name matches the payload's session id; otherwise fall back to the most
+ * recently modified rollout (the one this just-stopped session wrote). Returns
+ * null when nothing plausible is on disk.
+ */
+function locateRollout(payload: HookPayload | null): CodexRolloutInfo | null {
+  const rollouts = findRollouts();
+  if (rollouts.length === 0) return null;
+  const sid = extractSessionId(payload);
+  if (sid) {
+    const byId = rollouts.find((r) => r.sessionId === sid);
+    if (byId) return byId;
+  }
+  return rollouts[0]!; // newest first
+}
+
+/** Read the relevant rollout and normalize it for the generic stop reconcile. */
+function codexGetTranscript(raw: unknown, root: string): HookTranscript | null {
+  const info = locateRollout(raw as HookPayload | null);
+  if (!info || !existsSync(info.path)) return null;
+  try {
+    return parseCodexRollout(readFileSync(info.path, 'utf8'), root);
+  } catch {
+    return null; // Unreadable/unsupported rollout — nothing to capture.
+  }
+}
 
 export const codexPlugin: EnvironmentPlugin = {
   id: 'codex',
@@ -104,7 +140,27 @@ export const codexPlugin: EnvironmentPlugin = {
         };
       },
       internalPaths: [/(^|[\\/])\.codex([\\/]|$)/],
-      // Codex provides no Claude-style transcript, so stop is a no-op (no getTranscript).
+      // Codex hook payloads carry no transcript path, so we locate the session's
+      // rollout under ~/.codex/sessions ourselves (by session id, else newest).
+      getTranscript: codexGetTranscript,
     },
+  },
+
+  import: {
+    command: 'codex',
+    aliases: ['openai-codex'],
+    description:
+      'Import an existing OpenAI Codex session from its on-disk rollout into your trail.\n' +
+      "With no target, opens an interactive picker of this project's sessions " +
+      '(choose one or several); --list prints the same list non-interactively.',
+    shape: 'transcript',
+    run: (source, opts) =>
+      runImportCodex(source, {
+        list: opts.list,
+        withResponses: opts.withResponses,
+        file: opts.file,
+        session: opts.session,
+        cwd: opts.cwd,
+      }),
   },
 };

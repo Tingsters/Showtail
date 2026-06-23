@@ -8,6 +8,8 @@
  * when anything is missing or malformed.
  */
 
+import { isAbsolute, relative } from 'node:path';
+
 /** The subset of a hook payload that Showtail cares about. */
 export interface HookPayload {
   hook_event_name?: string;
@@ -64,9 +66,30 @@ export function extractPrompt(payload: HookPayload): string | null {
 }
 
 /**
+ * Normalize a file path extracted from a hook payload to repo-relative.
+ *
+ * Real Codex `apply_patch` envelopes (and some Edit payloads) carry ABSOLUTE
+ * file paths. The downstream artifact snapshot resolves the path against the
+ * repo root, so an absolute path that happens not to live under `root` — or that
+ * uses different separators/casing — silently fails to match. We make absolute
+ * paths relative to the payload's `cwd` (the session root) here, normalizing to
+ * posix separators so the path matches regardless of platform. Already-relative
+ * paths are returned unchanged.
+ */
+function normalizeHookPath(path: string, cwd: string | undefined): string {
+  if (!isAbsolute(path)) return path.replace(/\\/g, '/');
+  if (!cwd) return path.replace(/\\/g, '/');
+  const rel = relative(cwd, path);
+  // If the path escapes cwd, `relative` yields `..`; keep it as-is (posix) so the
+  // downstream repo-relative guard can reject it rather than silently mangling it.
+  return rel.replace(/\\/g, '/');
+}
+
+/**
  * Extract the file path(s) an Edit/Write/MultiEdit tool touched.
  * All three put the target in `tool_input.file_path`; we also tolerate a
- * `file_paths` array just in case.
+ * `file_paths` array just in case. Absolute paths are normalized to
+ * repo-relative against the payload's `cwd` (see {@link normalizeHookPath}).
  */
 export function extractEditedFiles(payload: HookPayload): string[] {
   const input = payload.tool_input;
@@ -74,12 +97,16 @@ export function extractEditedFiles(payload: HookPayload): string[] {
 
   const out: string[] = [];
   const single = (input as Record<string, unknown>).file_path;
-  if (typeof single === 'string' && single.length > 0) out.push(single);
+  if (typeof single === 'string' && single.length > 0) {
+    out.push(normalizeHookPath(single, payload.cwd));
+  }
 
   const many = (input as Record<string, unknown>).file_paths;
   if (Array.isArray(many)) {
     for (const p of many) {
-      if (typeof p === 'string' && p.length > 0) out.push(p);
+      if (typeof p === 'string' && p.length > 0) {
+        out.push(normalizeHookPath(p, payload.cwd));
+      }
     }
   }
   // De-dupe while preserving order.
@@ -170,19 +197,23 @@ export function extractApplyPatchFiles(payload: HookPayload): string[] {
     if (typeof text !== 'string') continue;
     for (const m of text.matchAll(APPLY_PATCH_FILE_RE)) {
       const path = m[1]?.trim();
-      if (path) out.push(path);
+      // Real Codex envelopes carry absolute paths; normalize to repo-relative so
+      // the downstream snapshot resolves correctly (otherwise it silently fails).
+      if (path) out.push(normalizeHookPath(path, payload.cwd));
     }
   }
 
   const changes = obj.changes;
   if (changes && typeof changes === 'object' && !Array.isArray(changes)) {
     for (const path of Object.keys(changes)) {
-      if (path.length > 0) out.push(path);
+      if (path.length > 0) out.push(normalizeHookPath(path, payload.cwd));
     }
   }
 
   const single = obj.file_path;
-  if (typeof single === 'string' && single.length > 0) out.push(single);
+  if (typeof single === 'string' && single.length > 0) {
+    out.push(normalizeHookPath(single, payload.cwd));
+  }
 
   // De-dupe while preserving order.
   return [...new Set(out)];
