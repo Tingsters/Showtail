@@ -5,10 +5,8 @@
  * cell stand without a passed marker here — so "fully implemented" in the matrix
  * always means "proven by a test against the real contract".
  *
- * These are contract-level end-to-end checks (real CLI spawns with real hook
- * payloads, real plugin install/state calls, real imports). The hook-driven
- * capture cells are additionally certified by the LLM-driven live suite under
- * tests/live (Tier B); see capability-claims.test.ts for how the two combine.
+ * Integration ids are the matrix column ids (e.g. `copilot-vscode`); the real
+ * exercise uses that tool's Showtail plugin / canonical tool tag underneath.
  */
 import { beforeAll, describe, expect, test } from 'bun:test';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
@@ -25,32 +23,32 @@ import { getPluginById } from '../src/plugins/registry.ts';
 import { resolveTarget } from '../src/core/skill.ts';
 import { codexInstructionsState, resolveCodexTarget } from '../src/core/codex.ts';
 import { copilotState, resolveCopilotTarget } from '../src/core/copilot.ts';
-import {
-  geminiCliInstructionsState,
-  resolveGeminiCliTarget,
-} from '../src/core/geminiCli.ts';
 import { clearMarkers, markPassed } from './e2eRegistry.ts';
 
 const REPO = join(import.meta.dir, '..');
 const run = (cwd: string, args: string[], input?: string) => runCli(cwd, args, { input });
+
+/** Built connect integrations: matrix column id → its Showtail plugin id. */
+const CONNECT_TOOLS = [
+  { matrixId: 'claude-code', pluginId: 'claude-code' as const },
+  { matrixId: 'codex', pluginId: 'codex' as const },
+  { matrixId: 'copilot-vscode', pluginId: 'github-copilot' as const },
+];
 
 /** The project-scope instructions/skill file each connect plugin writes. */
 const CONNECT_FILE: Record<string, (dir: string) => string> = {
   'claude-code': (dir) => resolveTarget('project', dir).skillFile,
   'github-copilot': (dir) => resolveCopilotTarget(dir).pathInstructionsFile,
   codex: (dir) => resolveCodexTarget('project', dir).agentsFile,
-  'gemini-cli': (dir) => resolveGeminiCliTarget('project', dir).contextFile,
 };
 
-/** Installed-state reader (installed + updateAvailable) for update detection. */
+/** Installed-state reader (installed + updateAvailable) where update-detection is full. */
 const INSTALL_STATE: Record<
   string,
   (dir: string) => { installed: boolean; updateAvailable: boolean }
 > = {
   'github-copilot': (dir) => copilotState(resolveCopilotTarget(dir)),
   codex: (dir) => codexInstructionsState(resolveCodexTarget('project', dir)),
-  'gemini-cli': (dir) =>
-    geminiCliInstructionsState(resolveGeminiCliTarget('project', dir)),
 };
 
 beforeAll(() => clearMarkers());
@@ -126,13 +124,12 @@ describe('backing: automatic capture via hooks (Claude Code, Codex)', () => {
       markPassed('auto-file-capture:claude-code');
       markPassed('auto-ai-output-capture:claude-code');
 
-      // --- Codex: prompt + apply_patch edit capture (separate tool tag) ---
+      // --- Codex: prompt capture + apply_patch edit (file-capture is partial, not marked) ---
       run(
         dir,
         ['hook', 'user-prompt', '--tool', 'codex'],
         JSON.stringify({ cwd: dir, prompt: 'codex: tweak parser' }),
       );
-      // A fresh file so the snapshot isn't deduped against the Claude edit above.
       writeFileSync(join(dir, 'svc.ts'), 'export const svc = 1;');
       const codexEdit = run(
         dir,
@@ -154,7 +151,6 @@ describe('backing: automatic capture via hooks (Claude Code, Codex)', () => {
 
       markPassed('auto-prompt-capture:codex');
       markPassed('live-capture-hooks:codex');
-      markPassed('auto-file-capture:codex');
     } finally {
       cleanup(dir);
     }
@@ -213,16 +209,15 @@ describe('backing: session import / backfill', () => {
 });
 
 describe('backing: connect-capability surface (install / detect / status)', () => {
-  test('each connect plugin installs instructions, detects, and reports status', async () => {
-    for (const id of ['claude-code', 'github-copilot', 'codex', 'gemini-cli'] as const) {
+  test('each built connect tool installs instructions, detects, and reports status', async () => {
+    for (const { matrixId, pluginId } of CONNECT_TOOLS) {
       const dir = makeTempDir();
       try {
         await runInit({ cwd: dir });
-        const plugin = getPluginById(id)!;
-        const connect = plugin.connect!;
+        const connect = getPluginById(pluginId)!.connect!;
 
         // managed-instructions: a project-scope install writes the managed file.
-        const file = CONNECT_FILE[id]!(dir);
+        const file = CONNECT_FILE[pluginId]!(dir);
         expect(existsSync(file)).toBe(false);
         await connect.install({
           project: true,
@@ -230,31 +225,29 @@ describe('backing: connect-capability surface (install / detect / status)', () =
           extension: false,
           cwd: dir,
         });
-        expect(existsSync(file), `${id} should install ${file}`).toBe(true);
-        markPassed(`managed-instructions:${id}`);
+        expect(existsSync(file), `${matrixId} should install ${file}`).toBe(true);
+        markPassed(`managed-instructions:${matrixId}`);
 
-        // host-detection: detect() answers a boolean (wired into `setup`).
+        // host-detection + status-detection.
         expect(typeof connect.detect()).toBe('boolean');
-        markPassed(`host-detection:${id}`);
-
-        // status-detection: status() reports a connected flag.
+        markPassed(`host-detection:${matrixId}`);
         expect(typeof connect.status(dir).connected).toBe('boolean');
-        markPassed(`status-detection:${id}`);
+        markPassed(`status-detection:${matrixId}`);
 
-        // multi-scope-install: declares both user and project scopes.
-        if (id === 'claude-code' || id === 'codex' || id === 'gemini-cli') {
+        // multi-scope-install: full only for Claude Code + Codex.
+        if (matrixId === 'claude-code' || matrixId === 'codex') {
           expect(connect.scopes).toContain('user');
           expect(connect.scopes).toContain('project');
-          markPassed(`multi-scope-install:${id}`);
+          markPassed(`multi-scope-install:${matrixId}`);
         }
 
-        // update-detection: fingerprinted plugins report installed + updateAvailable.
-        const stateReader = INSTALL_STATE[id];
+        // update-detection: full for Codex + Copilot (fingerprinted instructions).
+        const stateReader = INSTALL_STATE[pluginId];
         if (stateReader) {
           const state = stateReader(dir);
           expect(state.installed).toBe(true);
           expect(typeof state.updateAvailable).toBe('boolean');
-          markPassed(`update-detection:${id}`);
+          markPassed(`update-detection:${matrixId}`);
         }
 
         await connect.uninstall({ cwd: dir });
@@ -272,24 +265,23 @@ describe('backing: redaction and the cross-tool timeline', () => {
       run(dir, ['init', '--project', 'Timeline']);
       run(dir, ['start']);
       const SECRET = 'AKIAIOSFODNN7EXAMPLE';
+      // matrix column id → the canonical tool tag events carry for it.
       const tools = [
-        'claude-code',
-        'github-copilot',
-        'codex',
-        'gemini-cli',
-        'chatgpt',
-        'google-gemini',
-        'cli',
+        { matrixId: 'claude-code', tag: 'claude-code' },
+        { matrixId: 'codex', tag: 'codex' },
+        { matrixId: 'copilot-vscode', tag: 'github-copilot' },
+        { matrixId: 'chatgpt', tag: 'chatgpt' },
+        { matrixId: 'google-gemini', tag: 'google-gemini' },
       ];
-      for (const t of tools) {
+      for (const { tag } of tools) {
         const r = run(dir, [
           'log',
           '--type',
           'prompt',
           '--tool',
-          t,
+          tag,
           '--text',
-          `via ${t}, token: ${SECRET}`,
+          `via ${tag}, token: ${SECRET}`,
         ]);
         expect(r.code).toBe(0);
       }
@@ -304,10 +296,10 @@ describe('backing: redaction and the cross-tool timeline', () => {
 
       // cross-tool timeline: every tool tag shows up in the report's tool list.
       const seen = new Set((data.tools as Array<{ tool: string }>).map((x) => x.tool));
-      for (const t of tools) {
-        expect(seen.has(t), `${t} should appear on the timeline`).toBe(true);
-        markPassed(`redaction:${t}`);
-        markPassed(`cross-tool-timeline:${t}`);
+      for (const { matrixId, tag } of tools) {
+        expect(seen.has(tag), `${tag} should appear on the timeline`).toBe(true);
+        markPassed(`redaction:${matrixId}`);
+        markPassed(`cross-tool-timeline:${matrixId}`);
       }
     } finally {
       cleanup(dir);
@@ -325,9 +317,9 @@ describe('backing: marketplace / extension install', () => {
     markPassed('marketplace-install:claude-code');
   });
 
-  test('Copilot ships VS Code extension install guidance', () => {
+  test('Copilot (VS Code) ships extension install guidance', () => {
     const guidance = getPluginById('github-copilot')!.connect!.setupGuidance ?? [];
     expect(guidance.join('\n')).toContain('--install-extension');
-    markPassed('marketplace-install:github-copilot');
+    markPassed('marketplace-install:copilot-vscode');
   });
 });

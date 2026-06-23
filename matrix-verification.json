@@ -6,45 +6,45 @@
       "integration": "claude-code",
       "testId": "auto-file-capture:claude-code",
       "tier": "live",
-      "verifiedAt": "2026-06-22T23:57:09.251Z",
+      "verifiedAt": "2026-06-23T02:52:33.884Z",
       "toolVersion": "2.1.186 (Claude Code)",
-      "commit": "74b181b"
+      "commit": "8af7eaf"
     },
     {
       "capability": "auto-prompt-capture",
       "integration": "claude-code",
       "testId": "auto-prompt-capture:claude-code",
       "tier": "live",
-      "verifiedAt": "2026-06-22T23:57:09.251Z",
+      "verifiedAt": "2026-06-23T02:52:33.884Z",
       "toolVersion": "2.1.186 (Claude Code)",
-      "commit": "74b181b"
+      "commit": "8af7eaf"
     },
     {
       "capability": "auto-prompt-capture",
       "integration": "codex",
       "testId": "auto-prompt-capture:codex",
       "tier": "live",
-      "verifiedAt": "2026-06-22T23:57:09.251Z",
+      "verifiedAt": "2026-06-23T02:52:33.884Z",
       "toolVersion": "codex-cli 0.141.0",
-      "commit": "74b181b"
+      "commit": "8af7eaf"
     },
     {
       "capability": "live-capture-hooks",
       "integration": "claude-code",
       "testId": "live-capture-hooks:claude-code",
       "tier": "live",
-      "verifiedAt": "2026-06-22T23:57:09.251Z",
+      "verifiedAt": "2026-06-23T02:52:33.884Z",
       "toolVersion": "2.1.186 (Claude Code)",
-      "commit": "74b181b"
+      "commit": "8af7eaf"
     },
     {
       "capability": "live-capture-hooks",
       "integration": "codex",
       "testId": "live-capture-hooks:codex",
       "tier": "live",
-      "verifiedAt": "2026-06-22T23:57:09.251Z",
+      "verifiedAt": "2026-06-23T02:52:33.884Z",
       "toolVersion": "codex-cli 0.141.0",
-      "commit": "74b181b"
+      "commit": "8af7eaf"
     }
   ]
 }
