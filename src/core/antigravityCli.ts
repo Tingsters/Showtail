@@ -4,12 +4,7 @@ import { join } from 'node:path';
 // Single source of truth: committed under assets/ AND embedded into the binary,
 // so `showtail connect antigravity-cli` is fully self-contained (no files to ship).
 import AGY_BODY from '../../assets/antigravity-cli/AGY.showtail.md' with { type: 'text' };
-import {
-  hasOurHooks,
-  mergeHookEvents,
-  unmergeHookEvents,
-  type HookEvents,
-} from './hookMerge.ts';
+import type { HookEvents } from './hookMerge.ts';
 import {
   applyManagedBlock,
   classify,
@@ -24,35 +19,26 @@ export { AGY_BODY };
 
 export type InstallScope = 'user' | 'project';
 
-// --- NON-COLLISION NOTES ----------------------------------------------------
-// ~/.gemini is SHARED with the (now-EOL) gemini-cli plugin, which manages
-// `~/.gemini/settings.json` (hooks map) and `GEMINI.md`. Codex manages
-// `AGENTS.md`. To avoid clobbering any of those, this plugin uses DEDICATED,
-// Antigravity-specific paths that the real `agy` CLI reads:
-//   * Instructions: a uniquely-named rules file `AGY.showtail.md`, written into
-//     the Antigravity-specific workspace `.agents/` dir (project) or the
-//     `~/.gemini/antigravity-cli/` config dir (user). We never touch GEMINI.md
-//     or AGENTS.md (owned by gemini-cli / codex respectively).
-//   * Hooks: a dedicated `hooks.json` — `<root>/.agents/hooks.json` for a
-//     workspace (the `.agents/` dir is Antigravity-only; the binary loads
-//     "named hooks from hooks.json file(s)") and `~/.gemini/antigravity-cli/
-//     hooks.json` globally (a distinct file from gemini-cli's settings.json).
-// Both hooks files use the `{ hooks: { <Event>: [...] } }` map shape so the
-// shared mergeHookEvents/unmergeHookEvents helpers apply unchanged.
+// --- HOOK FORMAT (verified live against the real `agy` 1.0.10) ---------------
+// Antigravity CLI reads JSON hooks from `hooks.json` files it auto-loads from:
+//   * workspace: `<root>/.agents/hooks.json`
+//   * global:    `~/.gemini/config/hooks.json`  (next to `mcp_config.json`)
+// The schema is NOT Claude's `{ hooks: { <Event>: [...] } }`. It is a map of
+// NAMED config blocks, each with an `enabled` flag and event-name keys:
+//   { "showtail": { "enabled": true, "<Event>": [ { matcher?, hooks:[{type,command}] } ] } }
+// Its lifecycle events differ too — there is NO `UserPromptSubmit`. We use:
+//   * SessionStart  → session-start
+//   * PreInvocation → user-prompt (fires before inference; carries the prompt)
+//   * PostToolUse   → post-edit   (matched to the file-writing tools)
+//   * Stop          → stop        (reconcile the transcript)
+// agy runs a hook's `command` through cmd.exe and execs the FIRST token, so the
+// command must be a BARE `showtail` on PATH (no quotes/paths) — quoted paths fail.
+// agy's PostToolUse payload is `{ toolCall:{name,args:{TargetFile,CodeContent,…}},
+// transcriptPath, conversationId, workspacePaths }` (parsed in the plugin adapter).
 
-/**
- * The canonical Antigravity CLI hook configuration, written into a dedicated
- * `hooks.json`. Antigravity's lifecycle events follow Claude Code's naming
- * (confirmed present in the `agy` binary: SessionStart, UserPromptSubmit,
- * PostToolUse, Stop), so the mapping is:
- *  - SessionStart    → session-start
- *  - UserPromptSubmit→ user-prompt (fires when the student submits a prompt)
- *  - PostToolUse     → post-edit   (matched to the file-writing tools)
- *  - Stop            → stop        (fires once per turn after the final response)
- * Antigravity edit tools use `file_path`-style payloads (write_file/replace/
- * edit), so the matcher targets those. Every command is tagged
- * `--tool antigravity-cli` so events are attributed correctly.
- */
+/** Top-level config-block name we own in agy's hooks.json. */
+export const ANTIGRAVITY_BLOCK_NAME = 'showtail';
+
 export const ANTIGRAVITY_CLI_HOOK_EVENTS: HookEvents = {
   SessionStart: [
     {
@@ -64,7 +50,7 @@ export const ANTIGRAVITY_CLI_HOOK_EVENTS: HookEvents = {
       ],
     },
   ],
-  UserPromptSubmit: [
+  PreInvocation: [
     {
       hooks: [
         { type: 'command', command: 'showtail hook user-prompt --tool antigravity-cli' },
@@ -73,7 +59,8 @@ export const ANTIGRAVITY_CLI_HOOK_EVENTS: HookEvents = {
   ],
   PostToolUse: [
     {
-      matcher: 'write_file|replace|edit',
+      matcher:
+        'write_to_file|replace_file_content|multi_replace_file_content|edit|create_file',
       hooks: [
         { type: 'command', command: 'showtail hook post-edit --tool antigravity-cli' },
       ],
@@ -86,19 +73,21 @@ export const ANTIGRAVITY_CLI_HOOK_EVENTS: HookEvents = {
   ],
 };
 
-/** The exact JSON text of an Antigravity `hooks.json` (for asset-sync tests). */
+/** The `showtail` block exactly as it appears inside agy's hooks.json. */
+export function antigravityCliBlock(): Record<string, unknown> {
+  return { enabled: true, ...ANTIGRAVITY_CLI_HOOK_EVENTS };
+}
+
+/** The exact JSON text of a fresh Antigravity `hooks.json` (for asset-sync tests). */
 export function antigravityCliHooksJson(): string {
-  return JSON.stringify({ hooks: ANTIGRAVITY_CLI_HOOK_EVENTS }, null, 2) + '\n';
+  return (
+    JSON.stringify({ [ANTIGRAVITY_BLOCK_NAME]: antigravityCliBlock() }, null, 2) + '\n'
+  );
 }
 
 export interface AntigravityCliTarget {
   scope: InstallScope;
-  /**
-   * The Antigravity config/workspace dir holding our hooks + instructions.
-   * user: ~/.gemini/antigravity-cli, project: <root>/.agents
-   */
-  configDir: string;
-  /** Dedicated hooks file Antigravity reads our lifecycle hooks from. */
+  /** The `hooks.json` agy auto-loads for this scope. */
   hooksFile: string;
   /** Dedicated, uniquely-named rules/instructions file (never GEMINI.md/AGENTS.md). */
   contextFile: string;
@@ -106,22 +95,26 @@ export interface AntigravityCliTarget {
 
 /**
  * Resolve where to install for the given scope.
- *  - user: ~/.gemini/antigravity-cli/{hooks.json,AGY.showtail.md}
- *  - project: <root>/.agents/{hooks.json,AGY.showtail.md}
+ *  - user:    hooks `~/.gemini/config/hooks.json`, rules `~/.gemini/antigravity-cli/AGY.showtail.md`
+ *  - project: hooks `<root>/.agents/hooks.json`,   rules `<root>/.agents/AGY.showtail.md`
  */
 export function resolveAntigravityCliTarget(
   scope: InstallScope,
   cwd: string = process.cwd(),
 ): AntigravityCliTarget {
-  const configDir =
-    scope === 'user'
-      ? join(homedir(), '.gemini', 'antigravity-cli')
-      : join(findRoot(cwd) ?? cwd, '.agents');
+  if (scope === 'user') {
+    const gemini = join(homedir(), '.gemini');
+    return {
+      scope,
+      hooksFile: join(gemini, 'config', 'hooks.json'),
+      contextFile: join(gemini, 'antigravity-cli', 'AGY.showtail.md'),
+    };
+  }
+  const agents = join(findRoot(cwd) ?? cwd, '.agents');
   return {
     scope,
-    configDir,
-    hooksFile: join(configDir, 'hooks.json'),
-    contextFile: join(configDir, 'AGY.showtail.md'),
+    hooksFile: join(agents, 'hooks.json'),
+    contextFile: join(agents, 'AGY.showtail.md'),
   };
 }
 
@@ -185,10 +178,10 @@ export function removeAntigravityCliInstructions(target: AntigravityCliTarget): 
   );
 }
 
-// --- Hooks (dedicated hooks.json) ------------------------------------------
+// --- Hooks (our named block inside agy's hooks.json) -----------------------
 
-/** Read a `hooks.json` as a settings-shaped object, or `{}` if absent. */
-function readHooksFile(hooksFile: string): Record<string, unknown> {
+/** Read agy's `hooks.json` (a map of named blocks), or `{}` if absent/invalid. */
+function readBlocks(hooksFile: string): Record<string, unknown> {
   if (!existsSync(hooksFile)) return {};
   try {
     return readJson<Record<string, unknown>>(hooksFile);
@@ -197,28 +190,36 @@ function readHooksFile(hooksFile: string): Record<string, unknown> {
   }
 }
 
-/** Install (or refresh) the Antigravity CLI hooks in the target's hooks.json. */
+/** Install (or refresh) our `showtail` block, preserving any other user blocks. */
 export function installAntigravityCliHooks(target: AntigravityCliTarget): string {
-  const merged = mergeHookEvents(
-    readHooksFile(target.hooksFile),
-    ANTIGRAVITY_CLI_HOOK_EVENTS,
-  );
-  writeJson(target.hooksFile, merged);
+  mkdirSync(dirOf(target.hooksFile), { recursive: true });
+  const blocks = readBlocks(target.hooksFile);
+  blocks[ANTIGRAVITY_BLOCK_NAME] = antigravityCliBlock();
+  writeJson(target.hooksFile, blocks);
   return target.hooksFile;
 }
 
-/** Remove the Antigravity CLI hooks from the target's hooks.json (if present). */
+/** Remove only our `showtail` block (deletes the file if nothing else remains). */
 export function uninstallAntigravityCliHooks(target: AntigravityCliTarget): boolean {
   if (!existsSync(target.hooksFile)) return false;
-  writeJson(target.hooksFile, unmergeHookEvents(readHooksFile(target.hooksFile)));
+  const blocks = readBlocks(target.hooksFile);
+  if (!(ANTIGRAVITY_BLOCK_NAME in blocks)) return false;
+  delete blocks[ANTIGRAVITY_BLOCK_NAME];
+  if (Object.keys(blocks).length === 0) {
+    rmSync(target.hooksFile, { force: true });
+  } else {
+    writeJson(target.hooksFile, blocks);
+  }
   return true;
 }
 
-/** Does this hooks.json contain our auto-capture hooks? */
+/** Does this hooks.json contain our `showtail` auto-capture block? */
 export function antigravityCliHooksInstalledAt(hooksFile: string): boolean {
   if (!existsSync(hooksFile)) return false;
   try {
-    return hasOurHooks(readJson<Record<string, unknown>>(hooksFile));
+    const blocks = readJson<Record<string, unknown>>(hooksFile);
+    const block = blocks[ANTIGRAVITY_BLOCK_NAME];
+    return Boolean(block && typeof block === 'object');
   } catch {
     return false;
   }

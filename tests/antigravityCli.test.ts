@@ -3,12 +3,13 @@ import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   AGY_BODY,
-  ANTIGRAVITY_CLI_HOOK_EVENTS,
   antigravityCliHooksInstalledAt,
   antigravityCliInstructionsState,
+  installAntigravityCliHooks,
   resolveAntigravityCliTarget,
+  uninstallAntigravityCliHooks,
 } from '../src/core/antigravityCli.ts';
-import { mergeHookEvents } from '../src/core/hookMerge.ts';
+import { writeJson } from '../src/core/storage.ts';
 import {
   runAntigravityCliInstall,
   runAntigravityCliUninstall,
@@ -28,10 +29,11 @@ describe('antigravity-cli install / uninstall', () => {
       expect(readFileSync(target.contextFile, 'utf8')).toContain('showtail:start');
       expect(antigravityCliHooksInstalledAt(target.hooksFile)).toBe(true);
 
-      // The four Antigravity lifecycle events are present.
+      // agy's real schema: a `showtail` named block with `enabled` + its real events.
       const settings = JSON.parse(readFileSync(target.hooksFile, 'utf8'));
-      for (const event of ['SessionStart', 'UserPromptSubmit', 'PostToolUse', 'Stop']) {
-        expect(Array.isArray(settings.hooks[event])).toBe(true);
+      expect(settings.showtail.enabled).toBe(true);
+      for (const event of ['SessionStart', 'PreInvocation', 'PostToolUse', 'Stop']) {
+        expect(Array.isArray(settings.showtail[event])).toBe(true);
       }
 
       await runAntigravityCliUninstall({ cwd: dir });
@@ -55,13 +57,9 @@ describe('antigravity-cli install / uninstall', () => {
       expect(context.match(/showtail:start/g)?.length).toBe(1);
 
       const settings = JSON.parse(readFileSync(target.hooksFile, 'utf8'));
-      const postEdit = settings.hooks.PostToolUse as Array<{
-        hooks: { command: string }[];
-      }>;
-      const ours = postEdit.filter((g) =>
-        g.hooks?.[0]?.command?.includes('showtail hook'),
-      );
-      expect(ours).toHaveLength(1);
+      // One `showtail` block, one PostToolUse handler — no duplication.
+      expect(Object.keys(settings).filter((k) => k === 'showtail')).toHaveLength(1);
+      expect(settings.showtail.PostToolUse).toHaveLength(1);
     } finally {
       cleanup(dir);
     }
@@ -114,14 +112,29 @@ describe('antigravity-cli install / uninstall', () => {
     }
   });
 
-  test('merging the hook events is idempotent', () => {
-    const once = mergeHookEvents({}, ANTIGRAVITY_CLI_HOOK_EVENTS);
-    const twice = mergeHookEvents(once, ANTIGRAVITY_CLI_HOOK_EVENTS);
-    const hooks = (twice.hooks as Record<string, unknown[]>).PostToolUse as Array<{
-      hooks: { command: string }[];
-    }>;
-    const ours = hooks.filter((g) => g.hooks?.[0]?.command?.includes('showtail hook'));
-    expect(ours).toHaveLength(1);
+  test('install/uninstall preserve a co-existing user hook block', () => {
+    const dir = makeTempDir();
+    try {
+      mkdirSync(join(dir, '.showtail'), { recursive: true });
+      const target = resolveAntigravityCliTarget('project', dir);
+      // A user already has their own block in hooks.json.
+      mkdirSync(join(dir, '.agents'), { recursive: true });
+      writeJson(target.hooksFile, {
+        'my-safety-gate': { enabled: true, PreToolUse: [] },
+      });
+
+      installAntigravityCliHooks(target);
+      let blocks = JSON.parse(readFileSync(target.hooksFile, 'utf8'));
+      expect(blocks['my-safety-gate']).toBeDefined(); // ours sits alongside theirs
+      expect(blocks.showtail).toBeDefined();
+
+      uninstallAntigravityCliHooks(target);
+      blocks = JSON.parse(readFileSync(target.hooksFile, 'utf8'));
+      expect(blocks.showtail).toBeUndefined(); // only ours removed
+      expect(blocks['my-safety-gate']).toBeDefined();
+    } finally {
+      cleanup(dir);
+    }
   });
 
   test('the instructions body is non-empty and mentions the tool', () => {

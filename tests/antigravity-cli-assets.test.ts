@@ -20,16 +20,25 @@ describe('antigravity-cli assets stay in sync with the single source of truth', 
     );
   });
 
-  test('hook config matches edit tools and tags every command --tool antigravity-cli', () => {
-    const json = antigravityCliHooksJson();
-    expect(json).toContain('"matcher": "write_file|replace|edit"');
-    // Every Showtail command must carry the antigravity-cli tool tag.
+  test('hook config uses agy’s real schema, events, and edit-tool matcher', () => {
+    const parsed = JSON.parse(antigravityCliHooksJson());
+    // agy reads a NAMED block with an `enabled` flag, not a `{ hooks: {...} }` wrapper.
+    expect(Object.keys(parsed)).toEqual(['showtail']);
+    expect(parsed.showtail.enabled).toBe(true);
+    // agy's real lifecycle events (NO UserPromptSubmit).
+    expect(Object.keys(ANTIGRAVITY_CLI_HOOK_EVENTS).sort()).toEqual(
+      ['PostToolUse', 'PreInvocation', 'SessionStart', 'Stop'].sort(),
+    );
+    expect(parsed.showtail.PostToolUse[0].matcher).toContain('write_to_file');
+
+    // Every Showtail command must be a BARE `showtail …` (no quotes/paths, since
+    // agy execs the first token via cmd.exe) and carry the tool tag.
     const commands = Object.values(ANTIGRAVITY_CLI_HOOK_EVENTS).flatMap((groups) =>
       groups.flatMap((g) => g.hooks.map((h) => h.command)),
     );
     expect(commands.length).toBe(4);
     for (const c of commands) {
-      expect(c).toContain('showtail hook');
+      expect(c).toMatch(/^showtail hook /);
       expect(c).toContain('--tool antigravity-cli');
     }
   });

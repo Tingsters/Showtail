@@ -21,32 +21,48 @@ import {
   resolveAntigravityCliTarget,
   writeAntigravityCliInstructions,
 } from '../core/antigravityCli.ts';
+import { existsSync, readFileSync } from 'node:fs';
 import {
   locateAntigravityCliTranscript,
+  parseAntigravityCliTranscript,
   readAntigravityCliTranscript,
 } from '../core/antigravityCliTranscript.ts';
 import { commandOnPath, homeDirExists } from '../core/detect.ts';
 import {
+  extractAgyEditedFiles,
+  extractAgyPrompt,
+  extractAgySessionId,
+  extractAgySuggestedCode,
+  extractAgyTranscriptPath,
   extractEditedFiles,
   extractPrompt,
   extractSessionId,
   extractSuggestedCode,
+  type AgyHookPayload,
   type HookPayload,
 } from '../core/hookInput.ts';
 import type { EnvironmentPlugin, HookTranscript } from './types.ts';
 
 /**
- * Locate this session's Antigravity transcript and normalize it for the generic
- * stop reconcile. Antigravity writes a JSONL transcript per conversation under
- * `~/.gemini/antigravity-cli/brain/<id>/.system_generated/logs/transcript.jsonl`;
- * the hook payload carries no transcript path, so we find it ourselves — by the
- * payload's session id (the conversation/brain dir name), else the newest brain.
- * Captures the student's prompts, the planner's replies, and (Antigravity's
- * signature) its generated PLANS / task lists. Returns null when none is on disk
- * or it can't be parsed, leaving Stop a no-op.
+ * Normalize this session's Antigravity transcript for the generic stop reconcile.
+ * agy hands every hook a `transcriptPath` (its session JSONL), so we read that
+ * directly; if it's absent we fall back to locating the conversation by the
+ * payload's `conversationId`, else the newest brain dir. Captures the student's
+ * prompts, the planner's replies, and (Antigravity's signature) its generated
+ * PLANS / task lists. Returns null when none is on disk or it can't be parsed,
+ * leaving Stop a no-op.
  */
 function antigravityCliGetTranscript(raw: unknown, root: string): HookTranscript | null {
-  const sid = extractSessionId(raw as HookPayload | null);
+  const p = raw as AgyHookPayload | null;
+  const sid = extractAgySessionId(p ?? {});
+  const tp = extractAgyTranscriptPath(p ?? {});
+  if (tp && existsSync(tp)) {
+    try {
+      return parseAntigravityCliTranscript(readFileSync(tp, 'utf8'), root, sid);
+    } catch {
+      /* fall through to disk discovery */
+    }
+  }
   const info = locateAntigravityCliTranscript(sid);
   if (!info) return null;
   try {
@@ -121,16 +137,18 @@ export const antigravityCliPlugin: EnvironmentPlugin = {
     },
 
     hooks: {
-      // Antigravity CLI's PostToolUse/UserPromptSubmit payloads use file_path-style
-      // edit tools (write_file/replace/edit), so the same field extractors as
-      // Claude apply. Best-effort: see the validation caveat if field names differ.
+      // agy's PostToolUse payload is `{ toolCall:{name,args:{TargetFile,
+      // CodeContent}}, conversationId, transcriptPath, workspacePaths }` (verified
+      // live). Read those agy-specific fields, falling back to the Claude-shaped
+      // extractors so a future/different payload still degrades gracefully.
       parse(raw) {
-        const p = raw as HookPayload;
+        const p = raw as AgyHookPayload & HookPayload;
+        const edited = extractAgyEditedFiles(p);
         return {
-          nativeSessionId: extractSessionId(p),
-          prompt: extractPrompt(p) ?? undefined,
-          editedFiles: extractEditedFiles(p),
-          suggestedDiff: extractSuggestedCode(p),
+          nativeSessionId: extractAgySessionId(p) ?? extractSessionId(p),
+          prompt: extractAgyPrompt(p) ?? extractPrompt(p) ?? undefined,
+          editedFiles: edited.length > 0 ? edited : extractEditedFiles(p),
+          suggestedDiff: extractAgySuggestedCode(p) ?? extractSuggestedCode(p),
         };
       },
       // Antigravity's own dirs: ~/.gemini (shared config/transcripts) and the

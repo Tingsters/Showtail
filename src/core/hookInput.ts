@@ -218,3 +218,82 @@ export function extractApplyPatchFiles(payload: HookPayload): string[] {
   // De-dupe while preserving order.
   return [...new Set(out)];
 }
+
+// --- Antigravity CLI (`agy`) payloads --------------------------------------
+// agy sends a different shape than Claude/Codex (verified live against agy
+// 1.0.10): `{ toolCall: { name, args }, transcriptPath, conversationId,
+// workspacePaths: [root] }`. Its edit tools (write_to_file / replace_file_content
+// / …) carry the file under `args.TargetFile` and the new code under
+// `args.CodeContent`; paths are absolute, normalized against `workspacePaths[0]`.
+
+/** The subset of an Antigravity CLI hook payload Showtail reads. */
+export interface AgyHookPayload {
+  conversationId?: string;
+  transcriptPath?: string;
+  workspacePaths?: unknown;
+  toolCall?: { name?: unknown; args?: Record<string, unknown> };
+  // PreInvocation may surface the prompt under one of these (best-effort).
+  prompt?: unknown;
+  userMessage?: unknown;
+  message?: unknown;
+  userInput?: unknown;
+}
+
+const AGY_FILE_KEYS = ['TargetFile', 'FilePath', 'file_path', 'path', 'Path'] as const;
+const AGY_CODE_KEYS = [
+  'CodeContent',
+  'ReplacementContent',
+  'NewContent',
+  'content',
+] as const;
+
+function agyWorkspaceRoot(p: AgyHookPayload): string | undefined {
+  const ws = p.workspacePaths;
+  if (Array.isArray(ws) && typeof ws[0] === 'string') return ws[0];
+  return undefined;
+}
+
+/** File(s) an agy edit tool touched, repo-relative (from `toolCall.args.TargetFile`). */
+export function extractAgyEditedFiles(p: AgyHookPayload): string[] {
+  const args = p.toolCall?.args;
+  if (!args || typeof args !== 'object') return [];
+  const root = agyWorkspaceRoot(p);
+  const out: string[] = [];
+  for (const k of AGY_FILE_KEYS) {
+    const v = args[k];
+    if (typeof v === 'string' && v.length > 0) out.push(normalizeHookPath(v, root));
+  }
+  return [...new Set(out)];
+}
+
+/** AI-suggested code for an agy edit (from `toolCall.args.CodeContent`). */
+export function extractAgySuggestedCode(p: AgyHookPayload): string | undefined {
+  const args = p.toolCall?.args;
+  if (!args || typeof args !== 'object') return undefined;
+  for (const k of AGY_CODE_KEYS) {
+    const v = args[k];
+    if (typeof v === 'string' && v.length > 0) return simpleDiff(undefined, v);
+  }
+  return undefined;
+}
+
+/** The submitted prompt from an agy PreInvocation payload, best-effort. */
+export function extractAgyPrompt(p: AgyHookPayload): string | undefined {
+  for (const k of ['prompt', 'userMessage', 'message', 'userInput'] as const) {
+    const v = p[k];
+    if (typeof v === 'string' && v.trim().length > 0) return v.trim();
+  }
+  return undefined;
+}
+
+/** agy's session id (the conversation / brain dir name). */
+export function extractAgySessionId(p: AgyHookPayload): string | undefined {
+  const id = p.conversationId;
+  return typeof id === 'string' && id.length > 0 ? id : undefined;
+}
+
+/** The transcript path agy hands every hook (points at its session JSONL). */
+export function extractAgyTranscriptPath(p: AgyHookPayload): string | undefined {
+  const t = p.transcriptPath;
+  return typeof t === 'string' && t.length > 0 ? t : undefined;
+}

@@ -3,6 +3,15 @@
   "entries": [
     {
       "capability": "auto-file-capture",
+      "integration": "antigravity-cli",
+      "testId": "auto-file-capture:antigravity-cli",
+      "tier": "live",
+      "verifiedAt": "2026-06-23T05:22:20.637Z",
+      "toolVersion": "1.0.10",
+      "commit": "2ee984f"
+    },
+    {
+      "capability": "auto-file-capture",
       "integration": "claude-code",
       "testId": "auto-file-capture:claude-code",
       "tier": "live",
@@ -27,6 +36,15 @@
       "verifiedAt": "2026-06-23T03:46:11.899Z",
       "toolVersion": "codex-cli 0.141.0",
       "commit": "e7d08ff"
+    },
+    {
+      "capability": "live-capture-hooks",
+      "integration": "antigravity-cli",
+      "testId": "live-capture-hooks:antigravity-cli",
+      "tier": "live",
+      "verifiedAt": "2026-06-23T05:22:20.637Z",
+      "toolVersion": "1.0.10",
+      "commit": "2ee984f"
     },
     {
       "capability": "live-capture-hooks",

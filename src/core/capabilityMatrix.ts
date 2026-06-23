@@ -193,7 +193,7 @@ export const CAPABILITIES: Capability[] = [
     id: 'live-capture-hooks',
     label: 'Live-capture hooks',
     description: 'Automatic capture wired into the tool’s lifecycle hooks.',
-    note: 'CLI plugins are built + contract-tested; live capture is certified only where the tool could be driven here (Copilot CLI needs a token; Antigravity hooks didn’t fire headlessly). Copilot (VS Code) uses its extension; Zed has no hooks.',
+    note: 'Live-certified for Claude Code, Codex, and Antigravity CLI. Copilot CLI needs a token to drive headlessly; Copilot (VS Code) uses its extension; Zed has no hooks.',
     requires: hasHooks,
     surfaceRule: needHooks,
     overrides: {
@@ -202,9 +202,7 @@ export const CAPABILITIES: Capability[] = [
       'copilot-cli': partial(
         'Hooks wired + contract-tested; live capture needs a GitHub token to drive Copilot CLI headlessly (not certified here).',
       ),
-      'antigravity-cli': partial(
-        'Hooks wired + contract-tested; the agy hooks did not fire in a headless run, so live capture is not yet certified.',
-      ),
+      'antigravity-cli': full(),
       'copilot-vscode': partial(
         'Captured by the VS Code extension on save, not via lifecycle hooks.',
       ),
@@ -224,7 +222,7 @@ export const CAPABILITIES: Capability[] = [
         'Hooks wired + contract-tested; live capture not certified (Copilot CLI needs a token here).',
       ),
       'antigravity-cli': partial(
-        'Hooks wired + contract-tested; agy hooks didn’t fire headlessly, so not certified here.',
+        'agy fires its prompt hook (PreInvocation) in interactive sessions; headless `agy -p` only fires PostToolUse, so prompt capture isn’t certified here.',
       ),
       'copilot-vscode': partial('Model-driven via instructions — not guaranteed.'),
     },
@@ -233,7 +231,7 @@ export const CAPABILITIES: Capability[] = [
     id: 'auto-file-capture',
     label: 'Auto file/edit capture',
     description: 'Files the tool edits are snapshotted as artifacts automatically.',
-    note: 'Codex live apply_patch capture isn’t snapshotted in headless runs here; the CLI plugins are contract-tested but not live-certified. Copilot (VS Code) snapshots on save with no AI diff.',
+    note: 'Live-certified for Claude Code + Antigravity CLI. Codex live apply_patch isn’t snapshotted headlessly; Copilot CLI needs a token; Copilot (VS Code) snapshots on save with no AI diff.',
     requires: hasHooks,
     surfaceRule: needHooks,
     overrides: {
@@ -244,9 +242,7 @@ export const CAPABILITIES: Capability[] = [
       'copilot-cli': partial(
         'Hooks wired + contract-tested; live capture not certified (Copilot CLI needs a token here).',
       ),
-      'antigravity-cli': partial(
-        'Hooks wired + contract-tested; agy hooks didn’t fire headlessly, so not certified here.',
-      ),
+      'antigravity-cli': full(),
       'copilot-vscode': partial(
         'The extension snapshots on save; no AI-suggested diff and non-VS-Code edits are missed.',
       ),
