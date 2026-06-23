@@ -173,11 +173,18 @@ export function resolveDecisionAnswers(
   });
 }
 
-/** Render a decision as readable Markdown: the question, every option, the choice. */
-export function renderDecisionText(questions: DecisionQuestion[]): string {
+/**
+ * Render a decision as readable Markdown: the question, every option, the choice.
+ * `asker` names the AI that paused to ask (defaults to Claude; Codex passes its
+ * own name) so the rendered text reads `**<asker> asked:** …`.
+ */
+export function renderDecisionText(
+  questions: DecisionQuestion[],
+  asker = 'Claude',
+): string {
   const blocks: string[] = [];
   for (const q of questions) {
-    const lines: string[] = [`**Claude asked:** ${q.question}`, ''];
+    const lines: string[] = [`**${asker} asked:** ${q.question}`, ''];
     for (const o of q.options) {
       lines.push(o.chosen ? `- **${o.label}** ✅ _(your choice)_` : `- ${o.label}`);
     }

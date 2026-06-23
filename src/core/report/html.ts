@@ -4,7 +4,7 @@ import type { ReportData, Turn } from '../../types.ts';
 import { escapeHtml, firstLine } from '../html.ts';
 import { highlightCode } from '../highlight.ts';
 import { nameBySlugMap, shouldShowAuthor, toolLabel, turnTimeline } from './data.ts';
-import { PLAN_APPROVED_TAG, splitPlanText } from '../plans.ts';
+import { PLAN_APPROVED_TAG, PLAN_REVISED_TAG, splitPlanText } from '../plans.ts';
 import { buildMarkdown, fileHref, TURNS_PLACEHOLDER } from './markdown.ts';
 import { markdownToHtml, renderRichText } from './mdToHtml.ts';
 import { TIME_TOKEN, timeTag } from './time.ts';
@@ -104,18 +104,22 @@ function renderTimelineItem(item: ReturnType<typeof turnTimeline>[number]): stri
   if (item.kind === 'plan') {
     // A plan the AI proposed — collapsible (plans are long), with its approval
     // status (and, when sent back, the revision feedback) on the summary so both
-    // read before expanding. The body holds just the plan.
+    // read before expanding. The body holds just the plan. A plan from a tool with
+    // no approval flow (Codex) carries neither tag and shows no badge.
     const approved = item.event.tags?.includes(PLAN_APPROVED_TAG);
+    const revised = item.event.tags?.includes(PLAN_REVISED_TAG);
     const { feedback, plan } = splitPlanText(item.event.text);
     const badge = approved
-      ? '<span class="plan-badge approved">✅ Approved</span>'
-      : '<span class="plan-badge revised">↩ Revised</span>';
+      ? ' <span class="plan-badge approved">✅ Approved</span>'
+      : revised
+        ? ' <span class="plan-badge revised">↩ Revised</span>'
+        : '';
     const fb = feedback
       ? ` <span class="plan-feedback">“${escapeHtml(feedback)}”</span>`
       : '';
     return [
       '<details class="plan">',
-      `<summary><span class="role-tag plan-tag">📋 Plan</span> ${badge}${fb}</summary>`,
+      `<summary><span class="role-tag plan-tag">📋 Plan</span>${badge}${fb}</summary>`,
       `<div class="ai-text">${renderRichText(plan)}</div>`,
       '</details>',
     ].join('\n');

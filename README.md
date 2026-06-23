@@ -387,13 +387,16 @@ showtail connect codex --project --no-hooks
 What this gives you:
 
 - **Instructions in `AGENTS.md`.** Showtail adds a fingerprinted, managed block that keeps the trail tidy. Your own text in `AGENTS.md` is never touched.
-- **Codex-tagged events.** Your prompts and edits are captured with the `codex` tag.
+- **Codex-tagged events.** Your prompts, edits (with diffs), replies, decisions, and plans are captured with the `codex` tag — the same as Claude Code.
 - **Auto-capture hooks**, enabled by default unless you pass `--no-hooks`.
 
 | When | Showtail does this |
 | ---- | ------------------ |
 | You submit a prompt | Logs it as a `prompt` event |
-| Codex edits a file with `apply_patch` | Snapshots that file as an `artifact` |
+| Codex edits a file with `apply_patch` | Snapshots that file as an `artifact`, with the patch as its diff |
+| Codex replies | Logs the reply as an `ai_output` event |
+| Codex asks you to choose (`request_user_input`) | Logs your pick as a `decision` event |
+| Codex builds a plan (`update_plan`) | Logs it as a `plan` event (a to-do checklist; no approval badge) |
 | A session starts | Ensures a work session exists |
 
 ### Enabling Codex hooks

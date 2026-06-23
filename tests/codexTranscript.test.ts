@@ -155,9 +155,11 @@ describe('parseCodexTranscript', () => {
       expect(blob).not.toContain('AGENTS.md');
       expect(blob).not.toContain('config.toml');
 
-      // The edit's absolute envelope path is normalized to a repo-relative file.
+      // The edit's absolute envelope path is normalized to a repo-relative file,
+      // and the apply_patch envelope is captured as the edit's diff.
       const edit = parsed.messages.find((m) => m.role === 'edit')!;
       expect(edit.files).toEqual(['notes.txt']);
+      expect(edit.diff).toContain('+banana-codex');
 
       // The plan renders the steps as a status checklist, keyed by call_id.
       const plan = parsed.messages.find((m) => m.role === 'plan')!;
@@ -183,12 +185,114 @@ describe('parseCodexTranscript', () => {
       expect(t.messages[0]!.text).toContain('banana-codex');
       const plan = t.messages.find((m) => m.role === 'plan')!;
       expect(plan.text).toContain('Read notes.txt');
-      // Codex plans are headless — always marked approved for the reconcile.
-      expect(plan.approved).toBe(true);
+      // Codex plans are headless — never approved/revised, so they carry no
+      // approval flag and the reconcile tags them with no badge.
+      expect(plan.approved).toBeUndefined();
       expect(t.messages[t.messages.length - 1]!.text).toBe('Done.');
     } finally {
       cleanup(dir);
     }
+  });
+});
+
+describe('parseCodexTranscript plans (item_completed/Plan)', () => {
+  test('captures a completed Plan item as a plan message', () => {
+    const lines: unknown[] = [
+      { type: 'session_meta', payload: { id: 'sess-plan2', cwd: 'x' } },
+      {
+        timestamp: '2026-06-22T10:00:00.000Z',
+        type: 'event_msg',
+        payload: { type: 'user_message', message: 'make a plan' },
+      },
+      {
+        timestamp: '2026-06-22T10:00:01.000Z',
+        type: 'event_msg',
+        payload: {
+          type: 'item_completed',
+          item: {
+            type: 'Plan',
+            id: 'sess-plan2-plan',
+            text: '# Apples Plan\n\n## Summary\nUse apples.',
+          },
+        },
+      },
+    ];
+    const content = lines.map((l) => JSON.stringify(l)).join('\n') + '\n';
+    const parsed = parseCodexTranscript(content, 'x');
+    const plan = parsed.messages.find((m) => m.role === 'plan')!;
+    expect(plan).toBeDefined();
+    expect(plan.sourceId).toBe('codex:plan:sess-plan2-plan');
+    expect(plan.text).toContain('# Apples Plan');
+  });
+});
+
+describe('parseCodexTranscript decisions (request_user_input)', () => {
+  /** A rollout with one `request_user_input` and a matching answered output. */
+  function decisionRollout(answeredOutput: string): string {
+    const lines: unknown[] = [
+      { type: 'session_meta', payload: { id: 'sess-dec', cwd: 'x' } },
+      {
+        timestamp: '2026-06-22T10:00:00.000Z',
+        type: 'event_msg',
+        payload: { type: 'user_message', message: 'apples or bananas?' },
+      },
+      {
+        timestamp: '2026-06-22T10:00:01.000Z',
+        type: 'response_item',
+        payload: {
+          type: 'function_call',
+          name: 'request_user_input',
+          call_id: 'call_dec1',
+          arguments: JSON.stringify({
+            questions: [
+              {
+                id: 'fruit',
+                header: 'Fruit',
+                question: 'Are apples or bananas better?',
+                options: [
+                  { label: 'Apples', description: 'Pick apples.' },
+                  { label: 'Bananas', description: 'Pick bananas.' },
+                ],
+              },
+            ],
+          }),
+        },
+      },
+      {
+        timestamp: '2026-06-22T10:00:02.000Z',
+        type: 'response_item',
+        payload: {
+          type: 'function_call_output',
+          call_id: 'call_dec1',
+          output: answeredOutput,
+        },
+      },
+    ];
+    return lines.map((l) => JSON.stringify(l)).join('\n') + '\n';
+  }
+
+  test('captures an answered decision with the chosen option marked', () => {
+    const content = decisionRollout(
+      JSON.stringify({ answers: { fruit: { answers: ['Apples'] } } }),
+    );
+    const parsed = parseCodexTranscript(content, 'x');
+    const decision = parsed.messages.find((m) => m.role === 'decision')!;
+    expect(decision).toBeDefined();
+    expect(decision.sourceId).toBe('codex:decision:call_dec1');
+    expect(decision.timestamp).toBe('2026-06-22T10:00:01.000Z');
+    expect(decision.text).toContain('**Codex asked:** Are apples or bananas better?');
+    expect(decision.text).toContain('**Apples** ✅ _(your choice)_');
+    expect(decision.text).toContain('- Bananas');
+  });
+
+  test('an unavailable picker still records the question, with no selection', () => {
+    const content = decisionRollout('request_user_input is unavailable in Default mode');
+    const parsed = parseCodexTranscript(content, 'x');
+    const decision = parsed.messages.find((m) => m.role === 'decision')!;
+    expect(decision).toBeDefined();
+    expect(decision.text).toContain('Are apples or bananas better?');
+    expect(decision.text).toContain('_(no option selected)_');
+    expect(decision.text).not.toContain('✅');
   });
 });
 
@@ -278,7 +382,7 @@ describe('codex getTranscript (stop reconcile)', () => {
     }
   });
 
-  test('reconciles an update_plan into an approved plan event', () => {
+  test('reconciles an update_plan into a plan event with no approval badge', () => {
     const dir = makeTempDir();
     const codexHome = makeTempDir();
     const prev = process.env.CODEX_HOME;
@@ -334,7 +438,9 @@ describe('codex getTranscript (stop reconcile)', () => {
       const plans = readAllEvents(paths).filter((e) => e.type === 'plan');
       expect(plans.length).toBe(1);
       expect(plans[0]!.tool).toBe('codex');
-      expect(plans[0]!.tags).toContain('plan-approved');
+      // Codex plans carry no approval/revision tag — they render with no badge.
+      expect(plans[0]!.tags ?? []).not.toContain('plan-approved');
+      expect(plans[0]!.tags ?? []).not.toContain('plan-revised');
       expect(plans[0]!.text).toContain('Pick a language');
       expect(plans[0]!.text).toContain('Write the script');
     } finally {

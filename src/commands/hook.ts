@@ -412,9 +412,17 @@ async function reconcileTranscript(
       });
       seen.add(msg.sourceId);
     } else if (msg.role === 'plan') {
-      // A plan the AI proposed (and the student approved/revised) — captured
-      // regardless of AI-output capture, with its approval status as a tag.
+      // A plan the AI proposed — captured regardless of AI-output capture. When
+      // the tool resolves approval (Claude: approved/revised), that becomes a tag;
+      // a tool with no approval concept (Codex, headless) leaves `approved`
+      // undefined and the plan carries no badge.
       if (!currentTurn || seen.has(msg.sourceId)) continue;
+      const planTags =
+        msg.approved === true
+          ? [PLAN_APPROVED_TAG]
+          : msg.approved === false
+            ? [PLAN_REVISED_TAG]
+            : [];
       await logEvent(author, {
         type: 'plan',
         text: msg.text,
@@ -423,7 +431,7 @@ async function reconcileTranscript(
         turnId: currentTurn,
         sourceId: msg.sourceId,
         sessionId,
-        tags: [msg.approved ? PLAN_APPROVED_TAG : PLAN_REVISED_TAG],
+        tags: planTags,
       });
       seen.add(msg.sourceId);
     }

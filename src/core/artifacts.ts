@@ -181,6 +181,82 @@ export function artifactsForPath(author: AuthorPaths, repoPath: string): Artifac
   return readArtifacts(author).filter((a) => a.path === repoPath);
 }
 
+/** Options for back-filling a historical edit's diff as an artifact (see {@link importEditArtifact}). */
+export interface ImportEditArtifactInput {
+  /** Repo-relative display path of the edited file. */
+  path: string;
+  /** The AI-suggested diff/patch body that produced the edit. */
+  diff: string;
+  tool?: Tool;
+  turnId?: string;
+  /** Original edit time, so the snapshot back-dates into the trail. */
+  timestamp?: string;
+  sessionId?: string;
+  /** Stable id so re-imports dedupe (see {@link importedArtifactSourceIds}). */
+  sourceId?: string;
+  /** Groups this with its import run so `import undo` removes it with the batch. */
+  batchId?: string;
+}
+
+/**
+ * Source ids of every artifact already imported into this author's trail, for
+ * idempotent re-import. (Events dedupe via {@link importedSourceIds}; artifacts
+ * keep their own id on the journal entry, so they need their own scan.)
+ */
+export function importedArtifactSourceIds(author: AuthorPaths): Set<string> {
+  const ids = new Set<string>();
+  for (const e of readJournal(author)) {
+    if (e.kind === 'artifact' && e.sourceId) ids.add(e.sourceId);
+  }
+  return ids;
+}
+
+/**
+ * Record a *historical* edit (from an imported session) as a back-dated artifact
+ * carrying its captured diff, so it renders as an expandable code change just like
+ * a live snapshot. Unlike {@link addArtifact} this takes no file hash — a past
+ * file's content can't be recovered — and never reads disk, so it works for
+ * sessions whose files have since changed. The diff is scrubbed and capped the
+ * same way live capture does. Returns false (no entry written) when capture is
+ * off or the diff is empty.
+ */
+export function importEditArtifact(
+  author: AuthorPaths,
+  input: ImportEditArtifactInput,
+): boolean {
+  const paths = author.shared;
+  const config = readConfig(paths);
+  if (config.settings.captureCode === false || !input.diff) return false;
+
+  let diff = input.diff;
+  if (Buffer.byteLength(diff) > MAX_DIFF_BYTES) {
+    diff = diff.slice(0, MAX_DIFF_BYTES) + '\n… (diff truncated)';
+  }
+  const { text: cleaned, hits } = redact(diff, config.settings.redact);
+
+  const entry: JournalEntry = {
+    v: JOURNAL_ENTRY_VERSION,
+    kind: 'artifact',
+    id: makeId('art'),
+    ts: input.timestamp ?? new Date().toISOString(),
+    type: 'artifact',
+    conv: input.sessionId,
+    actorSlug: author.slug,
+    path: input.path,
+    // No sha256: imported edits aren't a live snapshot of the file on disk.
+    diffHash: writeObject(paths, cleaned),
+    diffLines: countDiffLines(cleaned),
+  };
+  if (input.tool) entry.tool = input.tool;
+  if (input.turnId) entry.turn = input.turnId;
+  if (input.sourceId) entry.sourceId = input.sourceId;
+  if (input.batchId) entry.batch = input.batchId;
+  if (hits > 0) entry.redacted = hits;
+
+  appendJournal(author, entry);
+  return true;
+}
+
 /**
  * Check recorded artifacts against the files currently on disk, across every
  * author. For each path, the *latest* recorded hash (project-wide) is compared
@@ -196,9 +272,12 @@ export interface HashCheck {
 export async function checkArtifactHashes(paths: ShowtailPaths): Promise<HashCheck[]> {
   const artifacts = readAllArtifacts(paths);
 
-  // Keep only the most recent record per path.
+  // Keep only the most recent record per path. Skip imported edits (no recorded
+  // hash) — there's nothing to verify against, and they'd otherwise shadow a real
+  // snapshot and report a spurious change.
   const latest = new Map<string, Artifact>();
   for (const a of artifacts) {
+    if (!a.sha256) continue;
     const prev = latest.get(a.path);
     if (!prev || a.timestamp >= prev.timestamp) latest.set(a.path, a);
   }

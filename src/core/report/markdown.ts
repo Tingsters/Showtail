@@ -1,5 +1,5 @@
 import type { ReportData, Turn } from '../../types.ts';
-import { PLAN_APPROVED_TAG } from '../plans.ts';
+import { PLAN_APPROVED_TAG, PLAN_REVISED_TAG } from '../plans.ts';
 import { nameBySlugMap, shouldShowAuthor, toolLabel, turnTimeline } from './data.ts';
 import { staticUtc, timeToken } from './time.ts';
 
@@ -152,11 +152,15 @@ function turnMarkdown(lines: string[], turn: Turn, author?: string): void {
       lines.push('_AI response:_', '');
       lines.push(item.event.text, '');
     } else if (item.kind === 'decision') {
-      lines.push('🔀 **Decision** · _you chose from the options Claude offered_', '');
+      lines.push('🔀 **Decision** · _you chose from the options the AI offered_', '');
       lines.push(item.event.text, '');
     } else if (item.kind === 'plan') {
+      // Approval status when the tool resolves one (Claude); a tool with no
+      // approval flow (Codex) shows the plan with no status suffix.
       const approved = item.event.tags?.includes(PLAN_APPROVED_TAG);
-      lines.push(`📋 **Plan** · _${approved ? 'approved' : 'revised'}_`, '');
+      const revised = item.event.tags?.includes(PLAN_REVISED_TAG);
+      const status = approved ? ' · _approved_' : revised ? ' · _revised_' : '';
+      lines.push(`📋 **Plan**${status}`, '');
       lines.push(item.event.text, '');
     } else {
       const code = item.change;
