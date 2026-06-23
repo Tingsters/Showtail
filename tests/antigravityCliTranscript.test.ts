@@ -60,7 +60,14 @@ function makeTranscript(): string {
       created_at: '2026-06-23T03:42:53Z',
       tool_calls: [{ name: 'view_file', args: { path: 'client.ts' } }],
     },
-    { step_index: 4, source: 'MODEL', type: 'VIEW_FILE', status: 'DONE', created_at: '2026-06-23T03:42:53Z', content: 'noise' },
+    {
+      step_index: 4,
+      source: 'MODEL',
+      type: 'VIEW_FILE',
+      status: 'DONE',
+      created_at: '2026-06-23T03:42:53Z',
+      content: 'noise',
+    },
     // A dedicated PLAN-type line (an alternate plan representation) — kept.
     {
       step_index: 5,
@@ -79,7 +86,14 @@ function makeTranscript(): string {
       created_at: '2026-06-23T03:42:55Z',
       content: 'The following changes were made by replace_file_content to client.ts',
     },
-    { step_index: 7, source: 'MODEL', type: 'RUN_COMMAND', status: 'DONE', created_at: '2026-06-23T03:42:56Z', content: 'bun test' },
+    {
+      step_index: 7,
+      source: 'MODEL',
+      type: 'RUN_COMMAND',
+      status: 'DONE',
+      created_at: '2026-06-23T03:42:56Z',
+      content: 'bun test',
+    },
     // The final assistant text reply.
     {
       step_index: 8,
@@ -98,12 +112,7 @@ function seedTranscript(geminiHome: string, sessionId: string, content: string):
   const prev = process.env.GEMINI_HOME;
   process.env.GEMINI_HOME = geminiHome;
   try {
-    const dir = join(
-      antigravityCliBrainDir(),
-      sessionId,
-      '.system_generated',
-      'logs',
-    );
+    const dir = join(antigravityCliBrainDir(), sessionId, '.system_generated', 'logs');
     mkdirSync(dir, { recursive: true });
     const path = join(dir, 'transcript.jsonl');
     writeFileSync(path, content);
@@ -251,27 +260,22 @@ describe('antigravity-cli getTranscript (stop reconcile)', () => {
       runCli(dir, ['init', '--project', 'Antigravity Stop'], { env });
       // Log the prompt live so the Stop reconcile has an in-window turn to attach
       // the plan and reply to (mirrors how the user-prompt hook would fire).
-      runCli(
-        dir,
-        ['hook', 'user-prompt', '--tool', 'antigravity-cli'],
-        {
-          env,
-          input: JSON.stringify({
-            cwd: dir,
-            session_id: sid,
-            prompt: 'Build a retry helper for fetch.',
-          }),
-        },
-      );
+      runCli(dir, ['hook', 'user-prompt', '--tool', 'antigravity-cli'], {
+        env,
+        input: JSON.stringify({
+          cwd: dir,
+          session_id: sid,
+          prompt: 'Build a retry helper for fetch.',
+        }),
+      });
 
       // Seed the transcript where `agy` writes it (under GEMINI_HOME's brain dir).
       seedTranscript(geminiHome, sid, makeTranscript());
 
-      const stop = runCli(
-        dir,
-        ['hook', 'stop', '--tool', 'antigravity-cli'],
-        { env, input: JSON.stringify({ cwd: dir, session_id: sid }) },
-      );
+      const stop = runCli(dir, ['hook', 'stop', '--tool', 'antigravity-cli'], {
+        env,
+        input: JSON.stringify({ cwd: dir, session_id: sid }),
+      });
       expect(stop.code).toBe(0);
 
       runCli(dir, ['report', '--format', 'json'], { env });

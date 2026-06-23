@@ -85,7 +85,11 @@ function makeEvents(dir: string, sessionId: string): string {
       data: {
         toolCallId: 'call_edit',
         toolName: 'str_replace',
-        arguments: { path: join(dir, 'notes.txt'), old_str: 'old', new_str: 'banana-copilot' },
+        arguments: {
+          path: join(dir, 'notes.txt'),
+          old_str: 'old',
+          new_str: 'banana-copilot',
+        },
       },
       id: 'evt-5',
       timestamp: '2026-06-22T19:23:01.000Z',
@@ -116,7 +120,12 @@ function makeEvents(dir: string, sessionId: string): string {
       timestamp: '2026-06-22T19:23:02.000Z',
       parentId: 'evt-3',
     },
-    { type: 'session.shutdown', data: {}, id: 'evt-8', timestamp: '2026-06-22T19:23:03.000Z' },
+    {
+      type: 'session.shutdown',
+      data: {},
+      id: 'evt-8',
+      timestamp: '2026-06-22T19:23:03.000Z',
+    },
   ];
   return lines.map((l) => JSON.stringify(l)).join('\n') + '\n';
 }

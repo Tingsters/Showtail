@@ -337,7 +337,8 @@ function renderCodexPlan(args: string | undefined): string | undefined {
     const step = asString(prop(item, 'step'))?.trim();
     if (!step) continue;
     const status = asString(prop(item, 'status'));
-    const mark = status === 'completed' ? '[x]' : status === 'in_progress' ? '[→]' : '[ ]';
+    const mark =
+      status === 'completed' ? '[x]' : status === 'in_progress' ? '[→]' : '[ ]';
     lines.push(`- ${mark} ${step}`);
   }
   if (lines.length === 0) return undefined;
@@ -507,8 +508,7 @@ export async function importCodexTranscript(
 
     // Codex plans aren't approved (headless), so they always carry the
     // approved tag, mirroring how Claude tags an approved plan.
-    const tags =
-      msg.role === 'plan' ? ['imported', PLAN_APPROVED_TAG] : ['imported'];
+    const tags = msg.role === 'plan' ? ['imported', PLAN_APPROVED_TAG] : ['imported'];
 
     const { event } = await logEvent(author, {
       type,

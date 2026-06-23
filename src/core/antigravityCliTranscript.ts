@@ -198,7 +198,15 @@ function cleanUserContent(raw: string): string {
 function planTextFromToolCall(call: unknown): string | undefined {
   const args = prop(call, 'args');
   // Common arg keys an Antigravity plan tool might carry the plan under.
-  for (const key of ['plan', 'content', 'markdown', 'text', 'body', 'task_list', 'tasks']) {
+  for (const key of [
+    'plan',
+    'content',
+    'markdown',
+    'text',
+    'body',
+    'task_list',
+    'tasks',
+  ]) {
     const v = prop(args, key);
     const s = asString(v)?.trim();
     if (s) return s;
@@ -277,8 +285,7 @@ export function parseAntigravityCliTranscript(
     if (!type) continue;
     const timestamp = asString(prop(obj, 'created_at'));
     const stepIndex = prop(obj, 'step_index');
-    const idx =
-      typeof stepIndex === 'number' ? String(stepIndex) : `n${seq++}`;
+    const idx = typeof stepIndex === 'number' ? String(stepIndex) : `n${seq++}`;
 
     if (type === 'USER_INPUT') {
       const text = cleanUserContent(asString(prop(obj, 'content')) ?? '');

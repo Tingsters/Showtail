@@ -141,9 +141,7 @@ export function findCopilotCliSessions(): CopilotCliSessionInfo[] {
  * `sessionId`; otherwise the most recently modified (the one that just stopped).
  * Returns null when nothing plausible is on disk.
  */
-export function findCopilotCliSession(
-  sessionId?: string,
-): CopilotCliSessionInfo | null {
+export function findCopilotCliSession(sessionId?: string): CopilotCliSessionInfo | null {
   const sessions = findCopilotCliSessions();
   if (sessions.length === 0) return null;
   if (sessionId) {
@@ -168,9 +166,7 @@ export function readCopilotCliSessionFile(
 function toRel(rawPath: string, root: string): string {
   // Already-relative paths keep their value; absolute ones are made relative to
   // the repo root so the downstream in-repo guard can match them.
-  const rel = /^([a-zA-Z]:[\\/]|[\\/])/.test(rawPath)
-    ? relative(root, rawPath)
-    : rawPath;
+  const rel = /^([a-zA-Z]:[\\/]|[\\/])/.test(rawPath) ? relative(root, rawPath) : rawPath;
   return rel.replace(/\\/g, '/');
 }
 
@@ -273,7 +269,9 @@ export function parseCopilotCliSession(
 
   return {
     sessionId,
-    title: sessionId ? `Copilot CLI session ${sessionId.slice(0, 8)}` : 'Copilot CLI session',
+    title: sessionId
+      ? `Copilot CLI session ${sessionId.slice(0, 8)}`
+      : 'Copilot CLI session',
     messages,
   };
 }
@@ -285,10 +283,7 @@ export function parseCopilotCliSession(
  * assistant replies. (No plan/decision messages are emitted; see the file
  * header for why Copilot CLI records none.)
  */
-export function parseCopilotCliTranscript(
-  content: string,
-  root: string,
-): HookTranscript {
+export function parseCopilotCliTranscript(content: string, root: string): HookTranscript {
   const parsed = parseCopilotCliSession(content, root);
   const messages: HookTranscriptMessage[] = [];
   for (const m of parsed.messages) {
