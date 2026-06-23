@@ -146,6 +146,7 @@ export const INTEGRATIONS: Integration[] = [
     id: 'antigravity-ide',
     label: 'Antigravity IDE',
     vendor: 'Google',
+    pluginId: 'antigravity-ide',
     surface: surface(true, true, true, true, true, true),
   },
   {
@@ -207,6 +208,9 @@ export const CAPABILITIES: Capability[] = [
         'Hooks wired + contract-tested; live capture needs a GitHub token to drive Copilot CLI headlessly (not certified here).',
       ),
       'antigravity-cli': full(),
+      'antigravity-ide': partial(
+        'Hooks wired to the IDE’s global ~/.gemini/config/hooks.json + contract-tested; not certified live (the IDE can’t be driven headlessly here).',
+      ),
       'copilot-vscode': partial(
         'Captured by the VS Code extension on save, not via lifecycle hooks.',
       ),
@@ -228,6 +232,9 @@ export const CAPABILITIES: Capability[] = [
       'antigravity-cli': partial(
         'agy fires its prompt hook (PreInvocation) in interactive sessions; headless `agy -p` only fires PostToolUse, so prompt capture isn’t certified here.',
       ),
+      'antigravity-ide': partial(
+        'Hooks wired + contract-tested; live capture not certified (the IDE can’t be driven headlessly here).',
+      ),
       'copilot-vscode': partial('Model-driven via instructions — not guaranteed.'),
     },
   },
@@ -247,6 +254,9 @@ export const CAPABILITIES: Capability[] = [
         'Hooks wired + contract-tested; live capture not certified (Copilot CLI needs a token here).',
       ),
       'antigravity-cli': full(),
+      'antigravity-ide': partial(
+        'Hooks wired + contract-tested; live capture not certified (the IDE can’t be driven headlessly here).',
+      ),
       'copilot-vscode': partial(
         'The extension snapshots on save; no AI-suggested diff and non-VS-Code edits are missed.',
       ),
@@ -324,6 +334,7 @@ export const CAPABILITIES: Capability[] = [
       codex: full(),
       'copilot-cli': full(),
       'antigravity-cli': full(),
+      'antigravity-ide': full(),
       'copilot-vscode': full(),
     },
   },
@@ -339,6 +350,7 @@ export const CAPABILITIES: Capability[] = [
       codex: full(),
       'copilot-cli': full(),
       'antigravity-cli': full(),
+      'antigravity-ide': full(),
       'copilot-vscode': full(),
     },
   },
@@ -353,6 +365,9 @@ export const CAPABILITIES: Capability[] = [
       codex: full(),
       'copilot-cli': full(),
       'antigravity-cli': full(),
+      'antigravity-ide': partial(
+        'Instructions install per-user or per-project; capture hooks are global-only (the IDE loads only ~/.gemini/config/hooks.json).',
+      ),
       'copilot-vscode': partial('Project-scoped only (.github/); no user-scope install.'),
     },
   },
@@ -369,6 +384,7 @@ export const CAPABILITIES: Capability[] = [
       codex: full(),
       'copilot-cli': full(),
       'antigravity-cli': full(),
+      'antigravity-ide': full(),
       'copilot-vscode': full(),
     },
   },
@@ -384,6 +400,7 @@ export const CAPABILITIES: Capability[] = [
       codex: full(),
       'copilot-cli': full(),
       'antigravity-cli': full(),
+      'antigravity-ide': full(),
       'copilot-vscode': full(),
     },
   },
@@ -398,6 +415,7 @@ export const CAPABILITIES: Capability[] = [
       codex: full(),
       'copilot-cli': full(),
       'antigravity-cli': full(),
+      'antigravity-ide': full(),
       'copilot-vscode': full(),
       chatgpt: full(),
       'google-gemini': full(),
@@ -415,6 +433,7 @@ export const CAPABILITIES: Capability[] = [
       codex: full(),
       'copilot-cli': full(),
       'antigravity-cli': full(),
+      'antigravity-ide': full(),
       'copilot-vscode': full(),
       chatgpt: full(),
       'google-gemini': full(),

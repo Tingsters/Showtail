@@ -95,7 +95,7 @@ const DECISION_TYPES = new Set<string>([]);
  * `~/.gemini` with the EOL gemini-cli; respect the same env knobs `agy` reads so
  * a relocated home is found.
  */
-function geminiHome(): string {
+export function geminiHome(): string {
   const override =
     process.env.ANTIGRAVITY_HOME ||
     process.env.GEMINI_HOME ||
@@ -140,7 +140,21 @@ function isDir(path: string): boolean {
  * Stop payload's session id, else the newest.
  */
 export function findAntigravityCliTranscripts(): AntigravityCliTranscriptInfo[] {
-  const brainDir = antigravityCliBrainDir();
+  return findTranscriptsUnderBrain(antigravityCliBrainDir());
+}
+
+/**
+ * The generic brain-dir scan shared by the Antigravity CLI and IDE readers (both
+ * use the identical `brain/<id>/.system_generated/logs/transcript.jsonl` layout;
+ * only the product dir under `~/.gemini` differs). Lists conversation dirs under
+ * `brainDir`, checks each expected transcript path (guarded — a missing file is
+ * simply skipped), and returns them newest first. The conversation id is the dir
+ * name; the lines carry no embedded `cwd`, so the caller selects by the Stop
+ * payload's session id, else the newest.
+ */
+export function findTranscriptsUnderBrain(
+  brainDir: string,
+): AntigravityCliTranscriptInfo[] {
   if (!existsSync(brainDir)) return [];
   const out: AntigravityCliTranscriptInfo[] = [];
 

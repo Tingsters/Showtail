@@ -44,6 +44,10 @@ import {
   antigravityCliInstructionsState,
   resolveAntigravityCliTarget,
 } from '../src/core/antigravityCli.ts';
+import {
+  antigravityIdeInstructionsState,
+  resolveAntigravityIdeTarget,
+} from '../src/core/antigravityIde.ts';
 import { clearMarkers, markPassed } from './e2eRegistry.ts';
 
 const REPO = join(import.meta.dir, '..');
@@ -56,6 +60,7 @@ const CONNECT_TOOLS = [
   { matrixId: 'copilot-vscode', pluginId: 'github-copilot' as const },
   { matrixId: 'copilot-cli', pluginId: 'copilot-cli' as const },
   { matrixId: 'antigravity-cli', pluginId: 'antigravity-cli' as const },
+  { matrixId: 'antigravity-ide', pluginId: 'antigravity-ide' as const },
 ];
 
 /** The project-scope instructions/skill file each connect plugin writes. */
@@ -65,6 +70,7 @@ const CONNECT_FILE: Record<string, (dir: string) => string> = {
   codex: (dir) => resolveCodexTarget('project', dir).agentsFile,
   'copilot-cli': (dir) => resolveCopilotCliTarget('project', dir).instructionsFile,
   'antigravity-cli': (dir) => resolveAntigravityCliTarget('project', dir).contextFile,
+  'antigravity-ide': (dir) => resolveAntigravityIdeTarget('project', dir).contextFile,
 };
 
 /** Installed-state reader (installed + updateAvailable) for update detection. */
@@ -79,6 +85,8 @@ const INSTALL_STATE: Record<
     copilotCliInstructionsState(resolveCopilotCliTarget('project', dir)),
   'antigravity-cli': (dir) =>
     antigravityCliInstructionsState(resolveAntigravityCliTarget('project', dir)),
+  'antigravity-ide': (dir) =>
+    antigravityIdeInstructionsState(resolveAntigravityIdeTarget('project', dir)),
 };
 
 /** A minimal Codex rollout (one JSON object per line) for transcript/import. */
@@ -641,6 +649,7 @@ describe('backing: redaction and the cross-tool timeline', () => {
         { matrixId: 'copilot-vscode', tag: 'github-copilot' },
         { matrixId: 'copilot-cli', tag: 'copilot-cli' },
         { matrixId: 'antigravity-cli', tag: 'antigravity-cli' },
+        { matrixId: 'antigravity-ide', tag: 'antigravity-ide' },
         { matrixId: 'chatgpt', tag: 'chatgpt' },
         { matrixId: 'google-gemini', tag: 'google-gemini' },
       ];

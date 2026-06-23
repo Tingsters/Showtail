@@ -14,6 +14,7 @@ import { copilotCliPlugin } from './copilot-cli.ts';
 import { codexPlugin } from './codex.ts';
 import { geminiCliPlugin } from './gemini-cli.ts';
 import { antigravityCliPlugin } from './antigravity-cli.ts';
+import { antigravityIdePlugin } from './antigravity-ide.ts';
 import { chatgptPlugin } from './chatgpt.ts';
 import { geminiPlugin } from './gemini.ts';
 
@@ -25,6 +26,7 @@ export const PLUGINS: EnvironmentPlugin[] = [
   codexPlugin,
   geminiCliPlugin,
   antigravityCliPlugin,
+  antigravityIdePlugin,
   chatgptPlugin,
   geminiPlugin,
 ];

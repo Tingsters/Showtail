@@ -180,23 +180,23 @@ Solo? Nothing changes — you are simply the only author, and the team report is
 
 Showtail works with many AI coding tools, and support depth varies by tool. This table shows what each integration can do today — every ✅ is backed by an end-to-end test, so it genuinely works against the real tool.
 
-<!-- showtail:start sha=0a2b74620688 -->
+<!-- showtail:start sha=e059cff5574f -->
 | Capability | Claude Code | OpenAI Codex | ChatGPT | Copilot (VS Code) | Copilot CLI | Copilot Desktop | Antigravity CLI | Antigravity IDE | Google Gemini | Zed | Notes |
 | --- | :-: | :-: | :-: | :-: | :-: | :-: | :-: | :-: | :-: | :-: | --- |
-| **Live-capture hooks** | ✅ | ✅ | ⛔ | 🚧 | 🚧 | 🗺️ | ✅ | 🗺️ | ⛔ | ⛔ | Live-certified for Claude Code, Codex, and Antigravity CLI. Copilot CLI needs a token to drive headlessly; Copilot (VS Code) uses its extension; Zed has no hooks. |
-| **Auto prompt capture** | ✅ | ✅ | ⛔ | 🚧 | 🚧 | 🗺️ | 🚧 | 🗺️ | ⛔ | ⛔ | Live-certified for Claude Code + Codex; the CLI plugins are built but their live capture isn’t certified here. Copilot (VS Code) is model-driven. |
-| **Auto file/edit capture** | ✅ | 🚧 | ⛔ | 🚧 | 🚧 | 🗺️ | ✅ | 🗺️ | ⛔ | ⛔ | Live-certified for Claude Code + Antigravity CLI. Codex live apply_patch isn’t snapshotted headlessly; Copilot CLI needs a token; Copilot (VS Code) snapshots on save with no AI diff. |
+| **Live-capture hooks** | ✅ | ✅ | ⛔ | 🚧 | 🚧 | 🗺️ | ✅ | 🚧 | ⛔ | ⛔ | Live-certified for Claude Code, Codex, and Antigravity CLI. Copilot CLI needs a token to drive headlessly; Copilot (VS Code) uses its extension; Zed has no hooks. |
+| **Auto prompt capture** | ✅ | ✅ | ⛔ | 🚧 | 🚧 | 🗺️ | 🚧 | 🚧 | ⛔ | ⛔ | Live-certified for Claude Code + Codex; the CLI plugins are built but their live capture isn’t certified here. Copilot (VS Code) is model-driven. |
+| **Auto file/edit capture** | ✅ | 🚧 | ⛔ | 🚧 | 🚧 | 🗺️ | ✅ | 🚧 | ⛔ | ⛔ | Live-certified for Claude Code + Antigravity CLI. Codex live apply_patch isn’t snapshotted headlessly; Copilot CLI needs a token; Copilot (VS Code) snapshots on save with no AI diff. |
 | **Auto AI-reply capture** | ✅ | ✅ | ⛔ | 🗺️ | 🗺️ | 🗺️ | 🗺️ | 🗺️ | ⛔ | ⛔ | Needs the tool’s stop-hook plus a readable transcript; planned wherever both exist. |
 | **Decision capture** | ✅ | ✅ | ⛔ | 🗺️ | 🗺️ | 🗺️ | 🗺️ | 🗺️ | ⛔ | ⛔ | Reconciled from the tool’s transcript on the Stop hook, so — like AI-reply capture — it is certified by its contract test, not the headless live run. Planned wherever a tool has hooks + a transcript but no ask-the-user construct yet. |
 | **Plan capture** | ✅ | 🚧 | ⛔ | ⛔ | ⛔ | ⛔ | ✅ | 🗺️ | ⛔ | ⛔ | Full for Claude Code + Antigravity CLI (Antigravity links its real plan.md). Codex captures plan content from the transcript (no native file). Antigravity IDE writes implementation_plan.md but has no plugin yet. Reconciled on the Stop hook, so — like AI-reply capture — it is certified by its contract test, not the headless live run (print mode never raises Stop). |
 | **Session import / backfill** | ✅ | ✅ | ✅ | 🗺️ | 🗺️ | 🗺️ | 🗺️ | 🗺️ | ✅ | 🗺️ | Planned wherever the tool writes a readable transcript (Zed: only via manual Markdown export). |
-| **Managed instructions** | ✅ | ✅ | ⛔ | ✅ | ✅ | 🗺️ | ✅ | 🗺️ | ⛔ | 🗺️ | Planned wherever the tool reads an instructions/rules file. |
-| **Instruction update detection** | ✅ | ✅ | ⛔ | ✅ | ✅ | 🗺️ | ✅ | 🗺️ | ⛔ | 🗺️ | Detected via a managed-block fingerprint in each tool’s instructions/skill file. |
-| **User + project install** | ✅ | ✅ | ⛔ | 🚧 | ✅ | 🗺️ | ✅ | 🗺️ | ⛔ | 🗺️ | Copilot (VS Code) is project-scoped only (.github/). |
-| **Host detection (setup)** | ✅ | ✅ | ⛔ | ✅ | ✅ | 🗺️ | ✅ | 🗺️ | ⛔ | 🗺️ | Hosted web apps have nothing local to detect. |
-| **Connection status** | ✅ | ✅ | ⛔ | ✅ | ✅ | 🗺️ | ✅ | 🗺️ | ⛔ | 🗺️ | Needs a local footprint to inspect; web apps have none. |
-| **Secret/PII redaction** | ✅ | ✅ | ✅ | ✅ | ✅ | 🗺️ | ✅ | 🗺️ | ✅ | 🗺️ | Applies automatically once any capture or import path for the tool exists. |
-| **Cross-tool timeline** | ✅ | ✅ | ✅ | ✅ | ✅ | 🗺️ | ✅ | 🗺️ | ✅ | 🗺️ | Any captured or imported event from the tool joins the shared timeline. |
+| **Managed instructions** | ✅ | ✅ | ⛔ | ✅ | ✅ | 🗺️ | ✅ | ✅ | ⛔ | 🗺️ | Planned wherever the tool reads an instructions/rules file. |
+| **Instruction update detection** | ✅ | ✅ | ⛔ | ✅ | ✅ | 🗺️ | ✅ | ✅ | ⛔ | 🗺️ | Detected via a managed-block fingerprint in each tool’s instructions/skill file. |
+| **User + project install** | ✅ | ✅ | ⛔ | 🚧 | ✅ | 🗺️ | ✅ | 🚧 | ⛔ | 🗺️ | Copilot (VS Code) is project-scoped only (.github/). |
+| **Host detection (setup)** | ✅ | ✅ | ⛔ | ✅ | ✅ | 🗺️ | ✅ | ✅ | ⛔ | 🗺️ | Hosted web apps have nothing local to detect. |
+| **Connection status** | ✅ | ✅ | ⛔ | ✅ | ✅ | 🗺️ | ✅ | ✅ | ⛔ | 🗺️ | Needs a local footprint to inspect; web apps have none. |
+| **Secret/PII redaction** | ✅ | ✅ | ✅ | ✅ | ✅ | 🗺️ | ✅ | ✅ | ✅ | 🗺️ | Applies automatically once any capture or import path for the tool exists. |
+| **Cross-tool timeline** | ✅ | ✅ | ✅ | ✅ | ✅ | 🗺️ | ✅ | ✅ | ✅ | 🗺️ | Any captured or imported event from the tool joins the shared timeline. |
 | **Marketplace/extension install** | ✅ | 🗺️ | ⛔ | ✅ | 🗺️ | 🗺️ | 🗺️ | 🗺️ | ⛔ | 🗺️ | Codex/Copilot CLI/Antigravity expose a marketplace; a Showtail installer just isn’t published there yet. |
 
 **Key:** ✅ Full · 🚧 Partial · 🗺️ Planned · ⛔ Unsupported

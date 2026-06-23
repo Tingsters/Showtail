@@ -16,6 +16,7 @@ import { resolveCopilotCliTarget } from '../src/core/copilotCli.ts';
 import { resolveCodexTarget } from '../src/core/codex.ts';
 import { resolveGeminiCliTarget } from '../src/core/geminiCli.ts';
 import { resolveAntigravityCliTarget } from '../src/core/antigravityCli.ts';
+import { resolveAntigravityIdeTarget } from '../src/core/antigravityIde.ts';
 import { cleanup, makeTempDir } from './helpers.ts';
 
 /**
@@ -33,6 +34,7 @@ const CONNECT_PROJECT_FILE: Record<string, (dir: string) => string> = {
   codex: (dir) => resolveCodexTarget('project', dir).agentsFile,
   'gemini-cli': (dir) => resolveGeminiCliTarget('project', dir).contextFile,
   'antigravity-cli': (dir) => resolveAntigravityCliTarget('project', dir).contextFile,
+  'antigravity-ide': (dir) => resolveAntigravityIdeTarget('project', dir).contextFile,
 };
 
 describe('plugin registry', () => {
