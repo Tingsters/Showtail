@@ -11,6 +11,7 @@ import {
   autoCaptureActive,
   installHooks,
   resolveTarget,
+  skillState,
   writeSkill,
 } from '../core/skill.ts';
 import { commandOnPath, homeDirExists } from '../core/detect.ts';
@@ -86,7 +87,15 @@ export const claudeCodePlugin: EnvironmentPlugin = {
 
     status(cwd) {
       const hooksActive = autoCaptureActive(cwd);
-      return { connected: skillInstalled(cwd) || hooksActive, hooksActive };
+      // Prefer the project-scope skill, falling back to user scope, so status
+      // reflects whichever install is actually present (mirrors codex).
+      const project = skillState(resolveTarget('project', cwd));
+      const state = project.installed ? project : skillState(resolveTarget('user', cwd));
+      return {
+        connected: skillInstalled(cwd) || hooksActive,
+        hooksActive,
+        updateAvailable: state.installed ? state.updateAvailable : undefined,
+      };
     },
 
     hooks: {

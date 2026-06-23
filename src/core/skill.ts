@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 // The skill markdown is the single source of truth: it is committed under
@@ -11,6 +11,13 @@ import {
   unmergeHookEvents,
   type HookEvents,
 } from './hookMerge.ts';
+import {
+  applyManagedBlock,
+  classify,
+  parseBlock,
+  shortHash,
+  splitFrontmatter,
+} from './managedBlock.ts';
 import { findRoot, readJson, writeJson } from './storage.ts';
 
 export { SKILL_MD };
@@ -74,12 +81,57 @@ export function resolveTarget(
   };
 }
 
-/** Write the SKILL.md into the target. Returns the file path written. */
-export function writeSkill(target: SkillTarget): string {
+export interface WriteSkillOptions {
+  /** Overwrite even a user-edited block (take the latest). */
+  force?: boolean;
+}
+
+/**
+ * Write the SKILL.md into the target. Returns the file path written. The YAML
+ * frontmatter stays at the very top (so Claude's skill loader still reads it),
+ * and the markdown body is wrapped in a fingerprinted managed block so we can
+ * later tell an untouched (possibly stale) install from a user-edited one.
+ */
+export function writeSkill(target: SkillTarget, opts: WriteSkillOptions = {}): string {
   mkdirSync(dirname(target.skillFile), { recursive: true });
-  // SKILL_MD already ends with a newline; write it verbatim.
-  writeFileSync(target.skillFile, SKILL_MD, 'utf8');
+  const { preamble, body } = splitFrontmatter(SKILL_MD);
+  applyManagedBlock(target.skillFile, body, preamble, opts.force ?? false);
   return target.skillFile;
+}
+
+export interface SkillState {
+  installed: boolean;
+  upToDate: boolean;
+  userEdited: boolean;
+  updateAvailable: boolean;
+}
+
+/** Inspect the installed SKILL.md managed block and classify it for status. */
+export function skillState(target: SkillTarget): SkillState {
+  const empty: SkillState = {
+    installed: false,
+    upToDate: false,
+    userEdited: false,
+    updateAvailable: false,
+  };
+  if (!existsSync(target.skillFile)) return empty;
+  const parsed = parseBlock(readFileSync(target.skillFile, 'utf8'));
+  if (!parsed) return empty;
+
+  const latestBody = splitFrontmatter(SKILL_MD).body;
+  const cls = classify(parsed, latestBody);
+  if (cls === 'edited') {
+    return {
+      installed: true,
+      upToDate: false,
+      userEdited: true,
+      updateAvailable: parsed.sha !== shortHash(latestBody),
+    };
+  }
+  if (cls === 'stale') {
+    return { installed: true, upToDate: false, userEdited: false, updateAvailable: true };
+  }
+  return { installed: true, upToDate: true, userEdited: false, updateAvailable: false };
 }
 
 /**

@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import {
   HOOK_EVENTS,
   SKILL_MD,
@@ -9,23 +9,119 @@ import {
   mergeHooks,
   removeSkill,
   resolveTarget,
+  skillState,
   uninstallHooks,
   unmergeHooks,
   writeSkill,
 } from '../src/core/skill.ts';
+import {
+  applyManagedBlock,
+  parseBlock,
+  splitFrontmatter,
+  START_RE,
+} from '../src/core/managedBlock.ts';
 import { readJson } from '../src/core/storage.ts';
 import { runSkillInstall, runSkillUninstall } from '../src/commands/skill.ts';
 import { cleanup, makeTempDir } from './helpers.ts';
 
 describe('skill assets + install', () => {
-  test('writeSkill writes the embedded SKILL.md verbatim', () => {
+  test('writeSkill keeps frontmatter on top and wraps the body in a marker', () => {
     const dir = makeTempDir();
     try {
       const target = resolveTarget('project', dir);
       const file = writeSkill(target);
       expect(file.endsWith('SKILL.md')).toBe(true);
-      expect(readFileSync(file, 'utf8')).toBe(SKILL_MD);
+
+      const written = readFileSync(file, 'utf8');
+      // Frontmatter must stay at the very top so Claude's loader reads it.
+      expect(written.startsWith('---\n')).toBe(true);
+      expect(written).toContain('name: showtail');
+      // The body is wrapped in a fingerprinted managed block.
+      expect(START_RE.test(written)).toBe(true);
+      expect(written).toContain('<!-- showtail:end -->');
       expect(SKILL_MD).toContain('name: showtail');
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('fresh install is up to date with no update available', () => {
+    const dir = makeTempDir();
+    try {
+      const target = resolveTarget('project', dir);
+      writeSkill(target);
+      const state = skillState(target);
+      expect(state.installed).toBe(true);
+      expect(state.upToDate).toBe(true);
+      expect(state.userEdited).toBe(false);
+      expect(state.updateAvailable).toBe(false);
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('missing install reports not installed', () => {
+    const dir = makeTempDir();
+    try {
+      const state = skillState(resolveTarget('project', dir));
+      expect(state.installed).toBe(false);
+      expect(state.updateAvailable).toBe(false);
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('writeSkill is idempotent and round-trips', () => {
+    const dir = makeTempDir();
+    try {
+      const target = resolveTarget('project', dir);
+      writeSkill(target);
+      const first = readFileSync(target.skillFile, 'utf8');
+      writeSkill(target);
+      const second = readFileSync(target.skillFile, 'utf8');
+      expect(second).toBe(first);
+      expect(skillState(target).upToDate).toBe(true);
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('a stale install (older body) reports updateAvailable', () => {
+    const dir = makeTempDir();
+    try {
+      const target = resolveTarget('project', dir);
+      mkdirSync(target.skillDir, { recursive: true });
+      const { preamble } = splitFrontmatter(SKILL_MD);
+      // Simulate an older shipped version: an untouched block with different text.
+      applyManagedBlock(target.skillFile, 'OLD BODY TEXT', preamble, false);
+      const state = skillState(target);
+      expect(state.installed).toBe(true);
+      expect(state.upToDate).toBe(false);
+      expect(state.userEdited).toBe(false);
+      expect(state.updateAvailable).toBe(true);
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('a user edit inside the block reports userEdited', () => {
+    const dir = makeTempDir();
+    try {
+      const target = resolveTarget('project', dir);
+      writeSkill(target);
+      // Hand-edit the managed body without updating the sha stamp.
+      const current = readFileSync(target.skillFile, 'utf8');
+      const parsed = parseBlock(current)!;
+      const tampered =
+        current.slice(0, parsed.startIndex) +
+        current.slice(parsed.startIndex).replace(parsed.inner, parsed.inner + '\n\nHAND EDIT');
+      writeFileSync(target.skillFile, tampered, 'utf8');
+
+      const state = skillState(target);
+      expect(state.installed).toBe(true);
+      expect(state.userEdited).toBe(true);
+      // Same shipped version, so no newer update — only an edit.
+      expect(state.updateAvailable).toBe(false);
     } finally {
       cleanup(dir);
     }
