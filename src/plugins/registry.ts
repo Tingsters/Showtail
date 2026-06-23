@@ -10,8 +10,10 @@ import type { Tool } from '../types.ts';
 import type { ConnectCapability, EnvironmentPlugin, ImportCapability } from './types.ts';
 import { claudeCodePlugin } from './claude-code.ts';
 import { copilotPlugin } from './copilot.ts';
+import { copilotCliPlugin } from './copilot-cli.ts';
 import { codexPlugin } from './codex.ts';
 import { geminiCliPlugin } from './gemini-cli.ts';
+import { antigravityCliPlugin } from './antigravity-cli.ts';
 import { chatgptPlugin } from './chatgpt.ts';
 import { geminiPlugin } from './gemini.ts';
 
@@ -19,8 +21,10 @@ import { geminiPlugin } from './gemini.ts';
 export const PLUGINS: EnvironmentPlugin[] = [
   claudeCodePlugin,
   copilotPlugin,
+  copilotCliPlugin,
   codexPlugin,
   geminiCliPlugin,
+  antigravityCliPlugin,
   chatgptPlugin,
   geminiPlugin,
 ];

@@ -23,7 +23,7 @@ import {
   rmSync,
   writeFileSync,
 } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { getPluginById } from '../plugins/registry.ts';
 import { testIdFor } from './capabilityMatrix.ts';
@@ -148,6 +148,26 @@ interface DriveSpec {
   replyCap?: string;
 }
 
+const LOCALAPPDATA = process.env.LOCALAPPDATA ?? join(homedir(), 'AppData', 'Local');
+
+/** Resolve the GitHub Copilot CLI exe (versioned dir), else fall back to PATH. */
+function resolveCopilotBin(): string {
+  const cliDir = join(LOCALAPPDATA, 'github-copilot-sdk', 'cli');
+  if (existsSync(cliDir)) {
+    for (const v of readdirSync(cliDir).sort().reverse()) {
+      const p = join(cliDir, v, 'copilot.exe');
+      if (existsSync(p)) return p;
+    }
+  }
+  return 'copilot';
+}
+
+/** Resolve the Antigravity CLI (`agy`) exe, else fall back to PATH. */
+function resolveAgyBin(): string {
+  const p = join(LOCALAPPDATA, 'agy', 'bin', 'agy.exe');
+  return existsSync(p) ? p : 'agy';
+}
+
 const SPECS: Record<string, DriveSpec> = {
   'claude-code': {
     bin: 'claude',
@@ -174,6 +194,16 @@ const SPECS: Record<string, DriveSpec> = {
       'workspace-write',
       prompt,
     ],
+  },
+  'copilot-cli': {
+    bin: resolveCopilotBin(),
+    connectArgs: ['connect', 'copilot-cli', '--project'],
+    driveArgs: (prompt) => ['-p', prompt, '--allow-all'],
+  },
+  'antigravity-cli': {
+    bin: resolveAgyBin(),
+    connectArgs: ['connect', 'antigravity-cli', '--project'],
+    driveArgs: (prompt) => ['-p', prompt, '--dangerously-skip-permissions'],
   },
 };
 

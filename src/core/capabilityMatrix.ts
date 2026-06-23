@@ -122,6 +122,7 @@ export const INTEGRATIONS: Integration[] = [
     id: 'copilot-cli',
     label: 'Copilot CLI',
     vendor: 'GitHub',
+    pluginId: 'copilot-cli',
     surface: surface(true, true, true, true, true),
   },
   {
@@ -135,6 +136,7 @@ export const INTEGRATIONS: Integration[] = [
     id: 'antigravity-cli',
     label: 'Antigravity CLI',
     vendor: 'Google',
+    pluginId: 'antigravity-cli',
     surface: surface(true, true, true, true, true),
   },
   {
@@ -191,12 +193,18 @@ export const CAPABILITIES: Capability[] = [
     id: 'live-capture-hooks',
     label: 'Live-capture hooks',
     description: 'Automatic capture wired into the tool’s lifecycle hooks.',
-    note: 'Copilot (VS Code) captures via its extension, not lifecycle hooks; Zed has no hook system.',
+    note: 'CLI plugins are built + contract-tested; live capture is certified only where the tool could be driven here (Copilot CLI needs a token; Antigravity hooks didn’t fire headlessly). Copilot (VS Code) uses its extension; Zed has no hooks.',
     requires: hasHooks,
     surfaceRule: needHooks,
     overrides: {
       'claude-code': full(),
       codex: full(),
+      'copilot-cli': partial(
+        'Hooks wired + contract-tested; live capture needs a GitHub token to drive Copilot CLI headlessly (not certified here).',
+      ),
+      'antigravity-cli': partial(
+        'Hooks wired + contract-tested; the agy hooks did not fire in a headless run, so live capture is not yet certified.',
+      ),
       'copilot-vscode': partial(
         'Captured by the VS Code extension on save, not via lifecycle hooks.',
       ),
@@ -206,12 +214,18 @@ export const CAPABILITIES: Capability[] = [
     id: 'auto-prompt-capture',
     label: 'Auto prompt capture',
     description: 'Your prompts are recorded automatically as you submit them.',
-    note: 'Copilot (VS Code) relies on model-driven instructions, so it is best-effort.',
+    note: 'Live-certified for Claude Code + Codex; the CLI plugins are built but their live capture isn’t certified here. Copilot (VS Code) is model-driven.',
     requires: hasHooks,
     surfaceRule: needHooks,
     overrides: {
       'claude-code': full(),
       codex: full(),
+      'copilot-cli': partial(
+        'Hooks wired + contract-tested; live capture not certified (Copilot CLI needs a token here).',
+      ),
+      'antigravity-cli': partial(
+        'Hooks wired + contract-tested; agy hooks didn’t fire headlessly, so not certified here.',
+      ),
       'copilot-vscode': partial('Model-driven via instructions — not guaranteed.'),
     },
   },
@@ -219,13 +233,19 @@ export const CAPABILITIES: Capability[] = [
     id: 'auto-file-capture',
     label: 'Auto file/edit capture',
     description: 'Files the tool edits are snapshotted as artifacts automatically.',
-    note: 'Codex live apply_patch capture is not yet verified; Copilot (VS Code) snapshots on save with no diff.',
+    note: 'Codex live apply_patch capture isn’t snapshotted in headless runs here; the CLI plugins are contract-tested but not live-certified. Copilot (VS Code) snapshots on save with no AI diff.',
     requires: hasHooks,
     surfaceRule: needHooks,
     overrides: {
       'claude-code': full(),
       codex: partial(
-        'Implemented and contract-tested, but a live apply_patch edit was not snapshotted in LLM-driven runs.',
+        'Contract-tested, but a live apply_patch edit was not snapshotted in headless Codex runs on this machine.',
+      ),
+      'copilot-cli': partial(
+        'Hooks wired + contract-tested; live capture not certified (Copilot CLI needs a token here).',
+      ),
+      'antigravity-cli': partial(
+        'Hooks wired + contract-tested; agy hooks didn’t fire headlessly, so not certified here.',
       ),
       'copilot-vscode': partial(
         'The extension snapshots on save; no AI-suggested diff and non-VS-Code edits are missed.',
@@ -242,6 +262,7 @@ export const CAPABILITIES: Capability[] = [
     surfaceRule: needReplyPath,
     overrides: {
       'claude-code': full(),
+      codex: full(),
     },
   },
   {
@@ -254,6 +275,7 @@ export const CAPABILITIES: Capability[] = [
     surfaceRule: needTranscript,
     overrides: {
       'claude-code': full(),
+      codex: full(),
       chatgpt: full(),
       'google-gemini': full(),
     },
@@ -268,6 +290,8 @@ export const CAPABILITIES: Capability[] = [
     overrides: {
       'claude-code': full(),
       codex: full(),
+      'copilot-cli': full(),
+      'antigravity-cli': full(),
       'copilot-vscode': full(),
     },
   },
@@ -276,14 +300,14 @@ export const CAPABILITIES: Capability[] = [
     label: 'Instruction update detection',
     description:
       'Detects stale or user-edited managed instructions and offers to refresh them.',
-    note: 'Claude Code’s skill has no fingerprint, so stale/edited skills aren’t detected.',
+    note: 'Detected via a managed-block fingerprint in each tool’s instructions/skill file.',
     surfaceRule: needInstructions,
     overrides: {
+      'claude-code': full(),
       codex: full(),
+      'copilot-cli': full(),
+      'antigravity-cli': full(),
       'copilot-vscode': full(),
-      'claude-code': partial(
-        'The skill is rewritten wholesale with no fingerprint, so stale/edited skills go undetected.',
-      ),
     },
   },
   {
@@ -295,6 +319,8 @@ export const CAPABILITIES: Capability[] = [
     overrides: {
       'claude-code': full(),
       codex: full(),
+      'copilot-cli': full(),
+      'antigravity-cli': full(),
       'copilot-vscode': partial('Project-scoped only (.github/); no user-scope install.'),
     },
   },
@@ -309,6 +335,8 @@ export const CAPABILITIES: Capability[] = [
     overrides: {
       'claude-code': full(),
       codex: full(),
+      'copilot-cli': full(),
+      'antigravity-cli': full(),
       'copilot-vscode': full(),
     },
   },
@@ -322,6 +350,8 @@ export const CAPABILITIES: Capability[] = [
     overrides: {
       'claude-code': full(),
       codex: full(),
+      'copilot-cli': full(),
+      'antigravity-cli': full(),
       'copilot-vscode': full(),
     },
   },
@@ -334,6 +364,8 @@ export const CAPABILITIES: Capability[] = [
     overrides: {
       'claude-code': full(),
       codex: full(),
+      'copilot-cli': full(),
+      'antigravity-cli': full(),
       'copilot-vscode': full(),
       chatgpt: full(),
       'google-gemini': full(),
@@ -349,6 +381,8 @@ export const CAPABILITIES: Capability[] = [
     overrides: {
       'claude-code': full(),
       codex: full(),
+      'copilot-cli': full(),
+      'antigravity-cli': full(),
       'copilot-vscode': full(),
       chatgpt: full(),
       'google-gemini': full(),

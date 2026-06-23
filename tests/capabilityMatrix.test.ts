@@ -86,8 +86,12 @@ describe('capability matrix invariants', () => {
     // Hook capture is full only for the hook-plugin tools.
     expect(status('live-capture-hooks', 'claude-code')).toBe('full');
     expect(status('live-capture-hooks', 'zed')).toBe('unsupported'); // Zed has no hooks
-    // Tools with all surfaces but no plugin read as planned, never unsupported.
-    expect(status('live-capture-hooks', 'copilot-cli')).toBe('planned');
+    // A tool with all surfaces but no plugin yet reads as planned, never unsupported.
+    expect(status('live-capture-hooks', 'copilot-desktop')).toBe('planned');
+    // Codex capture is live-certified (full); the CLI plugins are built but their
+    // live capture isn't certified on this machine, so they read partial.
+    expect(status('live-capture-hooks', 'codex')).toBe('full');
+    expect(status('live-capture-hooks', 'copilot-cli')).toBe('partial');
     expect(status('session-import', 'antigravity-cli')).toBe('planned');
     // Codex marketplace exists now → planned, not unsupported (R1 correction).
     expect(status('marketplace-install', 'codex')).toBe('planned');

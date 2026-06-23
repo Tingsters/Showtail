@@ -109,9 +109,8 @@ function isDir(path: string): boolean {
 /** Pull the session id out of a `rollout-<ISO>-<uuid>.jsonl` file name. */
 function sessionIdFromName(file: string): string {
   // rollout-2026-06-22T16-57-00-019ef1c4-1899-7a90-bb9f-b09bca10e91c.jsonl
-  const m = /-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/i.exec(
-    file,
-  );
+  const m =
+    /-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/i.exec(file);
   return m ? m[1]! : file.replace(/\.jsonl$/, '');
 }
 
@@ -430,7 +429,11 @@ export async function importCodexTranscript(
     seen.add(msg.sourceId);
 
     const type =
-      msg.role === 'user' ? 'prompt' : msg.role === 'assistant' ? 'ai_output' : 'artifact';
+      msg.role === 'user'
+        ? 'prompt'
+        : msg.role === 'assistant'
+          ? 'ai_output'
+          : 'artifact';
 
     const { event } = await logEvent(author, {
       type,

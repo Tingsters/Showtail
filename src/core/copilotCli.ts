@@ -83,9 +83,7 @@ export const COPILOT_CLI_HOOK_EVENTS: HookEvents = {
   PostToolUse: [
     {
       matcher: 'write|edit|str_replace_editor|create',
-      hooks: [
-        { type: 'command', command: 'showtail hook post-edit --tool copilot-cli' },
-      ],
+      hooks: [{ type: 'command', command: 'showtail hook post-edit --tool copilot-cli' }],
     },
   ],
   Stop: [
@@ -250,7 +248,10 @@ function readHooksFile(hooksFile: string): Record<string, unknown> {
 
 /** Install (or refresh) the Copilot CLI hooks in the target's hooks file. */
 export function installCopilotCliHooks(target: CopilotCliTarget): string {
-  const merged = mergeHookEvents(readHooksFile(target.hooksFile), COPILOT_CLI_HOOK_EVENTS);
+  const merged = mergeHookEvents(
+    readHooksFile(target.hooksFile),
+    COPILOT_CLI_HOOK_EVENTS,
+  );
   writeJson(target.hooksFile, merged);
   return target.hooksFile;
 }

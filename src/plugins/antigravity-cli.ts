@@ -81,8 +81,7 @@ export const antigravityCliPlugin: EnvironmentPlugin = {
         cwd: opts.cwd,
       }),
 
-    uninstall: (opts) =>
-      runAntigravityCliUninstall({ user: opts.user, cwd: opts.cwd }),
+    uninstall: (opts) => runAntigravityCliUninstall({ user: opts.user, cwd: opts.cwd }),
 
     status(cwd) {
       const state = antigravityCliInstructionsState(

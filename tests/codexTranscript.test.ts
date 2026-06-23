@@ -1,10 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import {
-  parseCodexRollout,
-  parseCodexTranscript,
-} from '../src/core/codexTranscript.ts';
+import { parseCodexRollout, parseCodexTranscript } from '../src/core/codexTranscript.ts';
 import { cleanup, makeTempDir, readJsonReport, runCli } from './helpers.ts';
 
 /** Run `showtail <args>` in `cwd`, optionally piping `input` to stdin. */
@@ -26,7 +23,11 @@ function makeRollout(dir: string): string {
       type: 'session_meta',
       payload: { id: 'sess-codex-1', cwd: dir, cli_version: '0.141.0' },
     },
-    { timestamp: '2026-06-22T23:57:02.000Z', type: 'event_msg', payload: { type: 'task_started' } },
+    {
+      timestamp: '2026-06-22T23:57:02.000Z',
+      type: 'event_msg',
+      payload: { type: 'task_started' },
+    },
     // The wrapped duplicate prompt (AGENTS.md/developer chrome) — must be dropped.
     {
       timestamp: '2026-06-22T23:57:03.000Z',
@@ -78,7 +79,11 @@ function makeRollout(dir: string): string {
         input: '*** Begin Patch\n*** Update File: .codex/config.toml\n*** End Patch\n',
       },
     },
-    { timestamp: '2026-06-22T23:57:07.000Z', type: 'event_msg', payload: { type: 'token_count' } },
+    {
+      timestamp: '2026-06-22T23:57:07.000Z',
+      type: 'event_msg',
+      payload: { type: 'token_count' },
+    },
     // The clean assistant reply — kept.
     {
       timestamp: '2026-06-22T23:57:08.000Z',
@@ -95,7 +100,11 @@ function makeRollout(dir: string): string {
         content: [{ type: 'output_text', text: 'Done.' }],
       },
     },
-    { timestamp: '2026-06-22T23:57:10.000Z', type: 'event_msg', payload: { type: 'task_complete' } },
+    {
+      timestamp: '2026-06-22T23:57:10.000Z',
+      type: 'event_msg',
+      payload: { type: 'task_complete' },
+    },
   ];
   return lines.map((l) => JSON.stringify(l)).join('\n') + '\n';
 }

@@ -12,8 +12,10 @@ import {
 } from '../src/plugins/registry.ts';
 import { resolveTarget } from '../src/core/skill.ts';
 import { resolveCopilotTarget } from '../src/core/copilot.ts';
+import { resolveCopilotCliTarget } from '../src/core/copilotCli.ts';
 import { resolveCodexTarget } from '../src/core/codex.ts';
 import { resolveGeminiCliTarget } from '../src/core/geminiCli.ts';
+import { resolveAntigravityCliTarget } from '../src/core/antigravityCli.ts';
 import { cleanup, makeTempDir } from './helpers.ts';
 
 /**
@@ -27,8 +29,10 @@ import { cleanup, makeTempDir } from './helpers.ts';
 const CONNECT_PROJECT_FILE: Record<string, (dir: string) => string> = {
   'claude-code': (dir) => resolveTarget('project', dir).skillFile,
   'github-copilot': (dir) => resolveCopilotTarget(dir).pathInstructionsFile,
+  'copilot-cli': (dir) => resolveCopilotCliTarget('project', dir).instructionsFile,
   codex: (dir) => resolveCodexTarget('project', dir).agentsFile,
   'gemini-cli': (dir) => resolveGeminiCliTarget('project', dir).contextFile,
+  'antigravity-cli': (dir) => resolveAntigravityCliTarget('project', dir).contextFile,
 };
 
 describe('plugin registry', () => {

@@ -30,12 +30,7 @@ describe('antigravity-cli install / uninstall', () => {
 
       // The four Antigravity lifecycle events are present.
       const settings = JSON.parse(readFileSync(target.hooksFile, 'utf8'));
-      for (const event of [
-        'SessionStart',
-        'UserPromptSubmit',
-        'PostToolUse',
-        'Stop',
-      ]) {
+      for (const event of ['SessionStart', 'UserPromptSubmit', 'PostToolUse', 'Stop']) {
         expect(Array.isArray(settings.hooks[event])).toBe(true);
       }
 

@@ -114,7 +114,9 @@ describe('skill assets + install', () => {
       const parsed = parseBlock(current)!;
       const tampered =
         current.slice(0, parsed.startIndex) +
-        current.slice(parsed.startIndex).replace(parsed.inner, parsed.inner + '\n\nHAND EDIT');
+        current
+          .slice(parsed.startIndex)
+          .replace(parsed.inner, parsed.inner + '\n\nHAND EDIT');
       writeFileSync(target.skillFile, tampered, 'utf8');
 
       const state = skillState(target);

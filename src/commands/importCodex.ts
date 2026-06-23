@@ -339,8 +339,7 @@ function printResult(
   const parts = [`${res.prompts} prompt(s)`];
   if (withResponses) parts.push(`${res.responses} response(s)`);
   parts.push(`${res.edits} edit(s)`);
-  const from =
-    sessionCount > 1 ? `${sessionCount} Codex sessions` : 'your Codex session';
+  const from = sessionCount > 1 ? `${sessionCount} Codex sessions` : 'your Codex session';
   console.log(`Imported from ${from}: ${parts.join(', ')} (tool: codex).`);
   if (res.skipped) console.log(`  ${res.skipped} already-imported item(s) skipped.`);
   if (res.first && res.last) {

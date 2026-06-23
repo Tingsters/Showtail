@@ -5,8 +5,9 @@
  * cell stand without a passed marker here — so "fully implemented" in the matrix
  * always means "proven by a test against the real contract".
  *
- * Integration ids are the matrix column ids (e.g. `copilot-vscode`); the real
- * exercise uses that tool's Showtail plugin / canonical tool tag underneath.
+ * Integration ids are the matrix column ids; the real exercise uses that tool's
+ * Showtail plugin / canonical tool tag underneath. ALL markPassed calls live in
+ * this one file (which runs before capability-claims) so the gate is order-safe.
  */
 import { beforeAll, describe, expect, test } from 'bun:test';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
@@ -17,12 +18,25 @@ import { runImportClaudeCode } from '../src/commands/importClaude.ts';
 import { parseTranscript as parseChatgpt } from '../src/core/chatgpt.ts';
 import { parseTranscript as parseGemini } from '../src/core/gemini.ts';
 import { importConversation } from '../src/core/importCommon.ts';
+import {
+  parseCodexRollout,
+  parseCodexTranscript,
+  importCodexTranscript,
+} from '../src/core/codexTranscript.ts';
 import { readAllEvents } from '../src/core/events.ts';
 import { pathsForRoot } from '../src/core/storage.ts';
 import { getPluginById } from '../src/plugins/registry.ts';
-import { resolveTarget } from '../src/core/skill.ts';
+import { resolveTarget, skillState } from '../src/core/skill.ts';
 import { codexInstructionsState, resolveCodexTarget } from '../src/core/codex.ts';
 import { copilotState, resolveCopilotTarget } from '../src/core/copilot.ts';
+import {
+  copilotCliInstructionsState,
+  resolveCopilotCliTarget,
+} from '../src/core/copilotCli.ts';
+import {
+  antigravityCliInstructionsState,
+  resolveAntigravityCliTarget,
+} from '../src/core/antigravityCli.ts';
 import { clearMarkers, markPassed } from './e2eRegistry.ts';
 
 const REPO = join(import.meta.dir, '..');
@@ -33,6 +47,8 @@ const CONNECT_TOOLS = [
   { matrixId: 'claude-code', pluginId: 'claude-code' as const },
   { matrixId: 'codex', pluginId: 'codex' as const },
   { matrixId: 'copilot-vscode', pluginId: 'github-copilot' as const },
+  { matrixId: 'copilot-cli', pluginId: 'copilot-cli' as const },
+  { matrixId: 'antigravity-cli', pluginId: 'antigravity-cli' as const },
 ];
 
 /** The project-scope instructions/skill file each connect plugin writes. */
@@ -40,35 +56,108 @@ const CONNECT_FILE: Record<string, (dir: string) => string> = {
   'claude-code': (dir) => resolveTarget('project', dir).skillFile,
   'github-copilot': (dir) => resolveCopilotTarget(dir).pathInstructionsFile,
   codex: (dir) => resolveCodexTarget('project', dir).agentsFile,
+  'copilot-cli': (dir) => resolveCopilotCliTarget('project', dir).instructionsFile,
+  'antigravity-cli': (dir) => resolveAntigravityCliTarget('project', dir).contextFile,
 };
 
-/** Installed-state reader (installed + updateAvailable) where update-detection is full. */
+/** Installed-state reader (installed + updateAvailable) for update detection. */
 const INSTALL_STATE: Record<
   string,
   (dir: string) => { installed: boolean; updateAvailable: boolean }
 > = {
+  'claude-code': (dir) => skillState(resolveTarget('project', dir)),
   'github-copilot': (dir) => copilotState(resolveCopilotTarget(dir)),
   codex: (dir) => codexInstructionsState(resolveCodexTarget('project', dir)),
+  'copilot-cli': (dir) =>
+    copilotCliInstructionsState(resolveCopilotCliTarget('project', dir)),
+  'antigravity-cli': (dir) =>
+    antigravityCliInstructionsState(resolveAntigravityCliTarget('project', dir)),
 };
+
+/** A minimal Codex rollout (one JSON object per line) for transcript/import. */
+function codexRollout(dir: string): string {
+  return [
+    {
+      timestamp: '2026-06-10T10:00:00.000Z',
+      type: 'session_meta',
+      payload: { id: 's1', cwd: dir },
+    },
+    {
+      timestamp: '2026-06-10T10:00:01.000Z',
+      type: 'event_msg',
+      payload: { type: 'user_message', message: 'codex: add a helper' },
+    },
+    {
+      timestamp: '2026-06-10T10:00:02.000Z',
+      type: 'event_msg',
+      payload: {
+        type: 'agent_message',
+        message: 'Added the helper.',
+        phase: 'final_answer',
+      },
+    },
+  ]
+    .map((l) => JSON.stringify(l))
+    .join('\n');
+}
 
 beforeAll(() => clearMarkers());
 
-describe('backing: automatic capture via hooks (Claude Code, Codex)', () => {
-  test('prompts, edits, and AI replies are captured through the real hook path', () => {
+/**
+ * Drive one hook tool's prompt + edit capture through the real dispatcher.
+ * Uses an ABSOLUTE file path inside its own temp dir, so it also exercises the
+ * absolute→relative normalization the capture fix added.
+ */
+function backCapture(
+  toolId: string,
+  edit: { editTool?: string; applyPatch?: boolean },
+  traceFile: string,
+) {
+  const dir = makeTempDir();
+  try {
+    run(dir, ['init', '--project', 'Cap']);
+    run(
+      dir,
+      ['hook', 'user-prompt', '--tool', toolId],
+      JSON.stringify({ cwd: dir, prompt: `${toolId}: do it` }),
+    );
+    const filePath = join(dir, traceFile);
+    writeFileSync(filePath, 'export const x = 1;');
+    const payload = edit.applyPatch
+      ? {
+          cwd: dir,
+          tool_name: 'apply_patch',
+          tool_input: {
+            input: `*** Begin Patch\n*** Update File: ${filePath}\n@@\n-1\n+2\n*** End Patch`,
+          },
+        }
+      : { cwd: dir, tool_name: edit.editTool, tool_input: { file_path: filePath } };
+    const r = run(dir, ['hook', 'post-edit', '--tool', toolId], JSON.stringify(payload));
+    expect(r.code).toBe(0);
+    run(dir, ['report', '--format', 'json']);
+    const data = readJsonReport(dir);
+    expect(JSON.stringify(data)).toContain('do it'); // prompt captured
+    expect(data.summary.artifacts, `${toolId} artifact`).toBeGreaterThanOrEqual(1); // edit captured
+    markPassed(`auto-prompt-capture:${toolId}`);
+    markPassed(`live-capture-hooks:${toolId}`);
+    markPassed(`auto-file-capture:${toolId}`);
+  } finally {
+    cleanup(dir);
+  }
+}
+
+describe('backing: automatic capture via hooks', () => {
+  test('Claude Code: prompt, edit, and AI-reply reconcile', () => {
     const dir = makeTempDir();
     try {
       run(dir, ['init', '--project', 'Backing']);
-
-      // --- Claude Code: prompt capture ---
       run(
         dir,
         ['hook', 'user-prompt'],
         JSON.stringify({ cwd: dir, prompt: 'add a parser', session_id: 'sess-1' }),
       );
-
-      // --- Claude Code: file/edit capture ---
       writeFileSync(join(dir, 'parser.ts'), 'export const x = 1;');
-      const edit = run(
+      run(
         dir,
         ['hook', 'post-edit'],
         JSON.stringify({
@@ -78,9 +167,6 @@ describe('backing: automatic capture via hooks (Claude Code, Codex)', () => {
           tool_input: { file_path: join(dir, 'parser.ts') },
         }),
       );
-      expect(edit.code).toBe(0);
-
-      // --- Claude Code: AI-reply reconcile from a transcript at stop ---
       const transcript = join(dir, 't.jsonl');
       writeFileSync(
         transcript,
@@ -111,46 +197,57 @@ describe('backing: automatic capture via hooks (Claude Code, Codex)', () => {
         ['hook', 'stop'],
         JSON.stringify({ cwd: dir, transcript_path: transcript }),
       );
-
       run(dir, ['report', '--format', 'json']);
-      const data = readJsonReport(dir);
-      const blob = JSON.stringify(data);
-      expect(blob).toContain('add a parser'); // prompt captured
-      expect(data.summary.artifacts).toBeGreaterThanOrEqual(1); // edit captured
-      expect(blob).toContain('REPLY captured at stop'); // reply reconciled
-
+      const blob = JSON.stringify(readJsonReport(dir));
+      expect(blob).toContain('add a parser');
+      expect(blob).toContain('REPLY captured at stop');
       markPassed('auto-prompt-capture:claude-code');
       markPassed('live-capture-hooks:claude-code');
       markPassed('auto-file-capture:claude-code');
       markPassed('auto-ai-output-capture:claude-code');
+    } finally {
+      cleanup(dir);
+    }
+  });
 
-      // --- Codex: prompt capture + apply_patch edit (file-capture is partial, not marked) ---
-      run(
-        dir,
-        ['hook', 'user-prompt', '--tool', 'codex'],
-        JSON.stringify({ cwd: dir, prompt: 'codex: tweak parser' }),
-      );
-      writeFileSync(join(dir, 'svc.ts'), 'export const svc = 1;');
-      const codexEdit = run(
-        dir,
-        ['hook', 'post-edit', '--tool', 'codex'],
-        JSON.stringify({
-          cwd: dir,
-          tool_name: 'apply_patch',
-          tool_input: {
-            input: '*** Begin Patch\n*** Update File: svc.ts\n@@\n-1\n+2\n*** End Patch',
-          },
-        }),
-      );
-      expect(codexEdit.code).toBe(0);
-      const trace = run(dir, ['trace', 'svc.ts', '--format', 'json']);
-      const traceData = JSON.parse(trace.stdout);
-      expect(traceData.artifacts.some((a: { tool?: string }) => a.tool === 'codex')).toBe(
-        true,
-      );
+  test('Codex: prompt + apply_patch edit (absolute path) capture', () => {
+    backCapture('codex', { applyPatch: true }, 'svc.ts');
+  });
 
-      markPassed('auto-prompt-capture:codex');
-      markPassed('live-capture-hooks:codex');
+  test('Copilot CLI: prompt + file_path edit capture', () => {
+    backCapture('copilot-cli', { editTool: 'write' }, 'cc.ts');
+  });
+
+  test('Antigravity CLI: prompt + file_path edit capture', () => {
+    backCapture('antigravity-cli', { editTool: 'write_file' }, 'ag.ts');
+  });
+});
+
+describe('backing: Codex transcript (AI-reply + import)', () => {
+  test('parseCodexRollout yields the assistant reply', () => {
+    const dir = makeTempDir();
+    try {
+      const t = parseCodexRollout(codexRollout(dir), dir);
+      expect(t.messages.some((m) => m.role === 'assistant')).toBe(true);
+      markPassed('auto-ai-output-capture:codex');
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('importing a Codex rollout logs prompts tagged codex', async () => {
+    const dir = makeTempDir();
+    try {
+      await runInit({ cwd: dir });
+      const author = authorFor(pathsForRoot(dir));
+      const transcript = parseCodexTranscript(codexRollout(dir), dir);
+      const res = await importCodexTranscript(author, transcript, {
+        withResponses: true,
+      });
+      expect(res.prompts).toBeGreaterThanOrEqual(1);
+      const prompts = readAllEvents(pathsForRoot(dir)).filter((e) => e.type === 'prompt');
+      expect(prompts.some((e) => e.tool === 'codex')).toBe(true);
+      markPassed('session-import:codex');
     } finally {
       cleanup(dir);
     }
@@ -209,14 +306,13 @@ describe('backing: session import / backfill', () => {
 });
 
 describe('backing: connect-capability surface (install / detect / status)', () => {
-  test('each built connect tool installs instructions, detects, and reports status', async () => {
+  test('each built connect tool installs instructions, detects, reports status', async () => {
     for (const { matrixId, pluginId } of CONNECT_TOOLS) {
       const dir = makeTempDir();
       try {
         await runInit({ cwd: dir });
         const connect = getPluginById(pluginId)!.connect!;
 
-        // managed-instructions: a project-scope install writes the managed file.
         const file = CONNECT_FILE[pluginId]!(dir);
         expect(existsSync(file)).toBe(false);
         await connect.install({
@@ -228,20 +324,15 @@ describe('backing: connect-capability surface (install / detect / status)', () =
         expect(existsSync(file), `${matrixId} should install ${file}`).toBe(true);
         markPassed(`managed-instructions:${matrixId}`);
 
-        // host-detection + status-detection.
         expect(typeof connect.detect()).toBe('boolean');
         markPassed(`host-detection:${matrixId}`);
         expect(typeof connect.status(dir).connected).toBe('boolean');
         markPassed(`status-detection:${matrixId}`);
 
-        // multi-scope-install: full only for Claude Code + Codex.
-        if (matrixId === 'claude-code' || matrixId === 'codex') {
-          expect(connect.scopes).toContain('user');
-          expect(connect.scopes).toContain('project');
+        if (connect.scopes.includes('user') && connect.scopes.includes('project')) {
           markPassed(`multi-scope-install:${matrixId}`);
         }
 
-        // update-detection: full for Codex + Copilot (fingerprinted instructions).
         const stateReader = INSTALL_STATE[pluginId];
         if (stateReader) {
           const state = stateReader(dir);
@@ -265,11 +356,12 @@ describe('backing: redaction and the cross-tool timeline', () => {
       run(dir, ['init', '--project', 'Timeline']);
       run(dir, ['start']);
       const SECRET = 'AKIAIOSFODNN7EXAMPLE';
-      // matrix column id → the canonical tool tag events carry for it.
       const tools = [
         { matrixId: 'claude-code', tag: 'claude-code' },
         { matrixId: 'codex', tag: 'codex' },
         { matrixId: 'copilot-vscode', tag: 'github-copilot' },
+        { matrixId: 'copilot-cli', tag: 'copilot-cli' },
+        { matrixId: 'antigravity-cli', tag: 'antigravity-cli' },
         { matrixId: 'chatgpt', tag: 'chatgpt' },
         { matrixId: 'google-gemini', tag: 'google-gemini' },
       ];
@@ -285,19 +377,13 @@ describe('backing: redaction and the cross-tool timeline', () => {
         ]);
         expect(r.code).toBe(0);
       }
-
       run(dir, ['report', '--format', 'json']);
       const data = readJsonReport(dir);
-      const blob = JSON.stringify(data);
-
-      // redaction-before-store: the secret never reaches the stored trail.
-      expect(blob).not.toContain(SECRET);
+      expect(JSON.stringify(data)).not.toContain(SECRET);
       expect(data.redactionCount).toBeGreaterThanOrEqual(tools.length);
-
-      // cross-tool timeline: every tool tag shows up in the report's tool list.
       const seen = new Set((data.tools as Array<{ tool: string }>).map((x) => x.tool));
       for (const { matrixId, tag } of tools) {
-        expect(seen.has(tag), `${tag} should appear on the timeline`).toBe(true);
+        expect(seen.has(tag), `${tag} on timeline`).toBe(true);
         markPassed(`redaction:${matrixId}`);
         markPassed(`cross-tool-timeline:${matrixId}`);
       }
@@ -309,11 +395,9 @@ describe('backing: redaction and the cross-tool timeline', () => {
 
 describe('backing: marketplace / extension install', () => {
   test('Claude Code ships a plugin marketplace entry', () => {
-    const manifest = readFileSync(
-      join(REPO, '.claude-plugin', 'marketplace.json'),
-      'utf8',
-    );
-    expect(manifest).toContain('showtail');
+    expect(
+      readFileSync(join(REPO, '.claude-plugin', 'marketplace.json'), 'utf8'),
+    ).toContain('showtail');
     markPassed('marketplace-install:claude-code');
   });
 

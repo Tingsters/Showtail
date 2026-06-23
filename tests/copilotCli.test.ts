@@ -60,9 +60,7 @@ describe('copilot-cli install / uninstall', () => {
 
       const hooks = JSON.parse(readFileSync(target.hooksFile, 'utf8'));
       const post = hooks.hooks.PostToolUse as Array<{ hooks: { command: string }[] }>;
-      const ours = post.filter((g) =>
-        g.hooks?.[0]?.command?.includes('showtail hook'),
-      );
+      const ours = post.filter((g) => g.hooks?.[0]?.command?.includes('showtail hook'));
       expect(ours).toHaveLength(1);
     } finally {
       cleanup(dir);

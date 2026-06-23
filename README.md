@@ -180,21 +180,21 @@ Solo? Nothing changes — you are simply the only author, and the team report is
 
 Showtail works with many AI coding tools, and support depth varies by tool. This table shows what each integration can do today — every ✅ is backed by an end-to-end test, so it genuinely works against the real tool.
 
-<!-- showtail:start sha=367e697da8f7 -->
+<!-- showtail:start sha=ff614e04fc72 -->
 | Capability | Claude Code | OpenAI Codex | ChatGPT | Copilot (VS Code) | Copilot CLI | Copilot Desktop | Antigravity CLI | Antigravity IDE | Google Gemini | Zed | Notes |
 | --- | :-: | :-: | :-: | :-: | :-: | :-: | :-: | :-: | :-: | :-: | --- |
-| **Live-capture hooks** | ✅ | ✅ | ⛔ | 🚧 | 🗺️ | 🗺️ | 🗺️ | 🗺️ | ⛔ | ⛔ | Copilot (VS Code) captures via its extension, not lifecycle hooks; Zed has no hook system. |
-| **Auto prompt capture** | ✅ | ✅ | ⛔ | 🚧 | 🗺️ | 🗺️ | 🗺️ | 🗺️ | ⛔ | ⛔ | Copilot (VS Code) relies on model-driven instructions, so it is best-effort. |
-| **Auto file/edit capture** | ✅ | 🚧 | ⛔ | 🚧 | 🗺️ | 🗺️ | 🗺️ | 🗺️ | ⛔ | ⛔ | Codex live apply_patch capture is not yet verified; Copilot (VS Code) snapshots on save with no diff. |
-| **Auto AI-reply capture** | ✅ | 🗺️ | ⛔ | 🗺️ | 🗺️ | 🗺️ | 🗺️ | 🗺️ | ⛔ | ⛔ | Needs the tool’s stop-hook plus a readable transcript; planned wherever both exist. |
-| **Session import / backfill** | ✅ | 🗺️ | ✅ | 🗺️ | 🗺️ | 🗺️ | 🗺️ | 🗺️ | ✅ | 🗺️ | Planned wherever the tool writes a readable transcript (Zed: only via manual Markdown export). |
-| **Managed instructions** | ✅ | ✅ | ⛔ | ✅ | 🗺️ | 🗺️ | 🗺️ | 🗺️ | ⛔ | 🗺️ | Planned wherever the tool reads an instructions/rules file. |
-| **Instruction update detection** | 🚧 | ✅ | ⛔ | ✅ | 🗺️ | 🗺️ | 🗺️ | 🗺️ | ⛔ | 🗺️ | Claude Code’s skill has no fingerprint, so stale/edited skills aren’t detected. |
-| **User + project install** | ✅ | ✅ | ⛔ | 🚧 | 🗺️ | 🗺️ | 🗺️ | 🗺️ | ⛔ | 🗺️ | Copilot (VS Code) is project-scoped only (.github/). |
-| **Host detection (setup)** | ✅ | ✅ | ⛔ | ✅ | 🗺️ | 🗺️ | 🗺️ | 🗺️ | ⛔ | 🗺️ | Hosted web apps have nothing local to detect. |
-| **Connection status** | ✅ | ✅ | ⛔ | ✅ | 🗺️ | 🗺️ | 🗺️ | 🗺️ | ⛔ | 🗺️ | Needs a local footprint to inspect; web apps have none. |
-| **Secret/PII redaction** | ✅ | ✅ | ✅ | ✅ | 🗺️ | 🗺️ | 🗺️ | 🗺️ | ✅ | 🗺️ | Applies automatically once any capture or import path for the tool exists. |
-| **Cross-tool timeline** | ✅ | ✅ | ✅ | ✅ | 🗺️ | 🗺️ | 🗺️ | 🗺️ | ✅ | 🗺️ | Any captured or imported event from the tool joins the shared timeline. |
+| **Live-capture hooks** | ✅ | ✅ | ⛔ | 🚧 | 🚧 | 🗺️ | 🚧 | 🗺️ | ⛔ | ⛔ | CLI plugins are built + contract-tested; live capture is certified only where the tool could be driven here (Copilot CLI needs a token; Antigravity hooks didn’t fire headlessly). Copilot (VS Code) uses its extension; Zed has no hooks. |
+| **Auto prompt capture** | ✅ | ✅ | ⛔ | 🚧 | 🚧 | 🗺️ | 🚧 | 🗺️ | ⛔ | ⛔ | Live-certified for Claude Code + Codex; the CLI plugins are built but their live capture isn’t certified here. Copilot (VS Code) is model-driven. |
+| **Auto file/edit capture** | ✅ | 🚧 | ⛔ | 🚧 | 🚧 | 🗺️ | 🚧 | 🗺️ | ⛔ | ⛔ | Codex live apply_patch capture isn’t snapshotted in headless runs here; the CLI plugins are contract-tested but not live-certified. Copilot (VS Code) snapshots on save with no AI diff. |
+| **Auto AI-reply capture** | ✅ | ✅ | ⛔ | 🗺️ | 🗺️ | 🗺️ | 🗺️ | 🗺️ | ⛔ | ⛔ | Needs the tool’s stop-hook plus a readable transcript; planned wherever both exist. |
+| **Session import / backfill** | ✅ | ✅ | ✅ | 🗺️ | 🗺️ | 🗺️ | 🗺️ | 🗺️ | ✅ | 🗺️ | Planned wherever the tool writes a readable transcript (Zed: only via manual Markdown export). |
+| **Managed instructions** | ✅ | ✅ | ⛔ | ✅ | ✅ | 🗺️ | ✅ | 🗺️ | ⛔ | 🗺️ | Planned wherever the tool reads an instructions/rules file. |
+| **Instruction update detection** | ✅ | ✅ | ⛔ | ✅ | ✅ | 🗺️ | ✅ | 🗺️ | ⛔ | 🗺️ | Detected via a managed-block fingerprint in each tool’s instructions/skill file. |
+| **User + project install** | ✅ | ✅ | ⛔ | 🚧 | ✅ | 🗺️ | ✅ | 🗺️ | ⛔ | 🗺️ | Copilot (VS Code) is project-scoped only (.github/). |
+| **Host detection (setup)** | ✅ | ✅ | ⛔ | ✅ | ✅ | 🗺️ | ✅ | 🗺️ | ⛔ | 🗺️ | Hosted web apps have nothing local to detect. |
+| **Connection status** | ✅ | ✅ | ⛔ | ✅ | ✅ | 🗺️ | ✅ | 🗺️ | ⛔ | 🗺️ | Needs a local footprint to inspect; web apps have none. |
+| **Secret/PII redaction** | ✅ | ✅ | ✅ | ✅ | ✅ | 🗺️ | ✅ | 🗺️ | ✅ | 🗺️ | Applies automatically once any capture or import path for the tool exists. |
+| **Cross-tool timeline** | ✅ | ✅ | ✅ | ✅ | ✅ | 🗺️ | ✅ | 🗺️ | ✅ | 🗺️ | Any captured or imported event from the tool joins the shared timeline. |
 | **Marketplace/extension install** | ✅ | 🗺️ | ⛔ | ✅ | 🗺️ | 🗺️ | 🗺️ | 🗺️ | ⛔ | 🗺️ | Codex/Copilot CLI/Antigravity expose a marketplace; a Showtail installer just isn’t published there yet. |
 
 **Key:** ✅ Full · 🚧 Partial · 🗺️ Planned · ⛔ Unsupported
