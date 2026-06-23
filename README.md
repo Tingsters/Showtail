@@ -176,6 +176,63 @@ Solo? Nothing changes — you are simply the only author, and the team report is
 
 ---
 
+## Integration capability matrix
+
+Support depth varies by integration. This matrix is generated from a single source of truth (`src/core/capabilityMatrix.ts`) and every ✅ cell is backed by an end-to-end test, so "fully implemented" means it works against the real tool. Regenerate with `showtail matrix --write-readme`.
+
+<!-- showtail:start sha=9d0b65849838 -->
+| Capability | Claude Code | GitHub Copilot | OpenAI Codex | Gemini CLI | ChatGPT | Google Gemini | CLI |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| **Live-capture hooks** | ✅ Full | 🟡 Partial [1] | ✅ Full | 🟡 Partial [2] | ⚪ Not planned [3] | ⚪ Not planned [4] | ⚪ Not planned [5] |
+| **Auto prompt capture** | ✅ Full | 🟡 Partial [6] | ✅ Full | 🟡 Partial [7] | ⚪ Not planned [3] | ⚪ Not planned [4] | ⚪ Not planned [5] |
+| **Auto file/edit capture** | ✅ Full | 🟡 Partial [8] | 🟡 Partial [9] | 🟡 Partial [7] | ⚪ Not planned [3] | ⚪ Not planned [4] | ⚪ Not planned [5] |
+| **Auto AI-reply capture** | ✅ Full | ⚪ Not planned [10] | 🔵 Planned [11] | 🔵 Planned [12] | ⚪ Not planned [13] | ⚪ Not planned [14] | ⚪ Not planned [5] |
+| **Session import / backfill** | ✅ Full | ⚪ Not planned [15] | ⚪ Not planned [16] | ⚪ Not planned [17] | ✅ Full | ✅ Full | ⚪ Not planned [18] |
+| **Managed instructions** | ✅ Full | ✅ Full | ✅ Full | ✅ Full | ⚪ Not planned [19] | ⚪ Not planned [20] | ⚪ Not planned [21] |
+| **Instruction update detection** | 🟡 Partial [22] | ✅ Full | ✅ Full | ✅ Full | ⚪ Not planned [3] | ⚪ Not planned [4] | ⚪ Not planned [23] |
+| **User + project install** | ✅ Full | 🟡 Partial [24] | ✅ Full | ✅ Full | ⚪ Not planned [3] | ⚪ Not planned [4] | ⚪ Not planned [25] |
+| **Host detection (setup)** | ✅ Full | ✅ Full | ✅ Full | ✅ Full | ⚪ Not planned [26] | ⚪ Not planned [26] | ⚪ Not planned [27] |
+| **Connection status** | ✅ Full | ✅ Full | ✅ Full | ✅ Full | ⚪ Not planned [3] | ⚪ Not planned [4] | 🟡 Partial [28] |
+| **Secret/PII redaction** | ✅ Full | ✅ Full | ✅ Full | ✅ Full | ✅ Full | ✅ Full | ✅ Full |
+| **Cross-tool timeline** | ✅ Full | ✅ Full | ✅ Full | ✅ Full | ✅ Full | ✅ Full | ✅ Full |
+| **Marketplace/extension install** | ✅ Full | ✅ Full | ⚪ Not planned [29] | ⚪ Not planned [29] | ⚪ Not planned [3] | ⚪ Not planned [4] | ⚪ Not planned [30] |
+
+**Legend:** ✅ fully implemented · 🟡 partial (see notes) · 🔵 planned · ⚪ not planned (constraint).
+
+**Notes:**
+
+1. No lifecycle hooks; capture happens through the VS Code extension on file save, so non-VS-Code sessions are uncovered.
+2. Hooks install, but the payload field names are not yet verified end-to-end against a live Gemini CLI.
+3. No live-capture surface; this integration is import-only.
+4. Hosted web app — nothing runs locally for Showtail to hook into.
+5. CLI is the manual fallback; events are logged explicitly, not captured.
+6. Model-driven: the managed instructions ask Copilot to log prompts, but it is best-effort, not guaranteed.
+7. Rides the same hook path; pending live verification (see live-capture hooks).
+8. The VS Code extension snapshots on save, but captures no AI-suggested diff and misses non-VS-Code edits.
+9. Edit-capture is implemented and passes contract tests, but a live apply_patch edit was not snapshotted in LLM-driven runs against this Codex build, so it is not yet live-certified (its prompt capture is).
+10. No hook or transcript surface; replies are never auto-captured.
+11. The reconcile logic is generic, but Codex exposes no session transcript, so the stop hook is a no-op until it does.
+12. The reconcile logic is generic, but Gemini CLI exposes no session transcript, so the stop hook is a no-op until it does.
+13. No live-capture surface; this integration is import-only. Replies arrive via import instead (see session import).
+14. Hosted web app — nothing runs locally for Showtail to hook into. Replies arrive via import instead (see session import).
+15. Copilot has no conversation export to import.
+16. Codex keeps no exportable transcript Showtail can read back.
+17. Gemini CLI keeps no exportable transcript Showtail can read back.
+18. Nothing to import; the CLI logs events directly.
+19. No live-capture surface; this integration is import-only. There is no model surface to instruct.
+20. Hosted web app — nothing runs locally for Showtail to hook into. There is no model surface to instruct.
+21. The CLI is Showtail itself — no host instructions to manage.
+22. The skill is rewritten wholesale with no managed-block fingerprint, so stale/edited skills are not detected (status reports no updateAvailable).
+23. No managed instructions to version.
+24. Project-scoped only (.github/); there is no user-scope install.
+25. No install step.
+26. Hosted web app — nothing runs locally for Showtail to hook into. Nothing to detect.
+27. The CLI is always present — detection is moot.
+28. Session state shows in `status`, but the CLI has no connect row of its own.
+29. No marketplace/extension surface to publish into.
+30. Installed directly as the Showtail binary.
+<!-- showtail:end -->
+
 ## Claude Code integration
 
 If you work with [Claude Code](https://claude.com/claude-code), Showtail can help build the trail for you. Install the bundled skill, which includes auto-capture hooks by default:

@@ -4,6 +4,7 @@ import { runInit } from './commands/init.ts';
 import { runEnsure } from './commands/ensure.ts';
 import { runSetup } from './commands/setup.ts';
 import { runCapabilities } from './commands/capabilities.ts';
+import { runMatrix } from './commands/matrix.ts';
 import { runStart } from './commands/start.ts';
 import { runEnd } from './commands/end.ts';
 import { runLog } from './commands/log.ts';
@@ -196,6 +197,30 @@ program
   .option('--json', 'output machine-readable JSON')
   .action(
     action(async (opts: { json?: boolean }) => runCapabilities({ json: opts.json })),
+  );
+
+program
+  .command('matrix')
+  .alias('integrations')
+  .description(
+    'Show which capabilities each AI tool integration supports (the capability matrix).',
+  )
+  .helpGroup(G_REVIEW)
+  .option('--json', 'output machine-readable JSON')
+  .option('--write-readme', "regenerate the README's matrix block (maintainers)")
+  .option(
+    '--verify-live',
+    'drive installed tools live to certify capture cells (maintainers)',
+  )
+  .action(
+    action(
+      async (opts: { json?: boolean; writeReadme?: boolean; verifyLive?: boolean }) =>
+        runMatrix({
+          json: opts.json,
+          writeReadme: opts.writeReadme,
+          verifyLive: opts.verifyLive,
+        }),
+    ),
   );
 
 program

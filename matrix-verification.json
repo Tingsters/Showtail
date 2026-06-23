@@ -1,0 +1,50 @@
+{
+  "version": 1,
+  "entries": [
+    {
+      "capability": "auto-file-capture",
+      "integration": "claude-code",
+      "testId": "auto-file-capture:claude-code",
+      "tier": "live",
+      "verifiedAt": "2026-06-22T23:57:09.251Z",
+      "toolVersion": "2.1.186 (Claude Code)",
+      "commit": "74b181b"
+    },
+    {
+      "capability": "auto-prompt-capture",
+      "integration": "claude-code",
+      "testId": "auto-prompt-capture:claude-code",
+      "tier": "live",
+      "verifiedAt": "2026-06-22T23:57:09.251Z",
+      "toolVersion": "2.1.186 (Claude Code)",
+      "commit": "74b181b"
+    },
+    {
+      "capability": "auto-prompt-capture",
+      "integration": "codex",
+      "testId": "auto-prompt-capture:codex",
+      "tier": "live",
+      "verifiedAt": "2026-06-22T23:57:09.251Z",
+      "toolVersion": "codex-cli 0.141.0",
+      "commit": "74b181b"
+    },
+    {
+      "capability": "live-capture-hooks",
+      "integration": "claude-code",
+      "testId": "live-capture-hooks:claude-code",
+      "tier": "live",
+      "verifiedAt": "2026-06-22T23:57:09.251Z",
+      "toolVersion": "2.1.186 (Claude Code)",
+      "commit": "74b181b"
+    },
+    {
+      "capability": "live-capture-hooks",
+      "integration": "codex",
+      "testId": "live-capture-hooks:codex",
+      "tier": "live",
+      "verifiedAt": "2026-06-22T23:57:09.251Z",
+      "toolVersion": "codex-cli 0.141.0",
+      "commit": "74b181b"
+    }
+  ]
+}
