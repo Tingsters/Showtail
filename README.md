@@ -178,7 +178,7 @@ Solo? Nothing changes — you are simply the only author, and the team report is
 
 ## Integration capability matrix
 
-Support depth varies by integration. This matrix is generated from a single source of truth (`src/core/capabilityMatrix.ts`) and every ✅ cell is backed by an end-to-end test, so "fully implemented" means it works against the real tool. Regenerate with `showtail matrix --write-readme`.
+Showtail works with many AI coding tools, and support depth varies by tool. This table shows what each integration can do today — every ✅ is backed by an end-to-end test, so it genuinely works against the real tool.
 
 <!-- showtail:start sha=367e697da8f7 -->
 | Capability | Claude Code | OpenAI Codex | ChatGPT | Copilot (VS Code) | Copilot CLI | Copilot Desktop | Antigravity CLI | Antigravity IDE | Google Gemini | Zed | Notes |

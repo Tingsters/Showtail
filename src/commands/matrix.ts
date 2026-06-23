@@ -8,12 +8,7 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import {
-  applyManagedBlock,
-  blockFor,
-  parseBlock,
-  writeIfChanged,
-} from '../core/managedBlock.ts';
+import { blockFor, parseBlock, writeIfChanged } from '../core/managedBlock.ts';
 import { emitJson } from '../core/output.ts';
 import { matrixJson, renderMatrixMarkdown } from '../core/capabilityMatrix.ts';
 import {
@@ -39,37 +34,42 @@ function readmePath(): string {
 
 const SECTION_HEADING = '## Integration capability matrix';
 const SECTION_INTRO =
-  'Support depth varies by integration. This matrix is generated from a single ' +
-  'source of truth (`src/core/capabilityMatrix.ts`) and every ✅ cell is backed ' +
-  'by an end-to-end test, so "fully implemented" means it works against the real ' +
-  'tool. Regenerate with `showtail matrix --write-readme`.';
+  'Showtail works with many AI coding tools, and support depth varies by tool. ' +
+  'This table shows what each integration can do today — every ✅ is backed by an ' +
+  'end-to-end test, so it genuinely works against the real tool.';
 
 /** The anchor the matrix section is inserted before, the first integration section. */
 const ANCHOR = '## Claude Code integration';
 
 /**
- * Insert or refresh the matrix's managed block in README. If the block already
- * exists, {@link applyManagedBlock} refreshes it in place; otherwise the whole
- * section (heading + intro + block) is spliced in just before the first
- * per-integration section.
+ * Insert or refresh the matrix section in README. If the section already exists,
+ * its heading, intro, and managed block are replaced atomically (so the intro —
+ * which lives outside the markers — stays in sync); otherwise the whole section
+ * is spliced in just before the first per-integration section.
  */
 function writeReadme(): void {
   const file = readmePath();
   const body = renderMatrixMarkdown();
   const current = existsSync(file) ? readFileSync(file, 'utf8') : '';
+  const section = `${SECTION_HEADING}\n\n${SECTION_INTRO}\n\n${blockFor(body)}`;
 
-  if (parseBlock(current)) {
-    // Block already present — refresh its contents in place (force: it's ours).
-    applyManagedBlock(file, body, '', true);
+  const block = parseBlock(current);
+  const headingIdx = current.indexOf(SECTION_HEADING);
+  if (block && headingIdx !== -1 && headingIdx < block.startIndex) {
+    // Section already present — replace heading + intro + block atomically so the
+    // intro (which lives outside the managed markers) stays in sync too.
+    writeIfChanged(
+      file,
+      current.slice(0, headingIdx) + section + current.slice(block.endIndex),
+    );
     return;
   }
 
-  const section = `${SECTION_HEADING}\n\n${SECTION_INTRO}\n\n${blockFor(body)}\n`;
   const idx = current.indexOf(ANCHOR);
   const next =
     idx === -1
-      ? `${current.trimEnd()}\n\n${section}`
-      : `${current.slice(0, idx)}${section}\n${current.slice(idx)}`;
+      ? `${current.trimEnd()}\n\n${section}\n`
+      : `${current.slice(0, idx)}${section}\n\n${current.slice(idx)}`;
   writeIfChanged(file, next);
 }
 
