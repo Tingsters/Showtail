@@ -21,6 +21,10 @@ import {
   resolveAntigravityCliTarget,
   writeAntigravityCliInstructions,
 } from '../core/antigravityCli.ts';
+import {
+  locateAntigravityCliTranscript,
+  readAntigravityCliTranscript,
+} from '../core/antigravityCliTranscript.ts';
 import { commandOnPath, homeDirExists } from '../core/detect.ts';
 import {
   extractEditedFiles,
@@ -29,7 +33,28 @@ import {
   extractSuggestedCode,
   type HookPayload,
 } from '../core/hookInput.ts';
-import type { EnvironmentPlugin } from './types.ts';
+import type { EnvironmentPlugin, HookTranscript } from './types.ts';
+
+/**
+ * Locate this session's Antigravity transcript and normalize it for the generic
+ * stop reconcile. Antigravity writes a JSONL transcript per conversation under
+ * `~/.gemini/antigravity-cli/brain/<id>/.system_generated/logs/transcript.jsonl`;
+ * the hook payload carries no transcript path, so we find it ourselves — by the
+ * payload's session id (the conversation/brain dir name), else the newest brain.
+ * Captures the student's prompts, the planner's replies, and (Antigravity's
+ * signature) its generated PLANS / task lists. Returns null when none is on disk
+ * or it can't be parsed, leaving Stop a no-op.
+ */
+function antigravityCliGetTranscript(raw: unknown, root: string): HookTranscript | null {
+  const sid = extractSessionId(raw as HookPayload | null);
+  const info = locateAntigravityCliTranscript(sid);
+  if (!info) return null;
+  try {
+    return readAntigravityCliTranscript(info, root);
+  } catch {
+    return null; // Unreadable/unsupported transcript — nothing to capture.
+  }
+}
 
 export const antigravityCliPlugin: EnvironmentPlugin = {
   id: 'antigravity-cli',
@@ -111,7 +136,10 @@ export const antigravityCliPlugin: EnvironmentPlugin = {
       // Antigravity's own dirs: ~/.gemini (shared config/transcripts) and the
       // workspace .agents/ dir (hooks + rules). Never snapshot edits to these.
       internalPaths: [/(^|[\\/])\.gemini([\\/]|$)/, /(^|[\\/])\.agents([\\/]|$)/],
-      // Antigravity CLI provides no Claude-style transcript, so stop is a no-op.
+      // Antigravity writes a per-conversation JSONL transcript under
+      // ~/.gemini/antigravity-cli/brain; locate it (by session id, else newest)
+      // and reconcile prompts/replies/plans from it at Stop.
+      getTranscript: antigravityCliGetTranscript,
     },
   },
 };
