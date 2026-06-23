@@ -21,6 +21,10 @@ import {
   resolveCopilotCliTarget,
   writeCopilotCliInstructions,
 } from '../core/copilotCli.ts';
+import {
+  findCopilotCliSession,
+  parseCopilotCliTranscript,
+} from '../core/copilotCliTranscript.ts';
 import { commandOnPath, homeDirExists } from '../core/detect.ts';
 import {
   extractEditedFiles,
@@ -29,7 +33,26 @@ import {
   extractSuggestedCode,
   type HookPayload,
 } from '../core/hookInput.ts';
-import type { EnvironmentPlugin } from './types.ts';
+import { existsSync, readFileSync } from 'node:fs';
+import type { EnvironmentPlugin, HookTranscript } from './types.ts';
+
+/**
+ * On stop, read the just-finished session's `events.jsonl` and normalize it for
+ * the generic stop reconcile. Copilot CLI hook payloads carry no transcript
+ * path, so — like Codex — we locate the session under ~/.copilot/session-state
+ * ourselves: by the payload's session id, else the newest. Returns null when
+ * nothing readable is found, so stop stays a safe no-op.
+ */
+function copilotCliGetTranscript(raw: unknown, root: string): HookTranscript | null {
+  const sid = extractSessionId(raw as HookPayload | null);
+  const info = findCopilotCliSession(sid);
+  if (!info || !existsSync(info.path)) return null;
+  try {
+    return parseCopilotCliTranscript(readFileSync(info.path, 'utf8'), root);
+  } catch {
+    return null; // Unreadable/unsupported log — nothing to capture.
+  }
+}
 
 export const copilotCliPlugin: EnvironmentPlugin = {
   id: 'copilot-cli',
@@ -108,7 +131,12 @@ export const copilotCliPlugin: EnvironmentPlugin = {
       },
       // Copilot CLI's own config/state live under ~/.copilot; never snapshot edits there.
       internalPaths: [/(^|[\\/])\.copilot([\\/]|$)/],
-      // Copilot CLI provides no Claude-style transcript, so stop is a no-op.
+      // Copilot CLI hook payloads carry no transcript path, so we locate the
+      // session's events.jsonl under ~/.copilot/session-state ourselves (by
+      // session id, else newest) and read AI replies from it. Note: Copilot CLI
+      // records no plan/decision construct in its event log, so only assistant
+      // replies (and prompts) are reconciled — see copilotCliTranscript.ts.
+      getTranscript: copilotCliGetTranscript,
     },
   },
 };
