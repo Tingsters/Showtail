@@ -199,6 +199,7 @@ async function importPaths(
     prompts: 0,
     responses: 0,
     edits: 0,
+    plans: 0,
     skipped: 0,
   };
   let imported = 0;
@@ -215,6 +216,7 @@ async function importPaths(
     totals.prompts += res.prompts;
     totals.responses += res.responses;
     totals.edits += res.edits;
+    totals.plans += res.plans;
     totals.skipped += res.skipped;
     if (res.first && (!totals.first || res.first < totals.first))
       totals.first = res.first;
@@ -326,7 +328,7 @@ function printResult(
   withResponses: boolean,
   sessionCount: number,
 ): void {
-  const total = res.prompts + res.responses + res.edits;
+  const total = res.prompts + res.responses + res.edits + res.plans;
   if (total === 0) {
     console.log(
       res.skipped > 0
@@ -339,6 +341,7 @@ function printResult(
   const parts = [`${res.prompts} prompt(s)`];
   if (withResponses) parts.push(`${res.responses} response(s)`);
   parts.push(`${res.edits} edit(s)`);
+  if (res.plans) parts.push(`${res.plans} plan(s)`);
   const from = sessionCount > 1 ? `${sessionCount} Codex sessions` : 'your Codex session';
   console.log(`Imported from ${from}: ${parts.join(', ')} (tool: codex).`);
   if (res.skipped) console.log(`  ${res.skipped} already-imported item(s) skipped.`);

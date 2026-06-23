@@ -20,6 +20,13 @@
  *     duplicates it; we key replies off `agent_message`.
  *   - `response_item`/`custom_tool_call` name=`apply_patch` — an edit. `payload.input`
  *     is the apply-patch envelope; `payload.call_id` is a stable id.
+ *   - `response_item`/`function_call` name=`update_plan` — Codex's plan/todo list.
+ *     `payload.arguments` is a JSON string `{ explanation?, plan: [{step,status}] }`;
+ *     `payload.call_id` is a stable id. Codex runs headless and never asks the
+ *     student to approve its plan (the parallel `function_call_output` is just
+ *     "Plan updated"), so a Codex plan carries no approval — and Codex has no
+ *     ask-the-user/decision construct at all (the only tools are apply_patch,
+ *     shell_command and update_plan), so we never emit a `decision` message.
  *
  * Everything is local and best-effort: malformed lines are skipped, never thrown.
  */
@@ -29,13 +36,17 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { importedSourceIds } from './events.ts';
 import { asArray, asString, isObject, prop } from './parse.ts';
+import { PLAN_APPROVED_TAG } from './plans.ts';
 import { toRepoRelative, type AuthorPaths } from './storage.ts';
 import type { HookTranscript, HookTranscriptMessage } from '../plugins/types.ts';
 
 /** A normalized message recovered from a Codex rollout. */
 export interface CodexMessage {
-  /** "user" (typed prompt), "assistant" (text reply), or "edit" (a file changed). */
-  role: 'user' | 'assistant' | 'edit';
+  /**
+   * "user" (typed prompt), "assistant" (text reply), "edit" (a file changed), or
+   * "plan" (a todo/plan list Codex built via its `update_plan` tool).
+   */
+  role: 'user' | 'assistant' | 'edit' | 'plan';
   text: string;
   /** ISO-8601 timestamp from the rollout line, if present. */
   timestamp?: string;
@@ -215,6 +226,7 @@ export function parseCodexTranscript(content: string, root: string): CodexTransc
   // deterministically across re-imports of the same (append-only) rollout.
   let userSeq = 0;
   let asstSeq = 0;
+  let planSeq = 0;
 
   for (const rawLine of content.split(/\r?\n/)) {
     const line = rawLine.trim();
@@ -273,6 +285,25 @@ export function parseCodexTranscript(content: string, root: string): CodexTransc
           ? `codex:edit:${callId}`
           : `codex:edit:${sessionId ?? '?'}:${messages.length}`,
       });
+    } else if (type === 'response_item' && pType === 'function_call') {
+      // Codex's plan/todo list. `arguments` is a JSON *string*: the steps live
+      // under `plan: [{ step, status }]`, with an optional `explanation`. There's
+      // no approval to resolve — Codex runs headless and never asks (the
+      // function_call_output is a bare "Plan updated") — so the message stands
+      // alone with no second pass.
+      if (prop(payload, 'name') !== 'update_plan') continue;
+      const text = renderCodexPlan(asString(prop(payload, 'arguments')));
+      if (!text) continue;
+      const callId = asString(prop(payload, 'call_id'));
+      messages.push({
+        role: 'plan',
+        text,
+        timestamp,
+        sourceId: callId
+          ? `codex:plan:${callId}`
+          : `codex:plan:${sessionId ?? '?'}:${planSeq}`,
+      });
+      planSeq += 1;
     }
   }
 
@@ -281,6 +312,38 @@ export function parseCodexTranscript(content: string, root: string): CodexTransc
     title: sessionId ? `Codex session ${sessionId.slice(0, 8)}` : 'Codex session',
     messages,
   };
+}
+
+/**
+ * Render Codex's `update_plan` arguments into readable plan markdown — an
+ * optional explanation line followed by a checklist of steps, each marked by its
+ * status (`completed` → checked, `in_progress` → arrow, anything else → empty
+ * box). `arguments` is a JSON *string*; returns undefined for a missing/empty or
+ * unparseable payload so the caller skips it.
+ */
+function renderCodexPlan(args: string | undefined): string | undefined {
+  if (!args) return undefined;
+  let obj: unknown;
+  try {
+    obj = JSON.parse(args);
+  } catch {
+    return undefined;
+  }
+  const steps = asArray(prop(obj, 'plan'));
+  if (!steps || steps.length === 0) return undefined;
+
+  const lines: string[] = [];
+  for (const item of steps) {
+    const step = asString(prop(item, 'step'))?.trim();
+    if (!step) continue;
+    const status = asString(prop(item, 'status'));
+    const mark = status === 'completed' ? '[x]' : status === 'in_progress' ? '[→]' : '[ ]';
+    lines.push(`- ${mark} ${step}`);
+  }
+  if (lines.length === 0) return undefined;
+
+  const explanation = asString(prop(obj, 'explanation'))?.trim();
+  return explanation ? `${explanation}\n\n${lines.join('\n')}` : lines.join('\n');
 }
 
 /** Repo-relative, in-repo, non-internal file paths named by an apply_patch envelope. */
@@ -299,7 +362,9 @@ function filesFromEnvelope(envelope: string, root: string): string[] {
 /**
  * Parse a rollout into the tool-agnostic {@link HookTranscript} the generic stop
  * reconcile in commands/hook.ts consumes. `edit` messages are dropped — the
- * post-edit hook already records those — leaving prompts and assistant replies.
+ * post-edit hook already records those — leaving prompts, assistant replies, and
+ * plans. A Codex plan is always marked `approved` (Codex runs headless and never
+ * asks for approval), so the reconcile tags it as an approved plan.
  */
 export function parseCodexRollout(content: string, root: string): HookTranscript {
   const parsed = parseCodexTranscript(content, root);
@@ -311,6 +376,7 @@ export function parseCodexRollout(content: string, root: string): HookTranscript
       text: m.text,
       timestamp: m.timestamp,
       sourceId: m.sourceId,
+      ...(m.role === 'plan' ? { approved: true } : {}),
     });
   }
   return { sessionId: parsed.sessionId, messages };
@@ -386,6 +452,7 @@ export interface CodexImportResult {
   prompts: number;
   responses: number;
   edits: number;
+  plans: number;
   skipped: number;
   first?: string;
   last?: string;
@@ -414,6 +481,7 @@ export async function importCodexTranscript(
     prompts: 0,
     responses: 0,
     edits: 0,
+    plans: 0,
     skipped: 0,
   };
 
@@ -433,7 +501,14 @@ export async function importCodexTranscript(
         ? 'prompt'
         : msg.role === 'assistant'
           ? 'ai_output'
-          : 'artifact';
+          : msg.role === 'plan'
+            ? 'plan'
+            : 'artifact';
+
+    // Codex plans aren't approved (headless), so they always carry the
+    // approved tag, mirroring how Claude tags an approved plan.
+    const tags =
+      msg.role === 'plan' ? ['imported', PLAN_APPROVED_TAG] : ['imported'];
 
     const { event } = await logEvent(author, {
       type,
@@ -444,13 +519,14 @@ export async function importCodexTranscript(
       batchId: options.batchId,
       sessionId: options.sessionId,
       files: msg.files,
-      tags: ['imported'],
+      tags,
       turnId: msg.role === 'user' ? undefined : currentTurnId,
     });
     if (msg.role === 'user') currentTurnId = event.id;
 
     if (msg.role === 'user') result.prompts += 1;
     else if (msg.role === 'assistant') result.responses += 1;
+    else if (msg.role === 'plan') result.plans += 1;
     else result.edits += 1;
 
     if (msg.timestamp) {

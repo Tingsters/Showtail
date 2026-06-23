@@ -2,6 +2,8 @@ import { describe, expect, test } from 'bun:test';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseCodexRollout, parseCodexTranscript } from '../src/core/codexTranscript.ts';
+import { readAllEvents } from '../src/core/events.ts';
+import { pathsForRoot } from '../src/core/storage.ts';
 import { cleanup, makeTempDir, readJsonReport, runCli } from './helpers.ts';
 
 /** Run `showtail <args>` in `cwd`, optionally piping `input` to stdin. */
@@ -52,6 +54,33 @@ function makeRollout(dir: string): string {
       timestamp: '2026-06-22T23:57:05.000Z',
       type: 'response_item',
       payload: { type: 'reasoning', summary: [] },
+    },
+    // Codex's update_plan tool — a plan/todo list. `arguments` is a JSON string.
+    {
+      timestamp: '2026-06-22T23:57:05.500Z',
+      type: 'response_item',
+      payload: {
+        type: 'function_call',
+        name: 'update_plan',
+        call_id: 'call_plan1',
+        arguments: JSON.stringify({
+          plan: [
+            { step: 'Read notes.txt', status: 'completed' },
+            { step: 'Rewrite the contents', status: 'in_progress' },
+            { step: 'Verify the change', status: 'pending' },
+          ],
+        }),
+      },
+    },
+    // The plan's result line — a bare "Plan updated" (no approval). Ignored.
+    {
+      timestamp: '2026-06-22T23:57:05.600Z',
+      type: 'response_item',
+      payload: {
+        type: 'function_call_output',
+        call_id: 'call_plan1',
+        output: 'Plan updated',
+      },
     },
     // The edit via apply_patch — kept (in-repo file).
     {
@@ -120,6 +149,7 @@ describe('parseCodexTranscript', () => {
       expect(roles.filter((r) => r === 'user').length).toBe(1);
       expect(roles.filter((r) => r === 'assistant').length).toBe(1);
       expect(roles.filter((r) => r === 'edit').length).toBe(1);
+      expect(roles.filter((r) => r === 'plan').length).toBe(1);
 
       const blob = parsed.messages.map((m) => m.text).join('\n');
       expect(blob).not.toContain('AGENTS.md');
@@ -129,6 +159,13 @@ describe('parseCodexTranscript', () => {
       const edit = parsed.messages.find((m) => m.role === 'edit')!;
       expect(edit.files).toEqual(['notes.txt']);
 
+      // The plan renders the steps as a status checklist, keyed by call_id.
+      const plan = parsed.messages.find((m) => m.role === 'plan')!;
+      expect(plan.sourceId).toBe('codex:plan:call_plan1');
+      expect(plan.text).toContain('[x] Read notes.txt');
+      expect(plan.text).toContain('[→] Rewrite the contents');
+      expect(plan.text).toContain('[ ] Verify the change');
+
       // Timestamps preserved for back-dating.
       expect(parsed.messages[0]!.timestamp).toBe('2026-06-22T23:57:04.000Z');
     } finally {
@@ -136,14 +173,19 @@ describe('parseCodexTranscript', () => {
     }
   });
 
-  test('parseCodexRollout drops edits, keeping the tool-agnostic prompt/reply', () => {
+  test('parseCodexRollout drops edits, keeping prompt/plan/reply', () => {
     const dir = makeTempDir();
     try {
       const t = parseCodexRollout(makeRollout(dir), dir);
       expect(t.sessionId).toBe('sess-codex-1');
-      expect(t.messages.map((m) => m.role)).toEqual(['user', 'assistant']);
+      // The plan flows through (between prompt and reply); the edit is dropped.
+      expect(t.messages.map((m) => m.role)).toEqual(['user', 'plan', 'assistant']);
       expect(t.messages[0]!.text).toContain('banana-codex');
-      expect(t.messages[1]!.text).toBe('Done.');
+      const plan = t.messages.find((m) => m.role === 'plan')!;
+      expect(plan.text).toContain('Read notes.txt');
+      // Codex plans are headless — always marked approved for the reconcile.
+      expect(plan.approved).toBe(true);
+      expect(t.messages[t.messages.length - 1]!.text).toBe('Done.');
     } finally {
       cleanup(dir);
     }
@@ -228,6 +270,73 @@ describe('codex getTranscript (stop reconcile)', () => {
       const turn = data.turns.find((t: any) => t.prompt.text === 'add a retry to fetch');
       expect(turn).toBeDefined();
       expect(turn.aiOutputs.map((o: any) => o.text)).toEqual(['Added retry to fetch.']);
+    } finally {
+      if (prev === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = prev;
+      cleanup(dir);
+      cleanup(codexHome);
+    }
+  });
+
+  test('reconciles an update_plan into an approved plan event', () => {
+    const dir = makeTempDir();
+    const codexHome = makeTempDir();
+    const prev = process.env.CODEX_HOME;
+    process.env.CODEX_HOME = codexHome;
+    try {
+      run(dir, ['init', '--project', 'Codex Plan Stop']);
+      run(dir, ['hook', 'session-start']);
+
+      const day = join(codexHome, 'sessions', '2026', '06', '22');
+      const rolloutName =
+        'rollout-2026-06-22T23-58-00-019ef1c4-1899-7a90-bb9f-b09bca10e92d.jsonl';
+      const sid = '019ef1c4-1899-7a90-bb9f-b09bca10e92d';
+      const lines = [
+        { type: 'session_meta', payload: { id: sid, cwd: dir } },
+        {
+          timestamp: new Date(Date.now() + 1000).toISOString(),
+          type: 'event_msg',
+          payload: { type: 'user_message', message: 'build a hello world script' },
+        },
+        // Codex's plan/todo list (update_plan); arguments is a JSON string.
+        {
+          timestamp: new Date(Date.now() + 2000).toISOString(),
+          type: 'response_item',
+          payload: {
+            type: 'function_call',
+            name: 'update_plan',
+            call_id: 'call_planA',
+            arguments: JSON.stringify({
+              plan: [
+                { step: 'Pick a language', status: 'completed' },
+                { step: 'Write the script', status: 'in_progress' },
+              ],
+            }),
+          },
+        },
+        {
+          timestamp: new Date(Date.now() + 3000).toISOString(),
+          type: 'event_msg',
+          payload: { type: 'agent_message', message: 'Done.' },
+        },
+      ];
+      const { mkdirSync, writeFileSync: wf } = require('node:fs');
+      mkdirSync(day, { recursive: true });
+      wf(join(day, rolloutName), lines.map((l: unknown) => JSON.stringify(l)).join('\n'));
+
+      run(
+        dir,
+        ['hook', 'stop', '--tool', 'codex'],
+        JSON.stringify({ cwd: dir, session_id: sid }),
+      );
+
+      const paths = pathsForRoot(dir);
+      const plans = readAllEvents(paths).filter((e) => e.type === 'plan');
+      expect(plans.length).toBe(1);
+      expect(plans[0]!.tool).toBe('codex');
+      expect(plans[0]!.tags).toContain('plan-approved');
+      expect(plans[0]!.text).toContain('Pick a language');
+      expect(plans[0]!.text).toContain('Write the script');
     } finally {
       if (prev === undefined) delete process.env.CODEX_HOME;
       else process.env.CODEX_HOME = prev;

@@ -38,6 +38,22 @@ function makeRollout(dir: string): string {
           '\n+export const foo = () => {};\n*** End Patch\n',
       },
     },
+    // Codex's update_plan tool — a plan/todo list (arguments is a JSON string).
+    {
+      timestamp: '2026-06-22T10:00:02.500Z',
+      type: 'response_item',
+      payload: {
+        type: 'function_call',
+        name: 'update_plan',
+        call_id: 'call_plan_imp',
+        arguments: JSON.stringify({
+          plan: [
+            { step: 'Add the foo function', status: 'completed' },
+            { step: 'Add a test', status: 'pending' },
+          ],
+        }),
+      },
+    },
     {
       timestamp: '2026-06-22T10:00:03.000Z',
       type: 'event_msg',
@@ -68,6 +84,11 @@ describe('codex import (end to end via --file)', () => {
       expect(imported.filter((e) => e.type === 'prompt').length).toBe(2);
       expect(imported.filter((e) => e.type === 'ai_output').length).toBe(1);
       expect(imported.filter((e) => e.type === 'artifact').length).toBe(1);
+      // The update_plan becomes a `plan` event, tagged approved (Codex is headless).
+      const plans = imported.filter((e) => e.type === 'plan');
+      expect(plans.length).toBe(1);
+      expect(plans[0]!.tags).toContain('plan-approved');
+      expect(plans[0]!.text).toContain('Add the foo function');
       expect(imported.every((e) => e.batchId)).toBe(true);
       expect(imported.every((e) => e.tags?.includes('imported'))).toBe(true);
       expect(imported.every((e) => e.timestamp.startsWith('2026-06-22'))).toBe(true);
