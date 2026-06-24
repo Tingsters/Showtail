@@ -1,5 +1,4 @@
-import { mkdtempSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { existsSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, test } from 'bun:test';
 import {
@@ -9,7 +8,6 @@ import {
   runImportAntigravityIde,
 } from '../src/commands/importAntigravityIde.ts';
 import { runInit } from '../src/commands/init.ts';
-import { antigravityIdeScratchDir } from '../src/core/antigravityIdeTranscript.ts';
 import { importedArtifactSourceIds } from '../src/core/artifacts.ts';
 import { readAllEvents } from '../src/core/events.ts';
 import { pathsForRoot } from '../src/core/storage.ts';
@@ -106,11 +104,13 @@ describe('importAntigravityIdeEdits', () => {
 });
 
 describe('runImportAntigravityIde --auto routes by edited-file paths', () => {
-  test('edits under a tracked .showtail/ project land in that project', async () => {
+  test('edits route to their nearest enclosing .showtail/ trail (idempotently)', async () => {
     const proj = makeTempDir();
     try {
       await runInit({ cwd: proj });
-      const editPath = `${proj.replace(/\\/g, '/')}/src/a.py`;
+      // Edit sits deep under the project — no closer `.showtail/`, so it routes up
+      // to the project root, exactly like any other tool's capture.
+      const editPath = `${proj.replace(/\\/g, '/')}/deeply/nested/app.py`;
       const file = join(proj, 'transcript.jsonl');
       writeFileSync(file, makeTranscript(editPath), 'utf8');
 
@@ -126,39 +126,31 @@ describe('runImportAntigravityIde --auto routes by edited-file paths', () => {
       ).toBe(true);
       // The edited file was recorded as an artifact tagged antigravity-ide.
       expect(importedArtifactSourceIds(authorFor(paths)).size).toBeGreaterThan(0);
-    } finally {
-      cleanup(proj);
-    }
-  });
-
-  test('edits under no project go to the scratch trail (created on first use)', async () => {
-    const prevGemini = process.env.GEMINI_HOME;
-    const gemini = mkdtempSync(join(tmpdir(), 'showtail-test-gemini-'));
-    process.env.GEMINI_HOME = gemini;
-    try {
-      const scratch = antigravityIdeScratchDir();
-      // An edit inside the scratch sandbox, under no .showtail/ project.
-      const editPath = `${scratch.replace(/\\/g, '/')}/hello/index.html`;
-      const file = join(gemini, 'transcript.jsonl');
-      writeFileSync(file, makeTranscript(editPath), 'utf8');
-
-      await runImportAntigravityIde(undefined, { auto: true, file });
-
-      const paths = pathsForRoot(scratch); // .showtail/ now exists at the scratch root
-      const events = readAllEvents(paths);
-      expect(
-        events.some((e) => e.type === 'prompt' && e.tool === 'antigravity-ide'),
-      ).toBe(true);
-      expect(importedArtifactSourceIds(authorFor(paths)).size).toBeGreaterThan(0);
 
       // Idempotent: a second auto-run on the same transcript adds nothing.
       const before = readAllEvents(paths).length;
       await runImportAntigravityIde(undefined, { auto: true, file });
       expect(readAllEvents(paths).length).toBe(before);
     } finally {
-      cleanup(gemini);
-      if (prevGemini === undefined) delete process.env.GEMINI_HOME;
-      else process.env.GEMINI_HOME = prevGemini;
+      cleanup(proj);
+    }
+  });
+
+  test('edits under no enclosing trail import nothing (no trail invented)', async () => {
+    const bare = makeTempDir(); // no `.showtail/`, under tmpdir (within the ceiling)
+    try {
+      const editPath = `${bare.replace(/\\/g, '/')}/x/y.py`;
+      const file = join(bare, 'transcript.jsonl');
+      writeFileSync(file, makeTranscript(editPath), 'utf8');
+
+      // cwd also has no enclosing trail, so the no-edit fallback finds nothing.
+      await runImportAntigravityIde(undefined, { auto: true, file, cwd: bare });
+
+      // Nothing was captured and — crucially — no trail was created anywhere.
+      expect(existsSync(join(bare, '.showtail'))).toBe(false);
+      expect(existsSync(join(bare, 'x', '.showtail'))).toBe(false);
+    } finally {
+      cleanup(bare);
     }
   });
 });

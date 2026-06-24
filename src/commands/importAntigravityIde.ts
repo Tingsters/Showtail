@@ -14,9 +14,8 @@
  * core/antigravityIdeTranscript.ts and the shared event logger.
  */
 import { existsSync, readFileSync } from 'node:fs';
-import { basename, dirname, isAbsolute, relative, resolve, sep } from 'node:path';
+import { basename, dirname, isAbsolute, relative } from 'node:path';
 import {
-  antigravityIdeScratchDir,
   findAntigravityIdeTranscripts,
   locateAntigravityIdeTranscript,
   readAntigravityIdeTranscript,
@@ -27,7 +26,6 @@ import { importedSourceIds, logEvent } from '../core/events.ts';
 import { PLAN_APPROVED_TAG, PLAN_REVISED_TAG } from '../core/plans.ts';
 import { makeId } from '../core/ids.ts';
 import { requireActiveAuthor, resolveActiveAuthorForHook } from '../core/authors.ts';
-import { ensureInitialized } from './init.ts';
 import {
   findRoot,
   pathsForRoot,
@@ -361,12 +359,16 @@ async function importIntoRoot(
 }
 
 /**
- * Auto-route a transcript by its edited-file paths. Each edit is filed under the
- * nearest enclosing `.showtail/` project; edits that sit under no project (the
- * IDE's scratch sandbox) go to a dedicated scratch trail, created on first use.
- * The full conversation (prompts/replies/plans) is imported into every project
- * the conversation touched, so each trail is self-contained. Never prompts — this
- * is the headless path; roots whose author can't be resolved silently are skipped.
+ * Auto-route a transcript by its edited-file paths — the headless capture path.
+ * Each edit is filed under its nearest enclosing `.showtail/` trail (`findRoot`),
+ * exactly like every other tool's capture: work under a tracked project lands in
+ * that project; no-folder/scratch work climbs to the nearest ancestor trail (e.g.
+ * a machine-wide `~/.showtail` catch-all). Edits with NO enclosing trail anywhere
+ * are skipped — we never invent a trail (matching Showtail's design). The full
+ * conversation (prompts/replies/plans) is imported into every trail the
+ * conversation touched, so each is self-contained; a conversation with no edits
+ * routes to the invocation cwd's enclosing trail. Never prompts; roots whose
+ * author can't be resolved silently are skipped.
  */
 async function runImportAntigravityIdeAuto(
   target: string | undefined,
@@ -377,7 +379,7 @@ async function runImportAntigravityIdeAuto(
     console.log('No Antigravity IDE conversations were found on disk.');
     return;
   }
-  const transcript = readAntigravityIdeTranscript(info, antigravityIdeScratchDir());
+  const transcript = readAntigravityIdeTranscript(info, options.cwd ?? process.cwd());
   const allEdits = safeExtractEdits(info.path, info.sessionId);
   if (transcript.messages.length === 0 && allEdits.length === 0) {
     console.log(
@@ -386,45 +388,20 @@ async function runImportAntigravityIdeAuto(
     return;
   }
 
-  const scratchRoot = antigravityIdeScratchDir();
-  const scratchPrefix = resolve(scratchRoot) + sep;
-  const isUnderScratch = (p: string): boolean => {
-    const abs = resolve(p);
-    return abs === resolve(scratchRoot) || abs.startsWith(scratchPrefix);
-  };
   const byRoot = new Map<string, TranscriptEdit[]>();
-  const bucket = (root: string): TranscriptEdit[] => {
-    const list = byRoot.get(root) ?? [];
-    byRoot.set(root, list);
-    return list;
-  };
-  let usedScratch = false;
   for (const e of allEdits) {
-    const abs = isAbsolute(e.path) ? e.path : null;
-    // Scratch-sandbox edits are PINNED to the dedicated scratch trail — never let
-    // findRoot climb above `~/.gemini` to a stray `.showtail` (e.g. one at $HOME).
-    let root: string;
-    if (abs && isUnderScratch(abs)) {
-      root = scratchRoot;
-      usedScratch = true;
-    } else {
-      const found = abs ? findRoot(dirname(abs)) : null;
-      root = found ?? scratchRoot;
-      if (!found) usedScratch = true;
-    }
-    bucket(root).push(e);
+    const root = isAbsolute(e.path) ? findRoot(dirname(e.path)) : null;
+    if (!root) continue; // no enclosing trail — don't invent one
+    const list = byRoot.get(root) ?? [];
+    list.push(e);
+    byRoot.set(root, list);
   }
   if (byRoot.size === 0) {
-    // Pure Q&A (no edits): the scratch trail is the only sensible home.
-    bucket(scratchRoot);
-    usedScratch = true;
-  }
-
-  // Create the scratch trail's OWN `.showtail/` on first use. Check for it *at*
-  // the scratch root (not via findRoot, which would climb to a stray ancestor
-  // `.showtail` and wrongly conclude scratch is already tracked).
-  if (usedScratch && !existsSync(pathsForRoot(scratchRoot).config)) {
-    await ensureInitialized(scratchRoot);
+    // No edits resolved to a trail (pure Q&A, or untracked scratch): fall back to
+    // the trail enclosing the invocation cwd, if any. The extension invokes with
+    // cwd = homedir(), so this lands in a machine-wide `~/.showtail` when present.
+    const cwdRoot = findRoot(options.cwd ?? process.cwd());
+    if (cwdRoot) byRoot.set(cwdRoot, []);
   }
 
   const totals: AntigravityIdeImportResult = {
