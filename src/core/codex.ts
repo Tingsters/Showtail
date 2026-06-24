@@ -39,7 +39,11 @@ export const CODEX_HOOK_EVENTS: HookEvents = {
   ],
   PostToolUse: [
     {
-      matcher: 'apply_patch',
+      // `apply_patch` is Codex's structured edit tool; `shell_command` covers
+      // edits Codex makes by running raw shell (e.g. PowerShell `Set-Content`,
+      // redirects, `sed -i`) — common on Windows. Both fire `post-edit`; the
+      // hook then recovers the touched files from the payload or via git.
+      matcher: 'apply_patch|shell_command',
       hooks: [{ type: 'command', command: 'showtail hook post-edit --tool codex' }],
     },
   ],

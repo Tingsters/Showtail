@@ -1,5 +1,13 @@
-import { existsSync } from 'node:fs';
-import { addArtifact } from '../core/artifacts.ts';
+import { existsSync, statSync } from 'node:fs';
+import { resolve } from 'node:path';
+import {
+  addArtifact,
+  artifactsForPath,
+  importEditArtifact,
+  importedArtifactSourceIds,
+} from '../core/artifacts.ts';
+import { changedFiles } from '../core/git.ts';
+import { readObject } from '../core/objects.ts';
 import { materializePlan, PLAN_APPROVED_TAG, PLAN_REVISED_TAG } from '../core/plans.ts';
 import { resolveActiveAuthorForHook } from '../core/authors.ts';
 import {
@@ -36,7 +44,7 @@ import {
   updateState,
   type AuthorPaths,
 } from '../core/storage.ts';
-import { recordHookTrace, type HookTrace } from '../core/hookTrace.ts';
+import { recordHookTrace, recordRawPayload, type HookTrace } from '../core/hookTrace.ts';
 import { connectPlugins, getPluginById } from '../plugins/registry.ts';
 import type {
   DiscoveredPlanFile,
@@ -56,6 +64,12 @@ export type HookEvent =
 
 /** Default minutes of inactivity before a session auto-closes. */
 const DEFAULT_IDLE_TIMEOUT_MINUTES = 60;
+
+// How recently a git-changed file must have been modified to be attributed to
+// the current Codex turn by the raw-shell git backstop. Wide enough to cover a
+// slow command, narrow enough to skip files left dirty by earlier turns/manual
+// edits. (See the git fallback in handlePostEdit.)
+const GIT_FALLBACK_WINDOW_MS = 5 * 60_000;
 
 export interface HookOptions {
   cwd?: string;
@@ -162,6 +176,9 @@ export async function runHook(
       root = anchor;
     }
     paths = pathsForRoot(root);
+    // Opt-in (SHOWTAIL_DEBUG_PAYLOAD=1) raw-payload capture, for pinning down a
+    // host's exact PostToolUse payload shape. No-op unless the flag is set.
+    recordRawPayload(paths, event, tool, payload);
     if (!existsSync(paths.config)) return; // Not initialized.
     const config = readConfig(paths);
 
@@ -321,6 +338,28 @@ async function handleUserPrompt(
   // Print nothing: this path must not add anything to the session's context.
 }
 
+/**
+ * Reconstruct a deletion diff (the removed code as `- ` lines) for `repoPath`
+ * from its most recent snapshot's stored diff in this trail — so a deleted file
+ * renders like Claude's code removals. Returns undefined when there's no prior
+ * in-trail content to show (then the deletion is recorded as nothing).
+ */
+function deletionDiff(author: AuthorPaths, repoPath: string): string | undefined {
+  const history = artifactsForPath(author, repoPath);
+  for (let i = history.length - 1; i >= 0; i--) {
+    const ref = history[i]?.diffHash;
+    if (!ref) continue;
+    const prior = readObject(author.shared, ref);
+    if (!prior) continue;
+    const removed = prior
+      .split('\n')
+      .filter((l) => l.startsWith('+ '))
+      .map((l) => '- ' + l.slice(2));
+    if (removed.length > 0) return removed.join('\n');
+  }
+  return undefined;
+}
+
 async function handlePostEdit(
   author: AuthorPaths,
   payload: HookPayload | null,
@@ -340,19 +379,88 @@ async function handlePostEdit(
     readState(author.shared).currentPromptId ??
     undefined;
   trace.turnId = turnId;
-  // Capture the AI-suggested code (unless code capture is turned off).
-  const diff = config.settings.captureCode === false ? undefined : ev.suggestedDiff;
+  const captureOff = config.settings.captureCode === false;
   let edits = 0;
-  for (const file of ev.editedFiles) {
-    if (isInternalPath(file)) continue;
-    try {
-      await addArtifact(author, { filePath: file, tool, turnId, diff });
-      edits += 1;
-    } catch {
-      // File may have been moved/deleted by now — skip it quietly.
+  if (ev.edits && ev.edits.length > 0) {
+    // Per-file edits with their own clean diffs (Codex apply_patch). Each file
+    // renders only its own change, and a removed file renders as a deletion —
+    // matching how Claude Code's edits look in the report.
+    for (const e of ev.edits) {
+      if (isInternalPath(e.file)) continue;
+      if (e.deleted) {
+        // Show the removed code as red `- ` lines, reconstructed from this
+        // file's most recent snapshot in the trail (its prior content).
+        const del = captureOff ? undefined : deletionDiff(author, e.file);
+        if (
+          del &&
+          importEditArtifact(author, { path: e.file, diff: del, tool, turnId })
+        ) {
+          edits += 1;
+        }
+        continue;
+      }
+      try {
+        await addArtifact(author, {
+          filePath: e.file,
+          tool,
+          turnId,
+          diff: captureOff ? undefined : e.diff,
+        });
+        edits += 1;
+      } catch {
+        // File may have been moved/deleted by now — skip it quietly.
+      }
+    }
+  } else {
+    // Legacy path: one captured diff applied to each edited file (Claude/Gemini).
+    const diff = captureOff ? undefined : ev.suggestedDiff;
+    for (const file of ev.editedFiles) {
+      if (isInternalPath(file)) continue;
+      try {
+        await addArtifact(author, { filePath: file, tool, turnId, diff });
+        edits += 1;
+      } catch {
+        // File may have been moved/deleted by now — skip it quietly.
+      }
     }
   }
   trace.edits = edits;
+
+  // Git backstop for hosts that edit via raw shell (declared by the plugin's
+  // `recoverEditsFromGit`). Such tools can write files by running shell (e.g.
+  // Codex's PowerShell `Set-Content`) where the path lives in a variable and
+  // isn't in the payload. When structured parsing captured nothing, recover
+  // recently-changed files from git. Gated on empty-parse so it never double-
+  // captures; the recency window keeps it from sweeping up stale/manual changes
+  // already dirty in the tree (the accepted trade-off for raw-shell coverage).
+  if (
+    edits === 0 &&
+    adapterFor(tool)?.recoverEditsFromGit &&
+    config.settings.git !== false
+  ) {
+    const cwd = payload.cwd ?? author.shared.root;
+    const cutoff = Date.now() - GIT_FALLBACK_WINDOW_MS;
+    let recovered = 0;
+    for (const file of await changedFiles(cwd)) {
+      if (isInternalPath(file)) continue;
+      // `file` is repo-relative; resolve against the trail root (the same base
+      // addArtifact uses) so the mtime check and the snapshot agree on one path.
+      const abs = resolve(author.shared.root, file);
+      try {
+        if (statSync(abs).mtimeMs < cutoff) continue; // not touched this turn
+        // A raw-shell write carries no diff in the payload — snapshot only.
+        await addArtifact(author, { filePath: file, tool, turnId });
+        recovered += 1;
+      } catch {
+        // Moved/deleted/unreadable since git saw it — skip quietly.
+      }
+    }
+    if (recovered > 0) {
+      edits += recovered;
+      trace.edits = edits;
+      trace.gitRecovered = recovered;
+    }
+  }
 
   // For hosts that never fire `Stop` (the Antigravity IDE only dispatches
   // `PostToolUse`), reconcile the transcript here too, so prompts/replies/plans
@@ -425,6 +533,7 @@ async function reconcileFromAdapter(
     trace.replies = summary.replies;
     trace.decisions = summary.decisions;
     trace.plans = summary.plans;
+    if (summary.edits > 0) trace.edits = summary.edits;
     if (summary.backlogSkipped > 0) trace.backlogSkipped = summary.backlogSkipped;
     if (summary.recoveredReplies > 0) trace.recoveredReplies = summary.recoveredReplies;
   }
@@ -439,6 +548,8 @@ interface StopSummary {
   replies: number;
   decisions: number;
   plans: number;
+  /** Per-file diff artifacts imported from the transcript (Codex apply_patch). */
+  edits: number;
   /** Transcript prompts dropped as pre-window backlog (older than the session). */
   backlogSkipped: number;
   /**
@@ -505,6 +616,7 @@ async function reconcileTranscript(
     replies: 0,
     decisions: 0,
     plans: 0,
+    edits: 0,
     backlogSkipped: 0,
     recoveredReplies: 0,
   };
@@ -541,6 +653,8 @@ async function reconcileTranscript(
   }
 
   const seen = importedSourceIds(author);
+  // Edits import as one diff artifact per file, keyed `<sourceId>#<file>`.
+  const seenArtifacts = importedArtifactSourceIds(author);
   const redactCfg = config.settings.redact;
   let currentTurn: string | undefined; // The prompt id replies attach to.
   // The session that owns `currentTurn` — usually the resolved one, but a
@@ -665,8 +779,31 @@ async function reconcileTranscript(
       });
       seen.add(msg.sourceId);
       summary.plans += 1;
+    } else if (msg.role === 'edit') {
+      // Import per-file CLEAN diffs (and deletions) recovered from the host's
+      // transcript — the reliable diff source when the live hook payload carries
+      // the file but not the diff (Codex `apply_patch`). The live snapshot still
+      // records the file hash; the report de-dupes the pair to one code change.
+      if (config.settings.captureCode === false) continue;
+      for (const e of msg.edits ?? []) {
+        if (isInternalPath(e.file) || !e.diff) continue;
+        const editSourceId = `${msg.sourceId}#${e.file}`;
+        if (seenArtifacts.has(editSourceId)) continue;
+        const wrote = importEditArtifact(author, {
+          path: e.file,
+          diff: e.diff,
+          tool,
+          turnId: currentTurn,
+          timestamp: msg.timestamp,
+          sessionId: currentTurnSession,
+          sourceId: editSourceId,
+        });
+        if (wrote) {
+          seenArtifacts.add(editSourceId);
+          summary.edits += 1;
+        }
+      }
     }
-    // `edit` messages are ignored — the post-edit hook already records those.
   }
   return summary;
 }

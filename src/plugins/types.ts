@@ -15,7 +15,10 @@
  *    transcript (share link, saved page, pasted text) into the trail.
  * Most plugins have one; Claude Code has both.
  */
+import type { EditedFile } from '../core/hookInput.ts';
 import type { Tool } from '../types.ts';
+
+export type { EditedFile };
 
 /** Where an integration is installed: per-user (all projects) or per-project. */
 export type InstallScope = 'user' | 'project';
@@ -118,17 +121,31 @@ export interface NormalizedHookEvent {
   editedFiles: string[];
   /** AI-suggested diff/code for the edit, if captured. */
   suggestedDiff?: string;
+  /**
+   * Per-file edits with their own clean diffs (and deletions), when the host
+   * gives file-level detail (Codex `apply_patch`). Preferred over
+   * `editedFiles` + `suggestedDiff` when present, so each file renders only its
+   * own change — and removed files render as a deletion — exactly like Claude.
+   */
+  edits?: EditedFile[];
 }
 
 /** One message of a normalized transcript used for stop-time reconciliation. */
 export interface HookTranscriptMessage {
-  /** 'user' | 'assistant' | 'decision' | 'plan' (others, e.g. 'edit', are ignored). */
+  /** 'user' | 'assistant' | 'decision' | 'plan' | 'edit'. */
   role: string;
   text: string;
   timestamp?: string;
   sourceId: string;
   /** For a 'plan' message: whether the student approved it. */
   approved?: boolean;
+  /**
+   * For an 'edit' message: the per-file edits (clean diffs + deletions) recovered
+   * from the host's transcript/rollout. The generic Stop reconcile imports these
+   * as diff artifacts — the reliable diff source for hosts (Codex) whose live
+   * hook payload carries the file but not the diff.
+   */
+  edits?: EditedFile[];
 }
 
 /** A normalized conversation transcript, in order. */
@@ -182,6 +199,15 @@ export interface HookAdapter {
    * Safe because the reconcile dedups by sourceId; default (unset) = Stop-only.
    */
   reconcileOnPostEdit?: boolean;
+  /**
+   * When a `post-edit` hook captured nothing from the payload, fall back to
+   * snapshotting files git reports as changed (recently). Set for hosts that can
+   * edit files by running raw shell — where the touched path isn't in the
+   * structured payload (e.g. Codex's `shell_command` writing via PowerShell). The
+   * fallback only fires on an empty parse and requires a git repo, so it's inert
+   * for tools that always carry the path. Default (unset) = no git fallback.
+   */
+  recoverEditsFromGit?: boolean;
 }
 
 // --- Import (transcript) ---------------------------------------------------

@@ -33,9 +33,9 @@
       "integration": "codex",
       "testId": "auto-prompt-capture:codex",
       "tier": "live",
-      "verifiedAt": "2026-06-23T03:46:11.899Z",
+      "verifiedAt": "2026-06-24T20:28:40.317Z",
       "toolVersion": "codex-cli 0.141.0",
-      "commit": "e7d08ff"
+      "commit": "8e8e991"
     },
     {
       "capability": "live-capture-hooks",
@@ -60,9 +60,9 @@
       "integration": "codex",
       "testId": "live-capture-hooks:codex",
       "tier": "live",
-      "verifiedAt": "2026-06-23T03:46:11.899Z",
+      "verifiedAt": "2026-06-24T20:28:40.317Z",
       "toolVersion": "codex-cli 0.141.0",
-      "commit": "e7d08ff"
+      "commit": "8e8e991"
     }
   ]
 }

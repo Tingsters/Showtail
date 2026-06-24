@@ -1,9 +1,11 @@
 import { describe, expect, test } from 'bun:test';
 import {
+  applyPatchEdits,
   extractAntigravityEditedFiles,
   extractApplyPatchFiles,
   extractEditedFiles,
   extractPrompt,
+  extractShellCommandFiles,
   extractSuggestedCode,
 } from '../src/core/hookInput.ts';
 
@@ -129,6 +131,130 @@ describe('hookInput', () => {
         extractApplyPatchFiles({ tool_input: { input: 'no headers here' } }),
       ).toEqual([]);
     });
+
+    // Regression: the real Codex `custom_tool_call` shape delivers the envelope
+    // flat (top-level `input` string + `name`), NOT nested under `tool_input`.
+    // The old object-only parser returned [] here, so Codex edits weren't
+    // captured. This is the exact payload that produced `hello_world.py`.
+    test('parses the flat custom_tool_call shape (top-level input string)', () => {
+      const payload = {
+        cwd: '/proj',
+        name: 'apply_patch',
+        arguments: null,
+        input:
+          '*** Begin Patch\n*** Add File: hello_world.py\n' +
+          '+def main() -> None:\n+    print("Hello, world!")\n*** End Patch\n',
+      };
+      expect(extractApplyPatchFiles(payload as any)).toEqual(['hello_world.py']);
+      // The envelope also feeds the suggested-code diff.
+      expect(extractSuggestedCode(payload as any)).toContain(
+        '*** Add File: hello_world.py',
+      );
+    });
+
+    test('tolerates tool_input handed over as a raw envelope string', () => {
+      expect(
+        extractApplyPatchFiles({
+          tool_input: '*** Begin Patch\n*** Update File: a.ts\n*** End Patch' as any,
+        }),
+      ).toEqual(['a.ts']);
+    });
+  });
+
+  describe('extractShellCommandFiles (Codex raw shell)', () => {
+    const cmd = (command: string, cwd = '/proj') =>
+      extractShellCommandFiles({
+        tool_name: 'shell_command',
+        cwd,
+        tool_input: { command },
+      });
+
+    test('PowerShell Set-Content with a literal -LiteralPath/-Path', () => {
+      expect(cmd("Set-Content -LiteralPath 'notes.txt' -Value 'hi'")).toEqual([
+        'notes.txt',
+      ]);
+      expect(cmd('Out-File -FilePath out.log -Encoding ASCII')).toEqual(['out.log']);
+      expect(cmd('Add-Content -Path "logs/app.txt" -Value x')).toEqual(['logs/app.txt']);
+    });
+
+    test('redirects and tee', () => {
+      expect(cmd('echo hi > result.txt')).toEqual(['result.txt']);
+      expect(cmd('cat a | tee -a combined.log')).toEqual(['combined.log']);
+    });
+
+    test('apply_patch run through the shell', () => {
+      expect(
+        cmd(
+          'apply_patch <<EOF\n*** Begin Patch\n*** Add File: gen.ts\n*** End Patch\nEOF',
+        ),
+      ).toEqual(['gen.ts']);
+    });
+
+    test('reads command from a JSON-string arguments field', () => {
+      expect(
+        extractShellCommandFiles({
+          name: 'shell_command',
+          cwd: '/proj',
+          arguments: JSON.stringify({
+            command: "Set-Content -Path 'z.txt' -Value q",
+            timeout_ms: 1000,
+          }),
+        } as any),
+      ).toEqual(['z.txt']);
+    });
+
+    test('skips paths held in a shell variable (git fallback covers those)', () => {
+      // The user's throwaway repro used `$scratch` — unresolvable from text alone.
+      expect(cmd('Set-Content -LiteralPath $scratch -Encoding ASCII')).toEqual([]);
+      expect(cmd('ls -la')).toEqual([]);
+    });
+  });
+});
+
+describe('applyPatchEdits (Codex envelope → clean per-file diffs)', () => {
+  test('Add File → all "+ " lines, no envelope markers (matches Claude Write)', () => {
+    const input =
+      '*** Begin Patch\n*** Add File: hello_world.py\n' +
+      '+def main() -> None:\n+    print("Hello, world!")\n*** End Patch\n';
+    expect(applyPatchEdits({ cwd: '/p', name: 'apply_patch', input } as any)).toEqual([
+      {
+        file: 'hello_world.py',
+        diff: '+ def main() -> None:\n+     print("Hello, world!")',
+      },
+    ]);
+  });
+
+  test('Update File → "+ "/"- " lines only, no @@/context', () => {
+    const input =
+      '*** Begin Patch\n*** Update File: a.ts\n@@\n const keep = 1;\n-const x = 1;\n+const x = 2;\n*** End Patch';
+    expect(applyPatchEdits({ cwd: '/p', tool_input: { input } } as any)).toEqual([
+      { file: 'a.ts', diff: '- const x = 1;\n+ const x = 2;' },
+    ]);
+  });
+
+  test('Delete File → { deleted: true } with no diff', () => {
+    const input = '*** Begin Patch\n*** Delete File: gone.ts\n*** End Patch';
+    expect(applyPatchEdits({ cwd: '/p', input } as any)).toEqual([
+      { file: 'gone.ts', deleted: true },
+    ]);
+  });
+
+  test('multi-file envelope splits into one entry per file', () => {
+    const input =
+      '*** Begin Patch\n' +
+      '*** Add File: new.ts\n+export const a = 1;\n' +
+      '*** Update File: old.ts\n@@\n-let b = 1;\n+let b = 2;\n' +
+      '*** Delete File: dead.ts\n' +
+      '*** End Patch';
+    expect(applyPatchEdits({ cwd: '/p', input } as any)).toEqual([
+      { file: 'new.ts', diff: '+ export const a = 1;' },
+      { file: 'old.ts', diff: '- let b = 1;\n+ let b = 2;' },
+      { file: 'dead.ts', deleted: true },
+    ]);
+  });
+
+  test('returns empty when there is no envelope', () => {
+    expect(applyPatchEdits({ tool_input: { command: 'ls' } } as any)).toEqual([]);
   });
 });
 

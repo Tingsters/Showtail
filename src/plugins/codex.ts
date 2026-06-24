@@ -22,9 +22,11 @@ import {
 } from '../core/codexTranscript.ts';
 import { commandOnPath, homeDirExists } from '../core/detect.ts';
 import {
+  applyPatchEdits,
   extractApplyPatchFiles,
   extractPrompt,
   extractSessionId,
+  extractShellCommandFiles,
   extractSuggestedCode,
   type HookPayload,
 } from '../core/hookInput.ts';
@@ -132,10 +134,19 @@ export const codexPlugin: EnvironmentPlugin = {
     hooks: {
       parse(raw) {
         const p = raw as HookPayload;
+        // Per-file edits with clean diffs (apply_patch) + bare shell-written
+        // files; deduped, apply_patch (diff-bearing) winning over a bare path.
+        const edits = new Map(extractShellCommandFiles(p).map((f) => [f, { file: f }]));
+        for (const e of applyPatchEdits(p)) edits.set(e.file, e);
         return {
           nativeSessionId: extractSessionId(p),
           prompt: extractPrompt(p) ?? undefined,
-          editedFiles: extractApplyPatchFiles(p), // Codex edits via apply_patch
+          // editedFiles kept for the legacy/no-`edits` consumers; `edits` drives
+          // rendering so each file shows only its own change (and deletions).
+          editedFiles: [
+            ...new Set([...extractApplyPatchFiles(p), ...extractShellCommandFiles(p)]),
+          ],
+          edits: [...edits.values()],
           suggestedDiff: extractSuggestedCode(p),
         };
       },
@@ -143,6 +154,10 @@ export const codexPlugin: EnvironmentPlugin = {
       // Codex hook payloads carry no transcript path, so we locate the session's
       // rollout under ~/.codex/sessions ourselves (by session id, else newest).
       getTranscript: codexGetTranscript,
+      // Codex edits via raw `shell_command` (PowerShell Set-Content, redirects)
+      // whose path may live in a shell variable — unparsable from the command.
+      // Let the hook recover such edits from git when the payload yields nothing.
+      recoverEditsFromGit: true,
     },
   },
 

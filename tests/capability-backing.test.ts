@@ -37,6 +37,8 @@ import {
   importCodexTranscript,
 } from '../src/core/codexTranscript.ts';
 import { readAllEvents } from '../src/core/events.ts';
+import { readAllArtifacts } from '../src/core/artifacts.ts';
+import { readObject } from '../src/core/objects.ts';
 import { pathsForRoot } from '../src/core/storage.ts';
 import { getPluginById } from '../src/plugins/registry.ts';
 import { resolveTarget, skillState } from '../src/core/skill.ts';
@@ -275,6 +277,60 @@ describe('backing: Codex transcript (AI-reply + import)', () => {
       cleanup(dir);
     }
   });
+
+  // The REAL file-capture contract: Codex's apply_patch envelope (which arrives in
+  // the rollout, not the live hook payload) reconciles into a CLEAN per-file diff
+  // artifact — no `*** Begin Patch` cruft. This is the path the Stop reconcile and
+  // `import codex` share; the live hook auto-firing is certified separately in the
+  // verification ledger.
+  test('a Codex apply_patch edit reconciles a clean per-file diff', async () => {
+    const dir = makeTempDir();
+    try {
+      await runInit({ cwd: dir });
+      const author = authorFor(pathsForRoot(dir));
+      const rollout = [
+        {
+          timestamp: '2026-06-10T10:00:00.000Z',
+          type: 'session_meta',
+          payload: { id: 'sfc', cwd: dir },
+        },
+        {
+          timestamp: '2026-06-10T10:00:01.000Z',
+          type: 'event_msg',
+          payload: { type: 'user_message', message: 'create svc' },
+        },
+        {
+          timestamp: '2026-06-10T10:00:02.000Z',
+          type: 'response_item',
+          payload: {
+            type: 'custom_tool_call',
+            call_id: 'c1',
+            name: 'apply_patch',
+            input:
+              '*** Begin Patch\n*** Add File: svc.ts\n+export const x = 1;\n*** End Patch\n',
+          },
+        },
+      ]
+        .map((l) => JSON.stringify(l))
+        .join('\n');
+      const transcript = parseCodexTranscript(rollout, dir);
+      const res = await importCodexTranscript(author, transcript, {
+        withResponses: true,
+      });
+      expect(res.edits).toBe(1);
+      const art = readAllArtifacts(pathsForRoot(dir))
+        .filter((a) => a.path === 'svc.ts')
+        .at(-1);
+      const diff = art?.diffHash
+        ? readObject(pathsForRoot(dir), art.diffHash)
+        : undefined;
+      expect(diff).toContain('+ export const x = 1;'); // Claude-style clean diff
+      expect(diff).not.toContain('*** Begin Patch'); // no envelope cruft
+      markPassed('auto-file-capture:codex');
+    } finally {
+      cleanup(dir);
+    }
+  });
 });
 
 describe('backing: session import / backfill', () => {
@@ -491,6 +547,58 @@ describe('backing: plan capture', () => {
       expect(data.plans[0].planPath).toBe('plans/epc.md');
       expect(existsSync(join(dir, '.showtail', 'plans', 'epc.md'))).toBe(true);
       markPassed('plan-capture:claude-code');
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('Codex: an update_plan plan is captured + materialized to a linkable file', async () => {
+    const dir = makeTempDir();
+    try {
+      await runInit({ cwd: dir });
+      const author = authorFor(pathsForRoot(dir));
+      const rollout = [
+        {
+          timestamp: '2026-06-10T10:00:00.000Z',
+          type: 'session_meta',
+          payload: { id: 'spc', cwd: dir },
+        },
+        {
+          timestamp: '2026-06-10T10:00:01.000Z',
+          type: 'event_msg',
+          payload: { type: 'user_message', message: 'plan it' },
+        },
+        {
+          timestamp: '2026-06-10T10:00:02.000Z',
+          type: 'response_item',
+          payload: {
+            type: 'function_call',
+            name: 'update_plan',
+            call_id: 'pl1',
+            arguments: JSON.stringify({
+              plan: [
+                { step: 'Read the file', status: 'completed' },
+                { step: 'Make the change', status: 'pending' },
+              ],
+            }),
+          },
+        },
+      ]
+        .map((l) => JSON.stringify(l))
+        .join('\n');
+      const transcript = parseCodexTranscript(rollout, dir);
+      const res = await importCodexTranscript(author, transcript, {
+        withResponses: true,
+      });
+      expect(res.plans).toBe(1);
+      run(dir, ['report', '--format', 'json']);
+      const data = readJsonReport(dir);
+      expect(data.plans.length).toBe(1);
+      // Codex writes no native plan file; the transcript plan is materialized to a
+      // browsable, linkable file — like Claude Code's.
+      expect(data.plans[0].planPath).toMatch(/^plans\//);
+      expect(existsSync(join(dir, '.showtail', data.plans[0].planPath))).toBe(true);
+      markPassed('plan-capture:codex');
     } finally {
       cleanup(dir);
     }
