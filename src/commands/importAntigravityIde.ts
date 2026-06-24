@@ -13,14 +13,15 @@
  * Mirrors commands/importCodex.ts; reuses the transcript parser in
  * core/antigravityIdeTranscript.ts and the shared event logger.
  */
-import { existsSync } from 'node:fs';
-import { basename } from 'node:path';
+import { existsSync, readFileSync } from 'node:fs';
+import { basename, isAbsolute, relative } from 'node:path';
 import {
   findAntigravityIdeTranscripts,
   locateAntigravityIdeTranscript,
   readAntigravityIdeTranscript,
   type AntigravityIdeTranscriptInfo,
 } from '../core/antigravityIdeTranscript.ts';
+import { importEditArtifact, importedArtifactSourceIds } from '../core/artifacts.ts';
 import { importedSourceIds, logEvent } from '../core/events.ts';
 import { PLAN_APPROVED_TAG, PLAN_REVISED_TAG } from '../core/plans.ts';
 import { makeId } from '../core/ids.ts';
@@ -45,9 +46,86 @@ export interface AntigravityIdeImportResult {
   prompts: number;
   responses: number;
   plans: number;
+  edits: number;
   skipped: number;
   first?: string;
   last?: string;
+}
+
+/** An edited file recovered from a transcript: the path + the IDE's edit note. */
+export interface TranscriptEdit {
+  /** Display path (repo-relative when under `root`, else absolute, posix slashes). */
+  path: string;
+  /** The CODE_ACTION description, recorded as the artifact's "diff" body. */
+  diff: string;
+  timestamp?: string;
+  /** Stable id for idempotent re-import (see importedArtifactSourceIds). */
+  sourceId: string;
+}
+
+/** Convert a `file:///C:/x/y.py` URI to a usable OS path (posix slashes). */
+function fileUriToPath(uri: string): string | null {
+  try {
+    let p = decodeURIComponent(uri);
+    // `file:///C:/…` → `C:/…`; a leading slash before a drive letter is spurious.
+    if (/^\/[A-Za-z]:/.test(p)) p = p.slice(1);
+    p = p.replace(/\\/g, '/');
+    return p.length > 0 ? p : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Make a path repo-relative against `root` when it lives under it; else posix-absolute. */
+function displayPath(p: string, root: string): string {
+  if (!isAbsolute(p)) return p.replace(/\\/g, '/');
+  const rel = relative(root, p).replace(/\\/g, '/');
+  return rel && !rel.startsWith('..') ? rel : p.replace(/\\/g, '/');
+}
+
+/**
+ * Recover the files the IDE edited from a raw transcript. Each `CODE_ACTION` line
+ * describes one file operation and embeds the target as a `file://` URI in its
+ * `content` (e.g. "Created file file:///C:/…/x.py with requested content."). We
+ * pull the path and keep the description as the artifact body. (The parsed
+ * conversation drops edits, so this reads the raw JSONL directly.)
+ */
+export function extractTranscriptEdits(
+  rawContent: string,
+  sessionId: string,
+): TranscriptEdit[] {
+  const out: TranscriptEdit[] = [];
+  let seq = 0;
+  for (const rawLine of rawContent.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line) continue;
+    let obj: {
+      type?: unknown;
+      content?: unknown;
+      created_at?: unknown;
+      step_index?: unknown;
+    };
+    try {
+      obj = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (obj.type !== 'CODE_ACTION') continue;
+    const content = typeof obj.content === 'string' ? obj.content : '';
+    const idx = typeof obj.step_index === 'number' ? String(obj.step_index) : `n${seq++}`;
+    const timestamp = typeof obj.created_at === 'string' ? obj.created_at : undefined;
+    for (const m of content.matchAll(/file:\/\/\/?([^\s)'"]+)/g)) {
+      const p = fileUriToPath(m[1]!);
+      if (!p) continue;
+      out.push({
+        path: p,
+        diff: content.trim() || `Antigravity edited ${p}`,
+        timestamp,
+        sourceId: `agy:edit:${sessionId}:${idx}:${p}`,
+      });
+    }
+  }
+  return out;
 }
 
 /**
@@ -66,6 +144,7 @@ export async function importAntigravityIdeTranscript(
     prompts: 0,
     responses: 0,
     plans: 0,
+    edits: 0,
     skipped: 0,
   };
   // A user prompt opens a turn; the reply/plan that follow link back via this id.
@@ -119,6 +198,36 @@ export async function importAntigravityIdeTranscript(
   }
 
   return result;
+}
+
+/**
+ * Import the edited files recovered from a transcript as back-dated artifacts,
+ * tagged `antigravity-ide`. Idempotent (dedup by sourceId) and de-duped within the
+ * run by sourceId. Returns how many new edit artifacts were written.
+ */
+export function importAntigravityIdeEdits(
+  author: AuthorPaths,
+  edits: TranscriptEdit[],
+  options: { root: string; sessionId?: string; batchId?: string },
+): number {
+  const seen = importedArtifactSourceIds(author);
+  const inRun = new Set<string>();
+  let count = 0;
+  for (const e of edits) {
+    if (seen.has(e.sourceId) || inRun.has(e.sourceId)) continue;
+    inRun.add(e.sourceId);
+    const wrote = importEditArtifact(author, {
+      path: displayPath(e.path, options.root),
+      diff: e.diff,
+      tool: 'antigravity-ide',
+      timestamp: e.timestamp,
+      sessionId: options.sessionId,
+      sourceId: e.sourceId,
+      batchId: options.batchId,
+    });
+    if (wrote) count += 1;
+  }
+  return count;
 }
 
 /** Resolve which transcript to import: `--file`, a `<conversationId>`, else newest. */
@@ -185,11 +294,24 @@ export async function runImportAntigravityIde(
     return;
   }
 
+  const batchId = makeId('imp');
   const res = await importAntigravityIdeTranscript(author, transcript, {
     withResponses: options.withResponses,
     sessionId: options.session,
-    batchId: makeId('imp'),
+    batchId,
   });
+  // The parsed conversation drops edits, so recover edited files from the raw
+  // transcript's CODE_ACTION lines and record them as artifacts under this batch.
+  try {
+    const raw = readFileSync(info.path, 'utf8');
+    res.edits = importAntigravityIdeEdits(
+      author,
+      extractTranscriptEdits(raw, info.sessionId),
+      { root: paths.root, sessionId: options.session, batchId },
+    );
+  } catch {
+    /* edit recovery is best-effort — never fail the conversation import over it */
+  }
   printResult(res, options.withResponses !== false);
 }
 
@@ -220,7 +342,7 @@ function listConversations(): void {
 }
 
 function printResult(res: AntigravityIdeImportResult, withResponses: boolean): void {
-  const total = res.prompts + res.responses + res.plans;
+  const total = res.prompts + res.responses + res.plans + res.edits;
   if (total === 0) {
     console.log(
       res.skipped > 0
@@ -231,6 +353,7 @@ function printResult(res: AntigravityIdeImportResult, withResponses: boolean): v
   }
   const parts = [`${res.prompts} prompt(s)`];
   if (withResponses) parts.push(`${res.responses} response(s)`);
+  if (res.edits) parts.push(`${res.edits} edit(s)`);
   if (res.plans) parts.push(`${res.plans} plan(s)`);
   console.log(
     `Imported from Antigravity IDE: ${parts.join(', ')} (tool: antigravity-ide).`,
