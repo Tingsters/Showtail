@@ -13,6 +13,7 @@ import {
   runAntigravityIdeInstall,
   runAntigravityIdeUninstall,
 } from '../commands/antigravityIde.ts';
+import { runImportAntigravityIde } from '../commands/importAntigravityIde.ts';
 import {
   antigravityIdeAutoCaptureActive,
   antigravityIdeInstructionsState,
@@ -147,5 +148,24 @@ export const antigravityIdePlugin: EnvironmentPlugin = {
       // Stop that won't come. Idempotent — see HookAdapter.reconcileOnPostEdit.
       reconcileOnPostEdit: true,
     },
+  },
+
+  // Live hooks here are unreliable (only PostToolUse fires), so the complete,
+  // truthful record is the on-disk brain transcript — importing it captures the
+  // full conversation independent of hook timing. See commands/importAntigravityIde.
+  import: {
+    command: 'antigravity-ide',
+    aliases: ['agy-ide'],
+    description:
+      'Import an Antigravity IDE conversation (its brain transcript) into your trail.',
+    shape: 'transcript',
+    run: (source, opts) =>
+      runImportAntigravityIde(source, {
+        list: opts.list,
+        withResponses: opts.withResponses,
+        file: opts.file,
+        session: opts.session,
+        cwd: opts.cwd,
+      }),
   },
 };

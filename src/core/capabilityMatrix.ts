@@ -320,6 +320,7 @@ export const CAPABILITIES: Capability[] = [
       codex: full(),
       chatgpt: full(),
       'google-gemini': full(),
+      'antigravity-ide': full(),
     },
   },
   {

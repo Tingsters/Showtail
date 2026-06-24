@@ -27,6 +27,7 @@ import {
 } from './helpers.ts';
 import { runInit } from '../src/commands/init.ts';
 import { runImportClaudeCode } from '../src/commands/importClaude.ts';
+import { importAntigravityIdeTranscript } from '../src/commands/importAntigravityIde.ts';
 import { parseTranscript as parseChatgpt } from '../src/core/chatgpt.ts';
 import { parseTranscript as parseGemini } from '../src/core/gemini.ts';
 import { importConversation } from '../src/core/importCommon.ts';
@@ -298,6 +299,57 @@ describe('backing: session import / backfill', () => {
       const prompts = readAllEvents(pathsForRoot(dir)).filter((e) => e.type === 'prompt');
       expect(prompts.some((e) => e.tool === 'claude-code')).toBe(true);
       markPassed('session-import:claude-code');
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('Antigravity IDE transcript import logs prompt + reply tagged antigravity-ide', async () => {
+    const dir = makeTempDir();
+    try {
+      await runInit({ cwd: dir });
+      const author = authorFor(pathsForRoot(dir));
+      const res = await importAntigravityIdeTranscript(
+        author,
+        {
+          sessionId: 'conv-imp',
+          messages: [
+            {
+              role: 'user',
+              text: 'imported agy-ide prompt',
+              sourceId: 'agy:user:conv-imp:0',
+            },
+            { role: 'assistant', text: 'the reply', sourceId: 'agy:asst:conv-imp:1' },
+          ],
+        },
+        { withResponses: true },
+      );
+      expect(res.prompts).toBeGreaterThanOrEqual(1);
+      const events = readAllEvents(pathsForRoot(dir));
+      expect(
+        events.some((e) => e.type === 'prompt' && e.tool === 'antigravity-ide'),
+      ).toBe(true);
+      expect(
+        events.some((e) => e.type === 'ai_output' && e.tool === 'antigravity-ide'),
+      ).toBe(true);
+      // Idempotent: a second import of the same transcript adds nothing new.
+      const again = await importAntigravityIdeTranscript(
+        author,
+        {
+          sessionId: 'conv-imp',
+          messages: [
+            {
+              role: 'user',
+              text: 'imported agy-ide prompt',
+              sourceId: 'agy:user:conv-imp:0',
+            },
+          ],
+        },
+        { withResponses: true },
+      );
+      expect(again.prompts).toBe(0);
+      expect(again.skipped).toBeGreaterThanOrEqual(1);
+      markPassed('session-import:antigravity-ide');
     } finally {
       cleanup(dir);
     }
