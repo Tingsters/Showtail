@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { cleanup, makeTempDir, readJsonReport, runCli, spawnEnv } from './helpers.ts';
 import { isInternalPath } from '../src/commands/hook.ts';
@@ -907,7 +907,11 @@ describe('Antigravity hooks: stdout "decision" contract (never fail-closed)', ()
       const pe = run(
         dir,
         ['hook', 'post-edit', '--tool', 'antigravity-ide'],
-        JSON.stringify({ cwd: dir, tool_name: 'write_to_file', tool_input: { file_path: file } }),
+        JSON.stringify({
+          cwd: dir,
+          tool_name: 'write_to_file',
+          tool_input: { file_path: file },
+        }),
       );
       expect(pe.code).toBe(0);
       expect(pe.stdout.trim()).toBe(ALLOW);
@@ -926,7 +930,11 @@ describe('Antigravity hooks: stdout "decision" contract (never fail-closed)', ()
       const r = run(
         dir,
         ['hook', 'post-edit', '--tool', 'antigravity-ide'],
-        JSON.stringify({ cwd: dir, tool_name: 'write_to_file', tool_input: { file_path: join(dir, 'x.ts') } }),
+        JSON.stringify({
+          cwd: dir,
+          tool_name: 'write_to_file',
+          tool_input: { file_path: join(dir, 'x.ts') },
+        }),
       );
       expect(r.code).toBe(0);
       expect(r.stdout.trim()).toBe(ALLOW);
@@ -958,12 +966,122 @@ describe('Antigravity hooks: stdout "decision" contract (never fail-closed)', ()
       const r = run(
         dir,
         ['hook', 'post-edit'], // default tool = claude-code
-        JSON.stringify({ cwd: dir, tool_name: 'Edit', tool_input: { file_path: join(dir, 'y.ts') } }),
+        JSON.stringify({
+          cwd: dir,
+          tool_name: 'Edit',
+          tool_input: { file_path: join(dir, 'y.ts') },
+        }),
       );
       expect(r.code).toBe(0);
       expect(r.stdout).toBe(''); // unchanged: claude-code hooks stay silent
     } finally {
       cleanup(dir);
+    }
+  });
+});
+
+describe('Antigravity IDE: reconcile the transcript on PostToolUse (Stop never fires here)', () => {
+  test('post-edit back-fills the prompt + reply from the IDE brain transcript', () => {
+    const home = makeTempDir();
+    const dir = makeTempDir();
+    const gemini = join(home, '.gemini');
+    try {
+      initProject(dir);
+      // Seed the brain transcript the IDE adapter locates (newest under brain/).
+      // Future timestamps keep the prompt in-window vs the session that opens now.
+      const ts = new Date(Date.now() + 5000).toISOString();
+      const logs = join(
+        gemini,
+        'antigravity-ide',
+        'brain',
+        'conv-ide-1',
+        '.system_generated',
+        'logs',
+      );
+      mkdirSync(logs, { recursive: true });
+      writeFileSync(
+        join(logs, 'transcript.jsonl'),
+        [
+          {
+            step_index: 1,
+            source: 'USER_EXPLICIT',
+            type: 'USER_INPUT',
+            content: '<USER_REQUEST>add a retry helper</USER_REQUEST>',
+            created_at: ts,
+          },
+          {
+            step_index: 2,
+            source: 'MODEL',
+            type: 'PLANNER_RESPONSE',
+            status: 'DONE',
+            content: 'Added the retry helper.',
+            created_at: ts,
+          },
+        ]
+          .map((l) => JSON.stringify(l))
+          .join('\n') + '\n',
+      );
+
+      const env = { ...spawnEnv(), GEMINI_HOME: gemini };
+      // No user-prompt/stop hooks fire in this IDE — only post-edit. It must still
+      // reconcile the transcript (reconcileOnPostEdit) so the convo is captured.
+      const r = runCli(dir, ['hook', 'post-edit', '--tool', 'antigravity-ide'], {
+        input: JSON.stringify({ cwd: dir }),
+        env,
+      });
+      expect(r.code).toBe(0);
+      expect(r.stdout.trim()).toBe('{"decision":"allow"}');
+
+      runCli(dir, ['report', '--format', 'json'], { env });
+      const blob = JSON.stringify(readJsonReport(dir));
+      expect(blob).toContain('add a retry helper'); // prompt back-filled from transcript
+      expect(blob).toContain('Added the retry helper.'); // reply reconciled
+    } finally {
+      cleanup(dir);
+      cleanup(home);
+    }
+  });
+
+  test('claude-code post-edit does NOT reconcile (Stop-only; no behavior change)', () => {
+    const home = makeTempDir();
+    const dir = makeTempDir();
+    const gemini = join(home, '.gemini');
+    try {
+      initProject(dir);
+      const ts = new Date(Date.now() + 5000).toISOString();
+      const logs = join(
+        gemini,
+        'antigravity-ide',
+        'brain',
+        'conv-x',
+        '.system_generated',
+        'logs',
+      );
+      mkdirSync(logs, { recursive: true });
+      writeFileSync(
+        join(logs, 'transcript.jsonl'),
+        JSON.stringify({
+          step_index: 1,
+          type: 'USER_INPUT',
+          content: '<USER_REQUEST>should not be captured</USER_REQUEST>',
+          created_at: ts,
+        }) + '\n',
+      );
+      // claude-code lacks reconcileOnPostEdit, so a post-edit must not pull the
+      // IDE transcript (it would also resolve a different adapter anyway).
+      runCli(dir, ['hook', 'post-edit'], {
+        input: JSON.stringify({
+          cwd: dir,
+          tool_name: 'Edit',
+          tool_input: { file_path: join(dir, 'z.ts') },
+        }),
+        env: { ...spawnEnv(), GEMINI_HOME: gemini },
+      });
+      runCli(dir, ['report', '--format', 'json']);
+      expect(JSON.stringify(readJsonReport(dir))).not.toContain('should not be captured');
+    } finally {
+      cleanup(dir);
+      cleanup(home);
     }
   });
 });

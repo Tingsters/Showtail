@@ -353,6 +353,13 @@ async function handlePostEdit(
     }
   }
   trace.edits = edits;
+
+  // For hosts that never fire `Stop` (the Antigravity IDE only dispatches
+  // `PostToolUse`), reconcile the transcript here too, so prompts/replies/plans
+  // are still captured. Idempotent (dedup), so running it per tool step is safe.
+  if (adapterFor(tool)?.reconcileOnPostEdit) {
+    await reconcileFromAdapter(author, payload, tool, config, trace);
+  }
 }
 
 /**
@@ -371,6 +378,25 @@ async function handleStop(
   config: Config,
   trace: HookTrace,
 ): Promise<void> {
+  await reconcileFromAdapter(author, payload, tool, config, trace);
+}
+
+/**
+ * Reconcile the trail against the tool's transcript: pull the adapter's
+ * normalized transcript + any on-disk plan files and walk them into the trail
+ * (back-filling prompts the live hook missed, attributing replies/plans). Used by
+ * the `Stop` hook and — for tools whose host never fires `Stop` (Antigravity IDE
+ * only dispatches `PostToolUse`) — by `post-edit` when `reconcileOnPostEdit` is
+ * set. Idempotent: `reconcileTranscript` dedups by sourceId, so running it on
+ * every tool step converges on the full conversation without duplicating events.
+ */
+async function reconcileFromAdapter(
+  author: AuthorPaths,
+  payload: HookPayload | null,
+  tool: Tool,
+  config: Config,
+  trace: HookTrace,
+): Promise<void> {
   const adapter = adapterFor(tool);
   const transcript = adapter?.getTranscript?.(payload, author.shared.root);
   const fallbackNativeId = parseEvent(adapter, payload).nativeSessionId;
@@ -382,7 +408,7 @@ async function handleStop(
   try {
     planFiles = adapter?.planFiles?.(payload, author.shared.root) ?? [];
   } catch {
-    planFiles = []; // Plan-file discovery is best-effort; never break the stop.
+    planFiles = []; // Plan-file discovery is best-effort; never break the hook.
   }
   const summary = await reconcileTranscript(
     author,

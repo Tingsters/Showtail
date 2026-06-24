@@ -175,6 +175,13 @@ export interface HookAdapter {
    * already on the transcript is materialized instead. Best-effort; never throws.
    */
   planFiles?(raw: unknown, root: string): DiscoveredPlanFile[];
+  /**
+   * Run the transcript reconcile on the `post-edit` hook too, not only on `Stop`.
+   * Set for hosts whose runtime never fires a stop/end hook (the Antigravity IDE
+   * only dispatches `PostToolUse`), so prompts/replies/plans are still captured.
+   * Safe because the reconcile dedups by sourceId; default (unset) = Stop-only.
+   */
+  reconcileOnPostEdit?: boolean;
 }
 
 // --- Import (transcript) ---------------------------------------------------

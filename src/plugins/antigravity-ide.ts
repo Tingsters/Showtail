@@ -140,8 +140,12 @@ export const antigravityIdePlugin: EnvironmentPlugin = {
       internalPaths: [/(^|[\\/])\.gemini([\\/]|$)/, /(^|[\\/])\.agents([\\/]|$)/],
       // The IDE writes a per-conversation JSONL transcript under
       // ~/.gemini/antigravity-ide/brain; locate it (by session id, else newest)
-      // and reconcile prompts/replies/plans from it at Stop.
+      // and reconcile prompts/replies/plans from it.
       getTranscript: antigravityIdeGetTranscript,
+      // This IDE build only dispatches PostToolUse hooks (PreInvocation/Stop never
+      // fire), so reconcile the transcript on post-edit instead of waiting for a
+      // Stop that won't come. Idempotent — see HookAdapter.reconcileOnPostEdit.
+      reconcileOnPostEdit: true,
     },
   },
 };
