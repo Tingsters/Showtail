@@ -17,10 +17,10 @@ import { runImportAntigravityIde } from '../commands/importAntigravityIde.ts';
 import {
   antigravityIdeAutoCaptureActive,
   antigravityIdeInstructionsState,
-  installAntigravityIdeHooks,
   resolveAntigravityIdeTarget,
   writeAntigravityIdeInstructions,
 } from '../core/antigravityIde.ts';
+import { installAntigravityIdeExtension } from '../core/antigravityIdeExtension.ts';
 import {
   locateAntigravityIdeTranscript,
   readAntigravityIdeTranscript,
@@ -76,32 +76,27 @@ export const antigravityIdePlugin: EnvironmentPlugin = {
         description: 'install for this project only [default]',
       },
       {
-        name: 'hooks',
-        flag: '--no-hooks',
-        description: 'skip auto-capture hooks; log prompts/edits yourself',
-      },
-      {
         name: 'force',
         flag: '--force',
         description: 'overwrite existing instructions (take the latest)',
       },
     ],
-    applicableFlags: ['user', 'project', 'hooks', 'force'],
+    applicableFlags: ['user', 'project', 'force'],
 
     detect: () => homeDirExists('.antigravity-ide') || homeDirExists('.gemini'),
 
     autoConnect(cwd) {
       const target = resolveAntigravityIdeTarget('user', cwd);
       writeAntigravityIdeInstructions(target, {});
-      installAntigravityIdeHooks(target);
-      return { hooks: true };
+      // Capture rides on the VS Code extension, not the IDE's (dead) hooks.
+      installAntigravityIdeExtension();
+      return { hooks: false };
     },
 
     install: (opts) =>
       runAntigravityIdeInstall({
         user: opts.user,
         project: opts.project,
-        hooks: opts.hooks,
         force: opts.force,
         cwd: opts.cwd,
       }),

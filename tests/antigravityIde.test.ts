@@ -8,6 +8,7 @@ import {
   antigravityIdeAutoCaptureActive,
   antigravityIdeHooksInstalledAt,
   antigravityIdeInstructionsState,
+  installAntigravityIdeHooks,
   resolveAntigravityIdeTarget,
 } from '../src/core/antigravityIde.ts';
 import { mergeNamedHooks } from '../src/core/namedHooks.ts';
@@ -37,7 +38,7 @@ afterEach(() => {
 });
 
 describe('antigravity-ide install / uninstall', () => {
-  test('install writes instructions block + the global named-bundle hooks.json', async () => {
+  test('default install writes instructions only — never the (dead) hooks.json', async () => {
     const dir = makeTempDir();
     try {
       mkdirSync(join(dir, '.showtail'), { recursive: true });
@@ -46,74 +47,65 @@ describe('antigravity-ide install / uninstall', () => {
 
       expect(existsSync(target.contextFile)).toBe(true);
       expect(readFileSync(target.contextFile, 'utf8')).toContain('showtail:start');
-      // Hooks go to the global file under GEMINI_HOME, not the project dir.
+      // The IDE's lifecycle hooks are dead (only PostToolUse fires); connect must
+      // NOT write the global hooks.json — capture rides on the VS Code extension.
+      expect(existsSync(target.hooksFile)).toBe(false);
+      expect(antigravityIdeAutoCaptureActive(dir)).toBe(false);
+
+      await runAntigravityIdeUninstall({ cwd: dir });
+      expect(existsSync(target.contextFile)).toBe(false);
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('install is idempotent (no duplicate instructions block)', async () => {
+    const dir = makeTempDir();
+    try {
+      mkdirSync(join(dir, '.showtail'), { recursive: true });
+      await runAntigravityIdeInstall({ project: true, cwd: dir });
+      await runAntigravityIdeInstall({ project: true, cwd: dir });
+      const target = resolveAntigravityIdeTarget('project', dir);
+      const context = readFileSync(target.contextFile, 'utf8');
+      expect(context.match(/showtail:start/g)?.length).toBe(1);
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  // The named-hooks machinery stays in core (used to clean up legacy installs and
+  // available behind the scenes); exercise it directly rather than via connect,
+  // which no longer writes hooks for this IDE.
+  test('the named-bundle hook machinery writes the IDE-recognized events', () => {
+    const dir = makeTempDir();
+    try {
+      const target = resolveAntigravityIdeTarget('project', dir);
+      installAntigravityIdeHooks(target);
       expect(target.hooksFile).toBe(join(geminiHomeDir, 'config', 'hooks.json'));
       expect(antigravityIdeHooksInstalledAt(target.hooksFile)).toBe(true);
 
       const settings = JSON.parse(readFileSync(target.hooksFile, 'utf8'));
       const bundle = settings[ANTIGRAVITY_IDE_HOOK_NAMESPACE];
       expect(bundle.enabled).toBe(true);
-      // Only the events the IDE language server recognizes.
       for (const event of ['PreInvocation', 'PostToolUse', 'Stop']) {
         expect(Array.isArray(bundle[event])).toBe(true);
       }
-
-      await runAntigravityIdeUninstall({ cwd: dir });
-      expect(existsSync(target.contextFile)).toBe(false);
-      expect(antigravityIdeHooksInstalledAt(target.hooksFile)).toBe(false);
     } finally {
       cleanup(dir);
     }
   });
 
-  test('install is idempotent (no duplicate block or bundle)', async () => {
-    const dir = makeTempDir();
-    try {
-      mkdirSync(join(dir, '.showtail'), { recursive: true });
-      await runAntigravityIdeInstall({ project: true, cwd: dir });
-      await runAntigravityIdeInstall({ project: true, cwd: dir });
-      const target = resolveAntigravityIdeTarget('project', dir);
-
-      const context = readFileSync(target.contextFile, 'utf8');
-      expect(context.match(/showtail:start/g)?.length).toBe(1);
-
-      const settings = JSON.parse(readFileSync(target.hooksFile, 'utf8'));
-      const postEdit = settings[ANTIGRAVITY_IDE_HOOK_NAMESPACE].PostToolUse as Array<{
-        hooks: { command: string }[];
-      }>;
-      const ours = postEdit.filter((g) =>
-        g.hooks?.[0]?.command?.includes('showtail hook'),
-      );
-      expect(ours).toHaveLength(1);
-    } finally {
-      cleanup(dir);
-    }
-  });
-
-  test('--no-hooks writes only instructions, no hooks.json', async () => {
-    const dir = makeTempDir();
-    try {
-      mkdirSync(join(dir, '.showtail'), { recursive: true });
-      await runAntigravityIdeInstall({ project: true, hooks: false, cwd: dir });
-      const target = resolveAntigravityIdeTarget('project', dir);
-      expect(existsSync(target.contextFile)).toBe(true);
-      expect(existsSync(target.hooksFile)).toBe(false);
-      expect(antigravityIdeAutoCaptureActive(dir)).toBe(false);
-    } finally {
-      cleanup(dir);
-    }
-  });
-
-  test('preserves a foreign named bundle in the same hooks.json', async () => {
+  test('disconnect removes legacy hooks while preserving a foreign named bundle', async () => {
     const dir = makeTempDir();
     try {
       mkdirSync(join(dir, '.showtail'), { recursive: true });
       const target = resolveAntigravityIdeTarget('project', dir);
-      // A user's pre-existing, unrelated named bundle must survive connect/disconnect.
+      // A user's pre-existing, unrelated named bundle must survive disconnect, and
+      // a hooks bundle left by an older Showtail must be cleaned up.
       const foreign = { 'their-tool': { enabled: true, Stop: [{ hooks: [] }] } };
       writeJson(target.hooksFile, foreign);
+      installAntigravityIdeHooks(target);
 
-      await runAntigravityIdeInstall({ project: true, cwd: dir });
       let settings = JSON.parse(readFileSync(target.hooksFile, 'utf8'));
       expect(settings['their-tool']).toBeDefined();
       expect(settings[ANTIGRAVITY_IDE_HOOK_NAMESPACE]).toBeDefined();
@@ -146,7 +138,7 @@ describe('antigravity-ide install / uninstall', () => {
     const dir = makeTempDir();
     try {
       mkdirSync(join(dir, '.showtail'), { recursive: true });
-      await runAntigravityIdeInstall({ project: true, hooks: false, cwd: dir });
+      await runAntigravityIdeInstall({ project: true, cwd: dir });
       const state = antigravityIdeInstructionsState(
         resolveAntigravityIdeTarget('project', dir),
       );
