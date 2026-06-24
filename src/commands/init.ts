@@ -32,6 +32,7 @@ const GITATTRIBUTES = `# Showtail stores content-addressed objects; keep bytes b
  */
 const GITIGNORE = `state.json
 reports/
+diag/
 `;
 
 export interface InitOptions {

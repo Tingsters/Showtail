@@ -15,6 +15,7 @@ import {
   type HookPayload,
 } from '../core/hookInput.ts';
 import { redact } from '../core/redact.ts';
+import { asString, prop } from '../core/parse.ts';
 import { autoInitEnabled } from '../core/globalConfig.ts';
 import {
   closeSession,
@@ -35,6 +36,7 @@ import {
   updateState,
   type AuthorPaths,
 } from '../core/storage.ts';
+import { recordHookTrace, type HookTrace } from '../core/hookTrace.ts';
 import { connectPlugins, getPluginById } from '../plugins/registry.ts';
 import type {
   DiscoveredPlanFile,
@@ -115,10 +117,23 @@ export async function runHook(
   event: HookEvent,
   options: HookOptions = {},
 ): Promise<void> {
+  const startedAt = Date.now();
+  // A diagnostic record of this invocation, filled in as we go and flushed in
+  // `finally` to `.showtail/diag/hooks.jsonl` (best-effort, never part of the
+  // trail). `paths` is hoisted so the flush can find where to write even when an
+  // early return or a throw cuts the handler short.
+  const trace: HookTrace = {
+    ts: new Date().toISOString(),
+    event,
+    tool: options.tool ?? 'claude-code',
+  };
+  let paths: ReturnType<typeof pathsForRoot> | undefined;
   try {
     const payload = await readHookPayload();
     const cwd = payload?.cwd ?? options.cwd ?? process.cwd();
     const tool: Tool = options.tool ?? 'claude-code';
+    trace.tool = tool;
+    trace.nativeSessionId = parseEvent(adapterFor(tool), payload).nativeSessionId;
 
     let root = findRoot(cwd);
     if (!root) {
@@ -134,7 +149,7 @@ export async function runHook(
       await ensureInitialized(anchor);
       root = anchor;
     }
-    const paths = pathsForRoot(root);
+    paths = pathsForRoot(root);
     if (!existsSync(paths.config)) return; // Not initialized.
     const config = readConfig(paths);
 
@@ -149,24 +164,30 @@ export async function runHook(
     // open. Tool-agnostic fallback to the SessionEnd hook below.
     if (event === 'user-prompt' || event === 'post-edit') {
       const idleMin = config.settings.idleTimeoutMinutes ?? DEFAULT_IDLE_TIMEOUT_MINUTES;
-      sweepIdleSessions(author, idleMin * 60_000, Date.now());
+      const swept = sweepIdleSessions(author, idleMin * 60_000, Date.now());
+      if (swept.length > 0) trace.closedSessions = swept;
     }
 
     switch (event) {
       case 'session-start':
-        return handleSessionStart(author, payload, tool);
+        return handleSessionStart(author, payload, tool, trace);
       case 'user-prompt':
-        return await handleUserPrompt(author, payload, tool);
+        return await handleUserPrompt(author, payload, tool, trace);
       case 'post-edit':
-        return await handlePostEdit(author, payload, tool, config);
+        return await handlePostEdit(author, payload, tool, config, trace);
       case 'stop':
-        return await handleStop(author, payload, tool, config);
+        return await handleStop(author, payload, tool, config, trace);
       case 'session-end':
-        return handleSessionEnd(author, payload, tool);
+        return handleSessionEnd(author, payload, tool, trace);
     }
-  } catch {
-    // Swallow everything — a hook must never break the session.
+  } catch (err) {
+    // Swallow everything — a hook must never break the session. Note it in the
+    // trace so a silently-failed hook is still visible to the diagnostics.
+    trace.error = err instanceof Error ? err.message : String(err);
     return;
+  } finally {
+    trace.durationMs = Date.now() - startedAt;
+    if (paths) recordHookTrace(paths, trace);
   }
 }
 
@@ -174,15 +195,28 @@ function handleSessionStart(
   author: AuthorPaths,
   payload: HookPayload | null,
   tool: Tool,
+  trace: HookTrace,
 ): void {
   // Bind this session to the tool's own session id when we have one, so a
   // resume/compact reuses the *same* trail instead of spawning a new session
   // each time. Without an id (older clients), fall back to the single current
   // session. Either way this becomes the CLI's "current" session.
   const nativeSessionId = parseEvent(adapterFor(tool), payload).nativeSessionId;
+  // Whether an open session already mirrored this native id tells us if the
+  // bind below creates a fresh session (a resume after the prior one closed) or
+  // reuses one — the distinction that matters for the lifecycle race.
+  const hadOpen = nativeSessionId
+    ? readSessions(author).some(
+        (s) => s.nativeSessionId === nativeSessionId && !s.endedAt,
+      )
+    : undefined;
   const session = nativeSessionId
     ? sessionForNativeSession(author, nativeSessionId, { tool })
     : (currentSession(author) ?? startSession(author));
+  trace.nativeSessionId = nativeSessionId;
+  trace.sessionId = session.id;
+  trace.sessionStartedAt = session.startedAt;
+  if (hadOpen === false) trace.createdSession = true;
   updateState(author.shared, { currentSessionId: session.id });
   // SessionStart stdout is injected into Claude's context — keep it to one line.
   process.stdout.write(
@@ -201,29 +235,40 @@ function handleSessionEnd(
   author: AuthorPaths,
   payload: HookPayload | null,
   tool: Tool,
+  trace: HookTrace,
 ): void {
   const nativeSessionId = parseEvent(adapterFor(tool), payload).nativeSessionId;
+  trace.nativeSessionId = nativeSessionId;
   const sessions = readSessions(author);
   const session = nativeSessionId
     ? sessions.find((s) => s.nativeSessionId === nativeSessionId && !s.endedAt)
     : sessions.find((s) => s.id === readState(author.shared).currentSessionId);
   if (!session) return;
+  trace.sessionId = session.id;
+  trace.sessionStartedAt = session.startedAt;
   let lastTs = session.startedAt;
   for (const e of readSessionEvents(author, session.id)) {
     if (e.timestamp > lastTs) lastTs = e.timestamp;
   }
   const at = new Date().toISOString();
   closeSession(author, session.id, lastTs > at ? lastTs : at);
+  trace.closedSessions = [...(trace.closedSessions ?? []), session.id];
 }
 
 async function handleUserPrompt(
   author: AuthorPaths,
   payload: HookPayload | null,
   tool: Tool,
+  trace: HookTrace,
 ): Promise<void> {
   if (!payload) return;
   const ev = parseEvent(adapterFor(tool), payload);
   const text = ev.prompt;
+  trace.nativeSessionId = ev.nativeSessionId;
+  // The prompt's source (typed/queued/suggestion_accepted/…), when the payload
+  // carries it — useful for spotting source-driven capture gaps after the fact.
+  const promptSource = asString(prop(payload, 'promptSource'));
+  if (promptSource) trace.promptSource = promptSource;
   if (!text) return;
   // Log the prompt into the session that owns this tool's session id (creating
   // it if the session-start hook never fired); without an id, the current
@@ -232,7 +277,15 @@ async function handleUserPrompt(
   const sessionId = nativeSessionId
     ? sessionForNativeSession(author, nativeSessionId, { tool }).id
     : undefined;
-  const { event } = await logEvent(author, { type: 'prompt', text, tool, sessionId });
+  const { event, session } = await logEvent(author, {
+    type: 'prompt',
+    text,
+    tool,
+    sessionId,
+  });
+  trace.sessionId = session.id;
+  trace.sessionStartedAt = session.startedAt;
+  trace.promptId = event.id;
   // Open a new "turn": edits and AI output that follow link back to this prompt.
   // Track it per tool session so interleaved sessions don't share one turn.
   if (nativeSessionId) {
@@ -249,9 +302,11 @@ async function handlePostEdit(
   payload: HookPayload | null,
   tool: Tool,
   config: Config,
+  trace: HookTrace,
 ): Promise<void> {
   if (!payload) return;
   const ev = parseEvent(adapterFor(tool), payload);
+  trace.nativeSessionId = ev.nativeSessionId;
   // Attach the edit to the open turn of *its* tool session when we can tell
   // which one fired; otherwise the global current turn (unchanged behavior).
   const turnId =
@@ -260,16 +315,20 @@ async function handlePostEdit(
       : undefined) ??
     readState(author.shared).currentPromptId ??
     undefined;
+  trace.turnId = turnId;
   // Capture the AI-suggested code (unless code capture is turned off).
   const diff = config.settings.captureCode === false ? undefined : ev.suggestedDiff;
+  let edits = 0;
   for (const file of ev.editedFiles) {
     if (isInternalPath(file)) continue;
     try {
       await addArtifact(author, { filePath: file, tool, turnId, diff });
+      edits += 1;
     } catch {
       // File may have been moved/deleted by now — skip it quietly.
     }
   }
+  trace.edits = edits;
 }
 
 /**
@@ -286,11 +345,13 @@ async function handleStop(
   payload: HookPayload | null,
   tool: Tool,
   config: Config,
+  trace: HookTrace,
 ): Promise<void> {
   const adapter = adapterFor(tool);
   const transcript = adapter?.getTranscript?.(payload, author.shared.root);
-  if (!transcript) return; // No transcript for this tool — nothing to reconcile.
   const fallbackNativeId = parseEvent(adapter, payload).nativeSessionId;
+  trace.nativeSessionId = transcript?.sessionId ?? fallbackNativeId;
+  if (!transcript) return; // No transcript for this tool — nothing to reconcile.
   // The real on-disk plan file(s) this tool wrote, if any. Tools that keep their
   // plan only in the transcript return none and the plan text is materialized.
   let planFiles: DiscoveredPlanFile[] = [];
@@ -299,7 +360,7 @@ async function handleStop(
   } catch {
     planFiles = []; // Plan-file discovery is best-effort; never break the stop.
   }
-  await reconcileTranscript(
+  const summary = await reconcileTranscript(
     author,
     transcript,
     tool,
@@ -307,6 +368,28 @@ async function handleStop(
     fallbackNativeId,
     planFiles,
   );
+  if (summary) {
+    trace.sessionId = summary.sessionId;
+    trace.sessionStartedAt = summary.sessionStartedAt;
+    if (summary.createdSession) trace.createdSession = true;
+    trace.replies = summary.replies;
+    trace.decisions = summary.decisions;
+    trace.plans = summary.plans;
+    if (summary.backlogSkipped > 0) trace.backlogSkipped = summary.backlogSkipped;
+  }
+}
+
+/** What a Stop reconcile did, surfaced for the hook trace (not the trail). */
+interface StopSummary {
+  sessionId: string;
+  sessionStartedAt: string;
+  /** The reconcile bound to a freshly-created session (a resume after close). */
+  createdSession: boolean;
+  replies: number;
+  decisions: number;
+  plans: number;
+  /** Transcript prompts dropped as pre-window backlog (older than the session). */
+  backlogSkipped: number;
 }
 
 /**
@@ -328,7 +411,7 @@ async function reconcileTranscript(
   config: Config,
   fallbackNativeId?: string,
   planFiles: DiscoveredPlanFile[] = [],
-): Promise<void> {
+): Promise<StopSummary | undefined> {
   // AI text replies obey `captureAiOutput`; prompts and decisions are the
   // student's own work and are captured regardless.
   const captureAi = config.settings.captureAiOutput !== false;
@@ -338,7 +421,15 @@ async function reconcileTranscript(
   // global current session (older clients that send no id).
   const nativeSessionId = transcript.sessionId ?? fallbackNativeId;
   let session;
+  let createdSession = false;
   if (nativeSessionId) {
+    // Whether an open session already mirrored this native id: if not, the bind
+    // below creates a fresh one — i.e. this Stop is reconciling against a
+    // session that started *after* the turn it's reconciling, which is exactly
+    // when straddling replies get excluded as backlog below.
+    createdSession = !readSessions(author).some(
+      (s) => s.nativeSessionId === nativeSessionId && !s.endedAt,
+    );
     session = sessionForNativeSession(author, nativeSessionId, { tool });
   } else {
     const currentId = readState(author.shared).currentSessionId;
@@ -346,9 +437,18 @@ async function reconcileTranscript(
       ? readSessions(author).find((s) => s.id === currentId)
       : undefined;
   }
-  if (!session) return; // No session to attribute to.
+  if (!session) return undefined; // No session to attribute to.
   const sessionId = session.id;
   const startedAt = session.startedAt;
+  const summary: StopSummary = {
+    sessionId,
+    sessionStartedAt: startedAt,
+    createdSession,
+    replies: 0,
+    decisions: 0,
+    plans: 0,
+    backlogSkipped: 0,
+  };
 
   // Prompts already logged this session, indexed two ways: by transcript uuid
   // (a prompt we back-filled on an earlier Stop) and by stored text as a FIFO
@@ -409,6 +509,7 @@ async function reconcileTranscript(
         // skipped so a resumed transcript isn't dumped onto a later turn.
         if (!msg.timestamp || msg.timestamp < startedAt) {
           currentTurn = undefined;
+          summary.backlogSkipped += 1;
           continue;
         }
         const { event } = await logEvent(author, {
@@ -438,6 +539,7 @@ async function reconcileTranscript(
         sessionId,
       });
       seen.add(msg.sourceId);
+      summary.replies += 1;
     } else if (msg.role === 'decision') {
       // The student chose between options the AI offered — their own work, so
       // it's captured even when AI-output capture is off. Attach to the open turn.
@@ -452,6 +554,7 @@ async function reconcileTranscript(
         sessionId,
       });
       seen.add(msg.sourceId);
+      summary.decisions += 1;
     } else if (msg.role === 'plan') {
       // A plan the AI proposed — captured regardless of AI-output capture. When
       // the tool resolves approval (Claude: approved/revised), that becomes a tag;
@@ -478,7 +581,9 @@ async function reconcileTranscript(
         planPath: resolveSessionPlanPath(),
       });
       seen.add(msg.sourceId);
+      summary.plans += 1;
     }
     // `edit` messages are ignored — the post-edit hook already records those.
   }
+  return summary;
 }

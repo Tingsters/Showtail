@@ -112,6 +112,21 @@ export interface TranscriptSummary {
 
 const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit']);
 
+/**
+ * Prompt sources that are NOT the student's own interactive input, so they must
+ * never open a turn: `system` (tooling-injected — compact summaries, system
+ * reminders) and `sdk` (programmatic Agent-SDK calls). Every other source —
+ * `typed`, `paste`, `queued` (typed while the AI was busy),
+ * `suggestion_accepted` (accepted from the suggestion UI), an unknown future
+ * source, or an absent field (older transcripts) — is treated as a real user
+ * prompt. This is a *denylist* on purpose: dropping a genuine prompt silently
+ * misattributes its replies to the neighbouring turn (the failure this guards
+ * against), whereas keeping a stray non-user prompt is at worst one visible
+ * extra turn. A prior allowlist of just {typed, paste} dropped `queued` and
+ * `suggestion_accepted` prompts and orphaned their replies.
+ */
+const NON_USER_PROMPT_SOURCES = new Set(['system', 'sdk']);
+
 /** User-content wrappers that are tooling chrome, not something the student typed. */
 const WRAPPER_RE =
   /^<(local-command-caveat|command-name|command-message|command-args|command-stdout|command-stderr|user-prompt-submit-hook|session-start-hook)/;
@@ -378,8 +393,8 @@ function handleUser(obj: unknown): ClaudeMessage | null {
   if (content === undefined) return null; // tool_result lines carry an array.
 
   const source = prop(obj, 'promptSource');
-  // Accept typed/pasted prompts; older transcripts may omit the field entirely.
-  if (typeof source === 'string' && source !== 'typed' && source !== 'paste') return null;
+  // Keep every genuine user prompt; drop only tooling/programmatic sources.
+  if (typeof source === 'string' && NON_USER_PROMPT_SOURCES.has(source)) return null;
 
   const text = content.trim();
   if (!text || WRAPPER_RE.test(text)) return null;

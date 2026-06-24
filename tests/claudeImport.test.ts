@@ -138,6 +138,49 @@ describe('parseClaudeTranscript', () => {
       cleanup(dir);
     }
   });
+
+  test('keeps queued and suggestion_accepted prompts; drops system and sdk', () => {
+    const dir = makeTempDir();
+    try {
+      const line = (uuid: string, source: string, content: string) =>
+        JSON.stringify({
+          type: 'user',
+          uuid,
+          promptSource: source,
+          sessionId: 'sess-1',
+          cwd: dir,
+          message: { role: 'user', content },
+        });
+      const transcript = [
+        line('q', 'queued', 'queued user prompt'),
+        line('s', 'suggestion_accepted', 'accepted suggestion prompt'),
+        line('y', 'system', 'system injected prompt'),
+        line('k', 'sdk', 'sdk programmatic prompt'),
+        // No promptSource at all (older transcripts) — still a real prompt.
+        JSON.stringify({
+          type: 'user',
+          uuid: 'o',
+          sessionId: 'sess-1',
+          cwd: dir,
+          message: { role: 'user', content: 'legacy prompt without a source' },
+        }),
+      ].join('\n');
+
+      const { messages } = parseClaudeTranscript(transcript, dir);
+      const userTexts = messages.filter((m) => m.role === 'user').map((m) => m.text);
+
+      // Genuine interactive sources (and a missing source) are kept...
+      expect(userTexts).toContain('queued user prompt');
+      expect(userTexts).toContain('accepted suggestion prompt');
+      expect(userTexts).toContain('legacy prompt without a source');
+      // ...tooling/programmatic sources are dropped (they must not open a turn).
+      expect(userTexts).not.toContain('system injected prompt');
+      expect(userTexts).not.toContain('sdk programmatic prompt');
+      expect(userTexts.length).toBe(3);
+    } finally {
+      cleanup(dir);
+    }
+  });
 });
 
 describe('parseSelection', () => {

@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
-import { writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { cleanup, makeTempDir, readJsonReport, runCli } from './helpers.ts';
+import { cleanup, makeTempDir, readJsonReport, runCli, spawnEnv } from './helpers.ts';
 import { isInternalPath } from '../src/commands/hook.ts';
 
 /** Run `showtail <args>` in `cwd`, optionally piping `input` to stdin. */
@@ -665,5 +665,93 @@ describe('isInternalPath', () => {
   test('does not skip ordinary project files', () => {
     expect(isInternalPath('/home/me/proj/src/foo.ts')).toBe(false);
     expect(isInternalPath('C:\\Users\\me\\proj\\src\\foo.ts')).toBe(false);
+  });
+});
+
+describe('hook trace (diagnostic log)', () => {
+  /** Read the parsed records from .showtail/diag/hooks.jsonl, oldest first. */
+  function readTrace(dir: string): any[] {
+    const file = join(dir, '.showtail', 'diag', 'hooks.jsonl');
+    if (!existsSync(file)) return [];
+    return readFileSync(file, 'utf8')
+      .split('\n')
+      .filter((l) => l.trim())
+      .map((l) => JSON.parse(l));
+  }
+
+  test('records each hook invocation with its session, source, and stop counts', () => {
+    const dir = makeTempDir();
+    try {
+      initProject(dir);
+      run(
+        dir,
+        ['hook', 'session-start'],
+        JSON.stringify({ cwd: dir, source: 'startup', session_id: 'sess-1' }),
+      );
+      run(
+        dir,
+        ['hook', 'user-prompt'],
+        JSON.stringify({
+          cwd: dir,
+          prompt: 'do the thing',
+          session_id: 'sess-1',
+          promptSource: 'suggestion_accepted',
+        }),
+      );
+      const transcriptPath = writeTranscript(dir, 'transcript.jsonl', [
+        userLine('u1', 'do the thing', dir),
+        asstLine('a1', 'done the thing'),
+      ]);
+      run(
+        dir,
+        ['hook', 'stop'],
+        JSON.stringify({
+          cwd: dir,
+          transcript_path: transcriptPath,
+          session_id: 'sess-1',
+        }),
+      );
+
+      const trace = readTrace(dir);
+      const byEvent = (e: string) => trace.find((t) => t.event === e);
+
+      // Every invocation is recorded, stamped, and timed.
+      expect(byEvent('session-start')).toBeDefined();
+      for (const t of trace) {
+        expect(typeof t.ts).toBe('string');
+        expect(typeof t.durationMs).toBe('number');
+      }
+
+      // The user-prompt trace carries the source and the turn it opened.
+      const up = byEvent('user-prompt');
+      expect(up.promptSource).toBe('suggestion_accepted');
+      expect(typeof up.promptId).toBe('string');
+      expect(up.sessionId).toBeTruthy();
+
+      // The stop trace reports what the reconcile captured.
+      const stop = byEvent('stop');
+      expect(stop.replies).toBe(1);
+      expect(stop.sessionId).toBe(up.sessionId); // same Showtail session
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('can be disabled with SHOWTAIL_HOOK_TRACE=0', () => {
+    const dir = makeTempDir();
+    try {
+      initProject(dir);
+      runCli(dir, ['hook', 'user-prompt'], {
+        input: JSON.stringify({
+          cwd: dir,
+          prompt: 'no trace please',
+          session_id: 'sess-1',
+        }),
+        env: { ...spawnEnv(), SHOWTAIL_HOOK_TRACE: '0' },
+      });
+      expect(existsSync(join(dir, '.showtail', 'diag', 'hooks.jsonl'))).toBe(false);
+    } finally {
+      cleanup(dir);
+    }
   });
 });
