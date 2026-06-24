@@ -90,6 +90,18 @@ function adapterFor(tool: Tool): HookAdapter | undefined {
 }
 
 /**
+ * Antigravity hosts (the IDE and the `agy` CLI) read a JSON *decision* from each
+ * hook's stdout (`{"decision":"allow"|"deny"|"ask"}`) and FAIL CLOSED — blocking
+ * the tool/model — if a hook errors or prints non-JSON. Showtail hooks only
+ * observe, so they must always print an "allow" and never break the host. Claude
+ * Code / Codex don't read hook stdout this way, so the decision output is gated to
+ * these tools.
+ */
+function isAntigravityHostTool(tool: Tool): boolean {
+  return tool === 'antigravity-ide' || tool === 'antigravity-cli';
+}
+
+/**
  * Normalize a raw hook payload into a tool-agnostic event. With an adapter the
  * plugin owns the parsing; without one (manual `cli`, or an unknown tool) we
  * read only the common `prompt`/`session_id` fields and capture no edits.
@@ -188,6 +200,14 @@ export async function runHook(
   } finally {
     trace.durationMs = Date.now() - startedAt;
     if (paths) recordHookTrace(paths, trace);
+    // Antigravity reads a JSON decision from the hook's stdout and fails closed on
+    // a missing/invalid one. Emit "allow" here in `finally` so it runs on EVERY
+    // path — early no-op return, successful capture, or a swallowed error — and a
+    // capture problem can never block the user's IDE/agent. Gated to Antigravity
+    // hosts (see isAntigravityHostTool); other hosts ignore hook stdout.
+    if (isAntigravityHostTool(trace.tool)) {
+      process.stdout.write('{"decision":"allow"}\n');
+    }
   }
 }
 
@@ -219,10 +239,14 @@ function handleSessionStart(
   if (hadOpen === false) trace.createdSession = true;
   updateState(author.shared, { currentSessionId: session.id });
   // SessionStart stdout is injected into Claude's context — keep it to one line.
-  process.stdout.write(
-    `Showtail is capturing this session's work trail (session ${session.id}). ` +
-      `Your prompts and edits are captured automatically — just work as usual.\n`,
-  );
+  // Antigravity hosts instead read stdout as a JSON decision (emitted in runHook's
+  // `finally`), so suppress this human-readable note there to keep stdout valid JSON.
+  if (!isAntigravityHostTool(tool)) {
+    process.stdout.write(
+      `Showtail is capturing this session's work trail (session ${session.id}). ` +
+        `Your prompts and edits are captured automatically — just work as usual.\n`,
+    );
+  }
 }
 
 /**

@@ -883,3 +883,87 @@ describe('hook trace (diagnostic log)', () => {
     }
   });
 });
+
+describe('Antigravity hooks: stdout "decision" contract (never fail-closed)', () => {
+  // Antigravity reads a JSON decision from the hook's stdout and blocks the
+  // tool/model if it's missing or invalid. Showtail only observes, so every
+  // Antigravity hook must print {"decision":"allow"} and exit 0.
+  const ALLOW = '{"decision":"allow"}';
+
+  test('post-edit + user-prompt --tool antigravity-ide print allow, exit 0, and still capture', () => {
+    const dir = makeTempDir();
+    try {
+      initProject(dir);
+      const up = run(
+        dir,
+        ['hook', 'user-prompt', '--tool', 'antigravity-ide'],
+        JSON.stringify({ cwd: dir, prompt: 'agy: add a helper' }),
+      );
+      expect(up.code).toBe(0);
+      expect(up.stdout.trim()).toBe(ALLOW);
+
+      const file = join(dir, 'helper.ts');
+      writeFileSync(file, 'export const x = 1;');
+      const pe = run(
+        dir,
+        ['hook', 'post-edit', '--tool', 'antigravity-ide'],
+        JSON.stringify({ cwd: dir, tool_name: 'write_to_file', tool_input: { file_path: file } }),
+      );
+      expect(pe.code).toBe(0);
+      expect(pe.stdout.trim()).toBe(ALLOW);
+
+      // The decision output is a side effect on top of capture, not instead of it.
+      run(dir, ['report', '--format', 'json']);
+      expect(JSON.stringify(readJsonReport(dir))).toContain('add a helper');
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('emits allow even with no trail (uninitialized) — capture no-ops, host not blocked', () => {
+    const dir = makeTempDir(); // deliberately NOT initialized
+    try {
+      const r = run(
+        dir,
+        ['hook', 'post-edit', '--tool', 'antigravity-ide'],
+        JSON.stringify({ cwd: dir, tool_name: 'write_to_file', tool_input: { file_path: join(dir, 'x.ts') } }),
+      );
+      expect(r.code).toBe(0);
+      expect(r.stdout.trim()).toBe(ALLOW);
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('antigravity-cli hooks also emit the allow decision', () => {
+    const dir = makeTempDir();
+    try {
+      initProject(dir);
+      const r = run(
+        dir,
+        ['hook', 'stop', '--tool', 'antigravity-cli'],
+        JSON.stringify({ cwd: dir }),
+      );
+      expect(r.code).toBe(0);
+      expect(r.stdout.trim()).toBe(ALLOW);
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('non-Antigravity tool (claude-code) does NOT emit a decision', () => {
+    const dir = makeTempDir();
+    try {
+      initProject(dir);
+      const r = run(
+        dir,
+        ['hook', 'post-edit'], // default tool = claude-code
+        JSON.stringify({ cwd: dir, tool_name: 'Edit', tool_input: { file_path: join(dir, 'y.ts') } }),
+      );
+      expect(r.code).toBe(0);
+      expect(r.stdout).toBe(''); // unchanged: claude-code hooks stay silent
+    } finally {
+      cleanup(dir);
+    }
+  });
+});
