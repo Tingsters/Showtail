@@ -113,13 +113,30 @@ function makeShimBin(): string {
 function childEnv(shimBin: string): NodeJS.ProcessEnv {
   const home = join(tmpdir(), 'showtail-live-identity');
   mkdirSync(home, { recursive: true });
+  // Tools that need GitHub auth to run headlessly (Copilot CLI) read a token
+  // from the env. We pass it straight through — it never reaches a command line
+  // (driveArgs carries only the prompt), so it can't leak into logged argv.
+  const ghToken = process.env.GITHUB_TOKEN ?? process.env.GH_TOKEN;
   return {
     ...process.env,
     PATH: `${shimBin}${delimiter}${process.env.PATH ?? ''}`,
     SHOWTAIL_IDENTITY_EMAIL: process.env.SHOWTAIL_IDENTITY_EMAIL ?? 'live@example.com',
     SHOWTAIL_IDENTITY_NAME: process.env.SHOWTAIL_IDENTITY_NAME ?? 'Live Verifier',
     SHOWTAIL_IDENTITY_HOME: process.env.SHOWTAIL_IDENTITY_HOME ?? home,
+    ...(ghToken ? { GH_TOKEN: ghToken, GITHUB_TOKEN: ghToken } : {}),
   };
+}
+
+/** Tools that can't drive headlessly without a credential in the environment. */
+const NEEDS_GITHUB_TOKEN = new Set(['copilot-cli']);
+
+/** True when a token-gated integration has no GitHub token to authenticate with. */
+function missingGithubToken(integration: string): boolean {
+  return (
+    NEEDS_GITHUB_TOKEN.has(integration) &&
+    !process.env.GITHUB_TOKEN &&
+    !process.env.GH_TOKEN
+  );
 }
 
 /** Read the JSON report Showtail wrote into `dir`. */
@@ -220,6 +237,12 @@ export function verifyToolLive(integration: string): LiveResult {
     return result;
   }
   result.available = true;
+  if (missingGithubToken(integration)) {
+    // The tool is here, but we can't drive it headlessly without auth. Report a
+    // clear skip rather than letting the drive fail with a confusing auth error.
+    result.error = 'GITHUB_TOKEN/GH_TOKEN not set; cannot drive Copilot CLI headlessly';
+    return result;
+  }
   result.toolVersion = toolVersion(spec.bin);
 
   const dir = mkdtempSync(join(tmpdir(), `showtail-live-${integration}-`));

@@ -41,6 +41,14 @@ const SOURCES: Record<string, string[]> = {
     'src/commands/hook.ts',
     'src/core/liveVerify.ts',
   ],
+  'copilot-cli': [
+    'src/plugins/copilot-cli.ts',
+    'src/core/copilotCli.ts',
+    'src/core/copilotCliTranscript.ts',
+    'src/core/hookInput.ts',
+    'src/commands/hook.ts',
+    'src/core/liveVerify.ts',
+  ],
 };
 
 function git(args: string[]): string {
@@ -50,7 +58,12 @@ function git(args: string[]): string {
 
 function changedFiles(base?: string): string[] {
   const set = new Set<string>();
-  const add = (out: string) => out.split('\n').map((s) => s.trim()).filter(Boolean).forEach((f) => set.add(f));
+  const add = (out: string) =>
+    out
+      .split('\n')
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .forEach((f) => set.add(f));
   if (base) {
     add(git(['diff', '--name-only', `${base}...HEAD`]));
   }
@@ -87,7 +100,9 @@ function checkStaleness(): number {
       : '';
     if (changedSince) {
       const newest = changedSince.split('\n')[0]!.slice(0, 7);
-      stale.push(`${claim.testId} (certified @ ${entry.commit}, sources changed @ ${newest})`);
+      stale.push(
+        `${claim.testId} (certified @ ${entry.commit}, sources changed @ ${newest})`,
+      );
     }
   }
   if (stale.length) {
