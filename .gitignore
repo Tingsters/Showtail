@@ -21,3 +21,4 @@ Thumbs.db
 # NOTE: .showtail/ is intentionally NOT ignored.
 # Showtail's whole purpose is a reviewable, committable "show your work" trail.
 # See the Privacy section of the README before committing it for sensitive work.
+.aider*
