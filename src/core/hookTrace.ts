@@ -56,6 +56,12 @@ export interface HookTrace {
    * backlog on a freshly-created session is the signature of the race.
    */
   backlogSkipped?: number;
+  /**
+   * stop: replies recovered onto a prompt in a *closed sibling* session of the
+   * same native id — work the session-close race would otherwise have orphaned.
+   * >0 means the cross-session recovery fired.
+   */
+  recoveredReplies?: number;
   /** Showtail session ids this hook closed (idle sweep or session-end). */
   closedSessions?: string[];
   /** Wall-clock duration of the hook handler, in milliseconds. */

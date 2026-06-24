@@ -376,6 +376,7 @@ async function handleStop(
     trace.decisions = summary.decisions;
     trace.plans = summary.plans;
     if (summary.backlogSkipped > 0) trace.backlogSkipped = summary.backlogSkipped;
+    if (summary.recoveredReplies > 0) trace.recoveredReplies = summary.recoveredReplies;
   }
 }
 
@@ -390,6 +391,13 @@ interface StopSummary {
   plans: number;
   /** Transcript prompts dropped as pre-window backlog (older than the session). */
   backlogSkipped: number;
+  /**
+   * Replies attributed to a prompt that lives in a *closed sibling* session of
+   * the same native id (rather than the freshly-resolved one) — work the
+   * session-close race would otherwise have orphaned. >0 means the cross-session
+   * recovery fired.
+   */
+  recoveredReplies: number;
 }
 
 /**
@@ -448,24 +456,47 @@ async function reconcileTranscript(
     decisions: 0,
     plans: 0,
     backlogSkipped: 0,
+    recoveredReplies: 0,
   };
 
-  // Prompts already logged this session, indexed two ways: by transcript uuid
-  // (a prompt we back-filled on an earlier Stop) and by stored text as a FIFO
-  // (a prompt logged live), so duplicate prompt texts line up in order.
-  const bySourceId = new Map<string, string>();
-  const byText = new Map<string, string[]>();
-  for (const p of readSessionEvents(author, sessionId)) {
-    if (p.type !== 'prompt') continue;
-    if (p.sourceId) bySourceId.set(p.sourceId, p.id);
-    const queue = byText.get(p.text) ?? [];
-    queue.push(p.id);
-    byText.set(p.text, queue);
+  // Prompts already logged, indexed two ways: by transcript uuid (a prompt we
+  // back-filled on an earlier Stop) and by stored text as a FIFO (a prompt
+  // logged live), so duplicate prompt texts line up in order. Each entry carries
+  // the session that owns the prompt.
+  //
+  // The index spans not just the resolved session but every *sibling* session of
+  // the same native id — including closed ones. This is what defeats the
+  // session-close race: when a prompt was logged live into a session that has
+  // since been closed (idle sweep / SessionEnd) and this Stop has resolved a
+  // fresh session, the prompt would otherwise be unmatched here and its reply
+  // dropped as backlog. Matching it in its (closed) sibling keeps the reply with
+  // its prompt. Sorting siblings by start time makes the FIFO drain oldest-first.
+  type PromptRef = { promptId: string; sessionId: string };
+  const bySourceId = new Map<string, PromptRef>();
+  const byText = new Map<string, PromptRef[]>();
+  const siblings = nativeSessionId
+    ? readSessions(author)
+        .filter((s) => s.nativeSessionId === nativeSessionId)
+        .sort((a, b) => a.startedAt.localeCompare(b.startedAt))
+    : [session];
+  for (const sib of siblings) {
+    for (const p of readSessionEvents(author, sib.id)) {
+      if (p.type !== 'prompt') continue;
+      const ref: PromptRef = { promptId: p.id, sessionId: sib.id };
+      if (p.sourceId) bySourceId.set(p.sourceId, ref);
+      const queue = byText.get(p.text) ?? [];
+      queue.push(ref);
+      byText.set(p.text, queue);
+    }
   }
 
   const seen = importedSourceIds(author);
   const redactCfg = config.settings.redact;
   let currentTurn: string | undefined; // The prompt id replies attach to.
+  // The session that owns `currentTurn` — usually the resolved one, but a
+  // closed sibling when the cross-session index matched there (the race fix).
+  // Replies are written into this session so they stay grouped with their prompt.
+  let currentTurnSession = sessionId;
 
   // The session's saved plan file path, resolved lazily on the first new plan so
   // a stop with no new plans writes nothing. A tool that wrote a real plan file
@@ -498,12 +529,12 @@ async function reconcileTranscript(
       // A prompt we already logged this session is in-window by definition and
       // must never be reclassified as backlog, even if its transcript timestamp
       // predates this session's start.
-      let id = msg.sourceId ? bySourceId.get(msg.sourceId) : undefined;
-      if (!id) {
+      let ref = msg.sourceId ? bySourceId.get(msg.sourceId) : undefined;
+      if (!ref) {
         const queue = byText.get(redact(msg.text, redactCfg).text);
-        if (queue && queue.length > 0) id = queue.shift();
+        if (queue && queue.length > 0) ref = queue.shift();
       }
-      if (!id) {
+      if (!ref) {
         // Unmatched. Back-fill only when a timestamp proves it's in-window
         // (at/after this session's start); a backlog or timestamp-less prompt is
         // skipped so a resumed transcript isn't dumped onto a later turn.
@@ -520,10 +551,11 @@ async function reconcileTranscript(
           sourceId: msg.sourceId,
           sessionId,
         });
-        id = event.id;
-        if (msg.sourceId) bySourceId.set(msg.sourceId, id);
+        ref = { promptId: event.id, sessionId };
+        if (msg.sourceId) bySourceId.set(msg.sourceId, ref);
       }
-      currentTurn = id;
+      currentTurn = ref.promptId;
+      currentTurnSession = ref.sessionId;
     } else if (msg.role === 'assistant') {
       // A reply only belongs to the trail if it follows an in-window prompt.
       if (!captureAi || !currentTurn || seen.has(msg.sourceId)) continue;
@@ -536,10 +568,11 @@ async function reconcileTranscript(
         timestamp: msg.timestamp,
         turnId: currentTurn,
         sourceId: msg.sourceId,
-        sessionId,
+        sessionId: currentTurnSession,
       });
       seen.add(msg.sourceId);
       summary.replies += 1;
+      if (currentTurnSession !== sessionId) summary.recoveredReplies += 1;
     } else if (msg.role === 'decision') {
       // The student chose between options the AI offered — their own work, so
       // it's captured even when AI-output capture is off. Attach to the open turn.
@@ -551,7 +584,7 @@ async function reconcileTranscript(
         timestamp: msg.timestamp, // message time, so it interleaves chronologically
         turnId: currentTurn,
         sourceId: msg.sourceId,
-        sessionId,
+        sessionId: currentTurnSession,
       });
       seen.add(msg.sourceId);
       summary.decisions += 1;
@@ -576,7 +609,7 @@ async function reconcileTranscript(
         timestamp: msg.timestamp,
         turnId: currentTurn,
         sourceId: msg.sourceId,
-        sessionId,
+        sessionId: currentTurnSession,
         tags: planTags,
         planPath: resolveSessionPlanPath(),
       });

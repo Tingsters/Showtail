@@ -31,6 +31,29 @@ function userLine(
   return line;
 }
 
+/**
+ * A user transcript line with an explicit `promptSource` (and optional explicit
+ * `timestamp`), for tests that need a non-typed source or a back-dated prompt.
+ */
+function userLineWithSource(
+  uuid: string,
+  content: string,
+  dir: string,
+  promptSource: string,
+  opts: { sessionId?: string; timestamp?: string } = {},
+) {
+  const line: any = {
+    type: 'user',
+    uuid,
+    promptSource,
+    sessionId: opts.sessionId ?? 'sess-1',
+    cwd: dir,
+    message: { role: 'user', content },
+  };
+  if (opts.timestamp) line.timestamp = opts.timestamp;
+  return line;
+}
+
 /** An assistant text-reply transcript line. */
 function asstLine(uuid: string, text: string) {
   return {
@@ -358,6 +381,60 @@ describe('hook command (end-to-end via stdin)', () => {
     }
   });
 
+  test('stop hook attributes replies for queued and suggestion_accepted prompts', () => {
+    // End-to-end guard for the promptSource denylist: a prompt accepted from the
+    // suggestion UI or queued while the AI was busy is a real user prompt and must
+    // open its own turn. A regression to a {typed, paste} allowlist would drop the
+    // middle/third prompts from the transcript walk and collapse their replies onto
+    // the previous turn.
+    const dir = makeTempDir();
+    try {
+      initProject(dir);
+      run(
+        dir,
+        ['hook', 'session-start'],
+        JSON.stringify({ cwd: dir, source: 'startup', session_id: 'sess-1' }),
+      );
+      // All three prompts are logged live (the live hook never filters by source).
+      for (const prompt of ['first task', 'second task', 'third task']) {
+        run(
+          dir,
+          ['hook', 'user-prompt'],
+          JSON.stringify({ cwd: dir, prompt, session_id: 'sess-1' }),
+        );
+      }
+
+      // In the transcript: first=typed, second=suggestion_accepted, third=queued.
+      const transcriptPath = writeTranscript(dir, 'transcript.jsonl', [
+        userLine('first-u', 'first task', dir),
+        asstLine('first-a', 'FIRST reply'),
+        userLineWithSource('second-u', 'second task', dir, 'suggestion_accepted'),
+        asstLine('second-a', 'SECOND reply'),
+        userLineWithSource('third-u', 'third task', dir, 'queued'),
+        asstLine('third-a', 'THIRD reply'),
+      ]);
+      run(
+        dir,
+        ['hook', 'stop'],
+        JSON.stringify({ cwd: dir, transcript_path: transcriptPath }),
+      );
+
+      run(dir, ['report', '--format', 'json']);
+      const data = readJsonReport(dir);
+      const replies = (text: string) =>
+        data.turns
+          .find((t: any) => t.prompt.text === text)
+          .aiOutputs.map((o: any) => o.text);
+
+      expect(data.turns.length).toBe(3);
+      expect(replies('first task')).toEqual(['FIRST reply']);
+      expect(replies('second task')).toEqual(['SECOND reply']); // suggestion_accepted
+      expect(replies('third task')).toEqual(['THIRD reply']); // queued
+    } finally {
+      cleanup(dir);
+    }
+  });
+
   test('stop hook back-fills a prompt the live hook missed, not dropping the work', () => {
     const dir = makeTempDir();
     try {
@@ -551,6 +628,57 @@ describe('hook command (end-to-end via stdin)', () => {
       const data = readJsonReport(dir);
       const turn = data.turns.find((t: any) => t.prompt.text === 'old session task');
       expect(turn.aiOutputs.map((o: any) => o.text)).toEqual(['old reply applied']);
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('stop recovers a reply for a prompt whose session was closed before the turn', () => {
+    // The session-close race: a prompt is logged live into session S for native
+    // session N; S is then closed (here via session-end, the deterministic stand-in
+    // for the idle sweep) before the turn's Stop. The Stop resolves a *fresh*
+    // session S' for N, so the prompt is no longer in the resolved session and its
+    // transcript line predates S'. Without the cross-session recovery the reply is
+    // dropped as backlog; with it, the reply attaches to the original prompt.
+    const dir = makeTempDir();
+    try {
+      initProject(dir);
+      run(dir, ['hook', 'session-start'], JSON.stringify({ cwd: dir, session_id: 'N' }));
+      run(
+        dir,
+        ['hook', 'user-prompt'],
+        JSON.stringify({ cwd: dir, prompt: 'orphan task', session_id: 'N' }),
+      );
+      // Close S. The next Stop for N will create a new session S'.
+      run(dir, ['hook', 'session-end'], JSON.stringify({ cwd: dir, session_id: 'N' }));
+
+      // The prompt's transcript line carries a past timestamp, so it predates S'
+      // and would trip the backlog guard if matched only against S'.
+      const past = new Date(Date.now() - 60_000).toISOString();
+      const t = writeTranscript(dir, 'orphan.jsonl', [
+        userLineWithSource('orphan-u', 'orphan task', dir, 'typed', {
+          sessionId: 'N',
+          timestamp: past,
+        }),
+        asstLine('orphan-a', 'orphan reply recovered'),
+      ]);
+      run(dir, ['hook', 'stop'], JSON.stringify({ cwd: dir, transcript_path: t }));
+
+      run(dir, ['report', '--format', 'json']);
+      const data = readJsonReport(dir);
+      // Exactly one prompt (matched its closed sibling — not duplicated as a
+      // back-fill), and its reply was recovered rather than dropped.
+      expect(data.turns.length).toBe(1);
+      const turn = data.turns.find((t: any) => t.prompt.text === 'orphan task');
+      expect(turn.aiOutputs.map((o: any) => o.text)).toEqual(['orphan reply recovered']);
+
+      // And the diagnostic log records that the recovery fired.
+      const trace = readFileSync(join(dir, '.showtail', 'diag', 'hooks.jsonl'), 'utf8')
+        .split('\n')
+        .filter((l) => l.trim())
+        .map((l) => JSON.parse(l));
+      const stop = trace.find((e: any) => e.event === 'stop');
+      expect(stop.recoveredReplies).toBe(1);
     } finally {
       cleanup(dir);
     }
