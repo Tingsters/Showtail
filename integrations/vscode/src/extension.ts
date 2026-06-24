@@ -70,15 +70,70 @@ function isInternalPath(p: string): boolean {
   return /(^|[\\/])(\.showtail|\.git|\.claude|node_modules)([\\/]|$)/.test(p);
 }
 
+/**
+ * True when running inside Google's Antigravity IDE (a VS Code fork). Its
+ * lifecycle hooks are unreliable, so there we capture via this extension (save
+ * snapshots) plus the transcript import, and tag work `antigravity-ide`.
+ */
+function isAntigravityHost(): boolean {
+  return /antigravity/i.test(vscode.env.appName ?? '');
+}
+
+/** The tool tag captures are recorded under, based on the host editor. */
+function captureTool(): string {
+  return isAntigravityHost() ? 'antigravity-ide' : 'github-copilot';
+}
+
+/**
+ * Back-fill the Antigravity conversation by running `showtail import
+ * antigravity-ide`, debounced per workspace. The IDE's hooks don't reliably
+ * capture prompts/replies, but its on-disk transcript is complete; the import is
+ * idempotent, so triggering it after edits converges on the full conversation.
+ */
+const importTimers = new Map<string, NodeJS.Timeout>();
+function scheduleAntigravityImport(cwd: string): void {
+  const existing = importTimers.get(cwd);
+  if (existing) clearTimeout(existing);
+  importTimers.set(
+    cwd,
+    setTimeout(() => {
+      importTimers.delete(cwd);
+      void runShowtail(['import', 'antigravity-ide'], cwd).then(() =>
+        output.appendLine('imported the Antigravity conversation transcript'),
+      );
+    }, 3000),
+  );
+}
+
 export function activate(context: vscode.ExtensionContext): void {
   output = vscode.window.createOutputChannel('Showtail');
-  context.subscriptions.push(output);
-  output.appendLine('Showtail is capturing your GitHub Copilot work trail.');
+  context.subscriptions.push(output, {
+    dispose: () => {
+      for (const t of importTimers.values()) clearTimeout(t);
+      importTimers.clear();
+    },
+  });
+  const host = isAntigravityHost() ? 'Antigravity IDE' : 'GitHub Copilot';
+  output.appendLine(`Showtail is capturing your ${host} work trail.`);
 
   registerChatParticipant(context);
   registerSaveCapture(context);
   registerCommands(context);
-  void maybeAutoInstallCopilot(context);
+  if (isAntigravityHost()) void maybeBootstrapAntigravity();
+  else void maybeAutoInstallCopilot(context);
+}
+
+/**
+ * Antigravity bootstrap: make sure the workspace is a tracked Showtail project
+ * (honoring the global opt-in), then back-fill the conversation transcript so far.
+ * Save snapshots + the debounced import (registerSaveCapture) keep it current.
+ */
+async function maybeBootstrapAntigravity(): Promise<void> {
+  const cwd = folderFor(undefined);
+  if (!cwd) return;
+  if (!(await ensureTracked(cwd))) return; // untracked and not opted in
+  output.appendLine('Showtail: Antigravity capture active (transcript import + save snapshots).');
+  scheduleAntigravityImport(cwd);
 }
 
 /**
@@ -197,6 +252,13 @@ async function maybeNotifyUpdate(context: vscode.ExtensionContext, cwd: string):
  *   - plain text — records your prompt verbatim and gives a quick answer
  */
 function registerChatParticipant(context: vscode.ExtensionContext): void {
+  // VS Code forks (e.g. Antigravity) may not expose the chat API. Feature-detect
+  // so activation still succeeds there and the save-capture path keeps working.
+  if (typeof vscode.chat?.createChatParticipant !== 'function') {
+    output.appendLine('Chat API unavailable here — skipping the @showtail participant.');
+    return;
+  }
+  const tool = captureTool();
   const handler: vscode.ChatRequestHandler = async (request, _ctx, stream, token) => {
     const cwd = folderFor(undefined);
     if (!cwd) {
@@ -237,7 +299,7 @@ function registerChatParticipant(context: vscode.ExtensionContext): void {
     let turnId: string | undefined;
     if (request.prompt.trim().length > 0) {
       const logged = await runShowtail(
-        ['log', '--type', 'prompt', '--text', request.prompt, '--tool', 'github-copilot'],
+        ['log', '--type', 'prompt', '--text', request.prompt, '--tool', tool],
         cwd,
       );
       turnId = loggedEventId(logged);
@@ -257,7 +319,7 @@ function registerChatParticipant(context: vscode.ExtensionContext): void {
         }
         // Capture the model's reply as ai_output, linked to the prompt's turn.
         if (full.trim().length > 0) {
-          const args = ['log', '--type', 'ai_output', '--tool', 'github-copilot'];
+          const args = ['log', '--type', 'ai_output', '--tool', tool];
           if (turnId) args.push('--turn', turnId);
           await runShowtailStdin(args, cwd, full);
         }
@@ -292,15 +354,19 @@ function registerSaveCapture(context: vscode.ExtensionContext): void {
     if (!cwd) return;
 
     // Collapse rapid saves of the same file into one snapshot.
+    const tool = captureTool();
     const existing = timers.get(file);
     if (existing) clearTimeout(existing);
     timers.set(
       file,
       setTimeout(() => {
         timers.delete(file);
-        void runShowtail(['artifact', file, '--tool', 'github-copilot'], cwd).then(
-          () => output.appendLine(`snapshotted ${file}`),
-        );
+        void runShowtail(['artifact', file, '--tool', tool], cwd).then(() => {
+          output.appendLine(`snapshotted ${file}`);
+          // On Antigravity, a save means the agent/you just did work — pull the
+          // conversation transcript so prompts/replies land alongside the edit.
+          if (isAntigravityHost()) scheduleAntigravityImport(cwd);
+        });
       }, 1500),
     );
   });
