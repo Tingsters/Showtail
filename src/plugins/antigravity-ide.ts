@@ -26,6 +26,7 @@ import {
 } from '../core/antigravityIdeTranscript.ts';
 import { homeDirExists } from '../core/detect.ts';
 import {
+  extractAntigravityEditedFiles,
   extractEditedFiles,
   extractPrompt,
   extractSessionId,
@@ -119,15 +120,18 @@ export const antigravityIdePlugin: EnvironmentPlugin = {
     },
 
     hooks: {
-      // The IDE's PostToolUse/UserPromptSubmit payloads use file_path-style edit
-      // tools, so the same field extractors as Claude apply. Best-effort: see the
-      // validation caveat in the plan if the IDE's payload field names differ.
+      // The IDE's PostToolUse payload puts the edited path in `toolCall.args.
+      // TargetFile` (PascalCase, JSON-string-encoded), NOT Claude's
+      // `tool_input.file_path` — so use the Antigravity extractor first and fall
+      // back to the Claude-shaped one. Prompts/replies/plans are recovered from the
+      // transcript at Stop, so a missing live `prompt` field is fine.
       parse(raw) {
         const p = raw as HookPayload;
+        const edited = extractAntigravityEditedFiles(p);
         return {
           nativeSessionId: extractSessionId(p),
           prompt: extractPrompt(p) ?? undefined,
-          editedFiles: extractEditedFiles(p),
+          editedFiles: edited.length > 0 ? edited : extractEditedFiles(p),
           suggestedDiff: extractSuggestedCode(p),
         };
       },

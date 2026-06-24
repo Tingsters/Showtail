@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import {
+  extractAntigravityEditedFiles,
   extractApplyPatchFiles,
   extractEditedFiles,
   extractPrompt,
@@ -128,5 +129,34 @@ describe('hookInput', () => {
         extractApplyPatchFiles({ tool_input: { input: 'no headers here' } }),
       ).toEqual([]);
     });
+  });
+});
+
+describe('extractAntigravityEditedFiles (IDE TargetFile shape)', () => {
+  test('reads toolCall.args.TargetFile and unwraps the JSON-encoded value', () => {
+    // Mirrors the IDE transcript: args values are JSON-string-encoded.
+    const payload = {
+      cwd: '/proj',
+      toolCall: { name: 'write_to_file', args: { TargetFile: '"/proj/src/a.ts"' } },
+    } as any;
+    expect(extractAntigravityEditedFiles(payload)).toEqual(['src/a.ts']);
+  });
+
+  test('tolerates a plain (not JSON-encoded) path and tool_input/args wrappers', () => {
+    expect(
+      extractAntigravityEditedFiles({ tool_input: { TargetFile: 'src/b.ts' } } as any),
+    ).toEqual(['src/b.ts']);
+    expect(
+      extractAntigravityEditedFiles({ args: { target_file: 'src/c.ts' } } as any),
+    ).toEqual(['src/c.ts']);
+  });
+
+  test('returns empty when no recognizable target field is present', () => {
+    expect(extractAntigravityEditedFiles({} as any)).toEqual([]);
+    expect(
+      extractAntigravityEditedFiles({
+        toolCall: { args: { Description: '"x"' } },
+      } as any),
+    ).toEqual([]);
   });
 });

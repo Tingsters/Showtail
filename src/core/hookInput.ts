@@ -113,6 +113,54 @@ export function extractEditedFiles(payload: HookPayload): string[] {
   return [...new Set(out)];
 }
 
+/**
+ * Extract edited file path(s) from an Antigravity IDE PostToolUse payload. Its
+ * edit tools (write_to_file / replace_file_content / multi_replace_file_content /
+ * create_file / …) put the path in `args.TargetFile` (PascalCase), and the IDE
+ * JSON-string-encodes arg values (e.g. `"\"C:/x.py\""`). The stdin wrapper may
+ * nest the args under `toolCall.args`, `tool_input`, or `args`, so we check each.
+ * Absolute paths are normalized repo-relative against `cwd`. Best-effort.
+ */
+export function extractAntigravityEditedFiles(payload: HookPayload): string[] {
+  const p = payload as unknown as Record<string, unknown>;
+  const fromToolCall =
+    p.toolCall && typeof p.toolCall === 'object'
+      ? (p.toolCall as Record<string, unknown>).args
+      : undefined;
+  const args = [fromToolCall, p.tool_input, p.args].find(
+    (a): a is Record<string, unknown> => !!a && typeof a === 'object',
+  );
+  if (!args) return [];
+  for (const key of [
+    'TargetFile',
+    'target_file',
+    'AbsolutePath',
+    'file_path',
+    'path',
+    'Path',
+  ]) {
+    const decoded = decodeMaybeJsonString(args[key]);
+    if (decoded) return [normalizeHookPath(decoded, payload.cwd)];
+  }
+  return [];
+}
+
+/** Unwrap a possibly JSON-string-encoded scalar (Antigravity double-encodes arg values). */
+function decodeMaybeJsonString(v: unknown): string | null {
+  if (typeof v !== 'string') return null;
+  let s = v.trim();
+  if (s.length === 0) return null;
+  if (s.startsWith('"') && s.endsWith('"')) {
+    try {
+      const inner: unknown = JSON.parse(s);
+      if (typeof inner === 'string') s = inner.trim();
+    } catch {
+      /* not JSON-encoded — use the raw value */
+    }
+  }
+  return s.length > 0 ? s : null;
+}
+
 /** Render a minimal +/- diff from an Edit's old/new strings. */
 function simpleDiff(oldStr: unknown, newStr: unknown): string {
   const out: string[] = [];
