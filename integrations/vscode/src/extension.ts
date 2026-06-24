@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { execFile, spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 
@@ -119,21 +120,44 @@ export function activate(context: vscode.ExtensionContext): void {
   registerChatParticipant(context);
   registerSaveCapture(context);
   registerCommands(context);
-  if (isAntigravityHost()) void maybeBootstrapAntigravity();
+  if (isAntigravityHost()) void maybeBootstrapAntigravity(context);
   else void maybeAutoInstallCopilot(context);
 }
 
 /**
  * Antigravity bootstrap: make sure the workspace is a tracked Showtail project
- * (honoring the global opt-in), then back-fill the conversation transcript so far.
- * Save snapshots + the debounced import (registerSaveCapture) keep it current.
+ * (honoring the global opt-in), back-fill the conversation so far, and — the key
+ * to hands-free capture here — WATCH the IDE's on-disk transcript so the agent's
+ * own work (which raises no editor save) triggers an import as the conversation
+ * grows. Editor saves still snapshot files via registerSaveCapture.
  */
-async function maybeBootstrapAntigravity(): Promise<void> {
+async function maybeBootstrapAntigravity(context: vscode.ExtensionContext): Promise<void> {
   const cwd = folderFor(undefined);
   if (!cwd) return;
   if (!(await ensureTracked(cwd))) return; // untracked and not opted in
-  output.appendLine('Showtail: Antigravity capture active (transcript import + save snapshots).');
+  output.appendLine('Showtail: Antigravity capture active (transcript watch + import).');
   scheduleAntigravityImport(cwd);
+
+  // The IDE writes the conversation to ~/.gemini/antigravity-ide/brain/<id>/
+  // .system_generated/logs/transcript.jsonl as the agent works. Watch it and
+  // re-import on every change — the import is idempotent, so this converges on the
+  // full conversation without the agent ever needing an editor save.
+  const brain = join(homedir(), '.gemini', 'antigravity-ide', 'brain');
+  try {
+    const watcher = vscode.workspace.createFileSystemWatcher(
+      new vscode.RelativePattern(vscode.Uri.file(brain), '**/transcript*.jsonl'),
+    );
+    const onTranscript = () => {
+      const c = folderFor(undefined);
+      if (c) scheduleAntigravityImport(c);
+    };
+    watcher.onDidChange(onTranscript);
+    watcher.onDidCreate(onTranscript);
+    context.subscriptions.push(watcher);
+    output.appendLine(`Watching Antigravity transcripts under ${brain}`);
+  } catch (err) {
+    output.appendLine(`transcript watch unavailable: ${(err as Error).message}`);
+  }
 }
 
 /**
