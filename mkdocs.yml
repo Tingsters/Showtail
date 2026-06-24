@@ -1,0 +1,82 @@
+site_name: Showtail
+site_description: >-
+  Show your work — automatically capture the prompts you send to AI and the
+  files you change into a local, reviewable trail your educator can review.
+site_url: https://tingsters.github.io/Showtail/
+repo_url: https://github.com/Tingsters/Showtail
+repo_name: Tingsters/Showtail
+edit_uri: edit/main/docs/
+copyright: Apache-2.0
+
+theme:
+  name: material
+  logo: assets/showtail-logo.png
+  favicon: assets/showtail-logo.png
+  icon:
+    repo: fontawesome/brands/github
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.top
+    - navigation.instant
+    - navigation.footer
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.tabs.link
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+
+extra_css:
+  - stylesheets/extra.css
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - tables
+  - pymdownx.superfences
+  - pymdownx.details
+  - pymdownx.tabbed:
+      alternate_style: true
+  - toc:
+      permalink: true
+
+nav:
+  - Home: index.md
+  - Getting started:
+      - Installation: getting-started/installation.md
+      - Quickstart: getting-started/quickstart.md
+  - How it works:
+      - Concepts & events: concepts/how-it-works.md
+      - Data layout: concepts/data-layout.md
+      - Privacy & redaction: concepts/privacy.md
+      - Example report: concepts/example-report.md
+  - Integrations:
+      - Overview & matrix: integrations/index.md
+      - Claude Code: integrations/claude-code.md
+      - OpenAI Codex: integrations/codex.md
+      - GitHub Copilot: integrations/copilot.md
+      - ChatGPT: integrations/chatgpt.md
+      - Google Gemini: integrations/gemini.md
+  - For educators:
+      - Classroom workflow: educators/classroom-workflow.md
+      - Working as a team: educators/teams.md
+  - Reference:
+      - CLI commands: reference/cli.md
+      - Configuration: reference/configuration.md
+  - Contributing: contributing.md
+  - Roadmap: roadmap.md

@@ -2,8 +2,9 @@
  * `showtail matrix` (alias `integrations`) — print the integration capability
  * matrix: what works fully, partially, is planned, or can't be done for each AI
  * coding tool Showtail integrates with. `--json` emits the machine-readable
- * form; the hidden `--write-readme` regenerates the README's managed block from
- * the single source of truth in core/capabilityMatrix.ts.
+ * form; the hidden `--write-readme` regenerates the managed block on the docs
+ * site's integrations page from the single source of truth in
+ * core/capabilityMatrix.ts.
  */
 import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
@@ -27,9 +28,12 @@ export interface MatrixOptions {
   only?: string[];
 }
 
-/** Path to the repository README (this command runs from source for maintainers). */
-function readmePath(): string {
-  return join(import.meta.dir, '..', '..', 'README.md');
+/**
+ * Path to the docs site's integrations page, which hosts the managed matrix
+ * block (this command runs from source for maintainers).
+ */
+function matrixDocPath(): string {
+  return join(import.meta.dir, '..', '..', 'docs', 'integrations', 'index.md');
 }
 
 const SECTION_HEADING = '## Integration capability matrix';
@@ -38,17 +42,17 @@ const SECTION_INTRO =
   'This table shows what each integration can do today — every ✅ is backed by an ' +
   'end-to-end test, so it genuinely works against the real tool.';
 
-/** The anchor the matrix section is inserted before, the first integration section. */
-const ANCHOR = '## Claude Code integration';
+/** The anchor the matrix section is inserted before, if the section is missing. */
+const ANCHOR = '## Per-tool guides';
 
 /**
- * Insert or refresh the matrix section in README. If the section already exists,
- * its heading, intro, and managed block are replaced atomically (so the intro —
- * which lives outside the markers — stays in sync); otherwise the whole section
- * is spliced in just before the first per-integration section.
+ * Insert or refresh the matrix section in the docs integrations page. If the
+ * section already exists, its heading, intro, and managed block are replaced
+ * atomically (so the intro — which lives outside the markers — stays in sync);
+ * otherwise the whole section is spliced in just before the per-tool guides.
  */
 function writeReadme(): void {
-  const file = readmePath();
+  const file = matrixDocPath();
   const body = renderMatrixMarkdown();
   const current = existsSync(file) ? readFileSync(file, 'utf8') : '';
   const section = `${SECTION_HEADING}\n\n${SECTION_INTRO}\n\n${blockFor(body)}`;
@@ -124,7 +128,7 @@ export async function runMatrix(options: MatrixOptions = {}): Promise<void> {
   }
   if (options.writeReadme) {
     writeReadme();
-    console.log(`Updated ${readmePath()}`);
+    console.log(`Updated ${matrixDocPath()}`);
     return;
   }
   if (options.json) {

@@ -4,6 +4,9 @@ node_modules/
 # Build output (compiled binaries)
 dist/
 
+# MkDocs build output (the docs site is built in CI; see .github/workflows/docs.yml)
+site/
+
 # VS Code extension package
 *.vsix
 

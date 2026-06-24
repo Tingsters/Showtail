@@ -1,0 +1,4 @@
+# Documentation site dependencies (MkDocs + Material).
+# Used by .github/workflows/docs.yml and for local previews:
+#   pip install -r docs/requirements.txt && mkdocs serve
+mkdocs-material>=9.5

@@ -207,7 +207,7 @@ program
   )
   .helpGroup(G_REVIEW)
   .option('--json', 'output machine-readable JSON')
-  .option('--write-readme', "regenerate the README's matrix block (maintainers)")
+  .option('--write-readme', "regenerate the docs site's matrix block (maintainers)")
   .option(
     '--verify-live',
     'drive installed tools live to certify capture cells (maintainers)',
