@@ -372,6 +372,7 @@ interface ImportCliOptions {
   date?: string;
   session?: string;
   list?: boolean;
+  auto?: boolean;
 }
 
 function toImportOptions(o: ImportCliOptions): ImportRunOptions {
@@ -384,6 +385,7 @@ function toImportOptions(o: ImportCliOptions): ImportRunOptions {
     date: o.date,
     session: o.session,
     list: o.list,
+    auto: o.auto,
   };
 }
 
@@ -411,7 +413,11 @@ for (const p of importPlugins()) {
       .option('--list', "list this project's transcripts and exit")
       .option('--no-responses', "don't import the AI's text responses, only your prompts")
       .option('--file <path>', 'import a specific transcript file by path')
-      .option('-s, --session <id>', 'import into a specific Showtail session id');
+      .option('-s, --session <id>', 'import into a specific Showtail session id')
+      .option(
+        '--auto',
+        "route by the transcript's edited-file paths into each project (headless capture)",
+      );
   }
 
   sub.action(

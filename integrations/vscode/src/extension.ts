@@ -86,32 +86,29 @@ function captureTool(): string {
 }
 
 /**
- * Back-fill the Antigravity conversation by running `showtail import
- * antigravity-ide`, debounced per workspace. The IDE's hooks don't reliably
- * capture prompts/replies, but its on-disk transcript is complete; the import is
- * idempotent, so triggering it after edits converges on the full conversation.
+ * Capture the Antigravity conversation by running `showtail import antigravity-ide
+ * --auto`, debounced. `--auto` routes prompts/replies/edits by the transcript's
+ * own file paths into each project (and a dedicated scratch trail), so this needs
+ * no open folder — the IDE's extension host frequently has none. Idempotent, so
+ * firing it on every transcript change converges on the full conversation.
  */
-const importTimers = new Map<string, NodeJS.Timeout>();
-function scheduleAntigravityImport(cwd: string): void {
-  const existing = importTimers.get(cwd);
-  if (existing) clearTimeout(existing);
-  importTimers.set(
-    cwd,
-    setTimeout(() => {
-      importTimers.delete(cwd);
-      void runShowtail(['import', 'antigravity-ide'], cwd).then(() =>
-        output.appendLine('imported the Antigravity conversation transcript'),
-      );
-    }, 3000),
-  );
+let importTimer: NodeJS.Timeout | undefined;
+function scheduleAntigravityImport(): void {
+  if (importTimer) clearTimeout(importTimer);
+  importTimer = setTimeout(() => {
+    importTimer = undefined;
+    void runShowtail(['import', 'antigravity-ide', '--auto'], homedir()).then(() => {
+      output.appendLine('Captured the Antigravity conversation (auto-routed by edit paths).');
+    });
+  }, 3000);
 }
 
 export function activate(context: vscode.ExtensionContext): void {
   output = vscode.window.createOutputChannel('Showtail');
   context.subscriptions.push(output, {
     dispose: () => {
-      for (const t of importTimers.values()) clearTimeout(t);
-      importTimers.clear();
+      if (importTimer) clearTimeout(importTimer);
+      importTimer = undefined;
     },
   });
   const host = isAntigravityHost() ? 'Antigravity IDE' : 'GitHub Copilot';
@@ -120,44 +117,33 @@ export function activate(context: vscode.ExtensionContext): void {
   registerChatParticipant(context);
   registerSaveCapture(context);
   registerCommands(context);
-  if (isAntigravityHost()) void maybeBootstrapAntigravity(context);
+  if (isAntigravityHost()) registerAntigravity(context);
   else void maybeAutoInstallCopilot(context);
 }
 
 /**
- * Antigravity bootstrap: make sure the workspace is a tracked Showtail project
- * (honoring the global opt-in), back-fill the conversation so far, and — the key
- * to hands-free capture here — WATCH the IDE's on-disk transcript so the agent's
- * own work (which raises no editor save) triggers an import as the conversation
- * grows. Editor saves still snapshot files via registerSaveCapture.
+ * Antigravity capture — host-independent. The agent runs in an extension host that
+ * frequently has no workspace folder, and it edits files in the IDE's scratch
+ * sandbox or an arbitrary project; relying on `workspace.workspaceFolders` misses
+ * that work. Instead we watch the IDE's on-disk transcript (a global path) and run
+ * `import antigravity-ide --auto`, which routes prompts/replies/edits by the
+ * transcript's own file paths into each enclosing project (and a dedicated scratch
+ * trail). Editor saves still snapshot files when a folder is open.
  */
-async function maybeBootstrapAntigravity(context: vscode.ExtensionContext): Promise<void> {
-  const cwd = folderFor(undefined);
-  if (!cwd) return;
-  if (!(await ensureTracked(cwd))) return; // untracked and not opted in
-  output.appendLine('Showtail: Antigravity capture active (transcript watch + import).');
-  scheduleAntigravityImport(cwd);
-
-  // The IDE writes the conversation to ~/.gemini/antigravity-ide/brain/<id>/
-  // .system_generated/logs/transcript.jsonl as the agent works. Watch it and
-  // re-import on every change — the import is idempotent, so this converges on the
-  // full conversation without the agent ever needing an editor save.
+function registerAntigravity(context: vscode.ExtensionContext): void {
   const brain = join(homedir(), '.gemini', 'antigravity-ide', 'brain');
   try {
     const watcher = vscode.workspace.createFileSystemWatcher(
       new vscode.RelativePattern(vscode.Uri.file(brain), '**/transcript*.jsonl'),
     );
-    const onTranscript = () => {
-      const c = folderFor(undefined);
-      if (c) scheduleAntigravityImport(c);
-    };
-    watcher.onDidChange(onTranscript);
-    watcher.onDidCreate(onTranscript);
+    watcher.onDidChange(() => scheduleAntigravityImport());
+    watcher.onDidCreate(() => scheduleAntigravityImport());
     context.subscriptions.push(watcher);
     output.appendLine(`Watching Antigravity transcripts under ${brain}`);
   } catch (err) {
     output.appendLine(`transcript watch unavailable: ${(err as Error).message}`);
   }
+  scheduleAntigravityImport(); // capture anything already on disk at startup
 }
 
 /**
@@ -389,7 +375,7 @@ function registerSaveCapture(context: vscode.ExtensionContext): void {
           output.appendLine(`snapshotted ${file}`);
           // On Antigravity, a save means the agent/you just did work — pull the
           // conversation transcript so prompts/replies land alongside the edit.
-          if (isAntigravityHost()) scheduleAntigravityImport(cwd);
+          if (isAntigravityHost()) scheduleAntigravityImport();
         });
       }, 1500),
     );

@@ -166,6 +166,7 @@ export const antigravityIdePlugin: EnvironmentPlugin = {
         file: opts.file,
         session: opts.session,
         cwd: opts.cwd,
+        auto: opts.auto,
       }),
   },
 };

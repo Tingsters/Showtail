@@ -200,6 +200,13 @@ export interface ImportRunOptions {
   yes?: boolean;
   date?: string;
   list?: boolean;
+  /**
+   * Route the import by the transcript's edited-file paths rather than into a
+   * single `cwd`-derived project. Used by the headless (extension-triggered)
+   * path, where no project folder is reliably open. Plugins that don't support
+   * it ignore the flag.
+   */
+  auto?: boolean;
 }
 
 export interface ImportCapability {

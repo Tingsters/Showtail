@@ -25,6 +25,15 @@ export function antigravityIdeBrainDir(): string {
   return join(geminiHome(), 'antigravity-ide', 'brain');
 }
 
+/**
+ * The IDE's scratch sandbox — where the agent edits files when no project folder
+ * is open. We give it its own `.showtail/` so scratch work has a home; the
+ * auto-route importer falls back here for edits that sit under no other project.
+ */
+export function antigravityIdeScratchDir(): string {
+  return join(geminiHome(), 'antigravity-ide', 'scratch');
+}
+
 /** Every Antigravity IDE transcript on disk, newest first. */
 export function findAntigravityIdeTranscripts(): AntigravityIdeTranscriptInfo[] {
   return findTranscriptsUnderBrain(antigravityIdeBrainDir());

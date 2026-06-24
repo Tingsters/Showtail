@@ -14,8 +14,9 @@
  * core/antigravityIdeTranscript.ts and the shared event logger.
  */
 import { existsSync, readFileSync } from 'node:fs';
-import { basename, isAbsolute, relative } from 'node:path';
+import { basename, dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import {
+  antigravityIdeScratchDir,
   findAntigravityIdeTranscripts,
   locateAntigravityIdeTranscript,
   readAntigravityIdeTranscript,
@@ -25,8 +26,14 @@ import { importEditArtifact, importedArtifactSourceIds } from '../core/artifacts
 import { importedSourceIds, logEvent } from '../core/events.ts';
 import { PLAN_APPROVED_TAG, PLAN_REVISED_TAG } from '../core/plans.ts';
 import { makeId } from '../core/ids.ts';
-import { requireActiveAuthor } from '../core/authors.ts';
-import { requirePaths, type AuthorPaths } from '../core/storage.ts';
+import { requireActiveAuthor, resolveActiveAuthorForHook } from '../core/authors.ts';
+import { ensureInitialized } from './init.ts';
+import {
+  findRoot,
+  pathsForRoot,
+  requirePaths,
+  type AuthorPaths,
+} from '../core/storage.ts';
 import { oneLine } from '../core/text.ts';
 import type { HookTranscript } from '../plugins/types.ts';
 
@@ -40,6 +47,12 @@ export interface ImportAntigravityIdeOptions {
   /** Import into a specific Showtail session id. */
   session?: string;
   cwd?: string;
+  /**
+   * Route by the transcript's edited-file paths into each enclosing `.showtail/`
+   * project (scratch sandbox edits go to a dedicated scratch trail) instead of
+   * importing into a single `cwd`-derived project. The headless capture path.
+   */
+  auto?: boolean;
 }
 
 export interface AntigravityIdeImportResult {
@@ -117,6 +130,9 @@ export function extractTranscriptEdits(
     for (const m of content.matchAll(/file:\/\/\/?([^\s)'"]+)/g)) {
       const p = fileUriToPath(m[1]!);
       if (!p) continue;
+      // Skip the IDE's own generated state (task logs, etc. under
+      // `.system_generated/`) — it's never the student's work, just execution noise.
+      if (p.includes('/.system_generated/')) continue;
       out.push({
         path: p,
         diff: content.trim() || `Antigravity edited ${p}`,
@@ -273,13 +289,20 @@ export async function runImportAntigravityIde(
   target: string | undefined,
   options: ImportAntigravityIdeOptions,
 ): Promise<void> {
-  const paths = requirePaths(options.cwd);
-  const author = await requireActiveAuthor(paths, { cwd: paths.root });
-
   if (options.list) {
     listConversations();
     return;
   }
+  // Headless capture: route by the transcript's edited-file paths into each
+  // project, rather than into one `cwd`-derived trail (no folder is reliably open
+  // in the IDE's extension host).
+  if (options.auto) {
+    await runImportAntigravityIdeAuto(target, options);
+    return;
+  }
+
+  const paths = requirePaths(options.cwd);
+  const author = await requireActiveAuthor(paths, { cwd: paths.root });
 
   const info = resolveTranscript(target, options);
   if (!info) {
@@ -294,25 +317,138 @@ export async function runImportAntigravityIde(
     return;
   }
 
+  // The parsed conversation drops edits, so recover edited files from the raw
+  // transcript's CODE_ACTION lines and record them under the same batch.
+  const edits = safeExtractEdits(info.path, info.sessionId);
+  const res = await importIntoRoot(author, paths.root, transcript, edits, options);
+  printResult(res, options.withResponses !== false);
+}
+
+/** Read a transcript's CODE_ACTION edits, swallowing read errors (best-effort). */
+function safeExtractEdits(file: string, sessionId: string): TranscriptEdit[] {
+  try {
+    return extractTranscriptEdits(readFileSync(file, 'utf8'), sessionId);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Import one parsed conversation + a given set of recovered edits into a single
+ * project root, tagged `antigravity-ide`. Idempotent by sourceId. The edits are
+ * passed in (not re-extracted) so the auto-router can hand each root only the
+ * edits that belong to it.
+ */
+async function importIntoRoot(
+  author: AuthorPaths,
+  root: string,
+  transcript: HookTranscript,
+  edits: TranscriptEdit[],
+  options: { withResponses?: boolean; session?: string },
+): Promise<AntigravityIdeImportResult> {
   const batchId = makeId('imp');
   const res = await importAntigravityIdeTranscript(author, transcript, {
     withResponses: options.withResponses,
     sessionId: options.session,
     batchId,
   });
-  // The parsed conversation drops edits, so recover edited files from the raw
-  // transcript's CODE_ACTION lines and record them as artifacts under this batch.
-  try {
-    const raw = readFileSync(info.path, 'utf8');
-    res.edits = importAntigravityIdeEdits(
-      author,
-      extractTranscriptEdits(raw, info.sessionId),
-      { root: paths.root, sessionId: options.session, batchId },
-    );
-  } catch {
-    /* edit recovery is best-effort — never fail the conversation import over it */
+  res.edits = importAntigravityIdeEdits(author, edits, {
+    root,
+    sessionId: options.session,
+    batchId,
+  });
+  return res;
+}
+
+/**
+ * Auto-route a transcript by its edited-file paths. Each edit is filed under the
+ * nearest enclosing `.showtail/` project; edits that sit under no project (the
+ * IDE's scratch sandbox) go to a dedicated scratch trail, created on first use.
+ * The full conversation (prompts/replies/plans) is imported into every project
+ * the conversation touched, so each trail is self-contained. Never prompts — this
+ * is the headless path; roots whose author can't be resolved silently are skipped.
+ */
+async function runImportAntigravityIdeAuto(
+  target: string | undefined,
+  options: ImportAntigravityIdeOptions,
+): Promise<void> {
+  const info = resolveTranscript(target, options);
+  if (!info) {
+    console.log('No Antigravity IDE conversations were found on disk.');
+    return;
   }
-  printResult(res, options.withResponses !== false);
+  const transcript = readAntigravityIdeTranscript(info, antigravityIdeScratchDir());
+  const allEdits = safeExtractEdits(info.path, info.sessionId);
+  if (transcript.messages.length === 0 && allEdits.length === 0) {
+    console.log(
+      'Nothing to capture — that conversation has no prompts, replies, or edits.',
+    );
+    return;
+  }
+
+  const scratchRoot = antigravityIdeScratchDir();
+  const scratchPrefix = resolve(scratchRoot) + sep;
+  const isUnderScratch = (p: string): boolean => {
+    const abs = resolve(p);
+    return abs === resolve(scratchRoot) || abs.startsWith(scratchPrefix);
+  };
+  const byRoot = new Map<string, TranscriptEdit[]>();
+  const bucket = (root: string): TranscriptEdit[] => {
+    const list = byRoot.get(root) ?? [];
+    byRoot.set(root, list);
+    return list;
+  };
+  let usedScratch = false;
+  for (const e of allEdits) {
+    const abs = isAbsolute(e.path) ? e.path : null;
+    // Scratch-sandbox edits are PINNED to the dedicated scratch trail — never let
+    // findRoot climb above `~/.gemini` to a stray `.showtail` (e.g. one at $HOME).
+    let root: string;
+    if (abs && isUnderScratch(abs)) {
+      root = scratchRoot;
+      usedScratch = true;
+    } else {
+      const found = abs ? findRoot(dirname(abs)) : null;
+      root = found ?? scratchRoot;
+      if (!found) usedScratch = true;
+    }
+    bucket(root).push(e);
+  }
+  if (byRoot.size === 0) {
+    // Pure Q&A (no edits): the scratch trail is the only sensible home.
+    bucket(scratchRoot);
+    usedScratch = true;
+  }
+
+  // Create the scratch trail's OWN `.showtail/` on first use. Check for it *at*
+  // the scratch root (not via findRoot, which would climb to a stray ancestor
+  // `.showtail` and wrongly conclude scratch is already tracked).
+  if (usedScratch && !existsSync(pathsForRoot(scratchRoot).config)) {
+    await ensureInitialized(scratchRoot);
+  }
+
+  const totals: AntigravityIdeImportResult = {
+    prompts: 0,
+    responses: 0,
+    plans: 0,
+    edits: 0,
+    skipped: 0,
+  };
+  const importedRoots: string[] = [];
+  for (const [root, edits] of byRoot) {
+    const paths = pathsForRoot(root);
+    if (!existsSync(paths.config)) continue; // not a tracked project — skip
+    const author = await resolveActiveAuthorForHook(paths, { cwd: root });
+    if (!author) continue; // can't attribute without prompting — skip this root
+    const res = await importIntoRoot(author, root, transcript, edits, options);
+    totals.prompts += res.prompts;
+    totals.responses += res.responses;
+    totals.plans += res.plans;
+    totals.edits += res.edits;
+    totals.skipped += res.skipped;
+    if (res.prompts + res.responses + res.plans + res.edits > 0) importedRoots.push(root);
+  }
+  printAutoResult(totals, importedRoots, options.withResponses !== false);
 }
 
 /** Print the conversations available to import, so a student can pick one by id. */
@@ -339,6 +475,32 @@ function listConversations(): void {
   console.log('');
   console.log('Import one with:  showtail import antigravity-ide <conversation-id>');
   console.log('Or run `showtail import antigravity-ide` to import the most recent.');
+}
+
+/** Summarize an auto-route capture: what was recorded, and into which project(s). */
+function printAutoResult(
+  res: AntigravityIdeImportResult,
+  roots: string[],
+  withResponses: boolean,
+): void {
+  const total = res.prompts + res.responses + res.plans + res.edits;
+  if (total === 0) {
+    console.log(
+      res.skipped > 0
+        ? `Already captured — nothing new (${res.skipped} item(s) already in your trail).`
+        : 'Nothing new to capture.',
+    );
+    return;
+  }
+  const parts = [`${res.prompts} prompt(s)`];
+  if (withResponses) parts.push(`${res.responses} response(s)`);
+  if (res.edits) parts.push(`${res.edits} edit(s)`);
+  if (res.plans) parts.push(`${res.plans} plan(s)`);
+  console.log(
+    `Captured from Antigravity IDE: ${parts.join(', ')} (tool: antigravity-ide) ` +
+      `into ${roots.length} project(s):`,
+  );
+  for (const r of roots) console.log(`  ${r}`);
 }
 
 function printResult(res: AntigravityIdeImportResult, withResponses: boolean): void {
