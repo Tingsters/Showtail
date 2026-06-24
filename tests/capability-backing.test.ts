@@ -1,13 +1,18 @@
 /**
- * The backing suite: for every `full` cell in the capability matrix, exercise
- * that capability for real and call markPassed(`${capability}:${integration}`).
- * The claims suite (capability-claims.test.ts) then refuses to let any `full`
- * cell stand without a passed marker here — so "fully implemented" in the matrix
- * always means "proven by a test against the real contract".
+ * The backing + claims suite: for every `full` cell in the capability matrix,
+ * exercise that capability for real and call markPassed(`${capability}:${integration}`),
+ * then assert (in the `claims` block at the end of this file) that no `full` cell
+ * stands without a passed marker — so "fully implemented" in the matrix always
+ * means "proven by a test against the real contract".
+ *
+ * Backing and claims live in ONE file on purpose: Bun runs tests in source order
+ * within a file but does NOT guarantee order *across* files, and the marker
+ * handshake requires backing to run before claims. Splitting them once made CI
+ * red on Linux (claims ran first; markers absent) while passing locally on stale
+ * markers — keeping them together makes the gate order-safe by construction.
  *
  * Integration ids are the matrix column ids; the real exercise uses that tool's
- * Showtail plugin / canonical tool tag underneath. ALL markPassed calls live in
- * this one file (which runs before capability-claims) so the gate is order-safe.
+ * Showtail plugin / canonical tool tag underneath.
  */
 import { beforeAll, describe, expect, test } from 'bun:test';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -48,7 +53,9 @@ import {
   antigravityIdeInstructionsState,
   resolveAntigravityIdeTarget,
 } from '../src/core/antigravityIde.ts';
-import { clearMarkers, markPassed } from './e2eRegistry.ts';
+import { fullClaims } from '../src/core/capabilityMatrix.ts';
+import { ledgerHas, readLedger } from '../src/core/matrixLedger.ts';
+import { E2E_TEST_IDS, clearMarkers, markPassed, passedIds } from './e2eRegistry.ts';
 
 const REPO = join(import.meta.dir, '..');
 const run = (cwd: string, args: string[], input?: string) => runCli(cwd, args, { input });
@@ -693,5 +700,42 @@ describe('backing: marketplace / extension install', () => {
     const guidance = getPluginById('github-copilot')!.connect!.setupGuidance ?? [];
     expect(guidance.join('\n')).toContain('--install-extension');
     markPassed('marketplace-install:copilot-vscode');
+  });
+});
+
+/**
+ * The keystone: a `full` capability claim is only allowed if a test proves it.
+ *
+ * Runs after the backing blocks above (same file ⇒ guaranteed source order),
+ * which mark each exercised capability. Here we assert every `full` cell in the
+ * matrix has a registered, *passed* contract test — and that every hook-driven
+ * capture cell is additionally certified in the live-verification ledger. A new
+ * `full` claim with no backing test fails this suite, so the matrix can never
+ * out-claim reality.
+ */
+describe('every full capability claim is backed by a passing test', () => {
+  const claims = fullClaims();
+  const registered = new Set(E2E_TEST_IDS);
+
+  test('there are full claims to check (guards against an empty matrix)', () => {
+    expect(claims.length).toBeGreaterThan(0);
+  });
+
+  test('each full cell has a registered, passing contract test', () => {
+    const passed = passedIds();
+    const missing = claims.filter(
+      (c) => !registered.has(c.testId) || !passed.has(c.testId),
+    );
+    // If this fails, either a backing block above did not run/mark this id,
+    // or a cell was set to `full` without adding its backing exercise.
+    expect(missing.map((c) => c.testId)).toEqual([]);
+  });
+
+  test('each hook-driven capture cell is certified in the live ledger', () => {
+    const ledger = readLedger();
+    const missing = claims.filter((c) => c.liveRequired && !ledgerHas(ledger, c.testId));
+    // If this fails, run `showtail matrix --verify-live` on a machine with the
+    // tool installed to certify it, or demote the cell to `partial` until then.
+    expect(missing.map((c) => c.testId)).toEqual([]);
   });
 });

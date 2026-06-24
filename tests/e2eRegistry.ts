@@ -2,14 +2,14 @@
  * The registry that links every `full` capability claim to a passing test.
  *
  * `E2E_TEST_IDS` is derived from the matrix itself: one id per `full` cell,
- * keyed `${capabilityId}:${integration}`. The backing suite
+ * keyed `${capabilityId}:${integration}`. The backing+claims suite
  * (capability-backing.test.ts) exercises each capability for real and calls
- * {@link markPassed} on success; the claims suite (capability-claims.test.ts)
- * then asserts every `full` cell has both a registered id and a passed marker.
+ * {@link markPassed} on success, then — in the same file — asserts every `full`
+ * cell has both a registered id and a passed marker.
  *
- * Markers are files under the OS temp dir so they survive across the separate
- * processes/files Bun runs — making the check order- and process-independent
- * within a single `bun test` run.
+ * Markers are files under the OS temp dir, cleared by {@link clearMarkers} in a
+ * `beforeAll` at the start of that file so every run begins from a clean slate
+ * (no stale markers from a previous run can mask a missing one).
  */
 import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
