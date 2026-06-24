@@ -42,47 +42,57 @@ export const ANTIGRAVITY_IDE_HOOK_NAMESPACE = 'showtail';
 
 /**
  * The canonical Antigravity IDE hook events, written under our named bundle.
- * Lifecycle event names follow the IDE's hook schema (SessionStart,
- * UserPromptSubmit, PostToolUse, Stop), mapped to Showtail's hook commands:
- *  - SessionStart     → session-start
- *  - UserPromptSubmit → user-prompt
- *  - PostToolUse      → post-edit   (matched to the IDE's file-writing tools)
- *  - Stop             → stop
- * The IDE's edit tools are `write_to_file` / `replace_file_content` /
- * `multi_replace_file_content` / `edit` / `write` / `create_file` / `str_replace`
- * (observed in the IDE transcript + hook matcher), so the matcher targets those.
- * Every command is tagged `--tool antigravity-ide` for correct attribution.
+ *
+ * The IDE's language server (`jsonhook.go`) recognizes ONLY these lifecycle
+ * events: `PreToolUse`, `PostToolUse`, `PreInvocation`, `PostInvocation`, `Stop`
+ * (confirmed from the IDE's hook-editor source + the LS load log). This is NOT
+ * the Claude/Codex set — an unknown event key (e.g. `SessionStart`) makes the Go
+ * parser reject the whole file ("0 named hooks, 0 total handlers"). Each entry is
+ * `{ matcher, hooks: [{ type:'command', command, timeout }] }` and the `matcher`
+ * is a tool-name glob (`*` = all tools), not a regex. So the mapping is:
+ *  - PreInvocation → user-prompt (fires before the model is called — turn start)
+ *  - PostToolUse   → post-edit   (all tools; Showtail snapshots only file edits)
+ *  - Stop          → stop        (reconciles prompts/replies/plans from the transcript)
+ * Prompts are also recovered at Stop from the transcript, so capture is robust
+ * even if PreInvocation carries no prompt text. Every command is tagged
+ * `--tool antigravity-ide` for correct attribution.
  */
+const HOOK_TIMEOUT_SECONDS = 30;
 export const ANTIGRAVITY_IDE_HOOK_EVENTS: HookEvents = {
-  SessionStart: [
+  PreInvocation: [
     {
+      matcher: '*',
       hooks: [
         {
           type: 'command',
-          command: 'showtail hook session-start --tool antigravity-ide',
+          command: 'showtail hook user-prompt --tool antigravity-ide',
+          timeout: HOOK_TIMEOUT_SECONDS,
         },
-      ],
-    },
-  ],
-  UserPromptSubmit: [
-    {
-      hooks: [
-        { type: 'command', command: 'showtail hook user-prompt --tool antigravity-ide' },
       ],
     },
   ],
   PostToolUse: [
     {
-      matcher:
-        'write_to_file|replace_file_content|multi_replace_file_content|edit|write|create_file|str_replace',
+      matcher: '*',
       hooks: [
-        { type: 'command', command: 'showtail hook post-edit --tool antigravity-ide' },
+        {
+          type: 'command',
+          command: 'showtail hook post-edit --tool antigravity-ide',
+          timeout: HOOK_TIMEOUT_SECONDS,
+        },
       ],
     },
   ],
   Stop: [
     {
-      hooks: [{ type: 'command', command: 'showtail hook stop --tool antigravity-ide' }],
+      matcher: '*',
+      hooks: [
+        {
+          type: 'command',
+          command: 'showtail hook stop --tool antigravity-ide',
+          timeout: HOOK_TIMEOUT_SECONDS,
+        },
+      ],
     },
   ],
 };

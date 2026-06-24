@@ -11,6 +11,8 @@
 export interface HookCommand {
   type: 'command';
   command: string;
+  /** Per-command timeout in seconds. Used by hosts that support it (Antigravity IDE). */
+  timeout?: number;
 }
 
 /** A matcher group: optional `matcher` plus the commands to run. */

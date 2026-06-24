@@ -53,7 +53,8 @@ describe('antigravity-ide install / uninstall', () => {
       const settings = JSON.parse(readFileSync(target.hooksFile, 'utf8'));
       const bundle = settings[ANTIGRAVITY_IDE_HOOK_NAMESPACE];
       expect(bundle.enabled).toBe(true);
-      for (const event of ['SessionStart', 'UserPromptSubmit', 'PostToolUse', 'Stop']) {
+      // Only the events the IDE language server recognizes.
+      for (const event of ['PreInvocation', 'PostToolUse', 'Stop']) {
         expect(Array.isArray(bundle[event])).toBe(true);
       }
 
