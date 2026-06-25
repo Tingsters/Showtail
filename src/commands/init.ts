@@ -5,8 +5,10 @@ import type { Config } from '../types.ts';
 import { establishIdentity } from '../core/authors.ts';
 import { gitToplevel } from '../core/git.ts';
 import { emitJson } from '../core/output.ts';
+import { makeId } from '../core/ids.ts';
 import {
   CONFIG_VERSION,
+  ensureTrailId,
   pathsForRoot,
   readConfig,
   writeConfig,
@@ -65,7 +67,12 @@ export async function ensureInitialized(
   options: EnsureInitOptions = {},
 ): Promise<{ created: boolean; paths: ShowtailPaths }> {
   const paths = pathsForRoot(root);
-  if (existsSync(paths.config)) return { created: false, paths };
+  if (existsSync(paths.config)) {
+    // Existing trail: upgrade it in place (mint trailId + bump version on a v3
+    // trail). No-op once already at the current version.
+    ensureTrailId(paths);
+    return { created: false, paths };
+  }
 
   // Create the shared directory tree (per-author folders are created on demand).
   for (const dir of [paths.base, paths.authorsDir, paths.objectsDir, paths.reportsDir]) {
@@ -84,6 +91,8 @@ export async function ensureInitialized(
     createdAt: new Date().toISOString(),
     anchor: resolve(root),
     anchorKind,
+    // Stable id the global ledger links sessions to (survives the repo moving).
+    trailId: makeId('trl'),
     settings: {
       git,
       captureAiOutput: true,

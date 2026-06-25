@@ -1,3 +1,5 @@
+import { afterEach } from 'bun:test';
+import { rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -8,6 +10,27 @@ import { join } from 'node:path';
 process.env.SHOWTAIL_IDENTITY_EMAIL ??= 'tester@example.com';
 process.env.SHOWTAIL_IDENTITY_NAME ??= 'Test Student';
 process.env.SHOWTAIL_IDENTITY_HOME ??= join(tmpdir(), 'showtail-test-identity');
+
+// Isolate the machine-global durable ledger (`SHOWTAIL_HOME`) for the whole test
+// run, so hooks never write to the developer's real `~/.showtail-cli/ledger`.
+// Spawned CLIs inherit it through `spawnEnv()`'s `...process.env`; tests that pin
+// their own home via `envWithHome` override it per test.
+process.env.SHOWTAIL_HOME ??= join(tmpdir(), 'showtail-test-home');
+
+// Clear the shared ledger after each test. The per-project `.showtail/` is already
+// isolated by its temp dir, but the ledger is machine-global and tests reuse
+// native session ids (e.g. `sess-1`) — so without this, a session's records would
+// leak across tests (and accumulate across runs). Best-effort; never throws.
+afterEach(() => {
+  try {
+    rmSync(join(process.env.SHOWTAIL_HOME ?? '', 'ledger'), {
+      recursive: true,
+      force: true,
+    });
+  } catch {
+    /* ignore */
+  }
+});
 
 // Cap `findRoot`'s upward walk at the OS temp dir for the entire test run. Test
 // temp dirs are created under `tmpdir()` (see makeTempDir), which itself sits

@@ -14,6 +14,8 @@ import { runReport } from './commands/report.ts';
 import { runVerify } from './commands/verify.ts';
 import { runStatus } from './commands/status.ts';
 import { runSessions } from './commands/sessions.ts';
+import { runInbox } from './commands/inbox.ts';
+import { runReattach } from './commands/reattach.ts';
 import { runHook, type HookEvent } from './commands/hook.ts';
 import { runImportUndo } from './commands/import.ts';
 import { eventTypeList } from './core/schema.ts';
@@ -27,7 +29,7 @@ import {
 import type { ConnectFlag, ImportRunOptions } from './plugins/types.ts';
 import type { Tool } from './types.ts';
 
-const VERSION = '0.10.1';
+const VERSION = '0.11.0';
 
 // Help-group headings (Commander 14 renders commands grouped under these).
 const G_START = 'Get started:';
@@ -187,6 +189,28 @@ program
   .action(
     action(async (opts: { json?: boolean; all?: boolean }) =>
       runSessions({ json: opts.json, all: opts.all }),
+    ),
+  );
+
+program
+  .command('inbox')
+  .description(
+    'Sessions captured globally but not yet placed in a project (scratch/folderless work). Pick to place them.',
+  )
+  .helpGroup(G_REVIEW)
+  .option('--json', 'output machine-readable JSON')
+  .action(action(async (opts: { json?: boolean }) => runInbox({ json: opts.json })));
+
+program
+  .command('reattach <sessionId>')
+  .description(
+    'Place an unplaced session into a project, or move a misattributed one to the right project.',
+  )
+  .helpGroup(G_CAPTURE)
+  .requiredOption('--to <path>', 'the project folder to place the session into')
+  .action(
+    action(async (sessionId: string, opts: { to?: string }) =>
+      runReattach(sessionId, { to: opts.to }),
     ),
   );
 

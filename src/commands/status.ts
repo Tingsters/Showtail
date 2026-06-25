@@ -1,12 +1,22 @@
-import { requirePaths } from '../core/storage.ts';
+import { requirePaths, trailIsNewerThanBinary } from '../core/storage.ts';
 import { activeAuthorPaths } from '../core/authors.ts';
 import { autoInitEnabled } from '../core/globalConfig.ts';
 import { currentSession } from '../core/sessions.ts';
 import { readSessionEvents } from '../core/events.ts';
+import { unplacedSessions } from '../core/ledger.ts';
 import { connectedToolsLines, toolStatuses } from '../core/tools.ts';
 import { emitJson } from '../core/output.ts';
 import { pluralS } from '../core/text.ts';
 import { EVENT_TYPES } from '../types.ts';
+
+/** Count of globally-captured sessions awaiting placement (best-effort; never throws). */
+function inboxCount(): number {
+  try {
+    return unplacedSessions().length;
+  } catch {
+    return 0;
+  }
+}
 
 export interface StatusOptions {
   /** Emit machine-readable JSON (consumed by the skill to decide manual capture). */
@@ -34,11 +44,14 @@ export async function runStatus(options: StatusOptions = {}): Promise<void> {
 
   const tools = toolStatuses(options.cwd);
   const claudeHooks = tools.find((t) => t.tool === 'claude')?.hooksActive ?? false;
+  const inbox = inboxCount();
+  const trailNewer = trailIsNewerThanBinary(paths);
 
   if (options.json) {
     const autoInit = autoInitEnabled();
     emitJson({
       initialized: true,
+      trailNewer,
       session: session
         ? {
             id: session.id,
@@ -50,10 +63,20 @@ export async function runStatus(options: StatusOptions = {}): Promise<void> {
         : null,
       hooksActive: claudeHooks,
       autoInit,
+      // Sessions captured globally (folderless/scratch tools) not yet placed in a project.
+      inbox,
       nextAction: events.length > 0 ? 'report' : 'work',
       tools,
     });
     return;
+  }
+
+  if (trailNewer) {
+    console.log(
+      'Note: this trail was written by a newer Showtail — some sessions may not be ' +
+        'visible. Upgrade Showtail to see everything.',
+    );
+    console.log('');
   }
 
   if (session) {
@@ -66,6 +89,13 @@ export async function runStatus(options: StatusOptions = {}): Promise<void> {
     }
   } else {
     console.log('No open session. Run `showtail start` to begin one.');
+  }
+
+  if (inbox > 0) {
+    console.log('');
+    console.log(
+      `${inbox} session${pluralS(inbox)} captured but not yet placed in a project — run \`showtail inbox\`.`,
+    );
   }
 
   console.log('');

@@ -41,6 +41,12 @@ export interface NewEventInput {
   batchId?: string;
   /** Links this event to the prompt that opened its turn. */
   turnId?: string;
+  /**
+   * Explicit git commit to stamp, overriding the auto-capture. A back-dated event
+   * (with `timestamp`) normally gets no commit; a projection from the ledger passes
+   * the commit it captured live so the projected event keeps it.
+   */
+  gitCommit?: string;
   /** For a `plan` event: trail-relative path of the saved plan file (`plans/<id>.md`). */
   planPath?: string;
   /** Force a specific session; otherwise the current/started session is used. */
@@ -69,11 +75,14 @@ export async function logEvent(
   const session = resolveOrStartSession(author, input.sessionId);
 
   const config = readConfig(paths);
-  // Imported (back-dated) events don't get a git commit — a past message's
-  // commit isn't meaningful; only live events capture the current commit.
-  const gitCommit = input.timestamp
-    ? undefined
-    : await maybeCurrentCommit(paths.root, config.settings.git);
+  // Imported (back-dated) events don't auto-capture a git commit — a past
+  // message's commit isn't meaningful; only live events capture the current one.
+  // A projection from the ledger passes the commit it captured live, which wins.
+  const gitCommit =
+    input.gitCommit ??
+    (input.timestamp
+      ? undefined
+      : await maybeCurrentCommit(paths.root, config.settings.git));
 
   // Scrub before anything touches disk, then hash the *redacted* text.
   const { text, hits } = redact(input.text, config.settings.redact);
@@ -184,6 +193,7 @@ export function resolveOrStartSession(author: AuthorPaths, explicitId?: string):
 
   // No usable current session: auto-start one.
   const session = makeSession();
+  session.machineId = author.machineId;
   sessions.push(session);
   writeSessions(author, sessions);
   updateState(author.shared, { currentSessionId: session.id, currentPromptId: null });
@@ -214,6 +224,9 @@ export function sweepIdleSessions(
   const closed: string[] = [];
   for (const session of readSessions(author)) {
     if (session.endedAt) continue;
+    // A machine only closes its own sessions — closing another machine's session
+    // can't persist (its shard isn't ours to write) and would churn every sweep.
+    if (session.machineId !== author.machineId) continue;
     // Latest activity by timestamp (events are in write order, and back-dated
     // imports can land out of order), falling back to the session start.
     let lastTs = session.startedAt;

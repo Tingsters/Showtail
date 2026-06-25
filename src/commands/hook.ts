@@ -6,7 +6,8 @@ import {
   importEditArtifact,
   importedArtifactSourceIds,
 } from '../core/artifacts.ts';
-import { changedFiles } from '../core/git.ts';
+import { changedFiles, maybeCurrentCommit } from '../core/git.ts';
+import { sha256OfFile } from '../core/hash.ts';
 import { readObject } from '../core/objects.ts';
 import { materializePlan, PLAN_APPROVED_TAG, PLAN_REVISED_TAG } from '../core/plans.ts';
 import { resolveActiveAuthorForHook } from '../core/authors.ts';
@@ -32,8 +33,10 @@ import {
   startSession,
 } from '../core/sessions.ts';
 import {
+  ensureTrailId,
   findRoot,
   isEligibleAnchor,
+  migrateLegacySessions,
   pathsForRoot,
   readConfig,
   readSessions,
@@ -44,6 +47,19 @@ import {
   updateState,
   type AuthorPaths,
 } from '../core/storage.ts';
+import { ensureMachineId, readMachineIdentity } from '../core/identity.ts';
+import {
+  appendLedgerRecord,
+  endLedgerSession,
+  ensureLedgerSession,
+  markInbox,
+  markPlaced,
+  readLedgerRecords,
+  readLedgerSession,
+  setLedgerTurn,
+  type LedgerSession,
+} from '../core/ledger.ts';
+import { materializeLedgerSession } from '../core/materialize.ts';
 import { recordHookTrace, recordRawPayload, type HookTrace } from '../core/hookTrace.ts';
 import { connectPlugins, getPluginById } from '../plugins/registry.ts';
 import type {
@@ -104,6 +120,21 @@ function adapterFor(tool: Tool): HookAdapter | undefined {
 }
 
 /**
+ * Sole-writer mode (the full inversion) — now the DEFAULT. For any session with a
+ * native session id, the repo trail is a pure *projection* of the ledger: the hook
+ * captures to the ledger, then `materialize`s into the resolved root, instead of
+ * the live handlers writing the repo directly. Verified at full parity with the old
+ * handlers across every plugin/capability (the whole suite passes either way).
+ * The live handlers remain only as the fallback for events with no native id (they
+ * can't be correlated in the ledger), and for session start/end lifecycle.
+ * Escape hatch: `SHOWTAIL_LEDGER_WRITER=0` restores the legacy direct-write path.
+ */
+function ledgerWriterEnabled(): boolean {
+  const v = process.env.SHOWTAIL_LEDGER_WRITER;
+  return v !== '0' && v !== 'false';
+}
+
+/**
  * Antigravity hosts (the IDE and the `agy` CLI) read a JSON *decision* from each
  * hook's stdout (`{"decision":"allow"|"deny"|"ask"}`) and FAIL CLOSED — blocking
  * the tool/model — if a hook errors or prints non-JSON. Showtail hooks only
@@ -134,6 +165,193 @@ function parseEvent(
 }
 
 /**
+ * Mirror a hook event into the durable ledger: the student's prompts and the
+ * files they changed, keyed to the tool session so they survive even when no
+ * project root resolves. Edit paths are stored ABSOLUTE (resolved against the
+ * payload cwd) so the materialize step can re-relativize them against whatever
+ * repo the session is ultimately placed in. Conversational replies are NOT
+ * mirrored here — for a placed session the existing Stop reconcile captures them
+ * into the trail; the ledger holds the student's own work, which is what an
+ * inbox/reattach needs to never drop.
+ */
+async function captureToLedger(
+  session: LedgerSession,
+  event: HookEvent,
+  parsed: NormalizedHookEvent,
+  cwd: string,
+): Promise<void> {
+  if (event === 'user-prompt') {
+    if (!parsed.prompt) return;
+    const rec = appendLedgerRecord(session.id, {
+      kind: 'prompt',
+      tool: session.tool,
+      text: parsed.prompt,
+      // Captured live so a projection keeps the real commit (it back-dates events).
+      gitCommit: await maybeCurrentCommit(cwd, true),
+    });
+    setLedgerTurn(session.id, rec.id);
+    return;
+  }
+  if (event === 'post-edit') {
+    const turnKey = readLedgerSession(session.id)?.currentTurnKey;
+    const gitCommit = await maybeCurrentCommit(cwd, true);
+    const add = async (
+      file: string,
+      diff: string | undefined,
+      deleted: boolean,
+    ): Promise<void> => {
+      if (isInternalPath(file)) return;
+      const abs = resolve(cwd, file);
+      // Hash the file as it stands now (the live snapshot), so a projection keeps
+      // the integrity hash without re-reading a file that may have moved.
+      let sha256: string | undefined;
+      if (!deleted) {
+        try {
+          sha256 = await sha256OfFile(abs);
+        } catch {
+          // File gone/unreadable — record the edit without a hash.
+        }
+      }
+      appendLedgerRecord(session.id, {
+        kind: 'edit',
+        tool: session.tool,
+        file: abs,
+        diff,
+        deleted,
+        turnKey,
+        gitCommit,
+        sha256,
+      });
+    };
+    if (parsed.edits && parsed.edits.length > 0) {
+      for (const e of parsed.edits) await add(e.file, e.diff, e.deleted === true);
+    } else {
+      for (const f of parsed.editedFiles) await add(f, parsed.suggestedDiff, false);
+    }
+    return;
+  }
+  if (event === 'session-end') {
+    endLedgerSession(session.id);
+  }
+}
+
+/**
+ * Mirror a tool transcript's CONVERSATION (AI replies, decisions, plans) into the
+ * ledger, attributing each to the prompt record it followed — so a folderless /
+ * inbox session carries its whole thread into `reattach`, not just prompts + edits.
+ * Edits are skipped here (captured live by post-edit). Idempotent: dedups by the
+ * transcript's per-message `sourceId` against records already in the session, so
+ * it is safe to run on every Stop (and on every post-edit for hosts that only fire
+ * that). This is the ledger half of making the repo a pure projection.
+ */
+function captureTranscriptToLedger(
+  session: LedgerSession,
+  transcript: HookTranscript,
+  tool: Tool,
+  planFiles: DiscoveredPlanFile[] = [],
+): void {
+  // The canonical on-disk plan file for this session, if the tool wrote one
+  // (Antigravity overwrites a single plan.md per update, so the last wins). Every
+  // plan record links to it instead of materializing the transcript's plan text.
+  const planFile = planFiles
+    .filter((f) => !f.nativeSessionId || f.nativeSessionId === transcript.sessionId)
+    .at(-1);
+  const existing = readLedgerRecords(session.id);
+  const seen = new Set<string>();
+  const promptBySourceId = new Map<string, string>();
+  const promptByText = new Map<string, string[]>();
+  for (const r of existing) {
+    if (r.sourceId) seen.add(r.sourceId);
+    if (r.kind !== 'prompt') continue;
+    if (r.sourceId) promptBySourceId.set(r.sourceId, r.id);
+    if (r.text !== undefined) {
+      const q = promptByText.get(r.text) ?? [];
+      q.push(r.id);
+      promptByText.set(r.text, q);
+    }
+  }
+
+  let currentTurnKey = session.currentTurnKey;
+  let lastPromptKey = currentTurnKey;
+  for (const msg of transcript.messages) {
+    if (msg.role === 'user') {
+      let recId = promptBySourceId.get(msg.sourceId);
+      if (!recId) recId = promptByText.get(msg.text)?.shift();
+      if (!recId) {
+        // A prompt the live hook missed — back-fill only when it's in-window
+        // (at/after this session started), so a resumed transcript isn't replayed.
+        if (!msg.timestamp || msg.timestamp < session.startedAt) {
+          currentTurnKey = undefined;
+          continue;
+        }
+        const rec = appendLedgerRecord(session.id, {
+          kind: 'prompt',
+          tool,
+          text: msg.text,
+          ts: msg.timestamp,
+          sourceId: msg.sourceId,
+        });
+        recId = rec.id;
+        promptBySourceId.set(msg.sourceId, rec.id);
+        seen.add(msg.sourceId);
+      }
+      currentTurnKey = recId;
+      lastPromptKey = recId;
+    } else if (
+      msg.role === 'assistant' ||
+      msg.role === 'decision' ||
+      msg.role === 'plan'
+    ) {
+      if (!currentTurnKey || seen.has(msg.sourceId)) continue;
+      const kind = msg.role === 'assistant' ? 'ai_output' : msg.role;
+      appendLedgerRecord(session.id, {
+        kind,
+        tool,
+        text: msg.text,
+        ts: msg.timestamp,
+        turnKey: currentTurnKey,
+        sourceId: msg.sourceId,
+        approved: msg.role === 'plan' ? msg.approved : undefined,
+        planFileContent: msg.role === 'plan' ? planFile?.content : undefined,
+        planFileSourceId: msg.role === 'plan' ? planFile?.sourceId : undefined,
+      });
+      seen.add(msg.sourceId);
+    } else if (msg.role === 'edit') {
+      // Per-file clean diffs recovered from the transcript (Codex apply_patch /
+      // deletions) — the reliable diff source when the live payload had the file
+      // but not the diff. Deduped by `<sourceId>#<file>`, keyed to the open turn.
+      for (const e of msg.edits ?? []) {
+        if (!e.diff || isInternalPath(e.file)) continue;
+        const editSourceId = `${msg.sourceId}#${e.file}`;
+        if (seen.has(editSourceId)) continue;
+        appendLedgerRecord(session.id, {
+          kind: 'edit',
+          tool,
+          file: resolve(session.cwd ?? process.cwd(), e.file),
+          diff: e.diff,
+          turnKey: currentTurnKey,
+          sourceId: editSourceId,
+          ts: msg.timestamp,
+        });
+        seen.add(editSourceId);
+      }
+    }
+  }
+  if (lastPromptKey && lastPromptKey !== session.currentTurnKey) {
+    setLedgerTurn(session.id, lastPromptKey);
+  }
+}
+
+/** Mark a ledger session unplaced without ever letting bookkeeping break the hook. */
+function safeMarkInbox(sessionId: string): void {
+  try {
+    markInbox(sessionId);
+  } catch {
+    // Best-effort.
+  }
+}
+
+/**
  * Handle one hook event (from any connected tool). This is intentionally
  * bulletproof: any problem (no project, malformed input, missing file, or no
  * resolvable student identity) results in a silent no-op with exit code 0, so a
@@ -159,19 +377,73 @@ export async function runHook(
     const cwd = payload?.cwd ?? options.cwd ?? process.cwd();
     const tool: Tool = options.tool ?? 'claude-code';
     trace.tool = tool;
-    trace.nativeSessionId = parseEvent(adapterFor(tool), payload).nativeSessionId;
+    const parsed = parseEvent(adapterFor(tool), payload);
+    trace.nativeSessionId = parsed.nativeSessionId;
 
     let root = findRoot(cwd);
+
+    // Durable ledger capture — runs whenever tracking is active (a trail already
+    // exists, or the user has opted into auto-init via `showtail setup`), and
+    // BEFORE any project root is resolved. This is what stops a folderless,
+    // scratch-workspace, or zero-edit session from being dropped: the student's
+    // prompts and edited files land in the machine-local ledger first, to be
+    // projected into a repo now (if a root resolves) or later (`showtail
+    // reattach`). Bulletproof — any failure here must never break the hook.
+    // Needs the tool's own session id to correlate this event's process with the
+    // session's others; the global tools we care about all send one.
+    const trackingActive = root != null || autoInitEnabled();
+    let ledger: LedgerSession | undefined;
+    if (trackingActive && parsed.nativeSessionId) {
+      try {
+        ledger = ensureLedgerSession({
+          tool,
+          nativeSessionId: parsed.nativeSessionId,
+          machineId: readMachineIdentity()?.machineId,
+          slug: readMachineIdentity()?.slug,
+          cwd,
+        });
+        await captureToLedger(ledger, event, parsed, cwd);
+        // Mirror the conversation into the ledger from the tool transcript on Stop
+        // (or post-edit for hosts that only fire that), so an inbox session keeps
+        // its replies/decisions/plans — discoverable by native id even with no root.
+        const adapter = adapterFor(tool);
+        if (
+          (event === 'stop' || (event === 'post-edit' && adapter?.reconcileOnPostEdit)) &&
+          adapter?.getTranscript
+        ) {
+          const transcript = adapter.getTranscript(payload, root ?? cwd);
+          if (transcript) {
+            let planFiles: DiscoveredPlanFile[] = [];
+            try {
+              planFiles = adapter.planFiles?.(payload, root ?? cwd) ?? [];
+            } catch {
+              planFiles = []; // Plan-file discovery is best-effort; never break capture.
+            }
+            captureTranscriptToLedger(ledger, transcript, tool, planFiles);
+          }
+        }
+      } catch {
+        ledger = undefined; // Ledger problems never disrupt the session.
+      }
+    }
+
     if (!root) {
       // Automatic tracking: silently start a trail on the first real activity in
       // an eligible project (git repo / dev folder), once the user has opted in
       // via `showtail setup`. Only a task start may create one — never a stray
       // edit/stop. `isEligibleAnchor` also refuses HOME, so a whole home dir is
-      // never turned into one shared trail.
-      if (event !== 'session-start' && event !== 'user-prompt') return;
+      // never turned into one shared trail. When no eligible root resolves the
+      // work is NOT dropped — it stays in the ledger inbox (`showtail inbox`).
+      if (event !== 'session-start' && event !== 'user-prompt') {
+        if (ledger) safeMarkInbox(ledger.id);
+        return;
+      }
       if (!autoInitEnabled()) return;
       const anchor = await resolveAnchor(cwd);
-      if (!isEligibleAnchor(anchor)) return;
+      if (!isEligibleAnchor(anchor)) {
+        if (ledger) safeMarkInbox(ledger.id);
+        return;
+      }
       await ensureInitialized(anchor);
       root = anchor;
     }
@@ -182,11 +454,30 @@ export async function runHook(
     if (!existsSync(paths.config)) return; // Not initialized.
     const config = readConfig(paths);
 
+    // Record where this session was placed: its stable trailId and the trail's
+    // current location. Minting the trailId here also upgrades an older trail
+    // (config < v4) on first sight. A later move of the repo is recognized by
+    // this id; a delete leaves the session reattributable from the ledger.
+    if (ledger) {
+      try {
+        markPlaced(ledger.id, ensureTrailId(paths), paths.root);
+      } catch {
+        // Placement bookkeeping is best-effort; capture already succeeded.
+      }
+    }
+
     // Resolve who is writing this trail. Cache-only / git-config at worst — never
     // prompts or hits the network, so the hook stays fast and non-blocking. If
     // identity can't be settled silently, no-op rather than guess.
     const author = await resolveActiveAuthorForHook(paths, { cwd });
     if (!author) return;
+    // One-time, idempotent: fold a legacy `sessions.json` into this machine's shard
+    // so old sessions can be closed/swept. No-op once migrated.
+    try {
+      migrateLegacySessions(author);
+    } catch {
+      // Migration is best-effort; a capture must never break on it.
+    }
 
     // On any live capture, first close this author's sessions that have gone idle
     // (stamped at their last event), so a finished task's session doesn't linger
@@ -195,6 +486,32 @@ export async function runHook(
       const idleMin = config.settings.idleTimeoutMinutes ?? DEFAULT_IDLE_TIMEOUT_MINUTES;
       const swept = sweepIdleSessions(author, idleMin * 60_000, Date.now());
       if (swept.length > 0) trace.closedSessions = swept;
+    }
+
+    // Sole-writer mode (the full inversion, opt-in): the work is already in the
+    // ledger (captured above, replies included on Stop); project it into the repo
+    // instead of writing the repo from the live handlers. Session start/end keep
+    // their lifecycle handlers (the context note + deterministic close) below.
+    if (
+      ledgerWriterEnabled() &&
+      ledger &&
+      (event === 'user-prompt' || event === 'post-edit' || event === 'stop')
+    ) {
+      const m = await materializeLedgerSession(ledger, author);
+      trace.sessionId = m.sessionId;
+      if (event === 'user-prompt') {
+        const promptSource = asString(prop(payload, 'promptSource'));
+        if (promptSource) trace.promptSource = promptSource;
+        if (m.lastPromptId) trace.promptId = m.lastPromptId;
+        // Make this the CLI's current session, like the live handler does, so
+        // `status`/`log` see it.
+        updateState(author.shared, { currentSessionId: m.sessionId });
+      }
+      if (m.replies > 0) trace.replies = m.replies;
+      if (m.decisions > 0) trace.decisions = m.decisions;
+      if (m.plans > 0) trace.plans = m.plans;
+      if (m.edits > 0) trace.edits = m.edits;
+      return;
     }
 
     switch (event) {

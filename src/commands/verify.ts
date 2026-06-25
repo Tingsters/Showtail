@@ -8,6 +8,7 @@ import {
   authorPaths,
   readConfig,
   requirePaths,
+  trailIsNewerThanBinary,
   type ShowtailPaths,
 } from '../core/storage.ts';
 import { readJournal } from '../core/journal.ts';
@@ -20,6 +21,16 @@ interface CheckResult {
   name: string;
   ok: boolean;
   details: string[];
+}
+
+/**
+ * Whether a recorded path is absolute (and therefore not portable). Checks both
+ * POSIX (`/x`, `\\unc`) and Windows-drive (`C:\x`) forms regardless of the host
+ * platform, since a trail may have been written on either and is checked on the
+ * other. A repo-relative path — including a cross-root `../other/x` — is fine.
+ */
+function isAbsoluteRecordedPath(p: string): boolean {
+  return p.startsWith('/') || p.startsWith('\\') || /^[A-Za-z]:[\\/]/.test(p);
 }
 
 export interface VerifyResult {
@@ -122,7 +133,43 @@ export async function verifyProject(paths: ShowtailPaths): Promise<VerifyResult>
   }
   checks.push(hashCheck);
 
-  // 4. A report can be generated.
+  // 4. Portability: no journal entry carries an absolute path. Paths must be
+  //    repo-relative so a trail is portable across machines — and a projection
+  //    from the ledger (whose records hold absolute paths) must re-relativize.
+  const pathCheck: CheckResult = {
+    name: 'recorded paths are repo-relative (portable)',
+    ok: true,
+    details: [],
+  };
+  try {
+    let i = 0;
+    for (const slug of authorSlugs(paths)) {
+      const author = authorPaths(paths, slug);
+      for (const entry of readJournal(author)) {
+        i += 1;
+        const bad: string[] = [];
+        if (entry.path && isAbsoluteRecordedPath(entry.path)) bad.push(entry.path);
+        for (const f of entry.files ?? []) {
+          if (isAbsoluteRecordedPath(f)) bad.push(f);
+        }
+        if (bad.length > 0) {
+          pathCheck.ok = false;
+          pathCheck.details.push(
+            `${slug} entry ${i} (${entry.id}): absolute path(s): ${bad.join(', ')}`,
+          );
+        }
+      }
+    }
+  } catch (err) {
+    pathCheck.ok = false;
+    pathCheck.details.push(`paths could not be checked: ${(err as Error).message}`);
+  }
+  if (pathCheck.ok && pathCheck.details.length === 0) {
+    pathCheck.details.push('All recorded paths are repo-relative.');
+  }
+  checks.push(pathCheck);
+
+  // 5. A report can be generated.
   const reportCheck: CheckResult = {
     name: 'a report can be generated',
     ok: false,
@@ -148,6 +195,13 @@ export async function runVerify(options: VerifyOptions = {}): Promise<boolean> {
 
   console.log('Showtail verification');
   console.log('');
+  if (trailIsNewerThanBinary(paths)) {
+    console.log(
+      'Note: this trail was written by a newer Showtail — some sessions may not be ' +
+        'visible to this version. Upgrade Showtail to read everything.',
+    );
+    console.log('');
+  }
   for (const check of result.checks) {
     console.log(`${check.ok ? 'PASS' : 'FAIL'}  ${check.name}`);
     for (const detail of check.details) {

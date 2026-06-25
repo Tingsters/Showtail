@@ -133,6 +133,13 @@ export interface Session {
    * and are normalized on read.
    */
   nativeSessionId?: string;
+  /**
+   * The machine that created this session. Sessions are sharded by machine
+   * (`authors/<slug>/sessions/<machineId>.json`) so the *same* student working
+   * from two machines never collides on one file — mirroring the journal. Absent
+   * on legacy trails (the single `sessions.json`), which are still read.
+   */
+  machineId?: string;
   /** ISO-8601 timestamp the session was closed with `showtail end`, if it was. */
   endedAt?: string;
 }
@@ -171,6 +178,14 @@ export interface Config {
   anchor?: string;
   /** Whether {@link anchor} was chosen from the git repo root or the working dir. */
   anchorKind?: 'git' | 'cwd';
+  /**
+   * Stable, generated identifier for this trail (`trl_…`), minted at init and
+   * never changed. Unlike {@link anchor} (a path, which moves), this survives the
+   * repo being renamed or relocated, so the global ledger can recognize a moved
+   * trail by id and flag a deleted one as "target missing". Absent on trails
+   * created before trail ids existed — minted on first write (upgrade-on-read).
+   */
+  trailId?: string;
   settings: {
     /** Whether to try to capture git commit hashes. */
     git: boolean;
