@@ -12,16 +12,18 @@ tools.
   and on later opens it refreshes them. It only ever overwrites text Showtail wrote: blocks you
   edit are kept (you'll get a one-time "update available" nudge, never an overwrite), and it
   won't fight a later `showtail disconnect copilot`.
+- **Captures native Copilot Chat** — VS Code writes every native chat session to disk
+  (`…/workspaceStorage/<hash>/chatSessions/<uuid>.json`); the extension watches those files and
+  imports each turn (your prompt, Copilot's reply, the files it edited), tagged `github-copilot`.
+  Back-fill past chats anytime with `showtail import copilot`.
 - **Snapshots files on save** as artifacts (tagged `github-copilot`) — automatic, no action
-  needed, no matter which tool made the change.
-- **`@showtail` — a Showtail control surface in chat** (not a coding agent). Record a prompt
-  verbatim with `@showtail <your question>`, or drive Showtail without leaving the editor:
-  `@showtail /report`, `/verify`, `/status`, `/trace <file>`.
+  needed, so edits made outside chat are captured too.
+- **`@showtail` — a Showtail control surface in chat** (not a coding agent). Drive Showtail
+  without leaving the editor: `@showtail /report`, `/verify`, `/status`, `/trace <file>`.
 - **Commands**: `Showtail: Generate Report`, `Showtail: Status`.
 
-Code with **native Copilot** as usual — `.github/copilot-instructions.md` (written by
-`showtail connect copilot`) teaches it to log your prompts, and the extension captures every
-save. Use `@showtail` for the Showtail commands.
+Code with **native Copilot** as usual — your chat turns and your saved edits are both captured,
+no special action needed. Use `@showtail` for the Showtail commands.
 
 ## Requirements
 
@@ -31,11 +33,14 @@ save. Use `@showtail` for the Showtail commands.
 
 ## Honest limitations
 
-- Prompts typed into **native** Copilot Chat (not `@showtail`) cannot be captured by any
-  third-party extension — that's a Copilot privacy boundary. Your **edits are still captured
-  on save**, so the work history is never lost.
+- Native Copilot Chat isn't exposed to third-party extensions through the VS Code API (a real
+  Copilot privacy boundary), so the extension reads it from VS Code's **on-disk** chat-session
+  files instead. A turn therefore lands a moment **after** it completes (when VS Code flushes
+  the file), not keystroke-by-keystroke.
 - There is no VS Code event for accepting an inline (ghost-text) completion, so inline
   completions are captured as part of the next file save, not individually.
+- Multi-root (`.code-workspace`) windows aren't routed by folder yet; single-folder workspaces —
+  the common case — are.
 
 ## Develop / build
 

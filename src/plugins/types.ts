@@ -233,6 +233,8 @@ export interface ImportRunOptions {
    * it ignore the flag.
    */
   auto?: boolean;
+  /** Suppress the human-facing summary (used by the Copilot extension's live watcher). */
+  quiet?: boolean;
 }
 
 export interface ImportCapability {

@@ -34,31 +34,47 @@ Copilot is more closed than Claude Code, so the integration works a little
 differently:
 
 - **Use native Copilot as usual.** This includes agent mode, inline suggestions,
-  and chat. The `.github/copilot-instructions.md` file teaches Copilot to log
-  your prompts through the Showtail CLI (Copilot has no capture hooks, so prompts
-  are recorded this way).
-- **File edits are captured automatically.** The VS Code extension snapshots
-  every file you save as an artifact tagged `github-copilot`.
+  and chat.
+- **Native Copilot Chat is captured.** VS Code writes every native chat session to
+  disk (`…/workspaceStorage/<hash>/chatSessions/<uuid>.json`). The extension watches
+  those files and imports each turn — your prompt, Copilot's reply, and the files it
+  edited — tagged `github-copilot`. You can also back-fill past chats anytime with
+  `showtail import copilot`.
+- **File edits are captured automatically.** The VS Code extension also snapshots
+  every file you save as an artifact, so edits made outside chat are never lost.
 - **`@showtail` is the Showtail control surface in chat.** It is not a coding
-  agent. Use it to record a prompt verbatim with `@showtail <your question>`, or
-  to run Showtail commands such as `@showtail /report`, `/verify`, `/status`, and
-  `/trace <file>`.
-- **For hands-on file edits, use native Copilot.** Saved edits are captured
-  regardless.
+  agent. Use it to run Showtail commands such as `@showtail /report`, `/verify`,
+  `/status`, and `/trace <file>`.
 
-Copilot does not expose prompts typed into native chat to third parties. That is
-a Copilot privacy boundary, not a Showtail limitation. The instructions ask
-Copilot to log your prompt, and `@showtail` captures it verbatim when you ask
-through it. Either way, edits are captured on save, so the work history is not
-lost.
+Native Copilot Chat is **not** exposed to third-party extensions through the VS
+Code API — that part is a real Copilot privacy boundary. But the chat is persisted
+to disk as plain JSON, so Showtail reads the on-disk session files instead of the
+(unavailable) live API. The result is the same: your native-chat prompts and
+Copilot's replies land in the trail, live as you work and via `import copilot`.
 
 !!! warning "Honest limitations"
-    - Prompts typed into **native** Copilot Chat (not `@showtail`) cannot be
-      captured by any third-party extension — that's a Copilot privacy boundary.
-      Your **edits are still captured on save**, so the work history is never lost.
+    - Native chat is read from VS Code's on-disk session files, so a turn lands in
+      the trail a moment **after** it completes (when VS Code flushes the file), not
+      keystroke-by-keystroke.
     - There is no VS Code event for accepting an inline (ghost-text) completion,
       so inline completions are captured as part of the next file save, not
       individually.
+    - Multi-root (`.code-workspace`) windows aren't routed by folder yet; single-
+      folder workspaces — the common case — are.
+
+## Back-filling past Copilot chats
+
+Already chatted with Copilot before connecting Showtail? Import those sessions:
+
+```bash
+showtail import copilot            # pick this project's sessions interactively
+showtail import copilot --list     # list them non-interactively
+showtail import copilot <id>       # import one by its session id
+```
+
+Imports are idempotent — re-running (or the live watcher re-reading a file) only
+adds what's new, deduped by a stable per-turn id. Undo a batch with
+`showtail import undo`.
 
 ## Customizing Copilot instructions
 

@@ -402,6 +402,7 @@ interface ImportCliOptions {
   session?: string;
   list?: boolean;
   auto?: boolean;
+  quiet?: boolean;
 }
 
 function toImportOptions(o: ImportCliOptions): ImportRunOptions {
@@ -415,6 +416,7 @@ function toImportOptions(o: ImportCliOptions): ImportRunOptions {
     session: o.session,
     list: o.list,
     auto: o.auto,
+    quiet: o.quiet,
   };
 }
 
@@ -446,7 +448,8 @@ for (const p of importPlugins()) {
       .option(
         '--auto',
         "route by the transcript's edited-file paths into each project (headless capture)",
-      );
+      )
+      .option('--quiet', 'suppress the summary (used by the Copilot extension watcher)');
   }
 
   sub.action(

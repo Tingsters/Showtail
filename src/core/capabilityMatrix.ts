@@ -212,7 +212,7 @@ export const CAPABILITIES: Capability[] = [
         'Hooks wired to the IDE’s global ~/.gemini/config/hooks.json + contract-tested; not certified live (the IDE can’t be driven headlessly here).',
       ),
       'copilot-vscode': partial(
-        'Captured by the VS Code extension on save, not via lifecycle hooks.',
+        'Captured by the VS Code extension — saves are snapshotted, and native Copilot Chat is read from its on-disk session JSON (watched live, plus `import copilot`). File-based, not lifecycle hooks.',
       ),
     },
   },
@@ -220,7 +220,7 @@ export const CAPABILITIES: Capability[] = [
     id: 'auto-prompt-capture',
     label: 'Auto prompt capture',
     description: 'Your prompts are recorded automatically as you submit them.',
-    note: 'Live-certified for Claude Code + Codex; the CLI plugins are built but their live capture isn’t certified here. Copilot (VS Code) is model-driven.',
+    note: 'Live-certified for Claude Code + Codex; the CLI plugins are built but their live capture isn’t certified here. Copilot (VS Code) reads native chat prompts from the on-disk session JSON (contract-tested), not via hooks.',
     requires: hasHooks,
     surfaceRule: needHooks,
     overrides: {
@@ -235,7 +235,9 @@ export const CAPABILITIES: Capability[] = [
       'antigravity-ide': partial(
         'Hooks wired + contract-tested; live capture not certified (the IDE can’t be driven headlessly here).',
       ),
-      'copilot-vscode': partial('Model-driven via instructions — not guaranteed.'),
+      'copilot-vscode': partial(
+        'Native Copilot Chat prompts are read from the on-disk chat-session JSON (extension watcher + `import copilot`); contract-tested, but file-based rather than a certified live hook.',
+      ),
     },
   },
   {
@@ -273,6 +275,9 @@ export const CAPABILITIES: Capability[] = [
     overrides: {
       'claude-code': full(),
       codex: full(),
+      'copilot-vscode': partial(
+        'Copilot Chat replies are read from the on-disk session JSON (extension watcher + `import copilot`); contract-tested via the transcript parser, not a certified live run.',
+      ),
     },
   },
   {
