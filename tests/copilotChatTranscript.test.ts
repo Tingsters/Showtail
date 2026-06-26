@@ -328,6 +328,66 @@ describe('parseCopilotChatTranscript', () => {
       cleanup(dir);
     }
   });
+
+  test('strips the empty code fence Copilot leaves around a streamed edit', () => {
+    const dir = makeTempDir();
+    try {
+      // Copilot streams an inline edit as the bare opening/closing ``` fence-marker
+      // text parts wrapped around a (skipped) textEditGroup — leaving an empty fence.
+      const doc = {
+        sessionId: 's',
+        requests: [
+          {
+            requestId: 'r1',
+            timestamp: ms('2026-06-22T10:00:00.000Z'),
+            message: { text: 'edit the file' },
+            agent: { extensionId: { value: 'GitHub.copilot-chat' } },
+            response: [
+              { value: 'Updating the file.\n\n' },
+              { value: '```python\n' },
+              {
+                kind: 'textEditGroup',
+                uri: { fsPath: join(dir, 'x.py') },
+                edits: [[{ text: 'print(1)', range: {} }]],
+              },
+              { value: '\n```\n' },
+              { value: 'Done.' },
+            ],
+          },
+        ],
+      };
+      const parsed = parseCopilotChatTranscript(JSON.stringify(doc), dir);
+      const reply = parsed.messages.find((m) => m.role === 'assistant')!;
+      expect(reply.text).not.toContain('```'); // no empty fence / blank box
+      expect(reply.text).toContain('Updating the file.');
+      expect(reply.text).toContain('Done.');
+      // The actual edit is still captured separately as a diff.
+      expect(parsed.messages.find((m) => m.role === 'edit')?.files).toEqual(['x.py']);
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('a turn’s decision is timestamped before the reply and after the prompt', () => {
+    const dir = makeTempDir();
+    try {
+      // makeSession's request_1 has a prompt, a vscode_askQuestions decision, and a
+      // streamed reply — answered mid-turn, the decision must sort between them so the
+      // report stops pushing it to the bottom of the turn.
+      const parsed = parseCopilotChatTranscript(makeSession(dir), dir);
+      const inR1 = (role: string) =>
+        parsed.messages.find((m) => m.role === role && m.sourceId.includes('request_1'))!;
+      const promptTs = ms(inR1('user').timestamp!);
+      const decisionTs = ms(
+        parsed.messages.find((m) => m.role === 'decision')!.timestamp!,
+      );
+      const replyTs = ms(inR1('assistant').timestamp!);
+      expect(decisionTs).toBeGreaterThan(promptTs);
+      expect(decisionTs).toBeLessThan(replyTs);
+    } finally {
+      cleanup(dir);
+    }
+  });
 });
 
 describe('copilot import (end to end via --file)', () => {

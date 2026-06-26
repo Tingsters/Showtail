@@ -361,7 +361,7 @@ function assistantText(request: unknown): string {
     const value = asString(prop(part, 'value'));
     if (value) chunks.push(value);
   }
-  let text = chunks.join('').trim();
+  let text = stripEmptyFences(chunks.join(''));
   if (text) return text;
 
   // Fallback: the per-round assistant text recorded in result.metadata.
@@ -369,12 +369,26 @@ function assistantText(request: unknown): string {
     prop(prop(prop(request, 'result'), 'metadata'), 'toolCallRounds'),
   );
   if (rounds) {
-    text = rounds
-      .map((r) => asString(prop(r, 'response')) ?? '')
-      .join('')
-      .trim();
+    text = stripEmptyFences(
+      rounds.map((r) => asString(prop(r, 'response')) ?? '').join(''),
+    );
   }
   return text;
+}
+
+/**
+ * Drop fenced code blocks whose body is empty/whitespace. Copilot streams an inline
+ * file edit as the bare opening/closing ``` fence-marker text parts wrapped around a
+ * `textEditGroup` part — and we skip that group (the code is captured separately as
+ * the edit diff), so the join leaves an empty fence that would render as a blank box.
+ * A fence with real content is untouched (`\s*` can't span the code). Then collapse
+ * the blank lines those removals leave behind.
+ */
+function stripEmptyFences(text: string): string {
+  return text
+    .replace(/```[^\n]*\n\s*```[ \t]*\n?/g, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
 }
 
 /**
@@ -557,43 +571,55 @@ export function parseCopilotSession(session: unknown, root: string): CopilotTran
     if (isOwnAgent(extId)) return;
 
     const requestId = asString(prop(request, 'requestId')) ?? String(i);
-    const timestamp = isoFromMs(asNumber(prop(request, 'timestamp')));
+    // A request records ONE epoch-ms `timestamp`, but its parts happen in sequence:
+    // the user prompts, Copilot may ask questions (decisions) mid-turn, then replies,
+    // then edits. Stamp them with strictly increasing sub-timestamps (tiny ms offsets
+    // that stay well inside the request's window — the next request is far later) so
+    // the report renders them in real order instead of collapsing on one time, which
+    // sank decisions to the bottom of the turn. `tsAt(0)` reproduces the old value.
+    const baseMs = asNumber(prop(request, 'timestamp'));
+    const tsAt = (offset: number): string | undefined =>
+      baseMs === undefined ? undefined : isoFromMs(baseMs + offset);
 
     const promptText = asString(prop(prop(request, 'message'), 'text'))?.trim();
     if (promptText) {
       messages.push({
         role: 'user',
         text: promptText,
-        timestamp,
+        timestamp: tsAt(0),
         sourceId: `copilot:user:${sid}:${requestId}`,
       });
     }
+
+    // Decisions (vscode_askQuestions) are answered mid-turn, BEFORE Copilot's final
+    // reply — so they sort right after the prompt, ahead of the reply below.
+    const decisions = decisionsFromRequest(request);
+    decisions.forEach((d, k) => {
+      messages.push({
+        role: 'decision',
+        text: d.text,
+        timestamp: tsAt(1 + k),
+        sourceId: `copilot:decision:${sid}:${d.callId}`,
+      });
+    });
 
     const reply = assistantText(request);
     if (reply) {
       messages.push({
         role: 'assistant',
         text: reply,
-        timestamp,
+        timestamp: tsAt(1 + decisions.length),
         sourceId: `copilot:asst:${sid}:${requestId}`,
       });
     }
 
-    // Decisions (vscode_askQuestions) and the plan (manage_todo_list) for this turn.
-    for (const d of decisionsFromRequest(request)) {
-      messages.push({
-        role: 'decision',
-        text: d.text,
-        timestamp,
-        sourceId: `copilot:decision:${sid}:${d.callId}`,
-      });
-    }
+    // The plan (manage_todo_list) and edits follow the reply.
     const plan = planFromRequest(request);
     if (plan) {
       messages.push({
         role: 'plan',
         text: plan,
-        timestamp,
+        timestamp: tsAt(2 + decisions.length),
         sourceId: `copilot:plan:${sid}:${requestId}`,
       });
     }
@@ -606,7 +632,7 @@ export function parseCopilotSession(session: unknown, root: string): CopilotTran
         text: `Copilot edited ${files.join(', ')}`,
         files,
         edits,
-        timestamp,
+        timestamp: tsAt(3 + decisions.length),
         sourceId: `copilot:edit:${sid}:${requestId}`,
       });
     }
