@@ -22,9 +22,16 @@
  *   - user:    ~/.copilot/instructions/showtail-copilot-cli.instructions.md
  *   - project: <root>/.github/instructions/showtail-copilot-cli.instructions.md
  *
- * Hook file shape (per docs): { "version": 1, "hooks": { <Event>: [ ... ] } }.
- * We use the PascalCase (VS Code-compatible) event aliases the CLI accepts, which
- * line up with the HookEvents shape the rest of Showtail already uses.
+ * Hook file shape (per docs): { "version": 1, "hooks": { <event>: [ ... ] } }.
+ * The CLI keys file-hooks by its own **camelCase** event names — verified against
+ * the installed Copilot CLI v1.0.64 (its own `events.jsonl` logs `hookType:
+ * "postToolUse"`, and the bundled SDK's only hook vocabulary is camelCase:
+ * sessionStart / userPromptSubmitted / pre|postToolUse / postToolUseFailure /
+ * sessionEnd / errorOccurred — there is NO `Stop`). An earlier version of this file
+ * wrote Claude's PascalCase names (SessionStart/UserPromptSubmit/PostToolUse/Stop);
+ * Copilot silently ignored every one, so nothing was ever captured. The event keys
+ * below are the names Copilot actually reads; the `command` strings are unchanged
+ * (`showtail hook <subcommand>`), since those drive Showtail's own dispatch.
  */
 import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -53,40 +60,45 @@ export { COPILOT_BODY };
 export type InstallScope = 'user' | 'project';
 
 /**
- * The canonical GitHub Copilot CLI hook configuration. Copilot's lifecycle
- * events map onto Showtail's the same way Codex/Gemini do:
- *  - SessionStart    → session-start
- *  - UserPromptSubmit → user-prompt (fires when the student submits a prompt)
- *  - PostToolUse     → post-edit  (matched to the file-writing tools)
- *  - Stop            → stop       (fires once the agent turn completes)
+ * The canonical GitHub Copilot CLI hook configuration. Copilot's lifecycle events
+ * (camelCase — see the file header) map onto Showtail's subcommands like Codex/Gemini:
+ *  - sessionStart        → session-start
+ *  - userPromptSubmitted → user-prompt (fires when the student submits a prompt)
+ *  - postToolUse         → post-edit   (matched to the file-editing tool)
+ *  - sessionEnd          → stop        (Copilot has no per-turn Stop; sessionEnd is
+ *                                       the end-of-session event, so the AI-reply
+ *                                       reconcile runs from events.jsonl there)
  * Every command is tagged `--tool copilot-cli` so events are attributed correctly.
  *
- * PostToolUse matches Copilot's edit tools. Copilot's built-in editing tools are
- * `write`/`edit` (str-replace style); the matcher is a regex anchored by the host
- * as ^(?:PATTERN)$ against the tool name.
+ * `postToolUse` matches Copilot's edit tool. Verified against real session logs:
+ * the file-editing tool is `edit` (args `{path, old_str, new_str}`); `view` is a
+ * read (args `{path}` only) and must NOT match. The matcher is a regex against the
+ * tool name; `create`/`write` are kept defensively for new-file variants. The
+ * post-edit handler is also defensive (it only records a file when the tool's args
+ * carry an edit signal), so a missed/ignored matcher never snapshots a mere read.
  */
 export const COPILOT_CLI_HOOK_EVENTS: HookEvents = {
-  SessionStart: [
+  sessionStart: [
     {
       hooks: [
         { type: 'command', command: 'showtail hook session-start --tool copilot-cli' },
       ],
     },
   ],
-  UserPromptSubmit: [
+  userPromptSubmitted: [
     {
       hooks: [
         { type: 'command', command: 'showtail hook user-prompt --tool copilot-cli' },
       ],
     },
   ],
-  PostToolUse: [
+  postToolUse: [
     {
-      matcher: 'write|edit|str_replace_editor|create',
+      matcher: 'edit|create|write|str_replace_editor',
       hooks: [{ type: 'command', command: 'showtail hook post-edit --tool copilot-cli' }],
     },
   ],
-  Stop: [
+  sessionEnd: [
     { hooks: [{ type: 'command', command: 'showtail hook stop --tool copilot-cli' }] },
   ],
 };

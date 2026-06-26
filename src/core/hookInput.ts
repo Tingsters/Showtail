@@ -599,3 +599,96 @@ export function extractAgyTranscriptPath(p: AgyHookPayload): string | undefined 
   const t = p.transcriptPath;
   return typeof t === 'string' && t.length > 0 ? t : undefined;
 }
+
+// --- GitHub Copilot CLI payloads -------------------------------------------
+// Copilot CLI's file-hook stdin shape differs from Claude's (verified against the
+// installed CLI v1.0.64 and real session logs): `{ sessionId, cwd, prompt (on
+// userPromptSubmitted), toolName, toolArgs }`. `toolArgs` arrives as a STRINGIFIED
+// JSON object (e.g. `"{\"path\":\"…\",\"old_str\":\"…\",\"new_str\":\"…\"}"`), so
+// callers must JSON-parse it. The edit tool is `edit` (`{path, old_str, new_str}`);
+// `view` is a read (`{path}` only) — distinguished by the presence of an edit
+// signal (`old_str`/`new_str`/`content`), NOT by the bare path, so a read is never
+// mistaken for an edit even if the postToolUse matcher is absent.
+
+/** The subset of a Copilot CLI hook payload Showtail reads. */
+export interface CopilotCliHookPayload {
+  sessionId?: string;
+  cwd?: string;
+  /** userPromptSubmitted: the prompt the student submitted. */
+  prompt?: string;
+  toolName?: string;
+  /** postToolUse: the tool's arguments — a JSON STRING, or (defensively) an object. */
+  toolArgs?: unknown;
+}
+
+const COPILOT_FILE_KEYS = ['path', 'file_path', 'filePath', 'filename', 'file'] as const;
+
+/** Coerce Copilot's `toolArgs` (a JSON string, or already an object) to a record. */
+function copilotToolArgs(p: CopilotCliHookPayload): Record<string, unknown> | null {
+  const a = p.toolArgs;
+  if (a && typeof a === 'object' && !Array.isArray(a))
+    return a as Record<string, unknown>;
+  if (typeof a === 'string' && a.trim().length > 0) {
+    try {
+      const o: unknown = JSON.parse(a);
+      if (o && typeof o === 'object' && !Array.isArray(o))
+        return o as Record<string, unknown>;
+    } catch {
+      /* not JSON — nothing structured to read */
+    }
+  }
+  return null;
+}
+
+/** True when the tool args carry an edit signal (so a read like `view` is excluded). */
+function copilotIsEdit(args: Record<string, unknown>): boolean {
+  return (
+    typeof args.old_str === 'string' ||
+    typeof args.new_str === 'string' ||
+    typeof args.content === 'string'
+  );
+}
+
+/** Copilot CLI's session id (the session-state directory name). */
+export function extractCopilotCliSessionId(
+  p: CopilotCliHookPayload | null,
+): string | undefined {
+  const id = p?.sessionId;
+  return typeof id === 'string' && id.length > 0 ? id : undefined;
+}
+
+/** The submitted prompt from a Copilot CLI userPromptSubmitted payload. */
+export function extractCopilotCliPrompt(p: CopilotCliHookPayload): string | undefined {
+  const t = p.prompt;
+  if (typeof t !== 'string') return undefined;
+  const trimmed = t.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+/** File(s) a Copilot CLI `edit` (or create/write) touched, repo-relative. Reads are excluded. */
+export function extractCopilotCliEditedFiles(p: CopilotCliHookPayload): string[] {
+  const args = copilotToolArgs(p);
+  if (!args || !copilotIsEdit(args)) return [];
+  const out: string[] = [];
+  for (const k of COPILOT_FILE_KEYS) {
+    const v = args[k];
+    if (typeof v === 'string' && v.length > 0) out.push(normalizeHookPath(v, p.cwd));
+  }
+  return [...new Set(out)];
+}
+
+/** AI-suggested code for a Copilot CLI edit: old_str→new_str, or a written file's content. */
+export function extractCopilotCliSuggestedCode(
+  p: CopilotCliHookPayload,
+): string | undefined {
+  const args = copilotToolArgs(p);
+  if (!args) return undefined;
+  if (typeof args.old_str === 'string' || typeof args.new_str === 'string') {
+    const d = simpleDiff(args.old_str, args.new_str);
+    return d || undefined;
+  }
+  if (typeof args.content === 'string' && args.content.length > 0) {
+    return simpleDiff(undefined, args.content);
+  }
+  return undefined;
+}

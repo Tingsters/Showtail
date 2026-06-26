@@ -26,6 +26,7 @@ import {
 import { redact } from '../core/redact.ts';
 import { asString, prop } from '../core/parse.ts';
 import { autoInitEnabled } from '../core/globalConfig.ts';
+import { autoConnectNewlyDetected } from '../core/autoConnectSweep.ts';
 import {
   closeSession,
   currentSession,
@@ -272,6 +273,20 @@ export async function runHook(
     trace.tool = tool;
     const parsed = parseEvent(adapterFor(tool), payload);
     trace.nativeSessionId = parsed.nativeSessionId;
+
+    // Opportunistically wire up any tool that was installed (or shipped in a
+    // Showtail build) after the user's last `showtail setup`. Auto-connect
+    // otherwise only runs during setup, so such a tool would never connect — its
+    // own hooks can't fire until installed. Runs on session-start of any already
+    // connected tool, once per tool, only after opt-in, and never re-touches one
+    // the user later disconnects. Best-effort: never disrupt the session.
+    if (event === 'session-start') {
+      try {
+        autoConnectNewlyDetected(cwd);
+      } catch {
+        /* a sweep failure must never break the hook */
+      }
+    }
 
     let root = findRoot(cwd);
 

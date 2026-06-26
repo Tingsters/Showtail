@@ -156,7 +156,20 @@ function backCapture(
             input: `*** Begin Patch\n*** Update File: ${filePath}\n@@\n-1\n+2\n*** End Patch`,
           },
         }
-      : { cwd: dir, tool_name: edit.editTool, tool_input: { file_path: filePath } };
+      : toolId === 'copilot-cli'
+        ? // Copilot CLI's real postToolUse shape: camelCase fields, `toolArgs` a
+          // JSON STRING, edit signalled by old_str/new_str (a `view` read has neither).
+          {
+            cwd: dir,
+            sessionId: 'cc-sess-1',
+            toolName: 'edit',
+            toolArgs: JSON.stringify({
+              path: filePath,
+              old_str: 'export const x = 1;',
+              new_str: 'export const x = 2;',
+            }),
+          }
+        : { cwd: dir, tool_name: edit.editTool, tool_input: { file_path: filePath } };
     const r = run(dir, ['hook', 'post-edit', '--tool', toolId], JSON.stringify(payload));
     expect(r.code).toBe(0);
     run(dir, ['report', '--format', 'json']);

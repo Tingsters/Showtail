@@ -3,6 +3,10 @@ import {
   applyPatchEdits,
   extractAntigravityEditedFiles,
   extractApplyPatchFiles,
+  extractCopilotCliEditedFiles,
+  extractCopilotCliPrompt,
+  extractCopilotCliSessionId,
+  extractCopilotCliSuggestedCode,
   extractEditedFiles,
   extractPrompt,
   extractShellCommandFiles,
@@ -284,5 +288,67 @@ describe('extractAntigravityEditedFiles (IDE TargetFile shape)', () => {
         toolCall: { args: { Description: '"x"' } },
       } as any),
     ).toEqual([]);
+  });
+});
+
+describe('Copilot CLI extractors', () => {
+  // Real v1.0.64 postToolUse shape: toolArgs is a JSON STRING.
+  const editPayload = {
+    sessionId: 'sess-123',
+    cwd: '/repo',
+    toolName: 'edit',
+    toolArgs: JSON.stringify({
+      path: '/repo/src/a.ts',
+      old_str: 'const a = 1;',
+      new_str: 'const a = 2;',
+    }),
+  };
+
+  test('session id comes from sessionId (not session_id)', () => {
+    expect(extractCopilotCliSessionId(editPayload)).toBe('sess-123');
+    expect(extractCopilotCliSessionId({})).toBeUndefined();
+    expect(extractCopilotCliSessionId(null)).toBeUndefined();
+  });
+
+  test('prompt comes from the prompt field', () => {
+    expect(extractCopilotCliPrompt({ prompt: '  hello  ' })).toBe('hello');
+    expect(extractCopilotCliPrompt({ prompt: '   ' })).toBeUndefined();
+    expect(extractCopilotCliPrompt({})).toBeUndefined();
+  });
+
+  test('edit: file parsed from stringified toolArgs, made repo-relative', () => {
+    expect(extractCopilotCliEditedFiles(editPayload)).toEqual(['src/a.ts']);
+  });
+
+  test('edit: suggested code is a +/- diff from old_str/new_str', () => {
+    const diff = extractCopilotCliSuggestedCode(editPayload);
+    expect(diff).toContain('- const a = 1;');
+    expect(diff).toContain('+ const a = 2;');
+  });
+
+  test('a view (read) is NOT treated as an edit, despite carrying a path', () => {
+    const view = {
+      sessionId: 's',
+      cwd: '/repo',
+      toolName: 'view',
+      toolArgs: JSON.stringify({ path: '/repo/src/a.ts' }),
+    };
+    expect(extractCopilotCliEditedFiles(view)).toEqual([]);
+    expect(extractCopilotCliSuggestedCode(view)).toBeUndefined();
+  });
+
+  test('toolArgs already an object (not a string) is tolerated', () => {
+    const obj = {
+      cwd: '/repo',
+      toolArgs: { path: '/repo/b.ts', content: 'x\ny' },
+    };
+    expect(extractCopilotCliEditedFiles(obj)).toEqual(['b.ts']);
+    expect(extractCopilotCliSuggestedCode(obj)).toBe('+ x\n+ y');
+  });
+
+  test('malformed / missing toolArgs is a safe no-op', () => {
+    expect(extractCopilotCliEditedFiles({ toolArgs: 'not json' })).toEqual([]);
+    expect(extractCopilotCliEditedFiles({})).toEqual([]);
+    expect(extractCopilotCliSuggestedCode({})).toBeUndefined();
   });
 });

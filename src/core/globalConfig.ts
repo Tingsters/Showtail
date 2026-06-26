@@ -25,6 +25,14 @@ export interface GlobalConfig {
   autoInit?: boolean;
   /** ISO-8601 timestamp `showtail setup` last completed, if it has. */
   setupCompletedAt?: string;
+  /**
+   * Tools the opportunistic auto-connect sweep has already handled (connected, or
+   * found already-connected). Each is processed at most once so a newly-installed
+   * tool wires itself up without a manual `setup` re-run, while a tool the user
+   * later disconnects is never re-installed against their wishes. See
+   * `core/autoConnectSweep.ts`.
+   */
+  autoConnectedTools?: string[];
 }
 
 /** The directory holding machine-wide Showtail config (not a project trail). */

@@ -27,11 +27,11 @@ import {
 } from '../core/copilotCliTranscript.ts';
 import { commandOnPath, homeDirExists } from '../core/detect.ts';
 import {
-  extractEditedFiles,
-  extractPrompt,
-  extractSessionId,
-  extractSuggestedCode,
-  type HookPayload,
+  extractCopilotCliEditedFiles,
+  extractCopilotCliPrompt,
+  extractCopilotCliSessionId,
+  extractCopilotCliSuggestedCode,
+  type CopilotCliHookPayload,
 } from '../core/hookInput.ts';
 import { existsSync, readFileSync } from 'node:fs';
 import type { EnvironmentPlugin, HookTranscript } from './types.ts';
@@ -44,7 +44,7 @@ import type { EnvironmentPlugin, HookTranscript } from './types.ts';
  * nothing readable is found, so stop stays a safe no-op.
  */
 function copilotCliGetTranscript(raw: unknown, root: string): HookTranscript | null {
-  const sid = extractSessionId(raw as HookPayload | null);
+  const sid = extractCopilotCliSessionId(raw as CopilotCliHookPayload | null);
   const info = findCopilotCliSession(sid);
   if (!info || !existsSync(info.path)) return null;
   try {
@@ -117,16 +117,17 @@ export const copilotCliPlugin: EnvironmentPlugin = {
     },
 
     hooks: {
-      // Copilot CLI's PostToolUse / UserPromptSubmit payloads use file_path-style
-      // edit tools (write/edit), so the same field extractors as Claude apply.
-      // Best-effort: a hook must never crash the host session.
+      // Copilot CLI's postToolUse / userPromptSubmitted payloads use a shape of
+      // their own: `{ sessionId, cwd, prompt, toolName, toolArgs (JSON string) }`.
+      // We read them with Copilot-specific extractors (Claude's field names don't
+      // match). Best-effort: a hook must never crash the host session.
       parse(raw) {
-        const p = raw as HookPayload;
+        const p = raw as CopilotCliHookPayload;
         return {
-          nativeSessionId: extractSessionId(p),
-          prompt: extractPrompt(p) ?? undefined,
-          editedFiles: extractEditedFiles(p),
-          suggestedDiff: extractSuggestedCode(p),
+          nativeSessionId: extractCopilotCliSessionId(p),
+          prompt: extractCopilotCliPrompt(p),
+          editedFiles: extractCopilotCliEditedFiles(p),
+          suggestedDiff: extractCopilotCliSuggestedCode(p),
         };
       },
       // Copilot CLI's own config/state live under ~/.copilot; never snapshot edits there.
