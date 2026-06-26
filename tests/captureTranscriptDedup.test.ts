@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import { captureTranscriptToLedger } from '../src/commands/hook.ts';
+import { captureTranscriptToLedger } from '../src/core/ledgerCapture.ts';
 import {
   appendLedgerRecord,
   ensureLedgerSession,
@@ -59,7 +59,9 @@ describe('captureTranscriptToLedger: prompt back-fill is race-safe', () => {
         ],
       };
 
-      captureTranscriptToLedger(session, transcript, 'codex', [], staleThenFresh);
+      captureTranscriptToLedger(session, transcript, 'codex', [], {
+        readRecords: staleThenFresh,
+      });
 
       const prompts = readLedgerRecords(session.id).filter((r) => r.kind === 'prompt');
       // One record — the live one was matched on the re-read, not back-filled again.

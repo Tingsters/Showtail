@@ -206,6 +206,17 @@ export function isEligibleAnchor(dir: string): boolean {
   return DEV_MARKERS.some((marker) => existsSync(join(resolved, marker)));
 }
 
+/**
+ * Whether `dir` is the user's HOME — i.e. an existing `~/.showtail` is the
+ * machine-wide catch-all, not a real project trail. Routing should never *place*
+ * folderless work here (it belongs in the inbox); only an explicit, deliberate
+ * trail at HOME would be one, and we don't auto-create those (see
+ * {@link isEligibleAnchor}).
+ */
+export function isHomedirCatchAll(dir: string): boolean {
+  return resolve(dir) === resolve(homedir());
+}
+
 // --- JSON helpers ---------------------------------------------------------
 
 export function readJson<T>(file: string): T {

@@ -10,6 +10,7 @@ import {
 import { runInit } from '../src/commands/init.ts';
 import { importedArtifactSourceIds } from '../src/core/artifacts.ts';
 import { readAllEvents } from '../src/core/events.ts';
+import { readLedgerRecords, unplacedSessions } from '../src/core/ledger.ts';
 import { pathsForRoot } from '../src/core/storage.ts';
 import { authorFor, cleanup, makeTempDir } from './helpers.ts';
 
@@ -136,21 +137,67 @@ describe('runImportAntigravityIde --auto routes by edited-file paths', () => {
     }
   });
 
-  test('edits under no enclosing trail import nothing (no trail invented)', async () => {
+  test('folderless/scratch work goes to the inbox, never the ~/.showtail catch-all', async () => {
     const bare = makeTempDir(); // no `.showtail/`, under tmpdir (within the ceiling)
     try {
       const editPath = `${bare.replace(/\\/g, '/')}/x/y.py`;
       const file = join(bare, 'transcript.jsonl');
       writeFileSync(file, makeTranscript(editPath), 'utf8');
 
-      // cwd also has no enclosing trail, so the no-edit fallback finds nothing.
       await runImportAntigravityIde(undefined, { auto: true, file, cwd: bare });
 
-      // Nothing was captured and — crucially — no trail was created anywhere.
+      // Crucially, no trail was invented anywhere on disk…
       expect(existsSync(join(bare, '.showtail'))).toBe(false);
       expect(existsSync(join(bare, 'x', '.showtail'))).toBe(false);
+      // …and the conversation was parked in the inbox (the ledger) instead of being
+      // dumped into a catch-all trail.
+      const inbox = unplacedSessions().filter((s) => s.tool === 'antigravity-ide');
+      expect(inbox).toHaveLength(1);
+      const kinds = readLedgerRecords(inbox[0]!.id).map((r) => r.kind);
+      expect(kinds).toContain('prompt');
+      expect(kinds).toContain('ai_output');
+      expect(kinds).toContain('edit');
     } finally {
       cleanup(bare);
+    }
+  });
+
+  test('re-running --auto on a folderless conversation adds nothing (idempotent inbox)', async () => {
+    const bare = makeTempDir();
+    try {
+      const editPath = `${bare.replace(/\\/g, '/')}/x/y.py`;
+      const file = join(bare, 'transcript.jsonl');
+      writeFileSync(file, makeTranscript(editPath), 'utf8');
+
+      await runImportAntigravityIde(undefined, { auto: true, file, cwd: bare });
+      const inbox1 = unplacedSessions().filter((s) => s.tool === 'antigravity-ide');
+      expect(inbox1).toHaveLength(1);
+      const before = readLedgerRecords(inbox1[0]!.id).length;
+
+      await runImportAntigravityIde(undefined, { auto: true, file, cwd: bare });
+      const inbox2 = unplacedSessions().filter((s) => s.tool === 'antigravity-ide');
+      expect(inbox2).toHaveLength(1); // still one session (keyed by conversation id)
+      expect(readLedgerRecords(inbox2[0]!.id).length).toBe(before); // no dup records
+    } finally {
+      cleanup(bare);
+    }
+  });
+
+  test('a conversation routed into a real project trail does NOT also hit the inbox', async () => {
+    const proj = makeTempDir();
+    try {
+      await runInit({ cwd: proj });
+      const editPath = `${proj.replace(/\\/g, '/')}/app.py`;
+      const file = join(proj, 'transcript.jsonl');
+      writeFileSync(file, makeTranscript(editPath), 'utf8');
+
+      await runImportAntigravityIde(undefined, { auto: true, file });
+
+      expect(unplacedSessions().filter((s) => s.tool === 'antigravity-ide')).toHaveLength(
+        0,
+      );
+    } finally {
+      cleanup(proj);
     }
   });
 });

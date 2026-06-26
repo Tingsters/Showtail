@@ -16,6 +16,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { basename, dirname, isAbsolute, relative } from 'node:path';
 import {
+  antigravityIdePlanFiles,
   findAntigravityIdeTranscripts,
   locateAntigravityIdeTranscript,
   readAntigravityIdeTranscript,
@@ -25,9 +26,18 @@ import { importEditArtifact, importedArtifactSourceIds } from '../core/artifacts
 import { importedSourceIds, logEvent } from '../core/events.ts';
 import { PLAN_APPROVED_TAG, PLAN_REVISED_TAG } from '../core/plans.ts';
 import { makeId } from '../core/ids.ts';
+import { readMachineIdentity } from '../core/identity.ts';
+import {
+  appendLedgerRecord,
+  ensureLedgerSession,
+  markInbox,
+  readLedgerRecords,
+} from '../core/ledger.ts';
+import { captureTranscriptToLedger } from '../core/ledgerCapture.ts';
 import { requireActiveAuthor, resolveActiveAuthorForHook } from '../core/authors.ts';
 import {
   findRoot,
+  isHomedirCatchAll,
   pathsForRoot,
   requirePaths,
   type AuthorPaths,
@@ -360,15 +370,15 @@ async function importIntoRoot(
 
 /**
  * Auto-route a transcript by its edited-file paths — the headless capture path.
- * Each edit is filed under its nearest enclosing `.showtail/` trail (`findRoot`),
- * exactly like every other tool's capture: work under a tracked project lands in
- * that project; no-folder/scratch work climbs to the nearest ancestor trail (e.g.
- * a machine-wide `~/.showtail` catch-all). Edits with NO enclosing trail anywhere
- * are skipped — we never invent a trail (matching Showtail's design). The full
- * conversation (prompts/replies/plans) is imported into every trail the
- * conversation touched, so each is self-contained; a conversation with no edits
- * routes to the invocation cwd's enclosing trail. Never prompts; roots whose
- * author can't be resolved silently are skipped.
+ * Each edit is filed under its nearest enclosing **project** `.showtail/` trail
+ * (`findRoot`): work under a tracked project lands in that project. Folderless /
+ * scratch work — the common case for Antigravity, which edits its own sandbox
+ * under `~/.gemini/antigravity-ide/scratch/...` with no project of its own — has
+ * NO real enclosing trail (the machine-wide `~/.showtail` at HOME does NOT count;
+ * see {@link isHomedirCatchAll}), so the whole conversation is parked in the
+ * **inbox** (the ledger) for the user to `showtail inbox` → reattach into a
+ * project, instead of being dumped into the homedir catch-all. Never prompts;
+ * roots whose author can't be resolved are silently skipped.
  */
 async function runImportAntigravityIdeAuto(
   target: string | undefined,
@@ -388,20 +398,15 @@ async function runImportAntigravityIdeAuto(
     return;
   }
 
+  // Group edits by their enclosing PROJECT trail. The homedir `~/.showtail`
+  // catch-all is not a project — folderless work belongs in the inbox, not there.
   const byRoot = new Map<string, TranscriptEdit[]>();
   for (const e of allEdits) {
     const root = isAbsolute(e.path) ? findRoot(dirname(e.path)) : null;
-    if (!root) continue; // no enclosing trail — don't invent one
+    if (!root || isHomedirCatchAll(root)) continue; // no real project trail
     const list = byRoot.get(root) ?? [];
     list.push(e);
     byRoot.set(root, list);
-  }
-  if (byRoot.size === 0) {
-    // No edits resolved to a trail (pure Q&A, or untracked scratch): fall back to
-    // the trail enclosing the invocation cwd, if any. The extension invokes with
-    // cwd = homedir(), so this lands in a machine-wide `~/.showtail` when present.
-    const cwdRoot = findRoot(options.cwd ?? process.cwd());
-    if (cwdRoot) byRoot.set(cwdRoot, []);
   }
 
   const totals: AntigravityIdeImportResult = {
@@ -425,7 +430,84 @@ async function runImportAntigravityIdeAuto(
     totals.skipped += res.skipped;
     if (res.prompts + res.responses + res.plans + res.edits > 0) importedRoots.push(root);
   }
+
+  // No real project trail received this conversation (folderless/scratch work, or
+  // a pure-chat conversation): park it in the inbox via the ledger.
+  if (importedRoots.length === 0) {
+    const inboxed = captureConversationToInbox(info, transcript, allEdits, options);
+    printAutoResult(totals, importedRoots, options.withResponses !== false, inboxed);
+    return;
+  }
   printAutoResult(totals, importedRoots, options.withResponses !== false);
+}
+
+/**
+ * Park a folderless Antigravity conversation in the inbox (the machine-local
+ * ledger), so it surfaces in `showtail inbox` for the user to reattach into a
+ * project — instead of dumping it into the homedir `~/.showtail` catch-all.
+ * Idempotent: the ledger session is keyed by the stable conversation id and
+ * records dedup by sourceId, so the extension re-running `--auto` adds nothing new.
+ * Returns whether anything (records or edits) is now captured for this session.
+ */
+function captureConversationToInbox(
+  info: AntigravityIdeTranscriptInfo,
+  transcript: HookTranscript,
+  edits: TranscriptEdit[],
+  options: ImportAntigravityIdeOptions,
+): boolean {
+  const identity = readMachineIdentity();
+  const ledger = ensureLedgerSession({
+    tool: 'antigravity-ide',
+    nativeSessionId: info.sessionId,
+    machineId: identity?.machineId,
+    slug: identity?.slug,
+    cwd: options.cwd ?? process.cwd(),
+  });
+  // `backfill` because this is an after-the-fact import of an already-finished
+  // conversation whose prompts predate the just-created ledger session.
+  captureTranscriptToLedger(
+    ledger,
+    transcript,
+    'antigravity-ide',
+    antigravityIdePlanFiles(info.sessionId),
+    { backfill: true },
+  );
+  appendImportEditsToLedger(ledger.id, edits);
+  // New ledger sessions are already `inbox`; mark defensively in case a prior run
+  // placed and the trail later vanished. Never let bookkeeping break capture.
+  try {
+    markInbox(ledger.id);
+  } catch {
+    /* best-effort */
+  }
+  return readLedgerRecords(ledger.id).length > 0;
+}
+
+/**
+ * Append the transcript's recovered file edits (absolute scratch paths) to the
+ * ledger session as `edit` records, deduped by sourceId. `captureTranscriptToLedger`
+ * only records per-file *diffs* carried on edit messages, which the Antigravity
+ * parser doesn't emit — the real edits come from the `CODE_ACTION` recovery, so
+ * the import adds them here.
+ */
+function appendImportEditsToLedger(sessionId: string, edits: TranscriptEdit[]): void {
+  const seen = new Set(
+    readLedgerRecords(sessionId)
+      .map((r) => r.sourceId)
+      .filter((s): s is string => !!s),
+  );
+  for (const e of edits) {
+    if (!isAbsolute(e.path) || seen.has(e.sourceId)) continue;
+    appendLedgerRecord(sessionId, {
+      kind: 'edit',
+      tool: 'antigravity-ide',
+      file: e.path,
+      diff: e.diff,
+      ts: e.timestamp,
+      sourceId: e.sourceId,
+    });
+    seen.add(e.sourceId);
+  }
 }
 
 /** Print the conversations available to import, so a student can pick one by id. */
@@ -454,12 +536,25 @@ function listConversations(): void {
   console.log('Or run `showtail import antigravity-ide` to import the most recent.');
 }
 
-/** Summarize an auto-route capture: what was recorded, and into which project(s). */
+/**
+ * Summarize an auto-route capture: what was recorded, and into which project(s).
+ * When no project trail received it (`roots` empty) but it was parked in the inbox
+ * (`inboxed`), point the user at `showtail inbox` to place it.
+ */
 function printAutoResult(
   res: AntigravityIdeImportResult,
   roots: string[],
   withResponses: boolean,
+  inboxed = false,
 ): void {
+  if (roots.length === 0 && inboxed) {
+    console.log(
+      'Captured your Antigravity IDE conversation to the Showtail inbox ' +
+        '(folderless/scratch work — no project to file it under).',
+    );
+    console.log('Place it in a project:  showtail inbox');
+    return;
+  }
   const total = res.prompts + res.responses + res.plans + res.edits;
   if (total === 0) {
     console.log(

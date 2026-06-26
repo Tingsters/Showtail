@@ -54,12 +54,11 @@ import {
   ensureLedgerSession,
   markInbox,
   markPlaced,
-  readLedgerRecords,
   readLedgerSession,
   setLedgerTurn,
-  type LedgerRecord,
   type LedgerSession,
 } from '../core/ledger.ts';
+import { captureTranscriptToLedger } from '../core/ledgerCapture.ts';
 import { materializeLedgerSession } from '../core/materialize.ts';
 import { recordHookTrace, recordRawPayload, type HookTrace } from '../core/hookTrace.ts';
 import { connectPlugins, getPluginById } from '../plugins/registry.ts';
@@ -236,135 +235,6 @@ async function captureToLedger(
   }
 }
 
-/**
- * Mirror a tool transcript's CONVERSATION (AI replies, decisions, plans) into the
- * ledger, attributing each to the prompt record it followed — so a folderless /
- * inbox session carries its whole thread into `reattach`, not just prompts + edits.
- * Edits are skipped here (captured live by post-edit). Idempotent: dedups by the
- * transcript's per-message `sourceId` against records already in the session, so
- * it is safe to run on every Stop (and on every post-edit for hosts that only fire
- * that). This is the ledger half of making the repo a pure projection.
- *
- * A prompt has two writers: the live `user-prompt` hook and this reconcile's
- * back-fill. For a turn the live hook always fires first, but in a *separate*
- * process — so its append can land after we snapshot the records below. Before
- * back-filling we therefore re-read fresh (via `readRecords`, injectable for
- * tests) and retry the match, so a raced live prompt is matched, not duplicated.
- */
-export function captureTranscriptToLedger(
-  session: LedgerSession,
-  transcript: HookTranscript,
-  tool: Tool,
-  planFiles: DiscoveredPlanFile[] = [],
-  readRecords: (id: string) => LedgerRecord[] = readLedgerRecords,
-): void {
-  // The canonical on-disk plan file for this session, if the tool wrote one
-  // (Antigravity overwrites a single plan.md per update, so the last wins). Every
-  // plan record links to it instead of materializing the transcript's plan text.
-  const planFile = planFiles
-    .filter((f) => !f.nativeSessionId || f.nativeSessionId === transcript.sessionId)
-    .at(-1);
-  const seen = new Set<string>();
-  const promptBySourceId = new Map<string, string>();
-  const promptByText = new Map<string, string[]>();
-  // Fold records into the dedup indexes, skipping any already folded in (so a
-  // mid-reconcile re-read only adds records that newly appeared on disk).
-  const indexedIds = new Set<string>();
-  const ingest = (records: LedgerRecord[]): void => {
-    for (const r of records) {
-      if (indexedIds.has(r.id)) continue;
-      indexedIds.add(r.id);
-      if (r.sourceId) seen.add(r.sourceId);
-      if (r.kind !== 'prompt') continue;
-      if (r.sourceId) promptBySourceId.set(r.sourceId, r.id);
-      if (r.text !== undefined) {
-        const q = promptByText.get(r.text) ?? [];
-        q.push(r.id);
-        promptByText.set(r.text, q);
-      }
-    }
-  };
-  ingest(readRecords(session.id));
-
-  let currentTurnKey = session.currentTurnKey;
-  let lastPromptKey = currentTurnKey;
-  for (const msg of transcript.messages) {
-    if (msg.role === 'user') {
-      let recId = promptBySourceId.get(msg.sourceId) ?? promptByText.get(msg.text)?.shift();
-      if (!recId) {
-        // Snapshot says missing — but the live hook for this turn may have appended
-        // it after we read (see the function header). Re-read fresh and retry before
-        // concluding it's missing, so we match the live record instead of duplicating.
-        ingest(readRecords(session.id));
-        recId = promptBySourceId.get(msg.sourceId) ?? promptByText.get(msg.text)?.shift();
-      }
-      if (!recId) {
-        // Genuinely uncaptured (e.g. a plan-mode turn the live hook never logged) —
-        // back-fill only when it's in-window (at/after this session started), so a
-        // resumed transcript isn't replayed.
-        if (!msg.timestamp || msg.timestamp < session.startedAt) {
-          currentTurnKey = undefined;
-          continue;
-        }
-        const rec = appendLedgerRecord(session.id, {
-          kind: 'prompt',
-          tool,
-          text: msg.text,
-          ts: msg.timestamp,
-          sourceId: msg.sourceId,
-        });
-        recId = rec.id;
-        indexedIds.add(rec.id);
-        promptBySourceId.set(msg.sourceId, rec.id);
-        seen.add(msg.sourceId);
-      }
-      currentTurnKey = recId;
-      lastPromptKey = recId;
-    } else if (
-      msg.role === 'assistant' ||
-      msg.role === 'decision' ||
-      msg.role === 'plan'
-    ) {
-      if (!currentTurnKey || seen.has(msg.sourceId)) continue;
-      const kind = msg.role === 'assistant' ? 'ai_output' : msg.role;
-      appendLedgerRecord(session.id, {
-        kind,
-        tool,
-        text: msg.text,
-        ts: msg.timestamp,
-        turnKey: currentTurnKey,
-        sourceId: msg.sourceId,
-        approved: msg.role === 'plan' ? msg.approved : undefined,
-        planFileContent: msg.role === 'plan' ? planFile?.content : undefined,
-        planFileSourceId: msg.role === 'plan' ? planFile?.sourceId : undefined,
-      });
-      seen.add(msg.sourceId);
-    } else if (msg.role === 'edit') {
-      // Per-file clean diffs recovered from the transcript (Codex apply_patch /
-      // deletions) — the reliable diff source when the live payload had the file
-      // but not the diff. Deduped by `<sourceId>#<file>`, keyed to the open turn.
-      for (const e of msg.edits ?? []) {
-        if (!e.diff || isInternalPath(e.file)) continue;
-        const editSourceId = `${msg.sourceId}#${e.file}`;
-        if (seen.has(editSourceId)) continue;
-        appendLedgerRecord(session.id, {
-          kind: 'edit',
-          tool,
-          file: resolve(session.cwd ?? process.cwd(), e.file),
-          diff: e.diff,
-          turnKey: currentTurnKey,
-          sourceId: editSourceId,
-          ts: msg.timestamp,
-        });
-        seen.add(editSourceId);
-      }
-    }
-  }
-  if (lastPromptKey && lastPromptKey !== session.currentTurnKey) {
-    setLedgerTurn(session.id, lastPromptKey);
-  }
-}
-
 /** Mark a ledger session unplaced without ever letting bookkeeping break the hook. */
 function safeMarkInbox(sessionId: string): void {
   try {
@@ -442,7 +312,9 @@ export async function runHook(
             } catch {
               planFiles = []; // Plan-file discovery is best-effort; never break capture.
             }
-            captureTranscriptToLedger(ledger, transcript, tool, planFiles);
+            captureTranscriptToLedger(ledger, transcript, tool, planFiles, {
+              isInternalPath,
+            });
           }
         }
       } catch {
