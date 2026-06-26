@@ -57,6 +57,7 @@ import {
   readLedgerRecords,
   readLedgerSession,
   setLedgerTurn,
+  type LedgerRecord,
   type LedgerSession,
 } from '../core/ledger.ts';
 import { materializeLedgerSession } from '../core/materialize.ts';
@@ -243,12 +244,19 @@ async function captureToLedger(
  * transcript's per-message `sourceId` against records already in the session, so
  * it is safe to run on every Stop (and on every post-edit for hosts that only fire
  * that). This is the ledger half of making the repo a pure projection.
+ *
+ * A prompt has two writers: the live `user-prompt` hook and this reconcile's
+ * back-fill. For a turn the live hook always fires first, but in a *separate*
+ * process — so its append can land after we snapshot the records below. Before
+ * back-filling we therefore re-read fresh (via `readRecords`, injectable for
+ * tests) and retry the match, so a raced live prompt is matched, not duplicated.
  */
-function captureTranscriptToLedger(
+export function captureTranscriptToLedger(
   session: LedgerSession,
   transcript: HookTranscript,
   tool: Tool,
   planFiles: DiscoveredPlanFile[] = [],
+  readRecords: (id: string) => LedgerRecord[] = readLedgerRecords,
 ): void {
   // The canonical on-disk plan file for this session, if the tool wrote one
   // (Antigravity overwrites a single plan.md per update, so the last wins). Every
@@ -256,30 +264,44 @@ function captureTranscriptToLedger(
   const planFile = planFiles
     .filter((f) => !f.nativeSessionId || f.nativeSessionId === transcript.sessionId)
     .at(-1);
-  const existing = readLedgerRecords(session.id);
   const seen = new Set<string>();
   const promptBySourceId = new Map<string, string>();
   const promptByText = new Map<string, string[]>();
-  for (const r of existing) {
-    if (r.sourceId) seen.add(r.sourceId);
-    if (r.kind !== 'prompt') continue;
-    if (r.sourceId) promptBySourceId.set(r.sourceId, r.id);
-    if (r.text !== undefined) {
-      const q = promptByText.get(r.text) ?? [];
-      q.push(r.id);
-      promptByText.set(r.text, q);
+  // Fold records into the dedup indexes, skipping any already folded in (so a
+  // mid-reconcile re-read only adds records that newly appeared on disk).
+  const indexedIds = new Set<string>();
+  const ingest = (records: LedgerRecord[]): void => {
+    for (const r of records) {
+      if (indexedIds.has(r.id)) continue;
+      indexedIds.add(r.id);
+      if (r.sourceId) seen.add(r.sourceId);
+      if (r.kind !== 'prompt') continue;
+      if (r.sourceId) promptBySourceId.set(r.sourceId, r.id);
+      if (r.text !== undefined) {
+        const q = promptByText.get(r.text) ?? [];
+        q.push(r.id);
+        promptByText.set(r.text, q);
+      }
     }
-  }
+  };
+  ingest(readRecords(session.id));
 
   let currentTurnKey = session.currentTurnKey;
   let lastPromptKey = currentTurnKey;
   for (const msg of transcript.messages) {
     if (msg.role === 'user') {
-      let recId = promptBySourceId.get(msg.sourceId);
-      if (!recId) recId = promptByText.get(msg.text)?.shift();
+      let recId = promptBySourceId.get(msg.sourceId) ?? promptByText.get(msg.text)?.shift();
       if (!recId) {
-        // A prompt the live hook missed — back-fill only when it's in-window
-        // (at/after this session started), so a resumed transcript isn't replayed.
+        // Snapshot says missing — but the live hook for this turn may have appended
+        // it after we read (see the function header). Re-read fresh and retry before
+        // concluding it's missing, so we match the live record instead of duplicating.
+        ingest(readRecords(session.id));
+        recId = promptBySourceId.get(msg.sourceId) ?? promptByText.get(msg.text)?.shift();
+      }
+      if (!recId) {
+        // Genuinely uncaptured (e.g. a plan-mode turn the live hook never logged) —
+        // back-fill only when it's in-window (at/after this session started), so a
+        // resumed transcript isn't replayed.
         if (!msg.timestamp || msg.timestamp < session.startedAt) {
           currentTurnKey = undefined;
           continue;
@@ -292,6 +314,7 @@ function captureTranscriptToLedger(
           sourceId: msg.sourceId,
         });
         recId = rec.id;
+        indexedIds.add(rec.id);
         promptBySourceId.set(msg.sourceId, rec.id);
         seen.add(msg.sourceId);
       }
