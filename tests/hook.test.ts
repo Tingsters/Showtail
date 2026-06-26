@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -6,6 +6,24 @@ import { cleanup, makeTempDir, readJsonReport, runCli, spawnEnv } from './helper
 import { isInternalPath } from '../src/commands/hook.ts';
 import { pathsForRoot } from '../src/core/storage.ts';
 import { readObject } from '../src/core/objects.ts';
+
+// Isolate the machine-local ledger per test: `run` spawns the CLI with
+// `spawnEnv()`, which inherits `process.env` — without this, `SHOWTAIL_HOME` is
+// unset and ledger writes hit the developer's real `~/.showtail-cli`, leaking
+// state across tests (and across the whole suite). A fresh temp home per test
+// keeps these hermetic; the spawned CLI picks it up via the spread of process.env.
+let prevLedgerHome: string | undefined;
+let ledgerHome: string | undefined;
+beforeEach(() => {
+  prevLedgerHome = process.env.SHOWTAIL_HOME;
+  ledgerHome = makeTempDir();
+  process.env.SHOWTAIL_HOME = ledgerHome;
+});
+afterEach(() => {
+  if (prevLedgerHome === undefined) delete process.env.SHOWTAIL_HOME;
+  else process.env.SHOWTAIL_HOME = prevLedgerHome;
+  if (ledgerHome) cleanup(ledgerHome);
+});
 
 /** The stored diff text for the latest artifact of `file` in `dir`'s trail. */
 function latestDiff(dir: string, file: string): string | undefined {
