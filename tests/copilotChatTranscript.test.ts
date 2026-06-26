@@ -11,10 +11,71 @@ import {
 } from '../src/core/copilotChatTranscript.ts';
 import { readAllArtifacts } from '../src/core/artifacts.ts';
 import { readAllEvents } from '../src/core/events.ts';
+import { buildReportData, renderHtml } from '../src/core/report.ts';
 import { pathsForRoot } from '../src/core/storage.ts';
 import { authorFor, cleanup, makeTempDir } from './helpers.ts';
 
 const ms = (iso: string): number => Date.parse(iso);
+
+/** A `manage_todo_list` response part — Copilot's plan (a status checklist). */
+const TODO_PART = {
+  kind: 'toolInvocationSerialized',
+  toolId: 'manage_todo_list',
+  toolSpecificData: {
+    kind: 'todoList',
+    todoList: [
+      { id: '1', title: 'Add the foo function', status: 'completed' },
+      { id: '2', title: 'Add a test', status: 'not-started' },
+    ],
+  },
+};
+
+/**
+ * A `request.result` carrying a `vscode_askQuestions` decision (in toolCallRounds)
+ * and its answer (in toolCallResults) — Copilot's AskUserQuestion. Keeps a
+ * `response` so it still works as the reply fallback when no markdown is present.
+ */
+const ASK_RESULT = {
+  metadata: {
+    toolCallRounds: [
+      {
+        response: 'fallback (unused)',
+        toolCalls: [
+          {
+            id: 'call_dec1',
+            name: 'vscode_askQuestions',
+            arguments: JSON.stringify({
+              questions: [
+                {
+                  header: 'feature',
+                  question: 'Which feature should I add?',
+                  multiSelect: false,
+                  options: [
+                    { label: 'Quiz mode', description: 'guess the language' },
+                    { label: 'Menu mode', description: 'pick a category' },
+                  ],
+                },
+              ],
+            }),
+          },
+        ],
+      },
+    ],
+    toolCallResults: {
+      call_dec1: {
+        content: [
+          {
+            value: JSON.stringify({
+              answers: {
+                feature: { selected: ['Quiz mode'], freeText: null, skipped: false },
+              },
+            }),
+          },
+        ],
+      },
+    },
+  },
+};
 
 /**
  * Build a synthetic native Copilot Chat session for `dir` (the project folder),
@@ -38,6 +99,7 @@ function makeSession(dir: string): string {
         response: [
           { value: "I'll add the foo function. " },
           { kind: 'thinking', value: 'INTERNAL REASONING — must be dropped' },
+          TODO_PART,
           {
             kind: 'textEditGroup',
             uri: { fsPath: join(dir, 'src', 'foo.ts') },
@@ -50,7 +112,7 @@ function makeSession(dir: string): string {
             edits: [[{ text: '{}', range: {} }]],
           },
         ],
-        result: { metadata: { toolCallRounds: [{ response: 'fallback (unused)' }] } },
+        result: ASK_RESULT,
       },
       {
         // Our own @showtail participant — must be skipped entirely.
@@ -88,6 +150,7 @@ function makeJournal(dir: string): string {
     response: [
       { value: "I'll add the foo function. " },
       { kind: 'thinking', value: 'INTERNAL REASONING — must be dropped' },
+      TODO_PART,
       {
         kind: 'textEditGroup',
         uri: { fsPath: join(dir, 'src', 'foo.ts') },
@@ -99,7 +162,7 @@ function makeJournal(dir: string): string {
         edits: [[{ text: '{}', range: {} }]],
       },
     ],
-    result: { metadata: { toolCallRounds: [{ response: 'fallback (unused)' }] } },
+    result: ASK_RESULT,
   };
   const r2 = {
     requestId: 'request_2',
@@ -201,6 +264,30 @@ describe('parseCopilotChatTranscript', () => {
     expect(parseCopilotChatTranscript('not json{', '/tmp/x').messages).toHaveLength(0);
   });
 
+  test('captures the manage_todo_list plan and the vscode_askQuestions decision', () => {
+    const dir = makeTempDir();
+    try {
+      const parsed = parseCopilotChatTranscript(makeSession(dir), dir);
+
+      // Plan: the todo list renders as a Codex-style status checklist.
+      const plan = parsed.messages.find((m) => m.role === 'plan')!;
+      expect(plan).toBeDefined();
+      expect(plan.sourceId).toBe('copilot:plan:sess-copilot-1:request_1');
+      expect(plan.text).toContain('[x] Add the foo function');
+      expect(plan.text).toContain('[ ] Add a test');
+
+      // Decision: rendered like Claude/Codex, with the chosen option marked.
+      const decision = parsed.messages.find((m) => m.role === 'decision')!;
+      expect(decision).toBeDefined();
+      expect(decision.sourceId).toBe('copilot:decision:sess-copilot-1:call_dec1');
+      expect(decision.text).toContain('**Copilot asked:** Which feature should I add?');
+      expect(decision.text).toContain('**Quiz mode** ✅ _(your choice)_');
+      expect(decision.text).toContain('- Menu mode');
+    } finally {
+      cleanup(dir);
+    }
+  });
+
   test('replays the .jsonl patch journal (kind 0/1/2) into the same session', () => {
     const dir = makeTempDir();
     try {
@@ -228,6 +315,14 @@ describe('parseCopilotChatTranscript', () => {
       const edit = parsed.messages.find((m) => m.role === 'edit')!;
       expect(edit.files).toEqual(['src/foo.ts']);
       expect(edit.edits![0]!.diff).toContain('+ export const foo = () => {};');
+
+      // Plans + decisions survive the journal replay too.
+      expect(parsed.messages.find((m) => m.role === 'plan')?.text).toContain(
+        '[x] Add the foo function',
+      );
+      expect(parsed.messages.find((m) => m.role === 'decision')?.text).toContain(
+        '**Copilot asked:**',
+      );
     } finally {
       cleanup(dir);
     }
@@ -261,6 +356,27 @@ describe('copilot import (end to end via --file)', () => {
       expect(imported.every((e) => e.batchId)).toBe(true);
       expect(imported.every((e) => e.tags?.includes('imported'))).toBe(true);
       expect(imported.every((e) => e.timestamp.startsWith('2026-06-22'))).toBe(true);
+
+      // Plan + decision events: imported, no plan-approval tag (agent-generated).
+      const plans = imported.filter((e) => e.type === 'plan');
+      const decisions = imported.filter((e) => e.type === 'decision');
+      expect(plans.length).toBe(1);
+      expect(decisions.length).toBe(1);
+      expect(plans[0]!.tags ?? []).not.toContain('plan-approved');
+      expect(plans[0]!.tags ?? []).not.toContain('plan-revised');
+
+      // The report renders the same card set as Codex/Antigravity: a plan card (no
+      // badge), a decision card, and a code diff.
+      const html = renderHtml(buildReportData(paths));
+      const planSummary =
+        /<details class="plan">\s*<summary>([\s\S]*?)<\/summary>/.exec(html)?.[1] ?? '';
+      expect(planSummary).toContain('📋 Plan');
+      expect(planSummary).not.toContain('Approved');
+      expect(planSummary).not.toContain('Revised');
+      expect(html).toContain('class="decision"');
+      expect(html).toContain('🔀 Decision');
+      expect(html).toContain('Quiz mode');
+      expect(html).toContain('<details class="code">');
 
       const count = imported.length;
       const artifactCount = artifacts.length;

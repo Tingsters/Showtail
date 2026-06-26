@@ -49,6 +49,11 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { importEditArtifact, importedArtifactSourceIds } from './artifacts.ts';
+import {
+  parseDecisionQuestions,
+  renderDecisionText,
+  type DecisionQuestion,
+} from './decisions.ts';
 import { importedSourceIds } from './events.ts';
 import { asArray, asNumber, asString, isObject, prop } from './parse.ts';
 import { toRepoRelative, type AuthorPaths } from './storage.ts';
@@ -56,8 +61,12 @@ import type { EditedFile } from './hookInput.ts';
 
 /** A normalized message recovered from a Copilot Chat session. */
 export interface CopilotMessage {
-  /** "user" (typed prompt), "assistant" (text reply), or "edit" (a file changed). */
-  role: 'user' | 'assistant' | 'edit';
+  /**
+   * "user" (typed prompt), "assistant" (text reply), "edit" (a file changed),
+   * "plan" (a `manage_todo_list` checklist), or "decision" (a `vscode_askQuestions`
+   * choice). Mirrors Codex's message roles so the report renders identical cards.
+   */
+  role: 'user' | 'assistant' | 'edit' | 'plan' | 'decision';
   text: string;
   /** ISO-8601 timestamp derived from the request's epoch-ms `timestamp`, if present. */
   timestamp?: string;
@@ -113,6 +122,13 @@ export interface CopilotEditArtifact {
   diff: string;
   timestamp?: string;
   sourceId: string;
+  /** The prompt-turn this edit belongs to, so it renders inside that turn. */
+  turnId?: string;
+}
+
+/** The `<requestId>` tail of a `copilot:<role>:<sid>:<requestId>` source id. */
+export function requestIdOf(sourceId: string): string {
+  return sourceId.slice(sourceId.lastIndexOf(':') + 1);
 }
 
 /** Don't record edits to Showtail/VS Code bookkeeping files. Mirrors hook.ts. */
@@ -398,6 +414,129 @@ function editsFromRequest(request: unknown, root: string): EditedFile[] {
 }
 
 /**
+ * Render a Copilot `manage_todo_list` todo list as a status checklist — the same
+ * markdown shape Codex's plans use (`renderCodexPlan`): `completed → [x]`,
+ * `in-progress → [→]`, anything else → `[ ]`. Returns undefined for an empty list.
+ */
+function renderTodoList(todoList: unknown): string | undefined {
+  const items = asArray(todoList);
+  if (!items || items.length === 0) return undefined;
+  const lines: string[] = [];
+  for (const item of items) {
+    const title = asString(prop(item, 'title'))?.trim();
+    if (!title) continue;
+    const status = asString(prop(item, 'status'));
+    const mark =
+      status === 'completed' ? '[x]' : status === 'in-progress' ? '[→]' : '[ ]';
+    lines.push(`- ${mark} ${title}`);
+  }
+  return lines.length > 0 ? lines.join('\n') : undefined;
+}
+
+/**
+ * The plan a request produced via `manage_todo_list`, if any. Copilot calls the
+ * tool repeatedly as it works (create, then mark items done); we keep the LAST
+ * invocation's list — its most complete state — so a turn shows one evolving plan
+ * (like Antigravity's single implementation_plan.md), not one card per micro-update.
+ * Returns the rendered checklist, else undefined.
+ */
+function planFromRequest(request: unknown): string | undefined {
+  let last: string | undefined;
+  for (const part of asArray(prop(request, 'response')) ?? []) {
+    if (!isObject(part) || prop(part, 'kind') !== 'toolInvocationSerialized') continue;
+    if (asString(prop(part, 'toolId')) !== 'manage_todo_list') continue;
+    const tsd = prop(part, 'toolSpecificData');
+    const rendered = renderTodoList(prop(tsd, 'todoList'));
+    if (rendered) last = rendered;
+  }
+  return last;
+}
+
+/**
+ * Apply a `vscode_askQuestions` result to its parsed questions. The result is
+ * `{ answers: { <header>: { selected: [label…], freeText, skipped } } }`, keyed by
+ * each question's `header`. `selected` labels mark the chosen options (and become
+ * the answer); a `freeText` answer is a typed-in custom choice. Mirrors
+ * `parseCodexDecision`'s answer loop, adapted to Copilot's shape.
+ */
+function applyCopilotAnswers(questions: DecisionQuestion[], answers: unknown): void {
+  for (const q of questions) {
+    const a = prop(answers, q.header ?? '');
+    if (a === undefined) continue;
+    const selected = (asArray(prop(a, 'selected')) ?? [])
+      .map((x) => asString(x))
+      .filter((x): x is string => Boolean(x));
+    const freeText = asString(prop(a, 'freeText'))?.trim();
+    if (selected.length > 0) {
+      q.answer = selected.join(', ');
+      let matched = false;
+      for (const o of q.options) {
+        if (selected.includes(o.label)) {
+          o.chosen = true;
+          matched = true;
+        }
+      }
+      q.custom = !matched;
+    } else if (freeText) {
+      q.answer = freeText;
+      q.custom = true;
+    }
+  }
+}
+
+/**
+ * The `{ <header>: { selected, freeText } }` answer object for a tool call id, from
+ * `result.metadata.toolCallResults[id].content[0].value` (a JSON string of
+ * `{ answers: {…} }`). Returns undefined when absent/unparseable.
+ */
+function decisionAnswers(request: unknown, callId: string): unknown {
+  const results = prop(prop(prop(request, 'result'), 'metadata'), 'toolCallResults');
+  const rec = prop(results, callId);
+  const raw = asString(prop(asArray(prop(rec, 'content'))?.[0], 'value'));
+  if (!raw) return undefined;
+  try {
+    return prop(JSON.parse(raw), 'answers');
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The decisions a request made via `vscode_askQuestions` (VS Code's AskUserQuestion).
+ * Each lives in `result.metadata.toolCallRounds[].toolCalls[]` as
+ * `{ id, name:'vscode_askQuestions', arguments }` (a JSON string of the same
+ * `{ questions:[…] }` shape `parseDecisionQuestions` reads); the chosen answer is in
+ * `toolCallResults[id]`. Rendered as Claude/Codex-style decision markdown. Returns
+ * `{ text, callId }[]`, skipping malformed calls.
+ */
+function decisionsFromRequest(request: unknown): { text: string; callId: string }[] {
+  const rounds = asArray(
+    prop(prop(prop(request, 'result'), 'metadata'), 'toolCallRounds'),
+  );
+  if (!rounds) return [];
+  const out: { text: string; callId: string }[] = [];
+  for (const round of rounds) {
+    for (const call of asArray(prop(round, 'toolCalls')) ?? []) {
+      if (asString(prop(call, 'name')) !== 'vscode_askQuestions') continue;
+      const callId = asString(prop(call, 'id'));
+      const args = asString(prop(call, 'arguments'));
+      if (!callId || !args) continue;
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(args);
+      } catch {
+        continue;
+      }
+      const questions = parseDecisionQuestions(parsed);
+      if (questions.length === 0) continue;
+      applyCopilotAnswers(questions, decisionAnswers(request, callId));
+      out.push({ text: renderDecisionText(questions, 'Copilot'), callId });
+    }
+  }
+  return out;
+}
+
+/**
  * Parse a reconstructed Copilot session object into normalized messages. For each
  * request we emit the user's prompt, the assistant's text reply, and any in-repo
  * file edits — each tagged with a stable `sourceId` keyed off the session +
@@ -437,6 +576,25 @@ export function parseCopilotSession(session: unknown, root: string): CopilotTran
         text: reply,
         timestamp,
         sourceId: `copilot:asst:${sid}:${requestId}`,
+      });
+    }
+
+    // Decisions (vscode_askQuestions) and the plan (manage_todo_list) for this turn.
+    for (const d of decisionsFromRequest(request)) {
+      messages.push({
+        role: 'decision',
+        text: d.text,
+        timestamp,
+        sourceId: `copilot:decision:${sid}:${d.callId}`,
+      });
+    }
+    const plan = planFromRequest(request);
+    if (plan) {
+      messages.push({
+        role: 'plan',
+        text: plan,
+        timestamp,
+        sourceId: `copilot:plan:${sid}:${requestId}`,
       });
     }
 
@@ -580,9 +738,13 @@ export interface CopilotImportOptions {
 export interface CopilotMessageResult {
   prompts: number;
   responses: number;
+  plans: number;
+  decisions: number;
   skipped: number;
   first?: string;
   last?: string;
+  /** requestId → the imported prompt event's id, so edits can link to their turn. */
+  turnIds: Map<string, string>;
 }
 
 export interface CopilotImportResult {
@@ -590,6 +752,8 @@ export interface CopilotImportResult {
   prompts: number;
   responses: number;
   edits: number;
+  plans: number;
+  decisions: number;
   skipped: number;
   first?: string;
   last?: string;
@@ -608,14 +772,21 @@ export async function importCopilotMessages(
 ): Promise<CopilotMessageResult> {
   const { logEvent } = await import('./events.ts');
   const seen = importedSourceIds(author);
-  const result: CopilotMessageResult = { prompts: 0, responses: 0, skipped: 0 };
+  const result: CopilotMessageResult = {
+    prompts: 0,
+    responses: 0,
+    plans: 0,
+    decisions: 0,
+    skipped: 0,
+    turnIds: new Map(),
+  };
   const stamp = (ts: string | undefined): void => {
     if (!ts) return;
     if (!result.first || ts < result.first) result.first = ts;
     if (!result.last || ts > result.last) result.last = ts;
   };
 
-  // A user prompt opens a turn; the reply that follows links back via this id.
+  // A user prompt opens a turn; the reply/plan/decision link back via this id.
   let currentTurnId: string | undefined;
 
   for (const msg of transcript.messages) {
@@ -628,8 +799,19 @@ export async function importCopilotMessages(
     }
     seen.add(msg.sourceId);
 
+    // role → event type. Copilot plans (todo lists) carry no approval — like Codex
+    // headless plans, they get no plan-approved/revised tag (just `imported`).
+    const type =
+      msg.role === 'user'
+        ? 'prompt'
+        : msg.role === 'assistant'
+          ? 'ai_output'
+          : msg.role === 'plan'
+            ? 'plan'
+            : 'decision';
+
     const { event } = await logEvent(author, {
-      type: msg.role === 'user' ? 'prompt' : 'ai_output',
+      type,
       text: msg.text,
       tool: 'github-copilot',
       timestamp: msg.timestamp,
@@ -641,9 +823,14 @@ export async function importCopilotMessages(
     });
     if (msg.role === 'user') {
       currentTurnId = event.id;
+      result.turnIds.set(requestIdOf(msg.sourceId), event.id);
       result.prompts += 1;
-    } else {
+    } else if (msg.role === 'assistant') {
       result.responses += 1;
+    } else if (msg.role === 'plan') {
+      result.plans += 1;
+    } else {
+      result.decisions += 1;
     }
     stamp(msg.timestamp);
   }
@@ -672,6 +859,7 @@ export function importCopilotEdits(
       path: e.path,
       diff: e.diff ?? '',
       tool: 'github-copilot',
+      turnId: e.turnId,
       timestamp: e.timestamp,
       sessionId: options.sessionId,
       sourceId: e.sourceId,
@@ -701,11 +889,13 @@ export async function importCopilotChatTranscript(
   const editArtifacts: CopilotEditArtifact[] = [];
   for (const m of transcript.messages) {
     if (m.role !== 'edit') continue;
+    const turnId = msg.turnIds.get(requestIdOf(m.sourceId));
     for (const e of m.edits ?? []) {
       editArtifacts.push({
         path: e.file,
         diff: e.diff ?? '',
         timestamp: m.timestamp,
+        turnId,
         sourceId: `${m.sourceId}#${e.file}`,
       });
     }
@@ -729,6 +919,8 @@ export async function importCopilotChatTranscript(
     prompts: msg.prompts,
     responses: msg.responses,
     edits: edits.written,
+    plans: msg.plans,
+    decisions: msg.decisions,
     skipped: msg.skipped + edits.skipped,
     first,
     last,

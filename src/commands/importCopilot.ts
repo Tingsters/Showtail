@@ -31,6 +31,7 @@ import {
   parseCopilotSession,
   readChatSessionFile,
   reconstructSession,
+  requestIdOf,
   summarizeChatSessions,
   type CopilotEditArtifact,
   type CopilotImportResult,
@@ -280,6 +281,8 @@ async function runImportCopilotAuto(
     prompts: 0,
     responses: 0,
     edits: 0,
+    plans: 0,
+    decisions: 0,
     skipped: 0,
   };
   const importedRoots: string[] = [];
@@ -295,7 +298,8 @@ async function runImportCopilotAuto(
       sessionId: options.session,
       batchId,
     });
-    // Map this root's absolute edits to in-repo artifacts (skip internal / out-of-repo).
+    // Map this root's absolute edits to in-repo artifacts (skip internal / out-of-repo),
+    // linking each to its prompt turn so it renders inside that turn.
     const artifacts: CopilotEditArtifact[] = [];
     for (const e of edits) {
       const display = displayPath(e.absPath, root);
@@ -304,6 +308,7 @@ async function runImportCopilotAuto(
         path: display,
         diff: e.diff,
         timestamp: e.timestamp,
+        turnId: msg.turnIds.get(requestIdOf(e.sourceIdBase)),
         sourceId: `${e.sourceIdBase}#${display}`,
       });
     }
@@ -315,11 +320,14 @@ async function runImportCopilotAuto(
     totals.prompts += msg.prompts;
     totals.responses += msg.responses;
     totals.edits += editRes.written;
+    totals.plans += msg.plans;
+    totals.decisions += msg.decisions;
     totals.skipped += msg.skipped + editRes.skipped;
     if (msg.first && (!totals.first || msg.first < totals.first))
       totals.first = msg.first;
     if (msg.last && (!totals.last || msg.last > totals.last)) totals.last = msg.last;
-    if (msg.prompts + msg.responses + editRes.written > 0) importedRoots.push(root);
+    if (msg.prompts + msg.responses + msg.plans + msg.decisions + editRes.written > 0)
+      importedRoots.push(root);
   }
 
   if (options.quiet) return;
@@ -332,7 +340,7 @@ function printAutoResult(
   roots: string[],
   withResponses: boolean,
 ): void {
-  const total = res.prompts + res.responses + res.edits;
+  const total = res.prompts + res.responses + res.edits + res.plans + res.decisions;
   if (total === 0) {
     console.log(
       res.skipped > 0
@@ -344,6 +352,8 @@ function printAutoResult(
   const parts = [`${res.prompts} prompt(s)`];
   if (withResponses) parts.push(`${res.responses} response(s)`);
   if (res.edits) parts.push(`${res.edits} edit(s)`);
+  if (res.plans) parts.push(`${res.plans} plan(s)`);
+  if (res.decisions) parts.push(`${res.decisions} decision(s)`);
   console.log(
     `Captured native Copilot Chat: ${parts.join(', ')} (tool: github-copilot) ` +
       `into ${roots.length} project(s):`,
@@ -367,6 +377,8 @@ async function importPaths(
     prompts: 0,
     responses: 0,
     edits: 0,
+    plans: 0,
+    decisions: 0,
     skipped: 0,
   };
   let imported = 0;
@@ -383,6 +395,8 @@ async function importPaths(
     totals.prompts += res.prompts;
     totals.responses += res.responses;
     totals.edits += res.edits;
+    totals.plans += res.plans;
+    totals.decisions += res.decisions;
     totals.skipped += res.skipped;
     if (res.first && (!totals.first || res.first < totals.first))
       totals.first = res.first;
@@ -464,7 +478,7 @@ function printResult(
   withResponses: boolean,
   sessionCount: number,
 ): void {
-  const total = res.prompts + res.responses + res.edits;
+  const total = res.prompts + res.responses + res.edits + res.plans + res.decisions;
   if (total === 0) {
     console.log(
       res.skipped > 0
@@ -477,6 +491,8 @@ function printResult(
   const parts = [`${res.prompts} prompt(s)`];
   if (withResponses) parts.push(`${res.responses} response(s)`);
   parts.push(`${res.edits} edit(s)`);
+  if (res.plans) parts.push(`${res.plans} plan(s)`);
+  if (res.decisions) parts.push(`${res.decisions} decision(s)`);
   const from =
     sessionCount > 1
       ? `${sessionCount} Copilot Chat sessions`
