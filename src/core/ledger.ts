@@ -313,6 +313,31 @@ export function unplacedSessions(): Array<LedgerSession & { targetMissing?: bool
   return out;
 }
 
+/** A ledger session annotated with its current placement, for listing / move UIs. */
+export interface LedgerSessionView extends LedgerSession {
+  /** Placed, but every recorded trail is now missing (deleted/moved). */
+  targetMissing: boolean;
+  /** Current (alive-where-known) trail paths this session is placed in. */
+  targetPaths: string[];
+}
+
+/**
+ * Every ledger session annotated with placement — placed (with its current
+ * folder), inbox, or target-missing. Powers `showtail move`'s full listing. The
+ * alive-check self-heals a trailId that diverged under a merge (CC2).
+ */
+export function allLedgerSessionViews(): LedgerSessionView[] {
+  return allLedgerSessions().map((session) => {
+    const targets = session.targets ?? [];
+    const targetPaths = targets.map((t) => knownTrailPath(t.trailId) ?? t.path);
+    let targetMissing = false;
+    if (session.status === 'placed' && targets.length > 0) {
+      targetMissing = !targets.some((t) => targetAlive(session.id, t));
+    }
+    return { ...session, targetMissing, targetPaths };
+  });
+}
+
 // --- records --------------------------------------------------------------
 
 /** Fields a caller provides to append a capture record (id/ts are filled in). */

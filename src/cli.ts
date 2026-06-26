@@ -15,7 +15,7 @@ import { runVerify } from './commands/verify.ts';
 import { runStatus } from './commands/status.ts';
 import { runSessions } from './commands/sessions.ts';
 import { runInbox } from './commands/inbox.ts';
-import { runReattach } from './commands/reattach.ts';
+import { runMove } from './commands/move.ts';
 import { runHook, type HookEvent } from './commands/hook.ts';
 import { runImportUndo } from './commands/import.ts';
 import { eventTypeList } from './core/schema.ts';
@@ -29,7 +29,7 @@ import {
 import type { ConnectFlag, ImportRunOptions } from './plugins/types.ts';
 import type { Tool } from './types.ts';
 
-const VERSION = '0.11.0';
+const VERSION = '0.11.1';
 
 // Help-group headings (Commander 14 renders commands grouped under these).
 const G_START = 'Get started:';
@@ -202,15 +202,20 @@ program
   .action(action(async (opts: { json?: boolean }) => runInbox({ json: opts.json })));
 
 program
-  .command('reattach <sessionId>')
+  .command('move [sessionId]')
+  .alias('reattach')
   .description(
-    'Place an unplaced session into a project, or move a misattributed one to the right project.',
+    'Move a captured session to another project folder. With no id, lists every session (id + current folder) to pick from.',
   )
-  .helpGroup(G_CAPTURE)
-  .requiredOption('--to <path>', 'the project folder to place the session into')
+  .helpGroup(G_REVIEW)
+  .option(
+    '--to <path>',
+    'the project folder to move the session into (default: current dir)',
+  )
+  .option('--json', 'list all sessions as machine-readable JSON')
   .action(
-    action(async (sessionId: string, opts: { to?: string }) =>
-      runReattach(sessionId, { to: opts.to }),
+    action(async (sessionId: string | undefined, opts: { to?: string; json?: boolean }) =>
+      runMove(sessionId, { to: opts.to, json: opts.json }),
     ),
   );
 

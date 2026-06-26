@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.11.1 — `showtail move`
+
+- **`showtail move`** relocates a captured session from one project folder to
+  another. With no arguments it lists *every* ledger session — its `led_…` id and
+  current folder (`→ <path>`, `[inbox]`, or `[target missing]`) — and lets you pick
+  one to move. `showtail move <id> --to <path>` is the scriptable form, and
+  `showtail move --json` lists everything for scripts/agents. `reattach` is now an
+  alias of `move`. (Only sessions captured on 0.11+ are movable; pre-upgrade
+  history lives only in its repo trail.)
+
 ## 0.11.0 — Durable capture ledger + per-machine sessions
 
 ### What changed
