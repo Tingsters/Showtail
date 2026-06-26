@@ -82,6 +82,24 @@ const PLAN_TOOL_NAMES = new Set([
 ]);
 
 /**
+ * File-writing tool calls that, when their target is a plan artifact (see
+ * PLAN_FILE_NAMES), create the session's plan. Antigravity *IDE* has no
+ * `create_plan`-style tool — it writes its implementation plan to a markdown file
+ * with `write_to_file`, so that write IS the plan event. We only treat a full
+ * `write_to_file` as a plan (it carries the whole plan in `CodeContent`);
+ * incremental `replace_file_content` edits carry only diffs and are reflected via
+ * the canonical on-disk file the `planFiles` hook surfaces instead.
+ */
+const PLAN_FILE_WRITE_TOOLS = new Set(['write_to_file']);
+
+/**
+ * Basenames Antigravity uses for its plan artifact: the IDE writes
+ * `implementation_plan.md`; the CLI's canonical file is `plan.md`. Matched on the
+ * write target's basename (case-insensitively), separator-agnostic.
+ */
+const PLAN_FILE_NAMES = new Set(['implementation_plan.md', 'plan.md']);
+
+/**
  * Decision/ask constructs. EMPTY by design: the real transcript carries no
  * structured decision line. Kept as the single extension point so a future `agy`
  * ask/choice line can be wired in without re-deriving the parser shape.
@@ -281,6 +299,67 @@ function planTextFromToolCall(call: unknown): string | undefined {
   return undefined;
 }
 
+/**
+ * Antigravity IDE tool-call arg values arrive JSON-string-**double-encoded** — a
+ * string arg reads as `"\"# Title\\n…\""`, a path as `"\"C:\\\\…\""`. Recover the
+ * real value: if it's wrapped in quotes, JSON.parse it (guarded); else return as
+ * is. Harmless on already-plain CLI args (they aren't quote-wrapped).
+ */
+function unwrapAgyArg(value: unknown): string | undefined {
+  const s = asString(value);
+  if (s === undefined) return undefined;
+  const t = s.trim();
+  if (t.length >= 2 && t.startsWith('"') && t.endsWith('"')) {
+    try {
+      const parsed = JSON.parse(t);
+      if (typeof parsed === 'string') return parsed;
+    } catch {
+      /* fall through — use the raw string */
+    }
+  }
+  return s;
+}
+
+/** The final path segment, splitting on both `/` and `\` (real data uses both). */
+function pathBasename(path: string): string {
+  const parts = path.split(/[\\/]/);
+  return parts[parts.length - 1] ?? path;
+}
+
+/**
+ * If `call` is a `write_to_file` whose target is a plan artifact (see
+ * PLAN_FILE_NAMES), return the plan markdown it wrote; otherwise undefined. This
+ * is how the IDE's implementation plan is recognized — it has no plan tool, it
+ * writes `implementation_plan.md`.
+ */
+function planTextFromFileWrite(call: unknown): string | undefined {
+  const name = asString(prop(call, 'name'))?.toLowerCase();
+  if (!name || !PLAN_FILE_WRITE_TOOLS.has(name)) return undefined;
+  const args = prop(call, 'args');
+  const target = unwrapAgyArg(prop(args, 'TargetFile') ?? prop(args, 'target_file'));
+  if (!target) return undefined;
+  if (!PLAN_FILE_NAMES.has(pathBasename(target).toLowerCase())) return undefined;
+  // The full plan is in `CodeContent`; fall back to the generic plan-text keys.
+  const content = unwrapAgyArg(prop(args, 'CodeContent'))?.trim();
+  if (content) return content;
+  return planTextFromToolCall(call);
+}
+
+/**
+ * Drop unusable links to Antigravity's plan artifact from an assistant reply. The
+ * IDE announces its plan with `[implementation_plan.md](file:///…/brain/<id>/
+ * implementation_plan.md)` — an absolute path into the user's private brain dir
+ * that the report can't resolve (and the HTML renderer won't even linkify), so it
+ * renders as a long dead path. The plan is captured as a first-class Plan with its
+ * own link, so we flatten the announcement link to just its label.
+ */
+function sanitizePlanFileLinks(text: string): string {
+  return text.replace(
+    /\[([^\]]+)\]\(file:\/\/[^)]*?(?:implementation_plan|plan)\.md\)/gi,
+    '$1',
+  );
+}
+
 /** Render a plan carried directly on a PLAN-type line (content / structured). */
 function planTextFromLine(obj: unknown): string | undefined {
   const content = asString(prop(obj, 'content'))?.trim();
@@ -380,11 +459,15 @@ export function parseAntigravityCliTranscript(
       const calls = asArray(prop(obj, 'tool_calls')) ?? [];
 
       // A plan-producing tool call → a 'plan' message (Antigravity's signature).
+      // Either a dedicated plan tool (CLI) or a write to the plan artifact file
+      // (IDE: `write_to_file` → implementation_plan.md).
       let emittedPlan = false;
       for (let i = 0; i < calls.length; i++) {
         const name = asString(prop(calls[i], 'name'))?.toLowerCase();
-        if (!name || !PLAN_TOOL_NAMES.has(name)) continue;
-        const text = planTextFromToolCall(calls[i]);
+        if (!name) continue;
+        const text = PLAN_TOOL_NAMES.has(name)
+          ? planTextFromToolCall(calls[i])
+          : planTextFromFileWrite(calls[i]);
         if (!text) continue;
         messages.push({
           role: 'plan',
@@ -397,12 +480,13 @@ export function parseAntigravityCliTranscript(
       }
       if (emittedPlan) continue;
 
-      // Otherwise: a text reply (content present, not a tool-only turn).
+      // Otherwise: a text reply (content present, not a tool-only turn). Strip any
+      // dead link to the plan artifact file — the plan is captured separately above.
       const text = asString(prop(obj, 'content'))?.trim();
       if (text) {
         messages.push({
           role: 'assistant',
-          text,
+          text: sanitizePlanFileLinks(text),
           timestamp,
           sourceId: `agy:asst:${sid}:${idx}`,
         });

@@ -22,6 +22,7 @@ import {
 } from '../core/antigravityIde.ts';
 import { installAntigravityIdeExtension } from '../core/antigravityIdeExtension.ts';
 import {
+  antigravityIdePlanFiles,
   locateAntigravityIdeTranscript,
   readAntigravityIdeTranscript,
 } from '../core/antigravityIdeTranscript.ts';
@@ -138,6 +139,12 @@ export const antigravityIdePlugin: EnvironmentPlugin = {
       // ~/.gemini/antigravity-ide/brain; locate it (by session id, else newest)
       // and reconcile prompts/replies/plans from it.
       getTranscript: antigravityIdeGetTranscript,
+      // The IDE writes the session's implementation plan to
+      // brain/<id>/implementation_plan.md; surface it so the report links the
+      // canonical (final) plan file even after later edits.
+      planFiles(raw) {
+        return antigravityIdePlanFiles(extractSessionId(raw as HookPayload | null));
+      },
       // This IDE build only dispatches PostToolUse hooks (PreInvocation/Stop never
       // fire), so reconcile the transcript on post-edit instead of waiting for a
       // Stop that won't come. Idempotent — see HookAdapter.reconcileOnPostEdit.

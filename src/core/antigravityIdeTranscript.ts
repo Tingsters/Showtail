@@ -8,6 +8,7 @@
  * (USER_INPUT / PLANNER_RESPONSE / CODE_ACTION / …), so this module reuses the
  * CLI reader's parser and brain-scan wholesale and only swaps the brain root.
  */
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   findTranscriptsUnderBrain,
@@ -15,7 +16,7 @@ import {
   readAntigravityCliTranscript,
   type AntigravityCliTranscriptInfo,
 } from './antigravityCliTranscript.ts';
-import type { HookTranscript } from '../plugins/types.ts';
+import type { DiscoveredPlanFile, HookTranscript } from '../plugins/types.ts';
 
 /** A transcript file found on disk for an Antigravity IDE conversation. */
 export type AntigravityIdeTranscriptInfo = AntigravityCliTranscriptInfo;
@@ -53,4 +54,31 @@ export function readAntigravityIdeTranscript(
   root: string,
 ): HookTranscript {
   return readAntigravityCliTranscript(info, root);
+}
+
+/**
+ * The on-disk plan file the Antigravity IDE wrote for a session, if any. The IDE
+ * keeps the implementation plan at `brain/<conversationId>/implementation_plan.md`
+ * (the CLI's counterpart is `plan.md`), overwriting it as the plan evolves — so
+ * the single file is the session's canonical plan, and surfacing it lets the
+ * report link to the final plan even after later edits. Mirrors
+ * {@link antigravityCliPlanFiles}. Returns `[]` when no session resolves or no
+ * file exists. Best-effort; never throws.
+ */
+export function antigravityIdePlanFiles(
+  sessionId: string | undefined,
+): DiscoveredPlanFile[] {
+  const sid = sessionId || findAntigravityIdeTranscripts()[0]?.sessionId;
+  if (!sid) return [];
+  const file = join(antigravityIdeBrainDir(), sid, 'implementation_plan.md');
+  if (!existsSync(file)) return [];
+  try {
+    const content = readFileSync(file, 'utf8').trim();
+    if (!content) return [];
+    return [
+      { absPath: file, content, sourceId: `agy-plan:${sid}`, nativeSessionId: sid },
+    ];
+  } catch {
+    return [];
+  }
 }
