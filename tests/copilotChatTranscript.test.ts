@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { runInit } from '../src/commands/init.ts';
@@ -11,6 +11,7 @@ import {
 } from '../src/core/copilotChatTranscript.ts';
 import { readAllArtifacts } from '../src/core/artifacts.ts';
 import { readAllEvents } from '../src/core/events.ts';
+import { readLedgerRecords, unplacedSessions } from '../src/core/ledger.ts';
 import { buildReportData, renderHtml } from '../src/core/report.ts';
 import { pathsForRoot } from '../src/core/storage.ts';
 import { authorFor, cleanup, makeTempDir } from './helpers.ts';
@@ -456,6 +457,49 @@ describe('copilot import (end to end via --file)', () => {
       ).toBe(cp.length);
     } finally {
       cleanup(proj);
+      cleanup(elsewhere);
+    }
+  });
+
+  test('--auto parks a folderless session in the inbox, never the ~/.showtail catch-all', async () => {
+    const scratch = makeTempDir(); // edits live here; no enclosing `.showtail/`
+    const elsewhere = makeTempDir(); // invocation cwd — also untracked
+    try {
+      const file = join(elsewhere, 'empty-window.jsonl');
+      writeFileSync(file, makeJournal(scratch), 'utf8'); // edits target scratch/src/foo.ts
+
+      await runImportCopilot(undefined, {
+        file,
+        auto: true,
+        withResponses: true,
+        cwd: elsewhere,
+      });
+
+      // No trail was invented anywhere…
+      expect(existsSync(join(scratch, '.showtail'))).toBe(false);
+      expect(existsSync(join(elsewhere, '.showtail'))).toBe(false);
+      // …and the conversation was parked in the inbox (the ledger).
+      const inbox = unplacedSessions().filter((s) => s.tool === 'github-copilot');
+      expect(inbox).toHaveLength(1);
+      const recs = readLedgerRecords(inbox[0]!.id);
+      const kinds = recs.map((r) => r.kind);
+      expect(recs.filter((r) => r.kind === 'prompt').length).toBe(2);
+      expect(kinds).toContain('ai_output');
+      expect(kinds).toContain('edit');
+
+      // Idempotent: re-running --auto adds no new records and no new session.
+      const before = recs.length;
+      await runImportCopilot(undefined, {
+        file,
+        auto: true,
+        withResponses: true,
+        cwd: elsewhere,
+      });
+      const inbox2 = unplacedSessions().filter((s) => s.tool === 'github-copilot');
+      expect(inbox2).toHaveLength(1);
+      expect(readLedgerRecords(inbox2[0]!.id).length).toBe(before);
+    } finally {
+      cleanup(scratch);
       cleanup(elsewhere);
     }
   });

@@ -33,18 +33,29 @@ import {
   reconstructSession,
   requestIdOf,
   summarizeChatSessions,
+  type CopilotAbsEdit,
   type CopilotEditArtifact,
   type CopilotImportResult,
   type CopilotSessionSummary,
 } from '../core/copilotChatTranscript.ts';
 import { makeId } from '../core/ids.ts';
+import { readMachineIdentity } from '../core/identity.ts';
+import {
+  appendLedgerRecord,
+  ensureLedgerSession,
+  markInbox,
+  readLedgerRecords,
+} from '../core/ledger.ts';
+import { captureTranscriptToLedger } from '../core/ledgerCapture.ts';
 import { requireActiveAuthor, resolveActiveAuthorForHook } from '../core/authors.ts';
 import {
   findRoot,
+  isHomedirCatchAll,
   pathsForRoot,
   requirePaths,
   type AuthorPaths,
 } from '../core/storage.ts';
+import type { HookTranscript } from '../plugins/types.ts';
 import { oneLine } from '../core/text.ts';
 import { parseSelection } from './importCodex.ts';
 
@@ -259,20 +270,17 @@ async function runImportCopilotAuto(
   const sid = sessionIdFromFile(file);
   const allEdits = extractCopilotEdits(session, sid);
 
-  // Group edits by the `.showtail/` project that encloses them.
+  // Group edits by the PROJECT `.showtail/` that encloses them. The homedir
+  // `~/.showtail` catch-all is not a project — folderless work belongs in the
+  // inbox (below), not there.
   const byRoot = new Map<string, typeof allEdits>();
   for (const e of allEdits) {
     if (!isAbsolute(e.absPath)) continue;
     const root = findRoot(dirname(e.absPath));
-    if (!root) continue; // no enclosing trail — don't invent one
+    if (!root || isHomedirCatchAll(root)) continue; // no real project trail
     const list = byRoot.get(root) ?? [];
     list.push(e);
     byRoot.set(root, list);
-  }
-  if (byRoot.size === 0) {
-    // No edits resolved (pure Q&A / untracked): fall back to the cwd's trail.
-    const cwdRoot = findRoot(options.cwd ?? process.cwd());
-    if (cwdRoot) byRoot.set(cwdRoot, []);
   }
 
   const batchId = makeId('imp');
@@ -330,16 +338,108 @@ async function runImportCopilotAuto(
       importedRoots.push(root);
   }
 
+  // No real project trail received this conversation (folderless / empty-window
+  // Copilot chat, or pure Q&A): park it in the inbox via the ledger so
+  // `showtail inbox` can place it — instead of dumping it into ~/.showtail.
+  if (importedRoots.length === 0) {
+    const inboxed = captureCopilotConversationToInbox(sid, session, allEdits, options);
+    if (!options.quiet)
+      printAutoResult(totals, importedRoots, options.withResponses !== false, inboxed);
+    return;
+  }
+
   if (options.quiet) return;
   printAutoResult(totals, importedRoots, options.withResponses !== false);
 }
 
-/** Summarize an `--auto` capture: what was recorded, and into which project(s). */
+/**
+ * Park a folderless Copilot conversation in the inbox (the machine-local ledger),
+ * so it surfaces in `showtail inbox` for reattach — instead of the homedir
+ * `~/.showtail` catch-all. Idempotent: keyed by the stable chat-session id, records
+ * dedup by sourceId, so the watcher re-running `--auto` adds nothing new. Returns
+ * whether anything is now captured for this session.
+ */
+function captureCopilotConversationToInbox(
+  sid: string,
+  session: unknown,
+  edits: CopilotAbsEdit[],
+  options: ImportCopilotOptions,
+): boolean {
+  const identity = readMachineIdentity();
+  const ledger = ensureLedgerSession({
+    tool: 'github-copilot',
+    nativeSessionId: sid,
+    machineId: identity?.machineId,
+    slug: identity?.slug,
+    cwd: options.cwd ?? process.cwd(),
+  });
+  // Conversation only (prompts/replies/plans/decisions). Edits are appended below
+  // from the recovered ABSOLUTE list so a reattach can re-relativize them against
+  // the target repo; the transcript's own relativized edit messages are dropped to
+  // avoid double-counting.
+  const parsed = parseCopilotSession(session, options.cwd ?? process.cwd());
+  const convo: HookTranscript = {
+    sessionId: parsed.sessionId,
+    messages: parsed.messages.filter((m) => m.role !== 'edit'),
+  };
+  // `backfill`: an after-the-fact import of an already-finished conversation whose
+  // prompts predate the just-created ledger session.
+  captureTranscriptToLedger(ledger, convo, 'github-copilot', [], { backfill: true });
+  appendCopilotEditsToLedger(ledger.id, edits);
+  try {
+    markInbox(ledger.id);
+  } catch {
+    /* best-effort — new ledger sessions already default to inbox */
+  }
+  return readLedgerRecords(ledger.id).length > 0;
+}
+
+/**
+ * Append the recovered absolute Copilot edits to the ledger session as `edit`
+ * records, deduped by sourceId. The conversation capture above does not record
+ * edits (the transcript's edit messages are dropped), so these are the edit source.
+ */
+function appendCopilotEditsToLedger(sessionId: string, edits: CopilotAbsEdit[]): void {
+  const seen = new Set(
+    readLedgerRecords(sessionId)
+      .map((r) => r.sourceId)
+      .filter((s): s is string => !!s),
+  );
+  for (const e of edits) {
+    if (!isAbsolute(e.absPath)) continue;
+    const sourceId = `${e.sourceIdBase}#${e.absPath}`;
+    if (seen.has(sourceId)) continue;
+    appendLedgerRecord(sessionId, {
+      kind: 'edit',
+      tool: 'github-copilot',
+      file: e.absPath,
+      diff: e.diff,
+      ts: e.timestamp,
+      sourceId,
+    });
+    seen.add(sourceId);
+  }
+}
+
+/**
+ * Summarize an `--auto` capture: what was recorded, and into which project(s).
+ * When no project trail received it (`roots` empty) but it was parked in the inbox
+ * (`inboxed`), point the user at `showtail inbox`.
+ */
 function printAutoResult(
   res: CopilotImportResult,
   roots: string[],
   withResponses: boolean,
+  inboxed = false,
 ): void {
+  if (roots.length === 0 && inboxed) {
+    console.log(
+      'Captured native Copilot Chat to the Showtail inbox (folderless work — ' +
+        'no project to file it under).',
+    );
+    console.log('Place it in a project:  showtail inbox');
+    return;
+  }
   const total = res.prompts + res.responses + res.edits + res.plans + res.decisions;
   if (total === 0) {
     console.log(
