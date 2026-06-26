@@ -21,6 +21,11 @@ function inlineMarkdown(s: string, extended: boolean): string {
       /\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g,
       '<a href="$2" rel="noreferrer">$1</a>',
     );
+    // Any remaining `[label](target)` points at a non-http target — a `file://`
+    // path or a relative file (e.g. an Antigravity plan's links into a private
+    // scratch dir). Those resolve nowhere useful in a shared report and the
+    // browser won't linkify them, so show just the readable label.
+    html = html.replace(/\[([^\]]+)\]\([^)\s]+\)/g, '$1');
   }
   return html;
 }
@@ -54,21 +59,69 @@ export function renderRichText(text: string): string {
   return out.join('');
 }
 
+/** GitHub-style callout markers (`> [!NOTE]`) → the label shown on the box. */
+const CALLOUT_LABELS: Record<string, string> = {
+  NOTE: 'Note',
+  TIP: 'Tip',
+  IMPORTANT: 'Important',
+  WARNING: 'Warning',
+  CAUTION: 'Caution',
+};
+
+/** One open list while parsing: its kind, indent depth, items, and `<ol>` start. */
+interface OpenList {
+  tag: 'ul' | 'ol';
+  indent: number;
+  items: string[];
+  start?: number;
+}
+
 /**
  * Render a Markdown prose run (no fenced code — that's handled above) into HTML:
- * headings, unordered/ordered lists, blockquotes, horizontal rules, paragraphs.
- * Used for free-form card text, so headings render as inline-styled `<div>`s
- * rather than the document-level `<h1>/<h2>` that {@link markdownToHtml} emits.
+ * headings, nested unordered/ordered lists, (multi-line) blockquotes and GitHub
+ * callouts, horizontal rules, paragraphs. Used for free-form card text, so
+ * headings render as inline-styled `<div>`s rather than the document-level
+ * `<h1>/<h2>` that {@link markdownToHtml} emits.
  */
 function renderBlocks(md: string): string {
+  return blocksToHtml(md.split('\n'));
+}
+
+/**
+ * The block parser shared by {@link renderBlocks} and (recursively) blockquote
+ * bodies — so a list or callout *inside* a quote renders as real structure, not
+ * literal `- ` / `[!NOTE]` text.
+ */
+function blocksToHtml(lines: string[]): string {
   const out: string[] = [];
-  let list: { tag: 'ul' | 'ol'; items: string[] } | null = null;
+  // A stack of open lists, outermost first, so deeper-indented items nest inside
+  // the previous item rather than flattening into siblings.
+  const stack: OpenList[] = [];
   let para: string[] = [];
-  const flushList = () => {
-    if (list) {
-      out.push(`<${list.tag}>${list.items.join('')}</${list.tag}>`);
-      list = null;
+
+  const renderList = (l: OpenList): string => {
+    const startAttr =
+      l.tag === 'ol' && l.start !== undefined && l.start !== 1
+        ? ` start="${l.start}"`
+        : '';
+    return `<${l.tag}${startAttr}>${l.items.join('')}</${l.tag}>`;
+  };
+  // Close the innermost list, nesting its HTML inside the parent's last <li> (or
+  // emitting it at top level when it's the outermost list).
+  const closeTopList = () => {
+    const l = stack.pop();
+    if (!l) return;
+    const html = renderList(l);
+    const parent = stack[stack.length - 1];
+    if (parent) {
+      const last = parent.items.length - 1;
+      parent.items[last] = parent.items[last]!.replace(/<\/li>$/, `${html}</li>`);
+    } else {
+      out.push(html);
     }
+  };
+  const flushLists = () => {
+    while (stack.length) closeTopList();
   };
   const flushPara = () => {
     if (para.length) {
@@ -76,51 +129,72 @@ function renderBlocks(md: string): string {
       para = [];
     }
   };
+  // Add a list item at `indent`, opening/closing nested lists as the depth shifts.
+  const addItem = (tag: 'ul' | 'ol', indent: number, html: string, num?: number) => {
+    flushPara();
+    while (stack.length && stack[stack.length - 1]!.indent > indent) closeTopList();
+    const top = stack[stack.length - 1];
+    if (!top || top.indent < indent) {
+      stack.push({ tag, indent, items: [], start: tag === 'ol' ? num : undefined });
+    } else if (top.indent === indent && top.tag !== tag) {
+      closeTopList();
+      stack.push({ tag, indent, items: [], start: tag === 'ol' ? num : undefined });
+    }
+    stack[stack.length - 1]!.items.push(`<li>${html}</li>`);
+  };
 
-  for (const raw of md.split('\n')) {
-    const line = raw.replace(/\s+$/, '');
+  for (let i = 0; i < lines.length; i++) {
+    const line = (lines[i] ?? '').replace(/\s+$/, '');
+    const trimmed = line.trim();
     let mm: RegExpMatchArray | null;
-    if (line.trim() === '') {
-      flushList();
+
+    if (trimmed === '') {
+      flushLists();
       flushPara();
+    } else if (/^\s*>/.test(line)) {
+      // Coalesce the whole run of `>` lines into one quote, strip the markers, and
+      // render the inner text as blocks (lists/paragraphs inside the quote work).
+      flushLists();
+      flushPara();
+      const inner: string[] = [];
+      while (i < lines.length && /^\s*>/.test(lines[i] ?? '')) {
+        inner.push((lines[i] ?? '').replace(/^\s*>\s?/, ''));
+        i++;
+      }
+      i--; // the for-loop will re-increment past the last quote line
+      const co = inner[0]
+        ?.trim()
+        .match(/^\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]\s*(.*)$/i);
+      if (co) {
+        const type = co[1]!.toUpperCase();
+        inner[0] = co[2] ?? '';
+        if (inner[0]!.trim() === '') inner.shift();
+        out.push(
+          `<blockquote class="callout callout-${type.toLowerCase()}">` +
+            `<p class="callout-label">${CALLOUT_LABELS[type]}</p>` +
+            `${blocksToHtml(inner)}</blockquote>`,
+        );
+      } else {
+        out.push(`<blockquote>${blocksToHtml(inner)}</blockquote>`);
+      }
     } else if ((mm = line.match(/^(#{1,6})\s+(.*)$/))) {
-      flushList();
+      flushLists();
       flushPara();
       out.push(`<div class="md-h">${inlineMarkdown(mm[2]!, true)}</div>`);
-    } else if (/^\s*[-*+]\s+/.test(line)) {
-      flushPara();
-      if (!list || list.tag !== 'ul') {
-        flushList();
-        list = { tag: 'ul', items: [] };
-      }
-      list.items.push(
-        `<li>${inlineMarkdown(line.replace(/^\s*[-*+]\s+/, ''), true)}</li>`,
-      );
-    } else if (/^\s*\d+\.\s+/.test(line)) {
-      flushPara();
-      if (!list || list.tag !== 'ol') {
-        flushList();
-        list = { tag: 'ol', items: [] };
-      }
-      list.items.push(
-        `<li>${inlineMarkdown(line.replace(/^\s*\d+\.\s+/, ''), true)}</li>`,
-      );
-    } else if (/^>\s?/.test(line)) {
-      flushList();
-      flushPara();
-      out.push(
-        `<blockquote>${inlineMarkdown(line.replace(/^>\s?/, ''), true)}</blockquote>`,
-      );
-    } else if (/^(-{3,}|\*{3,}|_{3,})$/.test(line.trim())) {
-      flushList();
+    } else if (/^(-{3,}|\*{3,}|_{3,})$/.test(trimmed)) {
+      flushLists();
       flushPara();
       out.push('<hr>');
+    } else if ((mm = line.match(/^(\s*)[-*+]\s+(.*)$/))) {
+      addItem('ul', mm[1]!.length, inlineMarkdown(mm[2]!, true));
+    } else if ((mm = line.match(/^(\s*)(\d+)\.\s+(.*)$/))) {
+      addItem('ol', mm[1]!.length, inlineMarkdown(mm[3]!, true), parseInt(mm[2]!, 10));
     } else {
-      flushList();
+      flushLists();
       para.push(line);
     }
   }
-  flushList();
+  flushLists();
   flushPara();
   return out.join('');
 }
