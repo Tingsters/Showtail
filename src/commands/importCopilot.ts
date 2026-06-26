@@ -1,32 +1,49 @@
 /**
  * `showtail import copilot` — back-fill a trail from an existing VS Code **native
- * Copilot Chat** session on disk (`…/Code/User/workspaceStorage/<hash>/chatSessions/
- * <uuid>.json`).
+ * Copilot Chat** session on disk (`…/workspaceStorage/<hash>/chatSessions/<id>.jsonl`,
+ * or a legacy `.json`; no-folder chats live in
+ * `…/globalStorage/emptyWindowChatSessions/<id>.jsonl`).
  *
  * Mirrors commands/importCodex.ts: with no target an interactive picker lists this
  * project's sessions (choose one or several); `--list` prints the same list
- * non-interactively; `--file` imports a specific session JSON; a `<target>` id
- * imports that session directly. Everything is local — roles are explicit in the
- * JSON, so there is no guessing about user vs. assistant.
+ * non-interactively; `--file` imports a specific session file; a `<target>` id
+ * imports that session directly. Roles are explicit in the file, so there's no
+ * guessing about user vs. assistant.
  *
- * The Showtail VS Code extension also calls this with `--file <path>` when its live
- * watcher sees a chat session change, so native prompts/replies are captured as you
- * work; the shared `sourceId` dedupe means the live path and a later manual import
- * never double-count.
+ * `--auto` is the headless/no-folder path (mirrors `import antigravity-ide --auto`):
+ * it routes each session's prompts/replies/edits into the `.showtail/` project that
+ * encloses its edited files (`findRoot`), falling back to the trail enclosing the
+ * invocation cwd — so an empty-window chat still lands somewhere (e.g. a machine-wide
+ * `~/.showtail`). The VS Code extension invokes this for both the folder watcher
+ * (`--file`) and the empty-window watcher (`--file --auto`); shared `sourceId` dedupe
+ * means the live path and a later manual import never double-count.
  */
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
+import { basename, dirname, isAbsolute, relative } from 'node:path';
 import { createInterface } from 'node:readline';
 import {
+  extractCopilotEdits,
   findProjectChatSessions,
   importCopilotChatTranscript,
+  importCopilotEdits,
+  importCopilotMessages,
+  isInternalEditPath,
+  parseCopilotSession,
   readChatSessionFile,
+  reconstructSession,
   summarizeChatSessions,
+  type CopilotEditArtifact,
   type CopilotImportResult,
   type CopilotSessionSummary,
 } from '../core/copilotChatTranscript.ts';
 import { makeId } from '../core/ids.ts';
-import { requireActiveAuthor } from '../core/authors.ts';
-import { requirePaths, type AuthorPaths } from '../core/storage.ts';
+import { requireActiveAuthor, resolveActiveAuthorForHook } from '../core/authors.ts';
+import {
+  findRoot,
+  pathsForRoot,
+  requirePaths,
+  type AuthorPaths,
+} from '../core/storage.ts';
 import { oneLine } from '../core/text.ts';
 import { parseSelection } from './importCodex.ts';
 
@@ -35,12 +52,14 @@ export interface ImportCopilotOptions {
   list?: boolean;
   /** Also log Copilot's text replies (not just your prompts). */
   withResponses?: boolean;
-  /** Import a specific session `.json` by path (escape hatch; used by the extension). */
+  /** Import a specific session file by path (escape hatch; used by the extension). */
   file?: string;
   /** Import into a specific Showtail session id. */
   session?: string;
   /** Suppress the human-facing summary (used by the extension's live watcher). */
   quiet?: boolean;
+  /** Route by edited-file paths into each enclosing `.showtail/` project (headless). */
+  auto?: boolean;
   cwd?: string;
 }
 
@@ -109,6 +128,13 @@ export async function runImportCopilot(
   target: string | undefined,
   options: ImportCopilotOptions,
 ): Promise<void> {
+  // Headless/no-folder capture: route by edited-file paths into each project,
+  // rather than into one `cwd`-derived trail. No `.showtail/` need enclose cwd.
+  if (options.auto) {
+    await runImportCopilotAuto(target, options);
+    return;
+  }
+
   const paths = requirePaths(options.cwd);
   const author = await requireActiveAuthor(paths, { cwd: paths.root });
 
@@ -190,6 +216,139 @@ function resolveSessionPath(
   }
 
   return null; // Unreachable: callers handle the no-target case.
+}
+
+// --- `--auto`: edit-path routing (headless / no-folder capture) ------------
+
+/** Convert an absolute path to a display path relative to `root` (else posix-absolute). */
+function displayPath(p: string, root: string): string {
+  if (!isAbsolute(p)) return p.replace(/\\/g, '/');
+  const rel = relative(root, p).replace(/\\/g, '/');
+  return rel && !rel.startsWith('..') ? rel : p.replace(/\\/g, '/');
+}
+
+/** The session id for a chat file = its basename without the .json/.jsonl extension. */
+function sessionIdFromFile(file: string): string {
+  return basename(file).replace(/\.jsonl?$/, '');
+}
+
+/**
+ * `--auto`: route a session's prompts/replies/edits by edited-file path into each
+ * enclosing `.showtail/` project (mirrors `runImportAntigravityIdeAuto`). Edits under
+ * a tracked project land there; if no edit resolves to a trail (pure Q&A / untracked
+ * scratch), fall back to the trail enclosing the invocation cwd — the extension
+ * invokes with `cwd = homedir()`, so an empty-window chat lands in a machine-wide
+ * `~/.showtail` when present. The full conversation is imported into every touched
+ * trail; roots whose author can't be resolved without prompting are skipped.
+ */
+async function runImportCopilotAuto(
+  target: string | undefined,
+  options: ImportCopilotOptions,
+): Promise<void> {
+  void target; // --auto is the headless --file path; <target> ids aren't used.
+  const file = options.file;
+  if (!file) {
+    if (!options.quiet)
+      console.log('`import copilot --auto` needs --file <session.jsonl>.');
+    return;
+  }
+  if (!existsSync(file)) throw new Error(`File not found: ${file}`);
+
+  const session = reconstructSession(readFileSync(file, 'utf8'));
+  const sid = sessionIdFromFile(file);
+  const allEdits = extractCopilotEdits(session, sid);
+
+  // Group edits by the `.showtail/` project that encloses them.
+  const byRoot = new Map<string, typeof allEdits>();
+  for (const e of allEdits) {
+    if (!isAbsolute(e.absPath)) continue;
+    const root = findRoot(dirname(e.absPath));
+    if (!root) continue; // no enclosing trail — don't invent one
+    const list = byRoot.get(root) ?? [];
+    list.push(e);
+    byRoot.set(root, list);
+  }
+  if (byRoot.size === 0) {
+    // No edits resolved (pure Q&A / untracked): fall back to the cwd's trail.
+    const cwdRoot = findRoot(options.cwd ?? process.cwd());
+    if (cwdRoot) byRoot.set(cwdRoot, []);
+  }
+
+  const batchId = makeId('imp');
+  const totals: CopilotImportResult = {
+    title: '',
+    prompts: 0,
+    responses: 0,
+    edits: 0,
+    skipped: 0,
+  };
+  const importedRoots: string[] = [];
+  for (const [root, edits] of byRoot) {
+    const paths = pathsForRoot(root);
+    if (!existsSync(paths.config)) continue; // not a tracked project — skip
+    const author = await resolveActiveAuthorForHook(paths, { cwd: root });
+    if (!author) continue; // can't attribute without prompting — skip this root
+
+    const transcript = parseCopilotSession(session, root);
+    const msg = await importCopilotMessages(author, transcript, {
+      withResponses: options.withResponses,
+      sessionId: options.session,
+      batchId,
+    });
+    // Map this root's absolute edits to in-repo artifacts (skip internal / out-of-repo).
+    const artifacts: CopilotEditArtifact[] = [];
+    for (const e of edits) {
+      const display = displayPath(e.absPath, root);
+      if (display.startsWith('..') || isInternalEditPath(display)) continue;
+      artifacts.push({
+        path: display,
+        diff: e.diff,
+        timestamp: e.timestamp,
+        sourceId: `${e.sourceIdBase}#${display}`,
+      });
+    }
+    const editRes = importCopilotEdits(author, artifacts, {
+      sessionId: options.session,
+      batchId,
+    });
+
+    totals.prompts += msg.prompts;
+    totals.responses += msg.responses;
+    totals.edits += editRes.written;
+    totals.skipped += msg.skipped + editRes.skipped;
+    if (msg.first && (!totals.first || msg.first < totals.first))
+      totals.first = msg.first;
+    if (msg.last && (!totals.last || msg.last > totals.last)) totals.last = msg.last;
+    if (msg.prompts + msg.responses + editRes.written > 0) importedRoots.push(root);
+  }
+
+  if (options.quiet) return;
+  printAutoResult(totals, importedRoots, options.withResponses !== false);
+}
+
+/** Summarize an `--auto` capture: what was recorded, and into which project(s). */
+function printAutoResult(
+  res: CopilotImportResult,
+  roots: string[],
+  withResponses: boolean,
+): void {
+  const total = res.prompts + res.responses + res.edits;
+  if (total === 0) {
+    console.log(
+      res.skipped > 0
+        ? `Already captured — nothing new (${res.skipped} item(s) already in your trail).`
+        : 'Nothing new to capture.',
+    );
+    return;
+  }
+  const parts = [`${res.prompts} prompt(s)`];
+  if (withResponses) parts.push(`${res.responses} response(s)`);
+  if (res.edits) parts.push(`${res.edits} edit(s)`);
+  console.log(
+    `Captured native Copilot Chat: ${parts.join(', ')} (tool: github-copilot) ` +
+      `into ${roots.length} project(s):`,
+  );
+  for (const r of roots) console.log(`  ${r}`);
 }
 
 /**

@@ -2,41 +2,46 @@
  * Parse and discover VS Code **native Copilot Chat** session files.
  *
  * Copilot Chat persists every native session (the normal chat box, not the
- * `@showtail` participant) to disk as a single JSON document at
- * `…/Code/User/workspaceStorage/<hash>/chatSessions/<uuid>.json`. The sibling
- * `…/workspaceStorage/<hash>/workspace.json` maps the opaque `<hash>` to the
- * project folder it was opened for. This is the same on-disk-transcript shape we
- * already read for the Antigravity IDE (Antigravity is a VS Code fork), so we use
- * the same strategy here: discover this project's sessions by folder, then read
- * prompts / replies / edits out of the JSON.
+ * `@showtail` participant) to disk under
+ * `…/Code/User/workspaceStorage/<hash>/chatSessions/<id>.{json,jsonl}`, with a
+ * sibling `…/workspaceStorage/<hash>/workspace.json` mapping the opaque `<hash>`
+ * to the project folder it was opened for. (No-folder "empty window" chats go to
+ * `…/globalStorage/emptyWindowChatSessions/<id>.jsonl` instead — those are routed
+ * by edited-file path, see `import copilot --auto`.)
  *
  * This is what makes native Copilot Chat capturable at all. The VS Code extension
  * API does NOT expose native chat to third parties (a real privacy boundary), but
  * the on-disk transcript is plain JSON — so both `showtail import copilot` and the
  * extension's live watcher read these files rather than the (unavailable) live API.
  *
- * Shapes we read (verified against real `version: 3` sessions):
- *   - `sessionId`                         — the chat session id.
- *   - `requests[]`                        — one per turn. Each has:
- *       - `message.text`                  — the user's typed prompt.
- *       - `requestId`                     — a stable per-turn id (for dedupe).
- *       - `timestamp`                     — epoch ms when the turn ran.
- *       - `agent.extensionId.value`       — which chat agent answered (we skip our
- *                                           own `@showtail` participant so the file
- *                                           import never double-counts it).
- *       - `response[]`                    — the assistant's streamed reply. Items
- *                                           with NO `kind` are markdown parts
- *                                           (`{ value }`); `kind:'textEditGroup'`
- *                                           items name files Copilot edited
- *                                           (`uri.fsPath`, `edits`). `kind:'thinking'`
- *                                           is internal reasoning and is dropped.
- *       - `result.metadata.toolCallRounds[].response` — the per-round assistant
- *                                           text; used as a fallback when the
- *                                           `response[]` markdown parts are empty.
+ * TWO on-disk shapes, both handled by {@link reconstructSession}:
+ *   - **Current (VS Code ≥ ~1.103)** — a `.jsonl` **patch journal**, one delta per
+ *     line: `{"kind":0,"v":{…session…}}` is the initial snapshot, then
+ *     `{"kind":1,"k":[path…],"v":val}` **sets** a value at a path and
+ *     `{"kind":2,"k":[path…],"v":[…]}` **appends** array items at a path (e.g.
+ *     `k:["requests"]` adds a turn; `k:["requests",2,"response"]` appends streamed
+ *     reply parts). We replay the deltas to rebuild the final session object.
+ *   - **Legacy** — a single `.json` document with a top-level `requests[]`.
  *
- * Mirrors src/core/codexTranscript.ts (discovery + parse + summarize + import),
- * adapted from Codex's JSONL vocabulary to Copilot's single-JSON shape. Everything
- * is local and best-effort: a malformed file or request is skipped, never thrown.
+ * Either way the reconstructed session has the same `requests[]` schema, read by
+ * {@link parseCopilotSession}:
+ *   - `requests[].message.text`            — the user's typed prompt.
+ *   - `requests[].requestId` / `timestamp` — stable per-turn id + epoch-ms time.
+ *   - `requests[].agent.extensionId.value` — the answering agent (our own
+ *                                            `@showtail` participant is skipped).
+ *   - `requests[].response[]`              — the streamed reply: items with NO
+ *                                            `kind` are markdown (`{ value }`);
+ *                                            `kind:'textEditGroup'` names edited
+ *                                            files (`uri.fsPath`, `edits`);
+ *                                            `kind:'thinking'` is dropped.
+ *   - `requests[].result.metadata.toolCallRounds[].response` — reply-text fallback.
+ *
+ * Antigravity (a VS Code fork) is captured separately: it replaced the chat backend
+ * with Gemini and writes a different "brain" transcript, so it has its own reader
+ * (`antigravityCliTranscript.ts`). Only the import/routing machinery is shared.
+ *
+ * Everything is local and best-effort: a malformed file/line/request is skipped,
+ * never thrown.
  */
 
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
@@ -74,7 +79,7 @@ export interface CopilotTranscript {
 /** A chat-session file found on disk. */
 export interface CopilotSessionInfo {
   path: string;
-  /** The Copilot chat session id (the file's basename, sans `.json`). */
+  /** The Copilot chat session id (the file's basename, sans extension). */
   sessionId: string;
   mtimeMs: number;
 }
@@ -91,8 +96,27 @@ export interface CopilotSessionSummary {
   importState: 'none' | 'partial' | 'full';
 }
 
+/** One file Copilot edited, with an ABSOLUTE path — for `--auto` edit-path routing. */
+export interface CopilotAbsEdit {
+  absPath: string;
+  /** Best-effort added-line diff. */
+  diff: string;
+  timestamp?: string;
+  /** `copilot:edit:<sid>:<requestId>`; the router appends `#<displayPath>`. */
+  sourceIdBase: string;
+}
+
+/** A back-dated edit artifact ready to import (display path + stable id). */
+export interface CopilotEditArtifact {
+  /** Display path (repo-relative or absolute) recorded on the artifact. */
+  path: string;
+  diff: string;
+  timestamp?: string;
+  sourceId: string;
+}
+
 /** Don't record edits to Showtail/VS Code bookkeeping files. Mirrors hook.ts. */
-function isInternalPath(p: string): boolean {
+export function isInternalEditPath(p: string): boolean {
   return /(^|[\\/])\.(showtail|git|vscode)([\\/]|$)/.test(p);
 }
 
@@ -135,6 +159,11 @@ function safeReaddir(dir: string): string[] {
   }
 }
 
+/** A chat-session file is either the new `.jsonl` journal or a legacy `.json` doc. */
+function isChatSessionFile(entry: string): boolean {
+  return entry.endsWith('.jsonl') || entry.endsWith('.json');
+}
+
 /** Decode a `workspaceStorage/<hash>/workspace.json` into the folder path it maps to. */
 function workspaceFolder(storageDir: string): string | null {
   const file = join(storageDir, 'workspace.json');
@@ -165,7 +194,7 @@ function normPath(p: string): string {
 /**
  * Find every Copilot chat-session file whose workspace folder is `root`, newest
  * first. Reads each `workspace.json` (cheap) to map storage hash → folder, then
- * lists that storage's `chatSessions/*.json`.
+ * lists that storage's `chatSessions/*.{json,jsonl}`.
  */
 export function findProjectChatSessions(root: string): CopilotSessionInfo[] {
   const want = normPath(root);
@@ -177,7 +206,7 @@ export function findProjectChatSessions(root: string): CopilotSessionInfo[] {
       if (!folder || normPath(folder) !== want) continue;
       const chatDir = join(storageDir, 'chatSessions');
       for (const entry of safeReaddir(chatDir)) {
-        if (!entry.endsWith('.json')) continue;
+        if (!isChatSessionFile(entry)) continue;
         const full = join(chatDir, entry);
         let st: ReturnType<typeof statSync>;
         try {
@@ -188,7 +217,7 @@ export function findProjectChatSessions(root: string): CopilotSessionInfo[] {
         if (!st.isFile()) continue;
         out.push({
           path: full,
-          sessionId: entry.replace(/\.json$/, ''),
+          sessionId: entry.replace(/\.jsonl?$/, ''),
           mtimeMs: st.mtimeMs,
         });
       }
@@ -196,6 +225,90 @@ export function findProjectChatSessions(root: string): CopilotSessionInfo[] {
   }
   out.sort((a, b) => b.mtimeMs - a.mtimeMs);
   return out;
+}
+
+// --- Reconstructing the session (format detect + delta replay) -------------
+
+/** Walk `path` into `node`, returning the value there or null if unreachable. */
+function navTo(node: unknown, path: unknown[]): unknown {
+  let cur: unknown = node;
+  for (const p of path) {
+    if (cur == null) return null;
+    if (Array.isArray(cur) && typeof p === 'number') cur = cur[p];
+    else if (isObject(cur)) cur = (cur as Record<string, unknown>)[p as string];
+    else return null;
+  }
+  return cur;
+}
+
+/** Apply one `{kind,k,v}` delta to the in-progress session state (best-effort). */
+function applyDelta(
+  state: unknown,
+  path: unknown[],
+  kind: number | undefined,
+  v: unknown,
+): void {
+  const parent = navTo(state, path.slice(0, -1));
+  if (parent == null || (!isObject(parent) && !Array.isArray(parent))) return;
+  const last = path[path.length - 1] as string | number;
+  const container = parent as Record<string | number, unknown>;
+  try {
+    if (kind === 2) {
+      // Append array elements at the path (creating the array if absent).
+      if (v == null) return;
+      const cur = container[last];
+      const items = Array.isArray(v) ? v : [v];
+      if (Array.isArray(cur)) cur.push(...items);
+      else container[last] = [...items];
+    } else {
+      // kind 1 (and any other) — replace the value at the path.
+      container[last] = v;
+    }
+  } catch {
+    /* unreachable path / frozen value — skip this delta */
+  }
+}
+
+/**
+ * Normalize a chat-session file's raw content to a single session object, whether
+ * it's the legacy single `.json` document or the current `.jsonl` patch journal.
+ * For the journal we replay the deltas (kind 0 snapshot → kind 1 set → kind 2
+ * append, by path `k`) into the final session. Best-effort: bad lines are skipped.
+ */
+export function reconstructSession(content: string): unknown {
+  // Legacy single-doc: the whole file is one JSON object with a `requests` array.
+  try {
+    const whole = JSON.parse(content);
+    if (isObject(whole) && Array.isArray((whole as Record<string, unknown>).requests)) {
+      return whole;
+    }
+  } catch {
+    /* not a single JSON document — fall through to the JSONL replay */
+  }
+
+  let state: unknown;
+  for (const rawLine of content.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line) continue;
+    let o: unknown;
+    try {
+      o = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (!isObject(o)) continue;
+    const kind = asNumber(prop(o, 'kind'));
+    const path = asArray(prop(o, 'k'));
+    const v = prop(o, 'v');
+    // No path → a whole-state set (the kind:0 initial snapshot).
+    if (path === undefined || path.length === 0) {
+      state = v;
+      continue;
+    }
+    if (state === undefined) state = {};
+    applyDelta(state, path, kind, v);
+  }
+  return state ?? {};
 }
 
 // --- Parsing ---------------------------------------------------------------
@@ -249,63 +362,52 @@ function assistantText(request: unknown): string {
 }
 
 /**
- * Build best-effort {@link EditedFile}s from a request's `textEditGroup` parts.
- * Each group names a file (`uri.fsPath`) and an `edits` list of `[{ text, range }]`
- * segments. We can't recover the file's prior content from disk-after-the-fact, so
- * the diff is the inserted text rendered as `+ ` lines (pure deletions contribute
- * no body). Files are kept repo-relative, inside the repo, and out of bookkeeping
- * dirs — the same filter Codex applies.
+ * The files a request's `textEditGroup` parts touched, with ABSOLUTE `fsPath` and a
+ * best-effort added-line diff. We can't recover prior content after the fact, so the
+ * diff is the inserted text rendered as `+ ` lines (pure deletions contribute none).
  */
-function editsFromRequest(request: unknown, root: string): EditedFile[] {
+function textEditGroups(request: unknown): { fsPath: string; diff: string }[] {
   const parts = asArray(prop(request, 'response')) ?? [];
   const byFile = new Map<string, string[]>();
   for (const part of parts) {
     if (!isObject(part) || prop(part, 'kind') !== 'textEditGroup') continue;
     const fsPath = asString(prop(prop(part, 'uri'), 'fsPath'));
     if (!fsPath) continue;
-    const rel = toRepoRelative(root, fsPath);
-    if (rel.startsWith('..') || isInternalPath(rel)) continue;
-    // `edits` is an array of edit rounds, each an array of `{ text, range }`.
     const added: string[] = [];
+    // `edits` is an array of edit rounds, each an array of `{ text, range }`.
     for (const round of asArray(prop(part, 'edits')) ?? []) {
       for (const seg of asArray(round) ?? []) {
         const text = asString(prop(seg, 'text'));
-        if (text) {
-          for (const line of text.split('\n')) added.push('+ ' + line);
-        }
+        if (text) for (const line of text.split('\n')) added.push('+ ' + line);
       }
     }
-    const prior = byFile.get(rel) ?? [];
-    byFile.set(rel, prior.concat(added));
+    byFile.set(fsPath, (byFile.get(fsPath) ?? []).concat(added));
   }
+  return [...byFile].map(([fsPath, lines]) => ({ fsPath, diff: lines.join('\n') }));
+}
+
+/** Repo-relative, in-repo, non-internal edits for a request (single-project import). */
+function editsFromRequest(request: unknown, root: string): EditedFile[] {
   const out: EditedFile[] = [];
-  for (const [file, lines] of byFile) {
-    out.push({ file, diff: lines.join('\n') });
+  for (const g of textEditGroups(request)) {
+    const rel = toRepoRelative(root, g.fsPath);
+    if (rel.startsWith('..') || isInternalEditPath(rel)) continue;
+    out.push({ file: rel, diff: g.diff });
   }
   return out;
 }
 
 /**
- * Parse a Copilot chat-session JSON into normalized messages. For each request we
- * emit the user's prompt, the assistant's text reply, and any file edits — each
- * tagged with a stable `sourceId` keyed off the session + `requestId` so the live
- * watcher and a later `import` never double-count. Requests answered by our own
- * `@showtail` participant are skipped (the extension logs those live). Malformed
- * input is skipped, never thrown.
+ * Parse a reconstructed Copilot session object into normalized messages. For each
+ * request we emit the user's prompt, the assistant's text reply, and any in-repo
+ * file edits — each tagged with a stable `sourceId` keyed off the session +
+ * `requestId` so the live watcher and a later `import` never double-count. Requests
+ * answered by our own `@showtail` participant are skipped (the extension logs those
+ * live).
  */
-export function parseCopilotChatTranscript(
-  content: string,
-  root: string,
-): CopilotTranscript {
-  let doc: unknown;
-  try {
-    doc = JSON.parse(content);
-  } catch {
-    return { sessionId: undefined, title: 'Copilot Chat session', messages: [] };
-  }
-
-  const sessionId = asString(prop(doc, 'sessionId'));
-  const requests = asArray(prop(doc, 'requests')) ?? [];
+export function parseCopilotSession(session: unknown, root: string): CopilotTranscript {
+  const sessionId = asString(prop(session, 'sessionId'));
+  const requests = asArray(prop(session, 'requests')) ?? [];
   const messages: CopilotMessage[] = [];
   const sid = sessionId ?? '?';
 
@@ -359,6 +461,45 @@ export function parseCopilotChatTranscript(
       : 'Copilot Chat session',
     messages,
   };
+}
+
+/** Reconstruct a chat-session file's content, then parse it. (Signature stable.) */
+export function parseCopilotChatTranscript(
+  content: string,
+  root: string,
+): CopilotTranscript {
+  return parseCopilotSession(reconstructSession(content), root);
+}
+
+/**
+ * The files Copilot edited across a whole session, with ABSOLUTE paths — the input
+ * to `--auto` edit-path routing. `@showtail` turns are skipped. Each edit carries a
+ * `sourceIdBase` (`copilot:edit:<sid>:<requestId>`); the router appends the chosen
+ * display path to form the artifact's stable `sourceId`.
+ */
+export function extractCopilotEdits(
+  session: unknown,
+  sessionId: string,
+): CopilotAbsEdit[] {
+  const sid = asString(prop(session, 'sessionId')) ?? sessionId;
+  const requests = asArray(prop(session, 'requests')) ?? [];
+  const out: CopilotAbsEdit[] = [];
+  requests.forEach((request, i) => {
+    if (!isObject(request)) return;
+    const extId = asString(prop(prop(prop(request, 'agent'), 'extensionId'), 'value'));
+    if (isOwnAgent(extId)) return;
+    const requestId = asString(prop(request, 'requestId')) ?? String(i);
+    const timestamp = isoFromMs(asNumber(prop(request, 'timestamp')));
+    for (const g of textEditGroups(request)) {
+      out.push({
+        absPath: g.fsPath,
+        diff: g.diff,
+        timestamp,
+        sourceIdBase: `copilot:edit:${sid}:${requestId}`,
+      });
+    }
+  });
+  return out;
 }
 
 // --- Summaries (for the import picker) -------------------------------------
@@ -436,6 +577,14 @@ export interface CopilotImportOptions {
   batchId?: string;
 }
 
+export interface CopilotMessageResult {
+  prompts: number;
+  responses: number;
+  skipped: number;
+  first?: string;
+  last?: string;
+}
+
 export interface CopilotImportResult {
   title: string;
   prompts: number;
@@ -447,66 +596,31 @@ export interface CopilotImportResult {
 }
 
 /**
- * Import a parsed Copilot session into the trail. User prompts become `prompt`
- * events, assistant replies become `ai_output` (only with `withResponses`), and
- * each edit becomes a back-dated `artifact` carrying its captured (added-line) diff
- * — just like the Codex importer. Every event is tagged `tool: github-copilot` and
- * `imported`, stamped with the original time, and deduped by `sourceId` so
- * re-importing (or the live watcher re-reading the file) adds nothing.
+ * Import a session's prompt/reply messages (NOT edits) into the trail, tagged
+ * `tool: github-copilot` and `imported`, back-dated, deduped by `sourceId`. Shared
+ * by the single-project import and the `--auto` router. Replies are logged only
+ * with `withResponses`.
  */
-export async function importCopilotChatTranscript(
+export async function importCopilotMessages(
   author: AuthorPaths,
   transcript: CopilotTranscript,
   options: CopilotImportOptions = {},
-): Promise<CopilotImportResult> {
+): Promise<CopilotMessageResult> {
   const { logEvent } = await import('./events.ts');
   const seen = importedSourceIds(author);
-  const seenArtifacts = importedArtifactSourceIds(author);
-  const result: CopilotImportResult = {
-    title: transcript.title,
-    prompts: 0,
-    responses: 0,
-    edits: 0,
-    skipped: 0,
-  };
-
-  const stampSpan = (ts: string | undefined): void => {
+  const result: CopilotMessageResult = { prompts: 0, responses: 0, skipped: 0 };
+  const stamp = (ts: string | undefined): void => {
     if (!ts) return;
     if (!result.first || ts < result.first) result.first = ts;
     if (!result.last || ts > result.last) result.last = ts;
   };
 
-  // A user prompt opens a turn; the reply/edits that follow link back via this id.
+  // A user prompt opens a turn; the reply that follows links back via this id.
   let currentTurnId: string | undefined;
 
   for (const msg of transcript.messages) {
+    if (msg.role === 'edit') continue; // edits are imported separately
     if (msg.role === 'assistant' && !options.withResponses) continue;
-
-    if (msg.role === 'edit') {
-      for (const e of msg.edits ?? []) {
-        const sourceId = `${msg.sourceId}#${e.file}`;
-        if (seenArtifacts.has(sourceId)) {
-          result.skipped += 1;
-          continue;
-        }
-        const wrote = importEditArtifact(author, {
-          path: e.file,
-          diff: e.diff ?? '',
-          tool: 'github-copilot',
-          turnId: currentTurnId,
-          timestamp: msg.timestamp,
-          sessionId: options.sessionId,
-          sourceId,
-          batchId: options.batchId,
-        });
-        if (wrote) {
-          seenArtifacts.add(sourceId);
-          result.edits += 1;
-          stampSpan(msg.timestamp);
-        }
-      }
-      continue;
-    }
 
     if (seen.has(msg.sourceId)) {
       result.skipped += 1;
@@ -531,9 +645,92 @@ export async function importCopilotChatTranscript(
     } else {
       result.responses += 1;
     }
+    stamp(msg.timestamp);
+  }
+  return result;
+}
 
-    stampSpan(msg.timestamp);
+/**
+ * Import a set of edits as back-dated `artifact`s carrying their captured diff,
+ * tagged `tool: github-copilot`. Idempotent by `sourceId`. Returns counts of newly
+ * written vs already-present artifacts.
+ */
+export function importCopilotEdits(
+  author: AuthorPaths,
+  edits: CopilotEditArtifact[],
+  options: { sessionId?: string; batchId?: string } = {},
+): { written: number; skipped: number } {
+  const seen = importedArtifactSourceIds(author);
+  let written = 0;
+  let skipped = 0;
+  for (const e of edits) {
+    if (seen.has(e.sourceId)) {
+      skipped += 1;
+      continue;
+    }
+    const wrote = importEditArtifact(author, {
+      path: e.path,
+      diff: e.diff ?? '',
+      tool: 'github-copilot',
+      timestamp: e.timestamp,
+      sessionId: options.sessionId,
+      sourceId: e.sourceId,
+      batchId: options.batchId,
+    });
+    if (wrote) {
+      seen.add(e.sourceId);
+      written += 1;
+    }
+  }
+  return { written, skipped };
+}
+
+/**
+ * Import a parsed Copilot session into a single project's trail: prompts, replies
+ * (with `withResponses`), and the session's in-repo edits (repo-relative). Used by
+ * the non-`--auto` `import copilot`. The live watcher and re-imports dedupe by
+ * `sourceId`, so re-reading the same (append-only) file adds nothing.
+ */
+export async function importCopilotChatTranscript(
+  author: AuthorPaths,
+  transcript: CopilotTranscript,
+  options: CopilotImportOptions = {},
+): Promise<CopilotImportResult> {
+  const msg = await importCopilotMessages(author, transcript, options);
+
+  const editArtifacts: CopilotEditArtifact[] = [];
+  for (const m of transcript.messages) {
+    if (m.role !== 'edit') continue;
+    for (const e of m.edits ?? []) {
+      editArtifacts.push({
+        path: e.file,
+        diff: e.diff ?? '',
+        timestamp: m.timestamp,
+        sourceId: `${m.sourceId}#${e.file}`,
+      });
+    }
+  }
+  const edits = importCopilotEdits(author, editArtifacts, {
+    sessionId: options.sessionId,
+    batchId: options.batchId,
+  });
+
+  // Fold edit timestamps into the span.
+  let first = msg.first;
+  let last = msg.last;
+  for (const m of transcript.messages) {
+    if (m.role !== 'edit' || !m.timestamp) continue;
+    if (!first || m.timestamp < first) first = m.timestamp;
+    if (!last || m.timestamp > last) last = m.timestamp;
   }
 
-  return result;
+  return {
+    title: transcript.title,
+    prompts: msg.prompts,
+    responses: msg.responses,
+    edits: edits.written,
+    skipped: msg.skipped + edits.skipped,
+    first,
+    last,
+  };
 }

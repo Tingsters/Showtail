@@ -72,6 +72,64 @@ function makeSession(dir: string): string {
   return JSON.stringify(doc);
 }
 
+/**
+ * The SAME session as {@link makeSession}, but in the current VS Code `.jsonl`
+ * **patch-journal** form: a `kind:0` empty snapshot, a `kind:1` set, `kind:2`
+ * appends that add each request to `requests[]`, and a nested `kind:2` append that
+ * streams request_3's reply into `requests[2].response`. Replaying it must rebuild
+ * the identical session, proving {@link reconstructSession}.
+ */
+function makeJournal(dir: string): string {
+  const r1 = {
+    requestId: 'request_1',
+    timestamp: ms('2026-06-22T10:00:00.000Z'),
+    message: { text: 'Add a foo function.' },
+    agent: { extensionId: { value: 'GitHub.copilot-chat' } },
+    response: [
+      { value: "I'll add the foo function. " },
+      { kind: 'thinking', value: 'INTERNAL REASONING — must be dropped' },
+      {
+        kind: 'textEditGroup',
+        uri: { fsPath: join(dir, 'src', 'foo.ts') },
+        edits: [[{ text: 'export const foo = () => {};', range: {} }]],
+      },
+      {
+        kind: 'textEditGroup',
+        uri: { fsPath: join(dir, '.vscode', 'settings.json') },
+        edits: [[{ text: '{}', range: {} }]],
+      },
+    ],
+    result: { metadata: { toolCallRounds: [{ response: 'fallback (unused)' }] } },
+  };
+  const r2 = {
+    requestId: 'request_2',
+    timestamp: ms('2026-06-22T10:00:30.000Z'),
+    message: { text: '@showtail report' },
+    agent: { extensionId: { value: 'Tingsters.showtail' } },
+    response: [{ value: 'a showtail reply that must not be imported' }],
+  };
+  const r3 = {
+    requestId: 'request_3',
+    timestamp: ms('2026-06-22T10:01:00.000Z'),
+    message: { text: 'Now add a test.' },
+    agent: { extensionId: { value: 'GitHub.copilot-chat' } },
+    response: [], // streamed in below via a nested kind:2 append
+  };
+  const lines: unknown[] = [
+    { kind: 0, v: { version: 3, sessionId: 'sess-copilot-1', requests: [] } },
+    { kind: 1, k: ['responderUsername'], v: 'GitHub Copilot' },
+    { kind: 2, k: ['requests'], v: [r1] },
+    { kind: 2, k: ['requests'], v: [r2] },
+    { kind: 2, k: ['requests'], v: [r3] },
+    {
+      kind: 2,
+      k: ['requests', 2, 'response'],
+      v: [{ value: 'Sure — adding a test now.' }],
+    },
+  ];
+  return lines.map((l) => JSON.stringify(l)).join('\n') + '\n';
+}
+
 describe('parseCopilotChatTranscript', () => {
   test('keeps prompts, replies and repo edits; drops thinking, internal edits, @showtail', () => {
     const dir = makeTempDir();
@@ -142,6 +200,38 @@ describe('parseCopilotChatTranscript', () => {
   test('malformed JSON yields an empty transcript, never throws', () => {
     expect(parseCopilotChatTranscript('not json{', '/tmp/x').messages).toHaveLength(0);
   });
+
+  test('replays the .jsonl patch journal (kind 0/1/2) into the same session', () => {
+    const dir = makeTempDir();
+    try {
+      const parsed = parseCopilotChatTranscript(makeJournal(dir), dir);
+      expect(parsed.sessionId).toBe('sess-copilot-1');
+
+      const roles = parsed.messages.map((m) => m.role);
+      expect(roles.filter((r) => r === 'user').length).toBe(2);
+      expect(roles.filter((r) => r === 'assistant').length).toBe(2);
+      expect(roles.filter((r) => r === 'edit').length).toBe(1);
+
+      // @showtail turn dropped; thinking + internal edit dropped.
+      const blob = parsed.messages.map((m) => m.text).join('\n');
+      expect(blob).not.toContain('INTERNAL REASONING');
+      expect(blob).not.toContain('settings.json');
+      expect(blob).not.toContain('showtail reply');
+
+      // request_3's reply was streamed in via a nested kind:2 append — replay must
+      // have applied it to requests[2].response.
+      const replies = parsed.messages
+        .filter((m) => m.role === 'assistant')
+        .map((m) => m.text);
+      expect(replies.some((t) => t.includes('Sure — adding a test now.'))).toBe(true);
+
+      const edit = parsed.messages.find((m) => m.role === 'edit')!;
+      expect(edit.files).toEqual(['src/foo.ts']);
+      expect(edit.edits![0]!.diff).toContain('+ export const foo = () => {};');
+    } finally {
+      cleanup(dir);
+    }
+  });
 });
 
 describe('copilot import (end to end via --file)', () => {
@@ -209,6 +299,50 @@ describe('copilot import (end to end via --file)', () => {
       cleanup(dir);
     }
   });
+
+  test('--auto routes a no-folder session into the edited file’s project', async () => {
+    const proj = makeTempDir(); // the project whose file Copilot edited
+    const elsewhere = makeTempDir(); // invocation cwd — NOT a tracked project
+    try {
+      await runInit({ cwd: proj });
+      mkdirSync(join(proj, 'src'), { recursive: true });
+      const projPaths = pathsForRoot(proj);
+
+      // An empty-window journal whose edit targets <proj>/src/foo.ts.
+      const file = join(elsewhere, 'empty-window.jsonl');
+      writeFileSync(file, makeJournal(proj), 'utf8');
+
+      await runImportCopilot(undefined, {
+        file,
+        auto: true,
+        withResponses: true,
+        cwd: elsewhere,
+      });
+
+      // The whole conversation + the edit landed in <proj>'s trail (routed by path),
+      // even though the invocation cwd was elsewhere.
+      const cp = readAllEvents(projPaths).filter((e) => e.tool === 'github-copilot');
+      expect(cp.filter((e) => e.type === 'prompt').length).toBe(2);
+      expect(cp.filter((e) => e.type === 'ai_output').length).toBe(2);
+      const arts = readAllArtifacts(projPaths).filter((a) => a.tool === 'github-copilot');
+      expect(arts.length).toBe(1);
+      expect(arts[0]!.path).toBe('src/foo.ts');
+
+      // Idempotent: re-running --auto adds nothing.
+      await runImportCopilot(undefined, {
+        file,
+        auto: true,
+        withResponses: true,
+        cwd: elsewhere,
+      });
+      expect(
+        readAllEvents(projPaths).filter((e) => e.tool === 'github-copilot').length,
+      ).toBe(cp.length);
+    } finally {
+      cleanup(proj);
+      cleanup(elsewhere);
+    }
+  });
 });
 
 describe('summarizeChatSessions (discovery by workspace.json folder)', () => {
@@ -222,7 +356,8 @@ describe('summarizeChatSessions (discovery by workspace.json folder)', () => {
       const paths = pathsForRoot(dir);
       const author = authorFor(paths);
 
-      // Lay out workspaceStorage/<hash>/{workspace.json, chatSessions/<id>.json}.
+      // Lay out workspaceStorage/<hash>/{workspace.json, chatSessions/<id>.jsonl}
+      // using the current VS Code `.jsonl` patch-journal format.
       const hashDir = join(storage, 'abc123hash');
       mkdirSync(join(hashDir, 'chatSessions'), { recursive: true });
       writeFileSync(
@@ -230,8 +365,8 @@ describe('summarizeChatSessions (discovery by workspace.json folder)', () => {
         JSON.stringify({ folder: pathToFileURL(dir).href }),
         'utf8',
       );
-      const sessionFile = join(hashDir, 'chatSessions', 'sess-copilot-1.json');
-      writeFileSync(sessionFile, makeSession(dir), 'utf8');
+      const sessionFile = join(hashDir, 'chatSessions', 'sess-copilot-1.jsonl');
+      writeFileSync(sessionFile, makeJournal(dir), 'utf8');
 
       let summaries = summarizeChatSessions(author);
       expect(summaries.length).toBe(1);

@@ -36,10 +36,12 @@ differently:
 - **Use native Copilot as usual.** This includes agent mode, inline suggestions,
   and chat.
 - **Native Copilot Chat is captured.** VS Code writes every native chat session to
-  disk (`…/workspaceStorage/<hash>/chatSessions/<uuid>.json`). The extension watches
-  those files and imports each turn — your prompt, Copilot's reply, and the files it
-  edited — tagged `github-copilot`. You can also back-fill past chats anytime with
-  `showtail import copilot`.
+  disk (`…/workspaceStorage/<hash>/chatSessions/<id>.jsonl`; no-folder windows use
+  `…/globalStorage/emptyWindowChatSessions/<id>.jsonl`). The extension watches those
+  files and imports each turn — your prompt, Copilot's reply, and the files it edited
+  — tagged `github-copilot`. Chats with **no folder open** are routed by their edited
+  files into the matching project (and otherwise into a machine-wide `~/.showtail`).
+  You can also back-fill past chats anytime with `showtail import copilot`.
 - **File edits are captured automatically.** The VS Code extension also snapshots
   every file you save as an artifact, so edits made outside chat are never lost.
 - **`@showtail` is the Showtail control surface in chat.** It is not a coding

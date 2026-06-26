@@ -126,65 +126,97 @@ export function activate(context: vscode.ExtensionContext): void {
 }
 
 /**
- * Capture **native** Copilot Chat by watching this workspace's on-disk chat
- * sessions. VS Code persists every native turn (the normal chat box, not the
- * `@showtail` participant) to `…/workspaceStorage/<hash>/chatSessions/<uuid>.json`.
- * `context.storageUri` points at this extension's own folder *inside that same
- * `<hash>` dir*, so `chatSessions` is simply its sibling — we never have to map a
- * storage hash back to a project folder.
+ * Capture **native** Copilot Chat by watching its on-disk session files. VS Code
+ * persists every native turn (the normal chat box, not the `@showtail` participant)
+ * as a `.jsonl` patch-journal (older builds: a single `.json`). We watch two places:
  *
- * On each change we run `showtail import copilot --file <path> --quiet`, which
- * feeds the new turns through the *same* parser + `sourceId` dedupe as the
- * back-fill command — so re-firing on every turn only ever appends what's new, and
- * a later manual `import copilot` never double-counts. This is what makes native
- * chat — long assumed uncapturable through the extension API — land in the trail.
+ *  (a) **Folder chats** — `…/workspaceStorage/<hash>/chatSessions/*.{json,jsonl}`.
+ *      `context.storageUri` points at this extension's own folder inside that same
+ *      `<hash>` dir, so `chatSessions` is its sibling — no hash→folder mapping. These
+ *      import into the open project's trail (`--file`).
+ *  (b) **Empty-window chats** (no folder open) — `…/globalStorage/
+ *      emptyWindowChatSessions/*.jsonl`. These have no project, so they import with
+ *      `--auto`, which routes each turn by its edited-file paths into the enclosing
+ *      `.showtail/` project (falling back to a machine-wide `~/.showtail`).
+ *
+ * Each change runs `showtail import copilot --file <path> [--auto] --quiet`, feeding
+ * the new turns through the *same* parser + `sourceId` dedupe as the back-fill
+ * command — so re-firing on every turn only appends what's new, and a later manual
+ * `import copilot` never double-counts. This is what makes native chat — long assumed
+ * uncapturable through the extension API — land in the trail.
  */
 function registerCopilotChatCapture(context: vscode.ExtensionContext): void {
-  const storage = context.storageUri?.fsPath;
-  if (!storage) {
-    output.appendLine(
-      'No workspace storage yet — native Copilot Chat capture starts once a folder is open.',
-    );
-    return;
-  }
-  const chatDir = join(dirname(storage), 'chatSessions');
   const timers = new Map<string, NodeJS.Timeout>();
+  context.subscriptions.push({
+    dispose: () => {
+      for (const t of timers.values()) clearTimeout(t);
+      timers.clear();
+    },
+  });
 
-  const schedule = (uri: vscode.Uri): void => {
-    const file = uri.fsPath;
-    const cwd = folderFor(undefined);
-    // Only import into a tracked project; otherwise the CLI would just error out.
-    if (!cwd || !existsSync(join(cwd, '.showtail'))) return;
+  // Debounced import of one changed chat-session file. `auto` routes no-folder
+  // chats by edited-file path; otherwise the chat imports into `cwd`'s trail.
+  const scheduleImport = (file: string, cwd: string, auto: boolean): void => {
     const existing = timers.get(file);
     if (existing) clearTimeout(existing);
     timers.set(
       file,
       setTimeout(() => {
         timers.delete(file);
-        // Replies are imported by default (the importer's --no-responses opts out),
-        // so we pass neither flag here. --quiet suppresses the human summary.
-        void runShowtail(['import', 'copilot', '--file', file, '--quiet'], cwd).then(() => {
+        // Replies import by default (the importer's --no-responses opts out), so we
+        // pass neither. --quiet suppresses the human summary; --auto routes by path.
+        const args = ['import', 'copilot', '--file', file, '--quiet'];
+        if (auto) args.push('--auto');
+        void runShowtail(args, cwd).then(() => {
           output.appendLine(`Captured native Copilot Chat from ${file}`);
         });
       }, 2000),
     );
   };
 
-  try {
-    const watcher = vscode.workspace.createFileSystemWatcher(
-      new vscode.RelativePattern(vscode.Uri.file(chatDir), '*.json'),
-    );
-    watcher.onDidChange(schedule);
-    watcher.onDidCreate(schedule);
-    context.subscriptions.push(watcher, {
-      dispose: () => {
-        for (const t of timers.values()) clearTimeout(t);
-        timers.clear();
+  const watch = (dir: string, onChange: (uri: vscode.Uri) => void, label: string): void => {
+    try {
+      const watcher = vscode.workspace.createFileSystemWatcher(
+        new vscode.RelativePattern(vscode.Uri.file(dir), '*.{json,jsonl}'),
+      );
+      watcher.onDidChange(onChange);
+      watcher.onDidCreate(onChange);
+      context.subscriptions.push(watcher);
+      output.appendLine(`Watching ${label} under ${dir}`);
+    } catch (err) {
+      output.appendLine(`Copilot Chat watch unavailable (${label}): ${(err as Error).message}`);
+    }
+  };
+
+  // (a) This workspace's chat sessions → the open folder's trail.
+  const storage = context.storageUri?.fsPath;
+  if (storage) {
+    const chatDir = join(dirname(storage), 'chatSessions');
+    watch(
+      chatDir,
+      (uri) => {
+        const cwd = folderFor(undefined);
+        // Only import into a tracked project; otherwise the CLI would just error out.
+        if (!cwd || !existsSync(join(cwd, '.showtail'))) return;
+        scheduleImport(uri.fsPath, cwd, false);
       },
-    });
-    output.appendLine(`Watching native Copilot Chat sessions under ${chatDir}`);
-  } catch (err) {
-    output.appendLine(`Copilot Chat watch unavailable: ${(err as Error).message}`);
+      'native Copilot Chat sessions',
+    );
+  } else {
+    output.appendLine(
+      'No workspace storage yet — folder Copilot Chat capture starts once a folder is open.',
+    );
+  }
+
+  // (b) Empty-window (no-folder) chats → routed by edited-file path via --auto.
+  const global = context.globalStorageUri?.fsPath;
+  if (global) {
+    const emptyDir = join(dirname(global), 'emptyWindowChatSessions');
+    watch(
+      emptyDir,
+      (uri) => scheduleImport(uri.fsPath, homedir(), true),
+      'empty-window Copilot Chat sessions',
+    );
   }
 }
 

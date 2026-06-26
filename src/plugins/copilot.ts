@@ -77,6 +77,7 @@ export const copilotPlugin: EnvironmentPlugin = {
         file: opts.file,
         session: opts.session,
         quiet: opts.quiet,
+        auto: opts.auto,
         cwd: opts.cwd,
       }),
   },
