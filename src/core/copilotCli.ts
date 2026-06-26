@@ -10,7 +10,7 @@
  *    documents the file layout and event names used below.
  *
  * Where we write (DEDICATED Showtail paths — chosen so we never touch a file
- * another plugin manages: NOT AGENTS.md/codex, NOT GEMINI.md/gemini-cli, NOT
+ * another plugin manages: NOT AGENTS.md/codex, NOT
  * .github/copilot-instructions.md or .github/instructions/showtail.instructions.md
  * which the github-copilot VS Code plugin owns):
  *

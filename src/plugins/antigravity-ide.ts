@@ -2,7 +2,7 @@
  * Antigravity IDE — Google's agentic IDE (a VS Code fork driven by the Gemini
  * language server). A live-capture connect plugin.
  *
- * The IDE shares `~/.gemini` with the Antigravity CLI and gemini-cli but reads
+ * The IDE shares `~/.gemini` with the Antigravity CLI but reads
  * its hooks from ONE global file in a *named-hooks* shape — `~/.gemini/config/
  * hooks.json` — distinct from the CLI's `.agents/` / `~/.gemini/antigravity-cli/`
  * map-shaped files. It writes a uniquely-named rules file (`AGY-IDE.showtail.md`)

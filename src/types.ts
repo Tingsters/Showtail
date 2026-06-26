@@ -36,8 +36,8 @@ export type ActorSlug = string;
  * Kept as a plain string (not an enum) on purpose: the set of integrations lives
  * in the plugin registry (`src/plugins/`), not here, so the core data model has
  * no knowledge of individual tools and old trails never break when tools change.
- * Known ids today: `claude-code`, `github-copilot`, `codex`, `gemini-cli`,
- * `chatgpt`, `google-gemini`, and `cli` (manual logging). Use `labelForTool`
+ * Known ids today: `claude-code`, `github-copilot`, `codex`, `chatgpt`,
+ * `google-gemini`, and `cli` (manual logging). Use `labelForTool`
  * from the registry for a human-friendly name.
  */
 export type Tool = string;

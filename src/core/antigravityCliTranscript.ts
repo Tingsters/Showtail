@@ -110,7 +110,7 @@ const DECISION_TYPES = new Set<string>([]);
 
 /**
  * The base `~/.gemini` dir, honoring a home override. Antigravity shares
- * `~/.gemini` with the EOL gemini-cli; respect the same env knobs `agy` reads so
+ * `~/.gemini` with other tools; respect the same env knobs `agy` reads so
  * a relocated home is found.
  */
 export function geminiHome(): string {

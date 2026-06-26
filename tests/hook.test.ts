@@ -831,42 +831,6 @@ describe('hook command (end-to-end via stdin)', () => {
     }
   });
 
-  test('post-edit --tool gemini-cli snapshots the edited file (new plugin, no core change)', () => {
-    const dir = makeTempDir();
-    try {
-      initProject(dir);
-      writeFileSync(join(dir, 'svc.ts'), 'export const x = 1;');
-      const payload = JSON.stringify({
-        cwd: dir,
-        tool_name: 'write_file',
-        tool_input: { file_path: join(dir, 'svc.ts'), content: 'export const x = 2;' },
-      });
-      const r = run(dir, ['hook', 'post-edit', '--tool', 'gemini-cli'], payload);
-      expect(r.code).toBe(0);
-      const trace = run(dir, ['trace', 'svc.ts', '--format', 'json']);
-      const data = JSON.parse(trace.stdout);
-      expect(data.artifacts.length).toBe(1);
-      expect(data.artifacts[0].tool).toBe('gemini-cli');
-    } finally {
-      cleanup(dir);
-    }
-  });
-
-  test('user-prompt --tool gemini-cli tags the prompt as gemini-cli', () => {
-    const dir = makeTempDir();
-    try {
-      initProject(dir);
-      const payload = JSON.stringify({ cwd: dir, prompt: 'add a cache layer' });
-      const r = run(dir, ['hook', 'user-prompt', '--tool', 'gemini-cli'], payload);
-      expect(r.code).toBe(0);
-      run(dir, ['report', '--format', 'json']);
-      const data = readJsonReport(dir);
-      expect(data.turns[0].prompt.tool).toBe('gemini-cli');
-    } finally {
-      cleanup(dir);
-    }
-  });
-
   test('two interleaved Claude sessions keep separate trails', () => {
     const dir = makeTempDir();
     try {

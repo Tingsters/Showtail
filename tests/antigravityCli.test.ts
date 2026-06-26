@@ -85,7 +85,7 @@ describe('antigravity-cli install / uninstall', () => {
       mkdirSync(join(dir, '.showtail'), { recursive: true });
       await runAntigravityCliInstall({ project: true, cwd: dir });
       // The dedicated rules file must live in .agents/, NOT the shared GEMINI.md
-      // (gemini-cli) or AGENTS.md (codex) at the project root.
+      // or AGENTS.md (codex) at the project root.
       expect(existsSync(join(dir, 'GEMINI.md'))).toBe(false);
       expect(existsSync(join(dir, 'AGENTS.md'))).toBe(false);
       const target = resolveAntigravityCliTarget('project', dir);
