@@ -43,7 +43,9 @@ differently:
   files into the matching project (and otherwise into a machine-wide `~/.showtail`).
   You can also back-fill past chats anytime with `showtail import copilot`.
 - **File edits are captured automatically.** The VS Code extension also snapshots
-  every file you save as an artifact, so edits made outside chat are never lost.
+  every file you save as an artifact, so edits made outside chat are never lost. These
+  snapshots record the *resulting code*, not how it was produced — so code written by
+  hand, pasted, or accepted from an inline suggestion all look the same in the trail.
 - **`@showtail` is the Showtail control surface in chat.** It is not a coding
   agent. Use it to run Showtail commands such as `@showtail /report`, `/verify`,
   `/status`, and `/trace <file>`.
@@ -58,9 +60,13 @@ Copilot's replies land in the trail, live as you work and via `import copilot`.
     - Native chat is read from VS Code's on-disk session files, so a turn lands in
       the trail a moment **after** it completes (when VS Code flushes the file), not
       keystroke-by-keystroke.
-    - There is no VS Code event for accepting an inline (ghost-text) completion,
-      so inline completions are captured as part of the next file save, not
-      individually.
+    - **Inline (ghost-text) completions aren't attributed.** VS Code exposes no event
+      for accepting a Copilot inline suggestion, and Copilot saves no record of one — so
+      the completed code is captured only as part of your next **file save**, as an
+      ordinary edit. Showtail can't tell which characters came from a suggestion, so
+      inline completions are never labeled as AI. (Copilot **Chat** — prompt + reply +
+      edits — *is* attributed; and agentic tools like Claude Code / Codex capture their
+      edits directly via hooks.)
     - Multi-root (`.code-workspace`) windows aren't routed by folder yet; single-
       folder workspaces — the common case — are.
 
