@@ -68,6 +68,9 @@ program
       'files you build together, into a local, reviewable trail of how you worked.',
   )
   .configureHelp({ sortSubcommands: false })
+  // Point users at help after any parse error (e.g. a mistyped `-all` for `--all`),
+  // instead of leaving them with a bare "unknown option" line.
+  .showHelpAfterError('(run the command with --help to see valid options)')
   .version(VERSION, '-v, --version');
 
 // --- Get started ----------------------------------------------------------
@@ -206,6 +209,18 @@ program
     'also show scratch work kept aside (folderless/trivial/ignored/dismissed)',
   )
   .option('--json', 'output machine-readable JSON')
+  .addHelpText(
+    'after',
+    `
+Managing your inbox:
+  showtail inbox                     work waiting to be placed; in the picker, type
+                                     numbers to place, or 'd1,3' / 'dismiss all' to dismiss
+  showtail inbox --all               also show scratch kept aside (folderless/trivial/
+                                     ignored/dismissed), tagged with why
+  showtail track <folder>            make a folder a project and pull its captured work in
+  showtail ignore <folder>           keep a folder's work out of the inbox
+  showtail move <id> --to <folder>   place one specific session by id`,
+  )
   .action(
     action(async (opts: { json?: boolean; all?: boolean }) =>
       runInbox({ json: opts.json, all: opts.all }),
@@ -221,6 +236,7 @@ program
   .option('--remove', 'stop ignoring the folder')
   .option('--list', 'list the ignored folders')
   .option('--json', 'output machine-readable JSON')
+  .addHelpText('after', '\nSee `showtail inbox --help` for the full inbox workflow.')
   .action(
     action(
       async (

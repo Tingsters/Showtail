@@ -24,9 +24,16 @@ import { ask, pickSessionsWithAction, relativeTime, summarize } from './sessionP
 
 type Unplaced = LedgerSession & { targetMissing?: boolean };
 
-/** Calm, number-free pointer at `--all`; shown whenever scratch is being kept aside. */
+/** Calm pointers (number-free). ALL_HINT shows when scratch is kept aside; HELP_HINT always. */
 const ALL_HINT =
-  "Run 'showtail inbox --all' to see scratch work kept aside (all local; you can delete it).";
+  "'showtail inbox --all' shows scratch kept aside (all local; you can delete it).";
+const HELP_HINT = "'showtail inbox --help' lists all inbox commands.";
+
+/** Print the calm pointer line(s): the `--all` recovery hint (only if scratch exists) + `--help`. */
+function printHints(hiddenExist: boolean): void {
+  if (hiddenExist) console.log(ALL_HINT);
+  console.log(HELP_HINT);
+}
 
 /** Human tag for why a session is hidden (only shown in the `--all` view). */
 const REASON_TAG: Record<HiddenReason, string> = {
@@ -128,7 +135,7 @@ export async function runInbox(
         ? 'Inbox empty — no captured sessions are awaiting placement.'
         : "Inbox empty — you're all set.",
     );
-    if (hiddenExist) console.log(ALL_HINT);
+    if (!showHidden) printHints(hiddenExist);
     return;
   }
 
@@ -137,8 +144,8 @@ export async function runInbox(
   );
   console.log('');
   const ordered = printGrouped(sessions, showHidden);
-  if (hiddenExist) {
-    console.log(ALL_HINT);
+  if (!showHidden) {
+    printHints(hiddenExist);
     console.log('');
   }
 
