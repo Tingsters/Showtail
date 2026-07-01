@@ -39,13 +39,20 @@ differently:
   disk (`…/workspaceStorage/<hash>/chatSessions/<id>.jsonl`; no-folder windows use
   `…/globalStorage/emptyWindowChatSessions/<id>.jsonl`). The extension watches those
   files and imports each turn — your prompt, Copilot's reply, and the files it edited
-  — tagged `github-copilot`. Chats with **no folder open** are routed by their edited
-  files into the matching project (and otherwise into a machine-wide `~/.showtail`).
-  You can also back-fill past chats anytime with `showtail import copilot`.
-- **File edits are captured automatically.** The VS Code extension also snapshots
-  every file you save as an artifact, so edits made outside chat are never lost. These
-  snapshots record the *resulting code*, not how it was produced — so code written by
-  hand, pasted, or accepted from an inline suggestion all look the same in the trail.
+  — tagged `github-copilot`. A chat in an open project lands in that project's trail.
+  A chat with **no folder open** is routed by its edited files into the matching
+  project; if its work doesn't belong to any tracked project, it's parked in your
+  **inbox** (not dumped into a machine-wide catch-all). You can also back-fill past
+  chats anytime with `showtail import copilot`.
+- **Folderless chats wait in the inbox.** Run `showtail inbox` to see captured Copilot
+  work that isn't tied to a project yet, then place it — `showtail track <folder>` to
+  make a folder a project and pull its work in, or `showtail move <id> --to <path>` for
+  one session. (See the inbox commands in the [CLI reference](../reference/cli.md).)
+- **File edits are captured automatically.** When a folder is open, the extension also
+  snapshots every file you save as an artifact, so edits made outside chat are never
+  lost. These snapshots record the *resulting code*, not how it was produced — so code
+  written by hand, pasted, or accepted from an inline suggestion all look the same in
+  the trail.
 - **`@showtail` is the Showtail control surface in chat.** It is not a coding
   agent. Use it to run Showtail commands such as `@showtail /report`, `/verify`,
   `/status`, and `/trace <file>`.
