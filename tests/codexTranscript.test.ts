@@ -313,7 +313,7 @@ describe('apply_patch absolute-path capture (regression)', () => {
   test('a post-edit apply_patch payload with an ABSOLUTE path produces an artifact', () => {
     const dir = makeTempDir();
     try {
-      run(dir, ['init', '--project', 'Codex Abs Path']);
+      run(dir, ['track', '--project', 'Codex Abs Path']);
       writeFileSync(join(dir, 'parser.ts'), 'export const x = 1;');
 
       // The real Codex bug: the envelope carries an ABSOLUTE file path. Before the
@@ -348,7 +348,7 @@ describe('codex getTranscript (stop reconcile)', () => {
     const prev = process.env.CODEX_HOME;
     process.env.CODEX_HOME = codexHome;
     try {
-      run(dir, ['init', '--project', 'Codex Stop']);
+      run(dir, ['track', '--project', 'Codex Stop']);
       // Place a rollout where Codex would, named with the session id, recording
       // a prompt + reply for this project (cwd === dir).
       const day = join(codexHome, 'sessions', '2026', '06', '22');
@@ -401,7 +401,7 @@ describe('codex getTranscript (stop reconcile)', () => {
     const prev = process.env.CODEX_HOME;
     process.env.CODEX_HOME = codexHome;
     try {
-      run(dir, ['init', '--project', 'Codex Plan Stop']);
+      run(dir, ['track', '--project', 'Codex Plan Stop']);
       run(dir, ['hook', 'session-start']);
 
       const day = join(codexHome, 'sessions', '2026', '06', '22');

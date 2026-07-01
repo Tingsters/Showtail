@@ -49,7 +49,7 @@ describe('showtail move', () => {
         input: userPrompt(scratch, 'relocatable work'),
         env,
       });
-      const id = JSON.parse(runCli(scratch, ['inbox', '--json'], { env }).stdout)
+      const id = JSON.parse(runCli(scratch, ['inbox', '--all', '--json'], { env }).stdout)
         .sessions[0].id;
 
       // `move <id> --to repoA` places it there.
@@ -91,7 +91,7 @@ describe('showtail move', () => {
         input: userPrompt(scratch, 'via alias'),
         env,
       });
-      const id = JSON.parse(runCli(scratch, ['inbox', '--json'], { env }).stdout)
+      const id = JSON.parse(runCli(scratch, ['inbox', '--all', '--json'], { env }).stdout)
         .sessions[0].id;
       expect(runCli(repo, ['reattach', id, '--to', repo], { env }).code).toBe(0);
       expect(promptTexts(repo, env)).toContain('via alias');

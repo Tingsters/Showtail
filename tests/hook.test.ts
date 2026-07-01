@@ -40,7 +40,7 @@ function run(cwd: string, args: string[], input?: string) {
 }
 
 function initProject(dir: string) {
-  run(dir, ['init', '--project', 'Hook Test']);
+  run(dir, ['track', '--project', 'Hook Test']);
 }
 
 /** A typed-user transcript line. Pass `sessionId: null` to omit the field. */

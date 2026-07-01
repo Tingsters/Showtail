@@ -539,7 +539,9 @@ describe('copilot import (end to end via --file)', () => {
       expect(existsSync(join(scratch, '.showtail'))).toBe(false);
       expect(existsSync(join(elsewhere, '.showtail'))).toBe(false);
       // …and the conversation was parked in the inbox (the ledger).
-      const inbox = unplacedSessions().filter((s) => s.tool === 'github-copilot');
+      const inbox = unplacedSessions({ includeHidden: true }).filter(
+        (s) => s.tool === 'github-copilot',
+      );
       expect(inbox).toHaveLength(1);
       const recs = readLedgerRecords(inbox[0]!.id);
       const kinds = recs.map((r) => r.kind);
@@ -555,7 +557,9 @@ describe('copilot import (end to end via --file)', () => {
         withResponses: true,
         cwd: elsewhere,
       });
-      const inbox2 = unplacedSessions().filter((s) => s.tool === 'github-copilot');
+      const inbox2 = unplacedSessions({ includeHidden: true }).filter(
+        (s) => s.tool === 'github-copilot',
+      );
       expect(inbox2).toHaveLength(1);
       expect(readLedgerRecords(inbox2[0]!.id).length).toBe(before);
     } finally {

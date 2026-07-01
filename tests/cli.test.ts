@@ -13,7 +13,7 @@ describe('cli (end-to-end acceptance sequence)', () => {
       writeFileSync(join(dir, 'README.md'), '# Demo Project\n');
 
       // init
-      let r = run(dir, ['init', '--project', 'Demo']);
+      let r = run(dir, ['track', '--project', 'Demo']);
       expect(r.code).toBe(0);
       expect(existsSync(join(dir, '.showtail', 'config.json'))).toBe(true);
 
@@ -78,7 +78,7 @@ describe('cli (end-to-end acceptance sequence)', () => {
   test('log with an invalid type exits non-zero with a helpful message', () => {
     const dir = makeTempDir();
     try {
-      run(dir, ['init']);
+      run(dir, ['track']);
       const r = run(dir, ['log', '--type', 'banana', '--text', 'hi']);
       expect(r.code).not.toBe(0);
       expect(r.stderr).toContain('valid --type');
@@ -92,7 +92,7 @@ describe('cli (end-to-end acceptance sequence)', () => {
     try {
       const r = run(dir, ['start']);
       expect(r.code).not.toBe(0);
-      expect(r.stderr).toContain('showtail init');
+      expect(r.stderr).toContain('showtail track');
     } finally {
       cleanup(dir);
     }
@@ -101,7 +101,7 @@ describe('cli (end-to-end acceptance sequence)', () => {
   test('text can be piped via stdin when --text is omitted', () => {
     const dir = makeTempDir();
     try {
-      run(dir, ['init']);
+      run(dir, ['track']);
       const res = run(dir, ['log', '--type', 'prompt'], {
         input: 'How do parsers tokenize input?',
       });
@@ -115,7 +115,7 @@ describe('cli (end-to-end acceptance sequence)', () => {
   test('status, sessions, and end report the session lifecycle', () => {
     const dir = makeTempDir();
     try {
-      run(dir, ['init']);
+      run(dir, ['track']);
       run(dir, ['start', '--label', 'lap one']);
       run(dir, ['log', '--type', 'prompt', '--text', 'plan it']);
 

@@ -383,7 +383,7 @@ function registerChatParticipant(context: vscode.ExtensionContext): void {
       stream.markdown(
         m
           ? `Report written to \`${m[1].trim()}\`.`
-          : 'Could not generate a report. Run `showtail init` in this project first.',
+          : 'Could not generate a report. Run `showtail track` in this project first.',
       );
       return;
     }
@@ -503,7 +503,7 @@ function registerCommands(context: vscode.ExtensionContext): void {
         await vscode.window.showTextDocument(doc);
       } else {
         vscode.window.showWarningMessage(
-          'Showtail: could not generate a report. Run `showtail init` in this project first.',
+          'Showtail: could not generate a report. Run `showtail track` in this project first.',
         );
       }
     }),

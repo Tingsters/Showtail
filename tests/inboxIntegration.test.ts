@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test';
+import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
 import { runInit } from '../src/commands/init.ts';
 import { verifyProject } from '../src/commands/verify.ts';
@@ -14,31 +15,58 @@ import {
 } from './helpers.ts';
 
 describe('status surfaces the inbox (D1)', () => {
-  test('status --json reports the count of unplaced sessions', () => {
-    const repo = makeTempDir();
-    const scratch = makeTempDir();
+  test('status --json counts surfaced (real-project) unplaced sessions, not scratch', () => {
+    const repo = makeTempDir(); // a tracked project — where we run `status`
+    const proj = makeTempDir(); // an untracked git repo — real project, not yet placed
+    const scratch = makeTempDir(); // folderless invocation cwd
     const home = makeTempDir();
     try {
       enableAutoInit(home);
       const env = envWithHome(home);
+      expect(spawnSync('git', ['init'], { cwd: proj }).status).toBe(0);
 
-      // A folderless capture → lands in the inbox (unplaced).
+      // A folderless prompt whose EDIT lands in the untracked git repo → parked in the
+      // inbox, but SURFACED because the work is in a real project.
       runCli(scratch, ['hook', 'user-prompt'], {
         input: JSON.stringify({
           hook_event_name: 'UserPromptSubmit',
           cwd: scratch,
-          prompt: 'scratch work',
+          prompt: 'real project work',
           session_id: 's1',
         }),
         env,
       });
-      // A placed capture in an initialized project (so `status` has somewhere to run).
-      runCli(repo, ['init', '--project', 'Demo'], { env });
+      runCli(scratch, ['hook', 'post-edit'], {
+        input: JSON.stringify({
+          hook_event_name: 'PostToolUse',
+          cwd: scratch,
+          session_id: 's1',
+          tool_name: 'Edit',
+          tool_input: { file_path: join(proj, 'a.ts'), old_string: 'x', new_string: 'y' },
+        }),
+        env,
+      });
+
+      // A pure folderless scratch session (no real project) → hidden, NOT counted.
+      runCli(scratch, ['hook', 'user-prompt'], {
+        input: JSON.stringify({
+          hook_event_name: 'UserPromptSubmit',
+          cwd: scratch,
+          prompt: 'just scratch',
+          session_id: 's2',
+        }),
+        env,
+      });
+
+      // A tracked project to run `status` in.
+      runCli(repo, ['track', '--project', 'Demo'], { env });
 
       const status = JSON.parse(runCli(repo, ['status', '--json'], { env }).stdout);
+      // Only the real-project session surfaces; the pure-scratch one is kept aside.
       expect(status.inbox).toBe(1);
     } finally {
       cleanup(repo);
+      cleanup(proj);
       cleanup(scratch);
       cleanup(home);
     }

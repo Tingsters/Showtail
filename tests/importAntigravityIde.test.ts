@@ -151,7 +151,9 @@ describe('runImportAntigravityIde --auto routes by edited-file paths', () => {
       expect(existsSync(join(bare, 'x', '.showtail'))).toBe(false);
       // …and the conversation was parked in the inbox (the ledger) instead of being
       // dumped into a catch-all trail.
-      const inbox = unplacedSessions().filter((s) => s.tool === 'antigravity-ide');
+      const inbox = unplacedSessions({ includeHidden: true }).filter(
+        (s) => s.tool === 'antigravity-ide',
+      );
       expect(inbox).toHaveLength(1);
       const kinds = readLedgerRecords(inbox[0]!.id).map((r) => r.kind);
       expect(kinds).toContain('prompt');
@@ -170,12 +172,16 @@ describe('runImportAntigravityIde --auto routes by edited-file paths', () => {
       writeFileSync(file, makeTranscript(editPath), 'utf8');
 
       await runImportAntigravityIde(undefined, { auto: true, file, cwd: bare });
-      const inbox1 = unplacedSessions().filter((s) => s.tool === 'antigravity-ide');
+      const inbox1 = unplacedSessions({ includeHidden: true }).filter(
+        (s) => s.tool === 'antigravity-ide',
+      );
       expect(inbox1).toHaveLength(1);
       const before = readLedgerRecords(inbox1[0]!.id).length;
 
       await runImportAntigravityIde(undefined, { auto: true, file, cwd: bare });
-      const inbox2 = unplacedSessions().filter((s) => s.tool === 'antigravity-ide');
+      const inbox2 = unplacedSessions({ includeHidden: true }).filter(
+        (s) => s.tool === 'antigravity-ide',
+      );
       expect(inbox2).toHaveLength(1); // still one session (keyed by conversation id)
       expect(readLedgerRecords(inbox2[0]!.id).length).toBe(before); // no dup records
     } finally {
@@ -193,9 +199,11 @@ describe('runImportAntigravityIde --auto routes by edited-file paths', () => {
 
       await runImportAntigravityIde(undefined, { auto: true, file });
 
-      expect(unplacedSessions().filter((s) => s.tool === 'antigravity-ide')).toHaveLength(
-        0,
-      );
+      expect(
+        unplacedSessions({ includeHidden: true }).filter(
+          (s) => s.tool === 'antigravity-ide',
+        ),
+      ).toHaveLength(0);
     } finally {
       cleanup(proj);
     }

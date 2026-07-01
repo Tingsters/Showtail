@@ -29,7 +29,7 @@ no special action needed. Use `@showtail` for the Showtail commands.
 
 - The `showtail` CLI on your PATH (or set `showtail.binaryPath`). Install from the
   [Showtail releases](https://github.com/Tingsters/Showtail/releases).
-- A project initialized with `showtail init`.
+- A project initialized with `showtail track`.
 
 ## Honest limitations
 

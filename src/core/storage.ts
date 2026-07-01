@@ -8,7 +8,7 @@ import {
   writeFileSync,
   appendFileSync,
 } from 'node:fs';
-import { homedir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import type { Config, Session, State } from '../types.ts';
 import { gitToplevel } from './git.ts';
@@ -86,7 +86,7 @@ export interface AuthorPaths {
 export class NotInitializedError extends Error {
   constructor() {
     super(
-      'No .showtail/ folder found. Run `showtail init` first to start tracking your work.',
+      'No .showtail/ folder found. Run `showtail track` first to start tracking your work.',
     );
     this.name = 'NotInitializedError';
   }
@@ -214,7 +214,62 @@ export function isEligibleAnchor(dir: string): boolean {
  * {@link isEligibleAnchor}).
  */
 export function isHomedirCatchAll(dir: string): boolean {
-  return resolve(dir) === resolve(homedir());
+  return pathKey(dir) === pathKey(homedir());
+}
+
+/**
+ * A case-normalized key for a resolved path, so comparisons are correct on
+ * Windows — where the ledger records drive-relative, lowercase-drive paths
+ * (`c:\Users\…`) while `homedir()`/`cwd` yield `C:\Users\…`. Case-folds only on
+ * win32; POSIX paths are already case-sensitive and left as-is.
+ */
+export function pathKey(p: string): string {
+  const r = resolve(p);
+  return process.platform === 'win32' ? r.toLowerCase() : r;
+}
+
+/** Whether `child` is `parent` or nested beneath it (case-insensitive on win32). */
+export function isPathUnder(child: string, parent: string): boolean {
+  const c = pathKey(child);
+  const p = pathKey(parent);
+  return c === p || c.startsWith(p + sep);
+}
+
+/**
+ * Whether `dir` lives in a throwaway temp location (the OS temp dir, or a literal
+ * `/tmp` / `\tmp`). Work in temp is scratch by default — a real case in the ledger
+ * is a Maven project the AI scaffolded under `\tmp`. A pure path predicate; callers
+ * decide when to apply it (see {@link eligibleProjectRoot}, which skips it under a
+ * test ceiling so fixtures created in the OS temp dir aren't all treated as scratch).
+ */
+export function isTempPath(dir: string): boolean {
+  return [tmpdir(), '/tmp', '\\tmp'].some((t) => isPathUnder(dir, t));
+}
+
+/**
+ * The eligible project root enclosing `dir`, or null when `dir` is scratch.
+ * Walks up (like {@link findRoot}) for either an existing `.showtail/` (a tracked
+ * trail) or a `.git` (a real repo); a non-git, marker-only, *untracked* folder is
+ * intentionally scratch until `showtail track`. A resolved root that is the home
+ * dir or a temp dir is never eligible. Honors `SHOWTAIL_ROOT_CEILING` like
+ * `findRoot` (and, in that hermetic-test mode, skips the temp-dir exclusion so
+ * fixtures under the OS temp dir still resolve).
+ */
+export function eligibleProjectRoot(dir: string): string | null {
+  const ceilingEnv = process.env.SHOWTAIL_ROOT_CEILING;
+  const ceiling = ceilingEnv && ceilingEnv.length > 0 ? resolve(ceilingEnv) : null;
+  let d = resolve(dir);
+  while (true) {
+    if (existsSync(join(d, SHOWTAIL_DIR)) || existsSync(join(d, '.git'))) {
+      if (isHomedirCatchAll(d)) return null;
+      if (!ceiling && isTempPath(d)) return null;
+      return d;
+    }
+    if (ceiling && d === ceiling) return null;
+    const parent = dirname(d);
+    if (parent === d) return null;
+    d = parent;
+  }
 }
 
 // --- JSON helpers ---------------------------------------------------------

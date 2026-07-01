@@ -350,7 +350,7 @@ describe('antigravity-cli getTranscript (stop reconcile)', () => {
       const env = { ...spawnEnv(), GEMINI_HOME: geminiHome };
       const sid = 'sess-agy-e2e-1';
 
-      runCli(dir, ['init', '--project', 'Antigravity Stop'], { env });
+      runCli(dir, ['track', '--project', 'Antigravity Stop'], { env });
       // Log the prompt live so the Stop reconcile has an in-window turn to attach
       // the plan and reply to (mirrors how the user-prompt hook would fire).
       runCli(dir, ['hook', 'user-prompt', '--tool', 'antigravity-cli'], {

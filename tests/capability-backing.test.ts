@@ -140,7 +140,7 @@ function backCapture(
 ) {
   const dir = makeTempDir();
   try {
-    run(dir, ['init', '--project', 'Cap']);
+    run(dir, ['track', '--project', 'Cap']);
     run(
       dir,
       ['hook', 'user-prompt', '--tool', toolId],
@@ -188,7 +188,7 @@ describe('backing: automatic capture via hooks', () => {
   test('Claude Code: prompt, edit, and AI-reply reconcile', () => {
     const dir = makeTempDir();
     try {
-      run(dir, ['init', '--project', 'Backing']);
+      run(dir, ['track', '--project', 'Backing']);
       run(
         dir,
         ['hook', 'user-prompt'],
@@ -496,7 +496,7 @@ describe('backing: plan capture', () => {
   test('Claude Code: an ExitPlanMode plan is materialized + linked at Stop', () => {
     const dir = makeTempDir();
     try {
-      run(dir, ['init', '--project', 'PlanCap']);
+      run(dir, ['track', '--project', 'PlanCap']);
       run(
         dir,
         ['hook', 'user-prompt'],
@@ -651,7 +651,7 @@ describe('backing: plan capture', () => {
       writeFileSync(join(brain, 'plan.md'), '# Plan\n- from disk\n');
       const env = { ...spawnEnv(), GEMINI_HOME: home };
 
-      runCli(dir, ['init', '--project', 'PlanCap'], { env });
+      runCli(dir, ['track', '--project', 'PlanCap'], { env });
       runCli(dir, ['hook', 'user-prompt', '--tool', 'antigravity-cli'], {
         env,
         input: JSON.stringify({ conversationId: SID, prompt: 'add retry' }),
@@ -680,7 +680,7 @@ describe('backing: decision capture', () => {
   test('Claude Code: an AskUserQuestion choice is captured as a decision at Stop', () => {
     const dir = makeTempDir();
     try {
-      run(dir, ['init', '--project', 'DecisionCap']);
+      run(dir, ['track', '--project', 'DecisionCap']);
       run(
         dir,
         ['hook', 'user-prompt'],
@@ -820,7 +820,7 @@ describe('backing: redaction and the cross-tool timeline', () => {
   test('a tagged prompt per tool is scrubbed before store and lands on the timeline', () => {
     const dir = makeTempDir();
     try {
-      run(dir, ['init', '--project', 'Timeline']);
+      run(dir, ['track', '--project', 'Timeline']);
       run(dir, ['start']);
       const SECRET = 'AKIAIOSFODNN7EXAMPLE';
       const tools = [

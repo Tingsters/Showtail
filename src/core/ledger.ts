@@ -23,11 +23,18 @@
  * rest of the codebase uses. No lock is needed — materialize is idempotent.
  */
 import { existsSync, mkdirSync, readdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import type { Tool } from '../types.ts';
-import { ledgerDir } from './globalConfig.ts';
+import { ledgerDir, readInboxMinSignal, readScratchPaths } from './globalConfig.ts';
 import { makeId } from './ids.ts';
-import { appendJsonl, readJson, readJsonl, writeJson } from './storage.ts';
+import {
+  appendJsonl,
+  eligibleProjectRoot,
+  isPathUnder,
+  readJson,
+  readJsonl,
+  writeJson,
+} from './storage.ts';
 
 /** Cap a single captured diff stored inline so one huge edit can't bloat the ledger. */
 const MAX_DIFF_BYTES = 64 * 1024;
@@ -63,6 +70,12 @@ export interface LedgerSession {
   targets?: LedgerTarget[];
   /** Ledger record id of the prompt that opened the current turn (replay linkage). */
   currentTurnKey?: string;
+  /**
+   * When set, the student explicitly dismissed this (still-`inbox`) session from the
+   * default `showtail inbox` view. It stays in the ledger and under `--all`/`move` —
+   * dismissal is a reversible view filter, not a delete. Cleared on (re)placement.
+   */
+  dismissedAt?: string;
 }
 
 /** The kind of a single captured record. */
@@ -290,16 +303,121 @@ export function allLedgerSessions(): LedgerSession[] {
   return out.sort((a, b) => b.lastSeenAt.localeCompare(a.lastSeenAt));
 }
 
+// --- inbox surfacing (triage) --------------------------------------------
+
+/** Prompt/edit counts, first prompt text, and absolute edit paths — one records read. */
+function sessionFacts(id: string): {
+  prompts: number;
+  edits: number;
+  firstPrompt?: string;
+  editPaths: string[];
+} {
+  let prompts = 0;
+  let edits = 0;
+  let firstPrompt: string | undefined;
+  const editPaths: string[] = [];
+  for (const rec of readLedgerRecords(id)) {
+    if (rec.kind === 'edit') {
+      edits += 1;
+      if (rec.file) editPaths.push(rec.file);
+    } else if (rec.kind === 'prompt') {
+      prompts += 1;
+      if (!firstPrompt && rec.text) firstPrompt = rec.text;
+    }
+  }
+  return { prompts, edits, firstPrompt, editPaths };
+}
+
+/** Prompt/edit counts for a session — the surfacing signal. */
+export function sessionSignal(id: string): { prompts: number; edits: number } {
+  const { prompts, edits } = sessionFacts(id);
+  return { prompts, edits };
+}
+
+/** Prompt/edit counts plus the first prompt text (the shared list/picker summary). */
+export function sessionSummary(id: string): {
+  prompts: number;
+  edits: number;
+  firstPrompt?: string;
+} {
+  const { prompts, edits, firstPrompt } = sessionFacts(id);
+  return { prompts, edits, firstPrompt };
+}
+
+/** Distinct eligible project roots for a set of edit paths (cwd fallback when edit-less). */
+function workRootsFrom(editPaths: string[], cwd?: string): string[] {
+  const dirs = editPaths.length ? editPaths.map((p) => dirname(p)) : cwd ? [cwd] : [];
+  const roots = new Set<string>();
+  for (const d of dirs) {
+    const root = eligibleProjectRoot(d);
+    if (root) roots.add(root);
+  }
+  return [...roots];
+}
+
+/**
+ * The eligible project roots a session's work resolves to (via `.showtail/`/git,
+ * excluding home + temp). Non-empty ⇒ the work lives in a real project. Used by the
+ * surface predicate and to group the inbox listing.
+ */
+export function sessionWorkRoots(session: LedgerSession): string[] {
+  return workRootsFrom(sessionFacts(session.id).editPaths, session.cwd);
+}
+
+/**
+ * Whether any of the session's edit paths (or its `cwd`, when edit-less) is under
+ * `folder` — a raw prefix membership test (NOT resolved-root), so targeting a
+ * subfolder of a session's git/`.showtail` root still matches. Powers the scratch
+ * list and `track`'s backfill.
+ */
+export function sessionTouchesPath(session: LedgerSession, folder: string): boolean {
+  const { editPaths } = sessionFacts(session.id);
+  const targets = editPaths.length ? editPaths : session.cwd ? [session.cwd] : [];
+  return targets.some((p) => isPathUnder(p, folder));
+}
+
+/** Why a session is hidden from the default inbox, or null when it surfaces. */
+export type HiddenReason = 'dismissed' | 'not-in-project' | 'low-signal' | 'ignored-path';
+
+/** The reason a never-placed session is hidden (see {@link isSurfaced}), or null. */
+export function hiddenReason(session: LedgerSession): HiddenReason | null {
+  if (session.dismissedAt) return 'dismissed';
+  const facts = sessionFacts(session.id);
+  if (workRootsFrom(facts.editPaths, session.cwd).length === 0) return 'not-in-project';
+  const min = readInboxMinSignal();
+  if (!(facts.edits >= min.edits || facts.prompts >= min.prompts)) return 'low-signal';
+  const targets = facts.editPaths.length
+    ? facts.editPaths
+    : session.cwd
+      ? [session.cwd]
+      : [];
+  const scratch = readScratchPaths();
+  if (scratch.some((s) => targets.some((p) => isPathUnder(p, s)))) return 'ignored-path';
+  return null;
+}
+
+/** Whether a never-placed session surfaces in the default `showtail inbox`. */
+export function isSurfaced(session: LedgerSession): boolean {
+  return hiddenReason(session) === null;
+}
+
 /**
  * Sessions awaiting placement: explicitly `inbox`, or `placed` into a trail that
  * has since gone missing (a deleted repo, or a moved one not yet re-seen). The
  * `targetMissing` flag tells the two apart for the `inbox` listing.
+ *
+ * By default only *surfaced* inbox sessions are returned (real-project, signal-
+ * bearing, not scratch/dismissed); `includeHidden` returns every inbox session so
+ * `showtail inbox --all` can reveal the rest. `target-missing` sessions always
+ * surface — they are placed real work whose repo vanished.
  */
-export function unplacedSessions(): Array<LedgerSession & { targetMissing?: boolean }> {
+export function unplacedSessions(
+  opts: { includeHidden?: boolean } = {},
+): Array<LedgerSession & { targetMissing?: boolean }> {
   const out: Array<LedgerSession & { targetMissing?: boolean }> = [];
   for (const session of allLedgerSessions()) {
     if (session.status === 'inbox') {
-      out.push(session);
+      if (opts.includeHidden || isSurfaced(session)) out.push(session);
       continue;
     }
     // Placed: surface it only if every recorded target is now missing. The
@@ -452,6 +570,7 @@ export function markPlaced(sessionId: string, trailId: string, path: string): vo
     else targets.find((t) => t.trailId === trailId)!.path = path;
     session.targets = targets;
     session.status = 'placed';
+    delete session.dismissedAt; // placement re-surfaces it; a stale dismissal shouldn't linger
     writeLedgerSession(session);
   }
   const now = new Date().toISOString();
@@ -468,6 +587,26 @@ export function markInbox(sessionId: string): void {
   const session = readLedgerSession(sessionId);
   if (!session || session.status === 'placed') return;
   session.status = 'inbox';
+  writeLedgerSession(session);
+}
+
+/**
+ * Dismiss an inbox session from the default view (reversible; stays in the ledger
+ * and under `--all`/`move`). No-op on a placed session. Idempotent — keeps the
+ * first dismissal time.
+ */
+export function dismissLedgerSession(id: string): void {
+  const session = readLedgerSession(id);
+  if (!session || session.status === 'placed' || session.dismissedAt) return;
+  session.dismissedAt = new Date().toISOString();
+  writeLedgerSession(session);
+}
+
+/** Undo a dismissal, so the session can surface again if it otherwise qualifies. */
+export function undismissLedgerSession(id: string): void {
+  const session = readLedgerSession(id);
+  if (!session || !session.dismissedAt) return;
+  delete session.dismissedAt;
   writeLedgerSession(session);
 }
 

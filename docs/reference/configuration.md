@@ -1,6 +1,6 @@
 # Configuration
 
-Showtail's project settings live in `.showtail/config.json`, written at `init`
+Showtail's project settings live in `.showtail/config.json`, written at `track`
 time and shared (committed) across the team. Machine-local state — the active
 session and author — lives separately in `.showtail/state.json`, which is
 git-ignored. See [Data layout](../concepts/data-layout.md) for the full file
@@ -27,7 +27,7 @@ tree.
 | Key | Meaning |
 | --- | ------- |
 | `version` | Showtail config schema version. |
-| `name` | Project name shown in report titles. Set with `showtail init --project <name>`. |
+| `name` | Project name shown in report titles. Set with `showtail track --project <name>`. |
 | `anchor` | Absolute path the trail is rooted at. |
 | `anchorKind` | Whether `anchor` was chosen from the git repo root (`git`) or the working dir (`cwd`). |
 | `settings.git` | Try to capture the git commit hash on each event. |

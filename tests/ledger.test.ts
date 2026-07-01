@@ -96,12 +96,14 @@ function makeTrail(trailId: string): string {
 describe('placement and the inbox', () => {
   test('a fresh session is unplaced; placing into a live trail removes it from the inbox', () => {
     const s = ensureLedgerSession({ tool: 'claude-code', nativeSessionId: 's1' });
-    expect(unplacedSessions().map((x) => x.id)).toContain(s.id);
+    expect(unplacedSessions({ includeHidden: true }).map((x) => x.id)).toContain(s.id);
 
     const root = makeTrail('trl_1');
     markPlaced(s.id, 'trl_1', root);
     expect(readLedgerSession(s.id)?.status).toBe('placed');
-    expect(unplacedSessions().map((x) => x.id)).not.toContain(s.id);
+    expect(unplacedSessions({ includeHidden: true }).map((x) => x.id)).not.toContain(
+      s.id,
+    );
     cleanup(root);
   });
 
@@ -109,7 +111,7 @@ describe('placement and the inbox', () => {
     const s = ensureLedgerSession({ tool: 'claude-code', nativeSessionId: 's1' });
     // Point at a path that has no .showtail/config.json with this trailId.
     markPlaced(s.id, 'trl_gone', makeTempDir() + '/deleted-repo');
-    const surfaced = unplacedSessions().find((x) => x.id === s.id);
+    const surfaced = unplacedSessions({ includeHidden: true }).find((x) => x.id === s.id);
     expect(surfaced?.targetMissing).toBe(true);
   });
 
@@ -117,7 +119,9 @@ describe('placement and the inbox', () => {
     const s = ensureLedgerSession({ tool: 'claude-code', nativeSessionId: 's1' });
     const root = makeTrail('trl_orig');
     markPlaced(s.id, 'trl_orig', root);
-    expect(unplacedSessions().map((x) => x.id)).not.toContain(s.id);
+    expect(unplacedSessions({ includeHidden: true }).map((x) => x.id)).not.toContain(
+      s.id,
+    );
 
     // Simulate a merge picking the other clone's trailId for the SAME path.
     writeFileSync(
@@ -126,7 +130,7 @@ describe('placement and the inbox', () => {
     );
 
     // The session is still alive (a valid trail sits at the path)...
-    const surfaced = unplacedSessions().find((x) => x.id === s.id);
+    const surfaced = unplacedSessions({ includeHidden: true }).find((x) => x.id === s.id);
     expect(surfaced).toBeUndefined();
     // ...and the placement has been repointed to the path's current trailId.
     expect(readLedgerSession(s.id)?.targets?.[0]?.trailId).toBe('trl_merged');

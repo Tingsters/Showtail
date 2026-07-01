@@ -34,6 +34,11 @@ import {
   readLedgerRecords,
 } from '../core/ledger.ts';
 import { captureTranscriptToLedger } from '../core/ledgerCapture.ts';
+import {
+  autoInitEnabled,
+  ensureCaptureSince,
+  isStaleForAutoBackfill,
+} from '../core/globalConfig.ts';
 import { requireActiveAuthor, resolveActiveAuthorForHook } from '../core/authors.ts';
 import {
   findRoot,
@@ -449,12 +454,30 @@ async function runImportAntigravityIdeAuto(
  * records dedup by sourceId, so the extension re-running `--auto` adds nothing new.
  * Returns whether anything (records or edits) is now captured for this session.
  */
+function newestBackfillTs(
+  messages: Array<{ timestamp?: string }>,
+  edits: Array<{ timestamp?: string }>,
+): string | undefined {
+  let newest: string | undefined;
+  for (const ts of [...messages, ...edits].map((x) => x.timestamp)) {
+    if (ts && (!newest || ts > newest)) newest = ts;
+  }
+  return newest;
+}
+
 function captureConversationToInbox(
   info: AntigravityIdeTranscriptInfo,
   transcript: HookTranscript,
   edits: TranscriptEdit[],
   options: ImportAntigravityIdeOptions,
 ): boolean {
+  // Watch-forward: don't resurrect a conversation that finished before Showtail began
+  // capturing here. Set-once watermark (only once tracking is on; `setup` normally
+  // sets it — this is the migration net), then skip stale history before creating any
+  // ledger session. Explicit `import antigravity-ide` (non-auto) never reaches here.
+  if (autoInitEnabled()) ensureCaptureSince();
+  if (isStaleForAutoBackfill(newestBackfillTs(transcript.messages, edits))) return false;
+
   const identity = readMachineIdentity();
   const ledger = ensureLedgerSession({
     tool: 'antigravity-ide',

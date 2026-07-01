@@ -36,9 +36,13 @@ function editFile(
   });
 }
 
-/** Parse `showtail inbox --json` run with this env. */
+/**
+ * Parse `showtail inbox --all --json` run with this env. These tests exercise
+ * capture/placement of folderless *scratch* work, which the default view now hides;
+ * `--all` reveals it (surfacing is covered separately in inboxSurface.test.ts).
+ */
 function inbox(cwd: string, env: NodeJS.ProcessEnv): any {
-  const r = runCli(cwd, ['inbox', '--json'], { env });
+  const r = runCli(cwd, ['inbox', '--all', '--json'], { env });
   expect(r.code).toBe(0);
   return JSON.parse(r.stdout);
 }

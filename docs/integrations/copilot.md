@@ -25,7 +25,7 @@ showtail connect copilot
 !!! note "Requirements"
     - The `showtail` CLI on your `PATH` (or set `showtail.binaryPath`). Install
       from the [Showtail releases](https://github.com/Tingsters/Showtail/releases).
-    - A project initialized with `showtail init` (or any project where Showtail
+    - A project initialized with `showtail track` (or any project where Showtail
       tracking is already on).
 
 ## How Copilot capture works

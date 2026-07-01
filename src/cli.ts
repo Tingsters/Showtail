@@ -15,6 +15,7 @@ import { runVerify } from './commands/verify.ts';
 import { runStatus } from './commands/status.ts';
 import { runSessions } from './commands/sessions.ts';
 import { runInbox } from './commands/inbox.ts';
+import { runIgnore } from './commands/ignore.ts';
 import { runMove } from './commands/move.ts';
 import { runHook, type HookEvent } from './commands/hook.ts';
 import { runImportUndo } from './commands/import.ts';
@@ -87,8 +88,10 @@ program
   );
 
 program
-  .command('init')
-  .description('Set up Showtail in this project (creates the .showtail/ folder).')
+  .command('track [path]')
+  .description(
+    'Track a folder as a Showtail project (creates .showtail/) and pull its already-captured work out of the inbox. Any folder works — it need not be a code repo.',
+  )
   .helpGroup(G_START)
   .option(
     '-p, --project <name>',
@@ -96,8 +99,8 @@ program
   )
   .option('--json', 'output machine-readable JSON')
   .action(
-    action(async (opts: { project?: string; json?: boolean }) =>
-      runInit({ project: opts.project, json: opts.json }),
+    action(async (path: string | undefined, opts: { project?: string; json?: boolean }) =>
+      runInit({ cwd: path, project: opts.project, json: opts.json }),
     ),
   );
 
@@ -195,11 +198,37 @@ program
 program
   .command('inbox')
   .description(
-    'Sessions captured globally but not yet placed in a project (scratch/folderless work). Pick to place them.',
+    'Real-project work captured but not yet placed. Pick to place (or dismiss) it. Scratch/folderless work is kept aside — see --all.',
   )
   .helpGroup(G_REVIEW)
+  .option(
+    '--all',
+    'also show scratch work kept aside (folderless/trivial/ignored/dismissed)',
+  )
   .option('--json', 'output machine-readable JSON')
-  .action(action(async (opts: { json?: boolean }) => runInbox({ json: opts.json })));
+  .action(
+    action(async (opts: { json?: boolean; all?: boolean }) =>
+      runInbox({ json: opts.json, all: opts.all }),
+    ),
+  );
+
+program
+  .command('ignore [path]')
+  .description(
+    'Mark a folder as scratch so its captured sessions stay out of `showtail inbox` (still under --all). No path lists ignored folders.',
+  )
+  .helpGroup(G_REVIEW)
+  .option('--remove', 'stop ignoring the folder')
+  .option('--list', 'list the ignored folders')
+  .option('--json', 'output machine-readable JSON')
+  .action(
+    action(
+      async (
+        path: string | undefined,
+        opts: { remove?: boolean; list?: boolean; json?: boolean },
+      ) => runIgnore(path, { remove: opts.remove, list: opts.list, json: opts.json }),
+    ),
+  );
 
 program
   .command('move [sessionId]')

@@ -47,6 +47,11 @@ import {
   readLedgerRecords,
 } from '../core/ledger.ts';
 import { captureTranscriptToLedger } from '../core/ledgerCapture.ts';
+import {
+  autoInitEnabled,
+  ensureCaptureSince,
+  isStaleForAutoBackfill,
+} from '../core/globalConfig.ts';
 import { requireActiveAuthor, resolveActiveAuthorForHook } from '../core/authors.ts';
 import {
   findRoot,
@@ -352,6 +357,18 @@ async function runImportCopilotAuto(
   printAutoResult(totals, importedRoots, options.withResponses !== false);
 }
 
+/** The newest ISO timestamp across a conversation's messages and recovered edits. */
+function newestBackfillTs(
+  messages: Array<{ timestamp?: string }>,
+  edits: Array<{ timestamp?: string }>,
+): string | undefined {
+  let newest: string | undefined;
+  for (const ts of [...messages, ...edits].map((x) => x.timestamp)) {
+    if (ts && (!newest || ts > newest)) newest = ts;
+  }
+  return newest;
+}
+
 /**
  * Park a folderless Copilot conversation in the inbox (the machine-local ledger),
  * so it surfaces in `showtail inbox` for reattach — instead of the homedir
@@ -365,14 +382,6 @@ function captureCopilotConversationToInbox(
   edits: CopilotAbsEdit[],
   options: ImportCopilotOptions,
 ): boolean {
-  const identity = readMachineIdentity();
-  const ledger = ensureLedgerSession({
-    tool: 'github-copilot',
-    nativeSessionId: sid,
-    machineId: identity?.machineId,
-    slug: identity?.slug,
-    cwd: options.cwd ?? process.cwd(),
-  });
   // Conversation only (prompts/replies/plans/decisions). Edits are appended below
   // from the recovered ABSOLUTE list so a reattach can re-relativize them against
   // the target repo; the transcript's own relativized edit messages are dropped to
@@ -382,6 +391,23 @@ function captureCopilotConversationToInbox(
     sessionId: parsed.sessionId,
     messages: parsed.messages.filter((m) => m.role !== 'edit'),
   };
+  // Watch-forward: don't resurrect a chat that finished before Showtail began
+  // capturing here. Establish the set-once watermark (only once tracking is on;
+  // `setup` normally sets it — this is the migration net for pre-feature setups),
+  // then skip stale history BEFORE creating any ledger session, so no empty shard is
+  // left behind. Explicit `import copilot` (not `--auto`) never reaches here, so
+  // on-purpose history imports are unaffected.
+  if (autoInitEnabled()) ensureCaptureSince();
+  if (isStaleForAutoBackfill(newestBackfillTs(convo.messages, edits))) return false;
+
+  const identity = readMachineIdentity();
+  const ledger = ensureLedgerSession({
+    tool: 'github-copilot',
+    nativeSessionId: sid,
+    machineId: identity?.machineId,
+    slug: identity?.slug,
+    cwd: options.cwd ?? process.cwd(),
+  });
   // `backfill`: an after-the-fact import of an already-finished conversation whose
   // prompts predate the just-created ledger session.
   captureTranscriptToLedger(ledger, convo, 'github-copilot', [], { backfill: true });

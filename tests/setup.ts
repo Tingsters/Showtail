@@ -17,16 +17,17 @@ process.env.SHOWTAIL_IDENTITY_HOME ??= join(tmpdir(), 'showtail-test-identity');
 // their own home via `envWithHome` override it per test.
 process.env.SHOWTAIL_HOME ??= join(tmpdir(), 'showtail-test-home');
 
-// Clear the shared ledger after each test. The per-project `.showtail/` is already
-// isolated by its temp dir, but the ledger is machine-global and tests reuse
-// native session ids (e.g. `sess-1`) — so without this, a session's records would
-// leak across tests (and accumulate across runs). Best-effort; never throws.
+// Clear the shared machine-global state after each test. The per-project `.showtail/`
+// is already isolated by its temp dir, but the ledger AND global config live under
+// `SHOWTAIL_HOME`: tests reuse native session ids (e.g. `sess-1`) so ledger records
+// would leak, and global config keys (`captureSince`, `autoInit`) written by one test
+// (e.g. `setup`) would leak into the next and change surfacing/backfill behavior.
+// Best-effort; never throws.
 afterEach(() => {
+  const home = process.env.SHOWTAIL_HOME ?? '';
   try {
-    rmSync(join(process.env.SHOWTAIL_HOME ?? '', 'ledger'), {
-      recursive: true,
-      force: true,
-    });
+    rmSync(join(home, 'ledger'), { recursive: true, force: true });
+    rmSync(join(home, 'config.json'), { force: true });
   } catch {
     /* ignore */
   }
