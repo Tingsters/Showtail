@@ -24,16 +24,12 @@ import { ask, pickSessionsWithAction, relativeTime, summarize } from './sessionP
 
 type Unplaced = LedgerSession & { targetMissing?: boolean };
 
-/** Calm pointers (number-free). ALL_HINT shows when scratch is kept aside; HELP_HINT always. */
-const ALL_HINT =
-  "'showtail inbox --all' shows scratch kept aside (all local; you can delete it).";
+/**
+ * One calm pointer to `--help` — the single home for the flag/command docs. We do NOT
+ * repeat `--all` inline here: it's already listed under Options in `showtail inbox --help`,
+ * and echoing it in the plain command output is redundant.
+ */
 const HELP_HINT = "'showtail inbox --help' lists all inbox commands.";
-
-/** Print the calm pointer line(s): the `--all` recovery hint (only if scratch exists) + `--help`. */
-function printHints(hiddenExist: boolean): void {
-  if (hiddenExist) console.log(ALL_HINT);
-  console.log(HELP_HINT);
-}
 
 /** Human tag for why a session is hidden (only shown in the `--all` view). */
 const REASON_TAG: Record<HiddenReason, string> = {
@@ -124,18 +120,13 @@ export async function runInbox(
     return;
   }
 
-  // Are there hidden sessions the default view is holding back? (Only asked when
-  // not already showing everything, so we can point the student at `--all`.)
-  const hiddenExist =
-    !showHidden && unplacedSessions({ includeHidden: true }).length > sessions.length;
-
   if (sessions.length === 0) {
     console.log(
       showHidden
         ? 'Inbox empty — no captured sessions are awaiting placement.'
         : "Inbox empty — you're all set.",
     );
-    if (!showHidden) printHints(hiddenExist);
+    if (!showHidden) console.log(HELP_HINT);
     return;
   }
 
@@ -145,7 +136,7 @@ export async function runInbox(
   console.log('');
   const ordered = printGrouped(sessions, showHidden);
   if (!showHidden) {
-    printHints(hiddenExist);
+    console.log(HELP_HINT);
     console.log('');
   }
 
