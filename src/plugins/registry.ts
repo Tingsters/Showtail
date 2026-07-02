@@ -91,30 +91,45 @@ function cap(s: string): string {
 
 /**
  * Human label for a raw model id, so reports read naturally across every tool:
- * `claude-opus-4-8` → "Opus 4.8", `gpt-5.3-codex` → "GPT-5.3 Codex", `gpt-5.5` →
- * "GPT-5.5", `gemini-2.5-pro` → "Gemini 2.5 Pro", and the human-readable names
- * Gemini share ("3.5 Flash") and Antigravity ("Gemini 3.5 Flash (Medium)") emit
- * → "Gemini 3.5 Flash". Any context-window suffix (`[1m]`, `[200k]`) is stripped.
- * Falls back to the raw string so an unknown or brand-new id still renders and
- * never throws.
+ * `claude-opus-4-8` → "Opus 4.8", `gpt-5.3-codex` → "GPT-5.3 Codex",
+ * `gpt-5-5` → "GPT-5.5" (ChatGPT dash-separates the minor version), `gpt-4o-mini`
+ * → "GPT-4o Mini", `gemini-2.5-pro` → "Gemini 2.5 Pro", and the human-readable
+ * names Gemini share ("3.5 Flash") and Antigravity ("Gemini 3.5 Flash (Medium)")
+ * emit → "Gemini 3.5 Flash". Any context-window suffix (`[1m]`, `[200k]`) is
+ * stripped.
+ *
+ * Each branch matches by *pattern* (any version/variant within a provider), not a
+ * fixed list of today's models, so a new family/variant labels cleanly; and an
+ * entirely unknown provider falls back to the raw id verbatim — so new models
+ * always render (and are always recorded raw) and this never throws.
  */
 export function labelForModel(model: string): string {
   const raw = model.replace(/\s*\[[^\]]*\]\s*$/, '').trim();
   if (!raw) return model.trim();
 
-  // Anthropic: claude-<family>-<maj>-<min>[-…] → "Opus 4.8"
-  const claude = /^claude-(opus|sonnet|haiku)-(\d+)-(\d+)\b/i.exec(raw);
+  // Anthropic: claude-<family>-<maj>-<min>[-…] → "Opus 4.8". Any family word
+  // (not a fixed list), so a future family still labels cleanly.
+  const claude = /^claude-([a-z]+)-(\d+)-(\d+)\b/i.exec(raw);
   if (claude) return `${cap(claude[1]!)} ${claude[2]}.${claude[3]}`;
 
-  // OpenAI GPT: gpt-<ver>[-codex] → "GPT-5.3 Codex" / "GPT-5.5"
-  const gpt = /^gpt-([\d.]+)(?:-(codex))?/i.exec(raw);
-  if (gpt) return `GPT-${gpt[1]}${gpt[2] ? ' Codex' : ''}`;
+  // OpenAI GPT: gpt-<version>[-<variant>…]. ChatGPT dash-separates the minor
+  // version (gpt-5-5 → GPT-5.5, gpt-4-5 → GPT-4.5) and appends variants
+  // (mini, thinking, codex); Codex uses a dotted version (gpt-5.5). Join the
+  // leading 1–2-digit numeric run into a dotted version; title-case the rest.
+  const gpt = /^gpt-(.+)$/i.exec(raw);
+  if (gpt) {
+    const tokens = gpt[1]!.split('-');
+    let version = tokens.shift()!; // "5" | "5.5" | "4o"
+    while (tokens.length && /^\d{1,2}$/.test(tokens[0]!)) version += '.' + tokens.shift();
+    const variant = tokens.map(cap).join(' '); // "Mini" | "Thinking" | "Codex"
+    return `GPT-${version}${variant ? ' ' + variant : ''}`;
+  }
 
   // OpenAI o-series: o3, o1-mini (a digit must follow "o", so "opus" won't match).
   if (/^o\d+(?:-\w+)?$/i.test(raw)) return raw.toLowerCase();
 
-  // Gemini slug: gemini-<ver>-<variant> → "Gemini 2.5 Pro"
-  const gemSlug = /^gemini-([\d.]+)-(pro|flash|ultra|nano)\b/i.exec(raw);
+  // Gemini slug: gemini-<ver>-<variant> → "Gemini 2.5 Pro" (any variant word).
+  const gemSlug = /^gemini-([\d.]+)-([a-z]+)\b/i.exec(raw);
   if (gemSlug) return `Gemini ${gemSlug[1]} ${cap(gemSlug[2]!)}`;
 
   // Human-readable Gemini names: "3.5 Flash" / "Gemini 3.5 Flash (Medium)".
