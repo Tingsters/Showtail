@@ -53,6 +53,7 @@ import {
   renderDecisionText,
   type DecisionQuestion,
 } from './decisions.ts';
+import { editsFromEnvelope, type EditedFile } from './hookInput.ts';
 import { importedSourceIds } from './events.ts';
 import { asArray, asString, prop } from './parse.ts';
 import { toRepoRelative, type AuthorPaths } from './storage.ts';
@@ -75,6 +76,12 @@ export interface CodexMessage {
   files?: string[];
   /** For edits: the apply_patch envelope (a +/- diff), captured for the report. */
   diff?: string;
+  /**
+   * For edits: per-file CLEAN diffs (and deletions), so the report renders Codex
+   * edits like Claude's. Built from the apply_patch envelope; a deletion carries
+   * the removed content (reconstructed from the file's earlier add/update).
+   */
+  edits?: EditedFile[];
   /** For an assistant reply: the model in effect (from `turn_context.model`, e.g. `gpt-5.5`). */
   model?: string;
 }
@@ -105,10 +112,6 @@ export interface CodexRolloutSummary {
   last?: string;
   importState: 'none' | 'partial' | 'full';
 }
-
-// File headers in an apply_patch envelope (Add/Update/Move keep the file; Delete
-// drops it). Mirrors APPLY_PATCH_FILE_RE in hookInput.ts.
-const APPLY_PATCH_FILE_RE = /^\*\*\* (?:Add|Update|Move) File: (.+)$/gm;
 
 /** Don't record edits to Showtail/Codex bookkeeping files. Mirrors hook.ts. */
 function isInternalPath(p: string): boolean {
@@ -250,6 +253,9 @@ export function parseCodexTranscript(content: string, root: string): CodexTransc
   let userSeq = 0;
   let asstSeq = 0;
   let planSeq = 0;
+  // The latest captured content (clean `+ ` lines) per file, so a later Delete
+  // can render the removed code as `- ` lines — like Claude shows a deletion.
+  const lastAdded = new Map<string, string>();
   let decisionSeq = 0;
   // The model in effect, updated by each `turn_context` line (Codex records it
   // per turn, not per message), so replies are stamped with the model that was
@@ -350,14 +356,34 @@ export function parseCodexTranscript(content: string, root: string): CodexTransc
       if (prop(payload, 'name') !== 'apply_patch') continue;
       const envelope = asString(prop(payload, 'input'));
       if (!envelope) continue;
-      const files = filesFromEnvelope(envelope, root);
-      if (files.length === 0) continue;
+      // Per-file CLEAN diffs (matches the live-hook formatting), keeping edits
+      // inside the repo and out of bookkeeping dirs. A Delete carries no body, so
+      // reconstruct its removed lines from the file's last add/update.
+      const edits = editsFromEnvelope(envelope, (p) => toRepoRelative(root, p)).filter(
+        (e) => !e.file.startsWith('..') && !isInternalPath(e.file),
+      );
+      for (const e of edits) {
+        if (e.deleted) {
+          const prior = lastAdded.get(e.file);
+          e.diff = prior
+            ? prior
+                .split('\n')
+                .filter((l) => l.startsWith('+ '))
+                .map((l) => '- ' + l.slice(2))
+                .join('\n')
+            : undefined;
+        } else if (e.diff) {
+          lastAdded.set(e.file, e.diff);
+        }
+      }
+      if (edits.length === 0) continue;
+      const files = edits.map((e) => e.file);
       const callId = asString(prop(payload, 'call_id'));
       messages.push({
         role: 'edit',
         text: `Codex edited ${files.join(', ')}`,
         files,
-        diff: envelope, // the apply_patch envelope is already a +/- diff
+        edits,
         timestamp,
         sourceId: callId
           ? `codex:edit:${callId}`
@@ -500,38 +526,26 @@ function parseCodexDecision(
   return questions;
 }
 
-/** Repo-relative, in-repo, non-internal file paths named by an apply_patch envelope. */
-function filesFromEnvelope(envelope: string, root: string): string[] {
-  const out: string[] = [];
-  for (const m of envelope.matchAll(APPLY_PATCH_FILE_RE)) {
-    const raw = m[1]?.trim();
-    if (!raw) continue;
-    const rel = toRepoRelative(root, raw);
-    if (rel.startsWith('..') || isInternalPath(rel)) continue;
-    if (!out.includes(rel)) out.push(rel);
-  }
-  return out;
-}
-
 /**
  * Parse a rollout into the tool-agnostic {@link HookTranscript} the generic stop
- * reconcile in commands/hook.ts consumes. `edit` messages are dropped — the
- * post-edit hook already records those (with diffs) — leaving prompts, assistant
- * replies, decisions, and plans. A Codex plan carries no `approved` flag (Codex
- * runs headless and never asks for approval), so the reconcile tags it with no
- * approval badge — distinct from Claude, which always resolves true/false.
+ * reconcile in commands/hook.ts consumes: prompts, assistant replies, decisions,
+ * plans, and `edit` messages. Edits carry per-file clean diffs (and deletions)
+ * which the reconcile imports as diff artifacts — the reliable diff source, since
+ * Codex's live hook payload carries the file but not the diff. A Codex plan
+ * carries no `approved` flag (it runs headless and never asks), so the reconcile
+ * tags it with no approval badge — distinct from Claude, which resolves true/false.
  */
 export function parseCodexRollout(content: string, root: string): HookTranscript {
   const parsed = parseCodexTranscript(content, root);
   const messages: HookTranscriptMessage[] = [];
   for (const m of parsed.messages) {
-    if (m.role === 'edit') continue;
     messages.push({
       role: m.role,
       text: m.text,
       timestamp: m.timestamp,
       sourceId: m.sourceId,
       model: m.model,
+      ...(m.role === 'edit' ? { edits: m.edits } : {}),
     });
   }
   return { sessionId: parsed.sessionId, messages };
@@ -672,15 +686,17 @@ export async function importCodexTranscript(
 
     // Edits become back-dated diff artifacts (one per touched file), not events.
     if (msg.role === 'edit') {
-      for (const file of msg.files ?? []) {
-        const sourceId = `${msg.sourceId}#${file}`;
+      for (const e of msg.edits ?? []) {
+        const sourceId = `${msg.sourceId}#${e.file}`;
         if (seenArtifacts.has(sourceId)) {
           result.skipped += 1;
           continue;
         }
+        // `e.diff` is the clean per-file diff (a deletion carries its removed
+        // lines); importEditArtifact skips an empty diff on its own.
         const wrote = importEditArtifact(author, {
-          path: file,
-          diff: msg.diff ?? '',
+          path: e.file,
+          diff: e.diff ?? '',
           tool: 'codex',
           turnId: currentTurnId,
           timestamp: msg.timestamp,

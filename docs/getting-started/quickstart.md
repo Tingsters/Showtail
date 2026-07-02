@@ -19,17 +19,17 @@ remember.
 ## Wiring up one project by hand
 
 Prefer to set up a single project explicitly instead of turning on tracking
-everywhere? Use `init` and `connect`:
+everywhere? Use `track` and `connect`:
 
 ```bash
 # 1. Set up Showtail in your project. This creates the .showtail/ folder.
-showtail init --project "Week 5 Parser"
+showtail track --project "Week 5 Parser"
 
 # 2. Connect your AI tool so capture is automatic (one time).
 showtail connect claude         # or: codex, copilot
 ```
 
-`showtail init` is the **manual** path. If you already ran `showtail setup`,
+`showtail track` is the **manual** path. If you already ran `showtail setup`,
 tracking is on everywhere and you can skip both steps.
 
 ## While you work

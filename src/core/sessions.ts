@@ -25,6 +25,7 @@ export function makeSession(label?: string): Session {
  */
 export function startSession(author: AuthorPaths, label?: string): Session {
   const session = makeSession(label);
+  session.machineId = author.machineId;
   const sessions = readSessions(author);
   sessions.push(session);
   writeSessions(author, sessions);
@@ -82,6 +83,7 @@ export function sessionForNativeSession(
 
   const session = makeSession();
   session.nativeSessionId = nativeSessionId;
+  session.machineId = author.machineId;
   if (opts.tool) session.tool = opts.tool;
   // Re-read immediately before writing to shrink the window in which a
   // concurrent session-start for a *different* id could clobber this push.

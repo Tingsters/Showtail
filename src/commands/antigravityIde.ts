@@ -1,71 +1,73 @@
 import { existsSync } from 'node:fs';
 import {
-  installAntigravityIdeHooks,
   removeAntigravityIdeInstructions,
   resolveAntigravityIdeTarget,
   uninstallAntigravityIdeHooks,
   writeAntigravityIdeInstructions,
 } from '../core/antigravityIde.ts';
 import {
-  printHooksEnabled,
-  printInstallHeader,
-  printPrivacyNote,
-  printUninstallResult,
-  scopeOf,
-} from './installBase.ts';
+  ANTIGRAVITY_EXTENSION_ID,
+  installAntigravityIdeExtension,
+} from '../core/antigravityIdeExtension.ts';
+import { printInstallHeader, printUninstallResult, scopeOf } from './installBase.ts';
 
 export interface AntigravityIdeInstallOptions {
   user?: boolean;
   project?: boolean;
-  /** Install auto-capture hooks. Defaults to true; `--no-hooks` sets false. */
-  hooks?: boolean;
   force?: boolean;
   cwd?: string;
 }
 
-/** Install (or refresh) the Antigravity IDE instructions and auto-capture hooks. */
+/**
+ * Install (or refresh) the Antigravity IDE integration: the rules file plus the
+ * Showtail VS Code extension — the reliable capture path (it watches the IDE's
+ * transcript and imports it). We deliberately do NOT write the IDE's lifecycle
+ * `hooks.json`: that build only ever fires `PostToolUse` (no `Stop`/`PreInvocation`,
+ * no stable session id), so the hooks can't capture the conversation. The
+ * extension supersedes them. (`disconnect` still cleans up any hooks an older
+ * version left behind.)
+ */
 export async function runAntigravityIdeInstall(
   options: AntigravityIdeInstallOptions,
 ): Promise<void> {
   const scope = scopeOf(options);
   const target = resolveAntigravityIdeTarget(scope, options.cwd);
-  const withHooks = options.hooks !== false; // default ON; --no-hooks opts out
 
   const existed = existsSync(target.contextFile);
   writeAntigravityIdeInstructions(target, { force: options.force });
   printInstallHeader('Antigravity IDE instructions', target.contextFile, scope, existed);
 
-  if (withHooks) {
-    installAntigravityIdeHooks(target);
-    printHooksEnabled(target.hooksFile);
-    // The IDE loads ONE global hooks file (no per-workspace path), and only at
-    // language-server startup — so connecting always writes the global file and
-    // the user must restart the IDE for it to take effect.
-    console.log('  Note: the Antigravity IDE reads this one global hooks file for every');
+  // The capture path: the Showtail VS Code extension, installed via the IDE's CLI.
+  const ext = installAntigravityIdeExtension();
+  if (ext.installed) {
+    console.log(`Installed the Showtail extension into Antigravity IDE (${ext.vsix}).`);
+    console.log('  RESTART the IDE once so it loads — then capture is automatic.');
+  } else if (ext.reason === 'cli-not-found') {
+    console.log('Could not find the Antigravity IDE CLI to install the extension.');
+    console.log(`  Install it from your IDE: search "${ANTIGRAVITY_EXTENSION_ID}" in`);
     console.log(
-      '  workspace, and only at startup — so RESTART the IDE to start capturing.',
+      '  Extensions, or run: antigravity-ide --install-extension <showtail.vsix>',
     );
-    console.log('');
-    printPrivacyNote({
-      editSubject: 'Antigravity IDE',
-      disconnectName: 'antigravity-ide',
-      scope,
-    });
+  } else if (ext.reason === 'vsix-not-bundled') {
+    console.log('The Showtail extension VSIX was not bundled with this build.');
+    console.log(
+      `  Install it manually: antigravity-ide --install-extension ${ANTIGRAVITY_EXTENSION_ID}`,
+    );
   } else {
-    console.log('Auto-capture hooks were SKIPPED (--no-hooks).');
+    console.log(`Could not install the Showtail extension: ${ext.reason}`);
     console.log(
-      '  The instructions still teach Antigravity IDE to log prompts and snapshot',
+      '  Try manually: antigravity-ide --install-extension <showtail.vsix> --force',
     );
-    console.log(
-      '  edits itself as you pair. That capture is model-driven, so it may be less',
-    );
-    console.log('  complete than the hooks. Re-run without --no-hooks to enable them.');
   }
 
   console.log('');
   console.log(
-    'Then just work in Antigravity IDE — it reads the rules file automatically.',
+    'Privacy: Showtail records your prompts and snapshots edits into your local',
   );
+  console.log('  .showtail/ folder — nothing leaves your machine. Review with `showtail');
+  console.log('  report`; stop anytime with `showtail disconnect antigravity-ide`.');
+  console.log('');
+  console.log('Then just work in Antigravity IDE — your prompts and edits are captured.');
 }
 
 export interface AntigravityIdeUninstallOptions {

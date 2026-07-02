@@ -1,7 +1,6 @@
 /**
  * Google Gemini (the web app) — import-only. A share link or pasted transcript
- * is parsed by core/gemini.ts and recorded into the trail. Distinct from the
- * Gemini CLI (see gemini-cli.ts), which is a live-capture connect plugin.
+ * is parsed by core/gemini.ts and recorded into the trail.
  */
 import { runImportGemini } from '../commands/importGemini.ts';
 import type { EnvironmentPlugin } from './types.ts';

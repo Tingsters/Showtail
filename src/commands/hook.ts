@@ -1,5 +1,14 @@
-import { existsSync } from 'node:fs';
-import { addArtifact } from '../core/artifacts.ts';
+import { existsSync, statSync } from 'node:fs';
+import { resolve } from 'node:path';
+import {
+  addArtifact,
+  artifactsForPath,
+  importEditArtifact,
+  importedArtifactSourceIds,
+} from '../core/artifacts.ts';
+import { changedFiles, maybeCurrentCommit } from '../core/git.ts';
+import { sha256OfFile } from '../core/hash.ts';
+import { readObject } from '../core/objects.ts';
 import { materializePlan, PLAN_APPROVED_TAG, PLAN_REVISED_TAG } from '../core/plans.ts';
 import { resolveActiveAuthorForHook } from '../core/authors.ts';
 import {
@@ -17,6 +26,7 @@ import {
 import { redact } from '../core/redact.ts';
 import { asString, prop } from '../core/parse.ts';
 import { autoInitEnabled } from '../core/globalConfig.ts';
+import { autoConnectNewlyDetected } from '../core/autoConnectSweep.ts';
 import {
   closeSession,
   currentSession,
@@ -24,8 +34,10 @@ import {
   startSession,
 } from '../core/sessions.ts';
 import {
+  ensureTrailId,
   findRoot,
   isEligibleAnchor,
+  migrateLegacySessions,
   pathsForRoot,
   readConfig,
   readSessions,
@@ -36,7 +48,20 @@ import {
   updateState,
   type AuthorPaths,
 } from '../core/storage.ts';
-import { recordHookTrace, type HookTrace } from '../core/hookTrace.ts';
+import { ensureMachineId, readMachineIdentity } from '../core/identity.ts';
+import {
+  appendLedgerRecord,
+  endLedgerSession,
+  ensureLedgerSession,
+  markInbox,
+  markPlaced,
+  readLedgerSession,
+  setLedgerTurn,
+  type LedgerSession,
+} from '../core/ledger.ts';
+import { captureTranscriptToLedger } from '../core/ledgerCapture.ts';
+import { materializeLedgerSession } from '../core/materialize.ts';
+import { recordHookTrace, recordRawPayload, type HookTrace } from '../core/hookTrace.ts';
 import { connectPlugins, getPluginById } from '../plugins/registry.ts';
 import type {
   DiscoveredPlanFile,
@@ -56,6 +81,12 @@ export type HookEvent =
 
 /** Default minutes of inactivity before a session auto-closes. */
 const DEFAULT_IDLE_TIMEOUT_MINUTES = 60;
+
+// How recently a git-changed file must have been modified to be attributed to
+// the current Codex turn by the raw-shell git backstop. Wide enough to cover a
+// slow command, narrow enough to skip files left dirty by earlier turns/manual
+// edits. (See the git fallback in handlePostEdit.)
+const GIT_FALLBACK_WINDOW_MS = 5 * 60_000;
 
 export interface HookOptions {
   cwd?: string;
@@ -90,6 +121,33 @@ function adapterFor(tool: Tool): HookAdapter | undefined {
 }
 
 /**
+ * Sole-writer mode (the full inversion) — now the DEFAULT. For any session with a
+ * native session id, the repo trail is a pure *projection* of the ledger: the hook
+ * captures to the ledger, then `materialize`s into the resolved root, instead of
+ * the live handlers writing the repo directly. Verified at full parity with the old
+ * handlers across every plugin/capability (the whole suite passes either way).
+ * The live handlers remain only as the fallback for events with no native id (they
+ * can't be correlated in the ledger), and for session start/end lifecycle.
+ * Escape hatch: `SHOWTAIL_LEDGER_WRITER=0` restores the legacy direct-write path.
+ */
+function ledgerWriterEnabled(): boolean {
+  const v = process.env.SHOWTAIL_LEDGER_WRITER;
+  return v !== '0' && v !== 'false';
+}
+
+/**
+ * Antigravity hosts (the IDE and the `agy` CLI) read a JSON *decision* from each
+ * hook's stdout (`{"decision":"allow"|"deny"|"ask"}`) and FAIL CLOSED — blocking
+ * the tool/model — if a hook errors or prints non-JSON. Showtail hooks only
+ * observe, so they must always print an "allow" and never break the host. Claude
+ * Code / Codex don't read hook stdout this way, so the decision output is gated to
+ * these tools.
+ */
+function isAntigravityHostTool(tool: Tool): boolean {
+  return tool === 'antigravity-ide' || tool === 'antigravity-cli';
+}
+
+/**
  * Normalize a raw hook payload into a tool-agnostic event. With an adapter the
  * plugin owns the parsing; without one (manual `cli`, or an unknown tool) we
  * read only the common `prompt`/`session_id` fields and capture no edits.
@@ -105,6 +163,86 @@ function parseEvent(
     prompt: extractPrompt(payload) ?? undefined,
     editedFiles: [],
   };
+}
+
+/**
+ * Mirror a hook event into the durable ledger: the student's prompts and the
+ * files they changed, keyed to the tool session so they survive even when no
+ * project root resolves. Edit paths are stored ABSOLUTE (resolved against the
+ * payload cwd) so the materialize step can re-relativize them against whatever
+ * repo the session is ultimately placed in. Conversational replies are NOT
+ * mirrored here — for a placed session the existing Stop reconcile captures them
+ * into the trail; the ledger holds the student's own work, which is what an
+ * inbox/reattach needs to never drop.
+ */
+async function captureToLedger(
+  session: LedgerSession,
+  event: HookEvent,
+  parsed: NormalizedHookEvent,
+  cwd: string,
+): Promise<void> {
+  if (event === 'user-prompt') {
+    if (!parsed.prompt) return;
+    const rec = appendLedgerRecord(session.id, {
+      kind: 'prompt',
+      tool: session.tool,
+      text: parsed.prompt,
+      // Captured live so a projection keeps the real commit (it back-dates events).
+      gitCommit: await maybeCurrentCommit(cwd, true),
+    });
+    setLedgerTurn(session.id, rec.id);
+    return;
+  }
+  if (event === 'post-edit') {
+    const turnKey = readLedgerSession(session.id)?.currentTurnKey;
+    const gitCommit = await maybeCurrentCommit(cwd, true);
+    const add = async (
+      file: string,
+      diff: string | undefined,
+      deleted: boolean,
+    ): Promise<void> => {
+      if (isInternalPath(file)) return;
+      const abs = resolve(cwd, file);
+      // Hash the file as it stands now (the live snapshot), so a projection keeps
+      // the integrity hash without re-reading a file that may have moved.
+      let sha256: string | undefined;
+      if (!deleted) {
+        try {
+          sha256 = await sha256OfFile(abs);
+        } catch {
+          // File gone/unreadable — record the edit without a hash.
+        }
+      }
+      appendLedgerRecord(session.id, {
+        kind: 'edit',
+        tool: session.tool,
+        file: abs,
+        diff,
+        deleted,
+        turnKey,
+        gitCommit,
+        sha256,
+      });
+    };
+    if (parsed.edits && parsed.edits.length > 0) {
+      for (const e of parsed.edits) await add(e.file, e.diff, e.deleted === true);
+    } else {
+      for (const f of parsed.editedFiles) await add(f, parsed.suggestedDiff, false);
+    }
+    return;
+  }
+  if (event === 'session-end') {
+    endLedgerSession(session.id);
+  }
+}
+
+/** Mark a ledger session unplaced without ever letting bookkeeping break the hook. */
+function safeMarkInbox(sessionId: string): void {
+  try {
+    markInbox(sessionId);
+  } catch {
+    // Best-effort.
+  }
 }
 
 /**
@@ -133,31 +271,123 @@ export async function runHook(
     const cwd = payload?.cwd ?? options.cwd ?? process.cwd();
     const tool: Tool = options.tool ?? 'claude-code';
     trace.tool = tool;
-    trace.nativeSessionId = parseEvent(adapterFor(tool), payload).nativeSessionId;
+    const parsed = parseEvent(adapterFor(tool), payload);
+    trace.nativeSessionId = parsed.nativeSessionId;
+
+    // Opportunistically wire up any tool that was installed (or shipped in a
+    // Showtail build) after the user's last `showtail setup`. Auto-connect
+    // otherwise only runs during setup, so such a tool would never connect — its
+    // own hooks can't fire until installed. Runs on session-start of any already
+    // connected tool, once per tool, only after opt-in, and never re-touches one
+    // the user later disconnects. Best-effort: never disrupt the session.
+    if (event === 'session-start') {
+      try {
+        autoConnectNewlyDetected(cwd);
+      } catch {
+        /* a sweep failure must never break the hook */
+      }
+    }
 
     let root = findRoot(cwd);
+
+    // Durable ledger capture — runs whenever tracking is active (a trail already
+    // exists, or the user has opted into auto-init via `showtail setup`), and
+    // BEFORE any project root is resolved. This is what stops a folderless,
+    // scratch-workspace, or zero-edit session from being dropped: the student's
+    // prompts and edited files land in the machine-local ledger first, to be
+    // projected into a repo now (if a root resolves) or later (`showtail
+    // reattach`). Bulletproof — any failure here must never break the hook.
+    // Needs the tool's own session id to correlate this event's process with the
+    // session's others; the global tools we care about all send one.
+    const trackingActive = root != null || autoInitEnabled();
+    let ledger: LedgerSession | undefined;
+    if (trackingActive && parsed.nativeSessionId) {
+      try {
+        ledger = ensureLedgerSession({
+          tool,
+          nativeSessionId: parsed.nativeSessionId,
+          machineId: readMachineIdentity()?.machineId,
+          slug: readMachineIdentity()?.slug,
+          cwd,
+        });
+        await captureToLedger(ledger, event, parsed, cwd);
+        // Mirror the conversation into the ledger from the tool transcript on Stop
+        // (or post-edit for hosts that only fire that), so an inbox session keeps
+        // its replies/decisions/plans — discoverable by native id even with no root.
+        const adapter = adapterFor(tool);
+        if (
+          (event === 'stop' || (event === 'post-edit' && adapter?.reconcileOnPostEdit)) &&
+          adapter?.getTranscript
+        ) {
+          const transcript = adapter.getTranscript(payload, root ?? cwd);
+          if (transcript) {
+            let planFiles: DiscoveredPlanFile[] = [];
+            try {
+              planFiles = adapter.planFiles?.(payload, root ?? cwd) ?? [];
+            } catch {
+              planFiles = []; // Plan-file discovery is best-effort; never break capture.
+            }
+            captureTranscriptToLedger(ledger, transcript, tool, planFiles, {
+              isInternalPath,
+            });
+          }
+        }
+      } catch {
+        ledger = undefined; // Ledger problems never disrupt the session.
+      }
+    }
+
     if (!root) {
       // Automatic tracking: silently start a trail on the first real activity in
       // an eligible project (git repo / dev folder), once the user has opted in
       // via `showtail setup`. Only a task start may create one — never a stray
       // edit/stop. `isEligibleAnchor` also refuses HOME, so a whole home dir is
-      // never turned into one shared trail.
-      if (event !== 'session-start' && event !== 'user-prompt') return;
+      // never turned into one shared trail. When no eligible root resolves the
+      // work is NOT dropped — it stays in the ledger inbox (`showtail inbox`).
+      if (event !== 'session-start' && event !== 'user-prompt') {
+        if (ledger) safeMarkInbox(ledger.id);
+        return;
+      }
       if (!autoInitEnabled()) return;
       const anchor = await resolveAnchor(cwd);
-      if (!isEligibleAnchor(anchor)) return;
+      if (!isEligibleAnchor(anchor)) {
+        if (ledger) safeMarkInbox(ledger.id);
+        return;
+      }
       await ensureInitialized(anchor);
       root = anchor;
     }
     paths = pathsForRoot(root);
+    // Opt-in (SHOWTAIL_DEBUG_PAYLOAD=1) raw-payload capture, for pinning down a
+    // host's exact PostToolUse payload shape. No-op unless the flag is set.
+    recordRawPayload(paths, event, tool, payload);
     if (!existsSync(paths.config)) return; // Not initialized.
     const config = readConfig(paths);
+
+    // Record where this session was placed: its stable trailId and the trail's
+    // current location. Minting the trailId here also upgrades an older trail
+    // (config < v4) on first sight. A later move of the repo is recognized by
+    // this id; a delete leaves the session reattributable from the ledger.
+    if (ledger) {
+      try {
+        markPlaced(ledger.id, ensureTrailId(paths), paths.root);
+      } catch {
+        // Placement bookkeeping is best-effort; capture already succeeded.
+      }
+    }
 
     // Resolve who is writing this trail. Cache-only / git-config at worst — never
     // prompts or hits the network, so the hook stays fast and non-blocking. If
     // identity can't be settled silently, no-op rather than guess.
     const author = await resolveActiveAuthorForHook(paths, { cwd });
     if (!author) return;
+    // One-time, idempotent: fold a legacy `sessions.json` into this machine's shard
+    // so old sessions can be closed/swept. No-op once migrated.
+    try {
+      migrateLegacySessions(author);
+    } catch {
+      // Migration is best-effort; a capture must never break on it.
+    }
 
     // On any live capture, first close this author's sessions that have gone idle
     // (stamped at their last event), so a finished task's session doesn't linger
@@ -166,6 +396,32 @@ export async function runHook(
       const idleMin = config.settings.idleTimeoutMinutes ?? DEFAULT_IDLE_TIMEOUT_MINUTES;
       const swept = sweepIdleSessions(author, idleMin * 60_000, Date.now());
       if (swept.length > 0) trace.closedSessions = swept;
+    }
+
+    // Sole-writer mode (the full inversion, opt-in): the work is already in the
+    // ledger (captured above, replies included on Stop); project it into the repo
+    // instead of writing the repo from the live handlers. Session start/end keep
+    // their lifecycle handlers (the context note + deterministic close) below.
+    if (
+      ledgerWriterEnabled() &&
+      ledger &&
+      (event === 'user-prompt' || event === 'post-edit' || event === 'stop')
+    ) {
+      const m = await materializeLedgerSession(ledger, author);
+      trace.sessionId = m.sessionId;
+      if (event === 'user-prompt') {
+        const promptSource = asString(prop(payload, 'promptSource'));
+        if (promptSource) trace.promptSource = promptSource;
+        if (m.lastPromptId) trace.promptId = m.lastPromptId;
+        // Make this the CLI's current session, like the live handler does, so
+        // `status`/`log` see it.
+        updateState(author.shared, { currentSessionId: m.sessionId });
+      }
+      if (m.replies > 0) trace.replies = m.replies;
+      if (m.decisions > 0) trace.decisions = m.decisions;
+      if (m.plans > 0) trace.plans = m.plans;
+      if (m.edits > 0) trace.edits = m.edits;
+      return;
     }
 
     switch (event) {
@@ -188,6 +444,14 @@ export async function runHook(
   } finally {
     trace.durationMs = Date.now() - startedAt;
     if (paths) recordHookTrace(paths, trace);
+    // Antigravity reads a JSON decision from the hook's stdout and fails closed on
+    // a missing/invalid one. Emit "allow" here in `finally` so it runs on EVERY
+    // path — early no-op return, successful capture, or a swallowed error — and a
+    // capture problem can never block the user's IDE/agent. Gated to Antigravity
+    // hosts (see isAntigravityHostTool); other hosts ignore hook stdout.
+    if (isAntigravityHostTool(trace.tool)) {
+      process.stdout.write('{"decision":"allow"}\n');
+    }
   }
 }
 
@@ -219,10 +483,14 @@ function handleSessionStart(
   if (hadOpen === false) trace.createdSession = true;
   updateState(author.shared, { currentSessionId: session.id });
   // SessionStart stdout is injected into Claude's context — keep it to one line.
-  process.stdout.write(
-    `Showtail is capturing this session's work trail (session ${session.id}). ` +
-      `Your prompts and edits are captured automatically — just work as usual.\n`,
-  );
+  // Antigravity hosts instead read stdout as a JSON decision (emitted in runHook's
+  // `finally`), so suppress this human-readable note there to keep stdout valid JSON.
+  if (!isAntigravityHostTool(tool)) {
+    process.stdout.write(
+      `Showtail is capturing this session's work trail (session ${session.id}). ` +
+        `Your prompts and edits are captured automatically — just work as usual.\n`,
+    );
+  }
 }
 
 /**
@@ -299,6 +567,28 @@ async function handleUserPrompt(
   // Print nothing: this path must not add anything to the session's context.
 }
 
+/**
+ * Reconstruct a deletion diff (the removed code as `- ` lines) for `repoPath`
+ * from its most recent snapshot's stored diff in this trail — so a deleted file
+ * renders like Claude's code removals. Returns undefined when there's no prior
+ * in-trail content to show (then the deletion is recorded as nothing).
+ */
+function deletionDiff(author: AuthorPaths, repoPath: string): string | undefined {
+  const history = artifactsForPath(author, repoPath);
+  for (let i = history.length - 1; i >= 0; i--) {
+    const ref = history[i]?.diffHash;
+    if (!ref) continue;
+    const prior = readObject(author.shared, ref);
+    if (!prior) continue;
+    const removed = prior
+      .split('\n')
+      .filter((l) => l.startsWith('+ '))
+      .map((l) => '- ' + l.slice(2));
+    if (removed.length > 0) return removed.join('\n');
+  }
+  return undefined;
+}
+
 async function handlePostEdit(
   author: AuthorPaths,
   payload: HookPayload | null,
@@ -318,19 +608,95 @@ async function handlePostEdit(
     readState(author.shared).currentPromptId ??
     undefined;
   trace.turnId = turnId;
-  // Capture the AI-suggested code (unless code capture is turned off).
-  const diff = config.settings.captureCode === false ? undefined : ev.suggestedDiff;
+  const captureOff = config.settings.captureCode === false;
   let edits = 0;
-  for (const file of ev.editedFiles) {
-    if (isInternalPath(file)) continue;
-    try {
-      await addArtifact(author, { filePath: file, tool, turnId, diff });
-      edits += 1;
-    } catch {
-      // File may have been moved/deleted by now — skip it quietly.
+  if (ev.edits && ev.edits.length > 0) {
+    // Per-file edits with their own clean diffs (Codex apply_patch). Each file
+    // renders only its own change, and a removed file renders as a deletion —
+    // matching how Claude Code's edits look in the report.
+    for (const e of ev.edits) {
+      if (isInternalPath(e.file)) continue;
+      if (e.deleted) {
+        // Show the removed code as red `- ` lines, reconstructed from this
+        // file's most recent snapshot in the trail (its prior content).
+        const del = captureOff ? undefined : deletionDiff(author, e.file);
+        if (
+          del &&
+          importEditArtifact(author, { path: e.file, diff: del, tool, turnId })
+        ) {
+          edits += 1;
+        }
+        continue;
+      }
+      try {
+        await addArtifact(author, {
+          filePath: e.file,
+          tool,
+          turnId,
+          diff: captureOff ? undefined : e.diff,
+        });
+        edits += 1;
+      } catch {
+        // File may have been moved/deleted by now — skip it quietly.
+      }
+    }
+  } else {
+    // Legacy path: one captured diff applied to each edited file (Claude/Gemini).
+    const diff = captureOff ? undefined : ev.suggestedDiff;
+    for (const file of ev.editedFiles) {
+      if (isInternalPath(file)) continue;
+      try {
+        await addArtifact(author, { filePath: file, tool, turnId, diff });
+        edits += 1;
+      } catch {
+        // File may have been moved/deleted by now — skip it quietly.
+      }
     }
   }
   trace.edits = edits;
+
+  // Git backstop for hosts that edit via raw shell (declared by the plugin's
+  // `recoverEditsFromGit`). Such tools can write files by running shell (e.g.
+  // Codex's PowerShell `Set-Content`) where the path lives in a variable and
+  // isn't in the payload. When structured parsing captured nothing, recover
+  // recently-changed files from git. Gated on empty-parse so it never double-
+  // captures; the recency window keeps it from sweeping up stale/manual changes
+  // already dirty in the tree (the accepted trade-off for raw-shell coverage).
+  if (
+    edits === 0 &&
+    adapterFor(tool)?.recoverEditsFromGit &&
+    config.settings.git !== false
+  ) {
+    const cwd = payload.cwd ?? author.shared.root;
+    const cutoff = Date.now() - GIT_FALLBACK_WINDOW_MS;
+    let recovered = 0;
+    for (const file of await changedFiles(cwd)) {
+      if (isInternalPath(file)) continue;
+      // `file` is repo-relative; resolve against the trail root (the same base
+      // addArtifact uses) so the mtime check and the snapshot agree on one path.
+      const abs = resolve(author.shared.root, file);
+      try {
+        if (statSync(abs).mtimeMs < cutoff) continue; // not touched this turn
+        // A raw-shell write carries no diff in the payload — snapshot only.
+        await addArtifact(author, { filePath: file, tool, turnId });
+        recovered += 1;
+      } catch {
+        // Moved/deleted/unreadable since git saw it — skip quietly.
+      }
+    }
+    if (recovered > 0) {
+      edits += recovered;
+      trace.edits = edits;
+      trace.gitRecovered = recovered;
+    }
+  }
+
+  // For hosts that never fire `Stop` (the Antigravity IDE only dispatches
+  // `PostToolUse`), reconcile the transcript here too, so prompts/replies/plans
+  // are still captured. Idempotent (dedup), so running it per tool step is safe.
+  if (adapterFor(tool)?.reconcileOnPostEdit) {
+    await reconcileFromAdapter(author, payload, tool, config, trace);
+  }
 }
 
 /**
@@ -349,6 +715,25 @@ async function handleStop(
   config: Config,
   trace: HookTrace,
 ): Promise<void> {
+  await reconcileFromAdapter(author, payload, tool, config, trace);
+}
+
+/**
+ * Reconcile the trail against the tool's transcript: pull the adapter's
+ * normalized transcript + any on-disk plan files and walk them into the trail
+ * (back-filling prompts the live hook missed, attributing replies/plans). Used by
+ * the `Stop` hook and — for tools whose host never fires `Stop` (Antigravity IDE
+ * only dispatches `PostToolUse`) — by `post-edit` when `reconcileOnPostEdit` is
+ * set. Idempotent: `reconcileTranscript` dedups by sourceId, so running it on
+ * every tool step converges on the full conversation without duplicating events.
+ */
+async function reconcileFromAdapter(
+  author: AuthorPaths,
+  payload: HookPayload | null,
+  tool: Tool,
+  config: Config,
+  trace: HookTrace,
+): Promise<void> {
   const adapter = adapterFor(tool);
   const transcript = adapter?.getTranscript?.(payload, author.shared.root);
   const fallbackNativeId = parseEvent(adapter, payload).nativeSessionId;
@@ -360,7 +745,7 @@ async function handleStop(
   try {
     planFiles = adapter?.planFiles?.(payload, author.shared.root) ?? [];
   } catch {
-    planFiles = []; // Plan-file discovery is best-effort; never break the stop.
+    planFiles = []; // Plan-file discovery is best-effort; never break the hook.
   }
   const summary = await reconcileTranscript(
     author,
@@ -377,6 +762,7 @@ async function handleStop(
     trace.replies = summary.replies;
     trace.decisions = summary.decisions;
     trace.plans = summary.plans;
+    if (summary.edits > 0) trace.edits = summary.edits;
     if (summary.backlogSkipped > 0) trace.backlogSkipped = summary.backlogSkipped;
     if (summary.recoveredReplies > 0) trace.recoveredReplies = summary.recoveredReplies;
   }
@@ -391,6 +777,8 @@ interface StopSummary {
   replies: number;
   decisions: number;
   plans: number;
+  /** Per-file diff artifacts imported from the transcript (Codex apply_patch). */
+  edits: number;
   /** Transcript prompts dropped as pre-window backlog (older than the session). */
   backlogSkipped: number;
   /**
@@ -457,6 +845,7 @@ async function reconcileTranscript(
     replies: 0,
     decisions: 0,
     plans: 0,
+    edits: 0,
     backlogSkipped: 0,
     recoveredReplies: 0,
   };
@@ -493,6 +882,8 @@ async function reconcileTranscript(
   }
 
   const seen = importedSourceIds(author);
+  // Edits import as one diff artifact per file, keyed `<sourceId>#<file>`.
+  const seenArtifacts = importedArtifactSourceIds(author);
   const redactCfg = config.settings.redact;
   let currentTurn: string | undefined; // The prompt id replies attach to.
   // The session that owns `currentTurn` — usually the resolved one, but a
@@ -618,8 +1009,31 @@ async function reconcileTranscript(
       });
       seen.add(msg.sourceId);
       summary.plans += 1;
+    } else if (msg.role === 'edit') {
+      // Import per-file CLEAN diffs (and deletions) recovered from the host's
+      // transcript — the reliable diff source when the live hook payload carries
+      // the file but not the diff (Codex `apply_patch`). The live snapshot still
+      // records the file hash; the report de-dupes the pair to one code change.
+      if (config.settings.captureCode === false) continue;
+      for (const e of msg.edits ?? []) {
+        if (isInternalPath(e.file) || !e.diff) continue;
+        const editSourceId = `${msg.sourceId}#${e.file}`;
+        if (seenArtifacts.has(editSourceId)) continue;
+        const wrote = importEditArtifact(author, {
+          path: e.file,
+          diff: e.diff,
+          tool,
+          turnId: currentTurn,
+          timestamp: msg.timestamp,
+          sessionId: currentTurnSession,
+          sourceId: editSourceId,
+        });
+        if (wrote) {
+          seenArtifacts.add(editSourceId);
+          summary.edits += 1;
+        }
+      }
     }
-    // `edit` messages are ignored — the post-edit hook already records those.
   }
   return summary;
 }

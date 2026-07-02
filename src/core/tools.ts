@@ -1,7 +1,7 @@
 import { connectPlugins } from '../plugins/registry.ts';
 
 export interface ToolStatus {
-  /** The tool's CLI name (e.g. 'claude', 'gemini-cli'). */
+  /** The tool's CLI name (e.g. 'claude', 'codex'). */
   tool: string;
   /** Human-friendly label (e.g. 'Claude Code'). */
   label: string;

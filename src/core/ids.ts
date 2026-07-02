@@ -4,9 +4,11 @@ import { randomBytes } from 'node:crypto';
  * The known id prefixes — the single source of truth for the kinds of ids
  * Showtail mints. Typing {@link makeId} against this catches typos at every call
  * site without each one importing a constant.
- *  - `evt` events, `ses` sessions, `art` artifacts, `imp` import batches.
+ *  - `evt` events, `ses` sessions, `art` artifacts, `imp` import batches,
+ *    `led` ledger sessions (the global durable store), `trl` trail ids (the
+ *    stable per-repo identifier stamped into `.showtail/config.json`).
  */
-export type IdPrefix = 'evt' | 'ses' | 'art' | 'imp';
+export type IdPrefix = 'evt' | 'ses' | 'art' | 'imp' | 'led' | 'trl';
 
 /**
  * Generate a short, sortable-ish, collision-resistant id with a type prefix,

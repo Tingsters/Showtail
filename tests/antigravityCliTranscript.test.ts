@@ -188,6 +188,99 @@ describe('parseAntigravityCliTranscript', () => {
     }
   });
 
+  test('captures the IDE implementation plan from a write_to_file (double-encoded args)', () => {
+    const dir = makeTempDir();
+    try {
+      // Antigravity IDE has no plan tool — it writes implementation_plan.md with
+      // write_to_file, and its tool-call arg VALUES are JSON-string-double-encoded
+      // (a string reads as `"\"…\""`). Mirror that exactly.
+      const planMd = '# Tic-Tac-Toe\n\n## Proposed Changes\n- Build the board\n- Add AI';
+      const content =
+        JSON.stringify({
+          step_index: 10,
+          type: 'PLANNER_RESPONSE',
+          created_at: '2026-06-23T05:00:00Z',
+          tool_calls: [
+            {
+              name: 'write_to_file',
+              args: {
+                ArtifactMetadata: JSON.stringify({ RequestFeedback: true }),
+                CodeContent: JSON.stringify(planMd),
+                Overwrite: true,
+                TargetFile: JSON.stringify(
+                  'C:\\Users\\me\\.gemini\\antigravity-ide\\brain\\sid\\implementation_plan.md',
+                ),
+                toolSummary: JSON.stringify('Create implementation_plan.md'),
+              },
+            },
+          ],
+        }) + '\n';
+      const t = parseAntigravityCliTranscript(content, dir, 'sid');
+      expect(t.messages).toHaveLength(1);
+      const plan = t.messages[0]!;
+      expect(plan.role).toBe('plan');
+      expect(plan.approved).toBe(true);
+      // The plan markdown is decoded (no stray quotes / escapes from the wrapping).
+      expect(plan.text).toBe(planMd);
+      expect(plan.text).not.toContain('\\n');
+      expect(plan.sourceId).toBe('agy:plan:sid:10:0');
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('a write_to_file to a non-plan file is not treated as a plan', () => {
+    const dir = makeTempDir();
+    try {
+      const content =
+        JSON.stringify({
+          step_index: 11,
+          type: 'PLANNER_RESPONSE',
+          created_at: '2026-06-23T05:01:00Z',
+          tool_calls: [
+            {
+              name: 'write_to_file',
+              args: {
+                CodeContent: JSON.stringify('console.log(1)'),
+                TargetFile: JSON.stringify('C:/proj/app.js'),
+              },
+            },
+          ],
+        }) + '\n';
+      const t = parseAntigravityCliTranscript(content, dir, 'sid');
+      // Only the (dropped) edit — no plan, no assistant text.
+      expect(t.messages.filter((m) => m.role === 'plan')).toHaveLength(0);
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('flattens a dead file:// plan link in an assistant reply to plain text', () => {
+    const dir = makeTempDir();
+    try {
+      const content =
+        JSON.stringify({
+          step_index: 12,
+          type: 'PLANNER_RESPONSE',
+          created_at: '2026-06-23T05:02:00Z',
+          content:
+            'I created the plan. Review it in ' +
+            '[implementation_plan.md](file:///C:/Users/me/.gemini/antigravity-ide/brain/sid/implementation_plan.md). ' +
+            'Approve when ready.',
+        }) + '\n';
+      const t = parseAntigravityCliTranscript(content, dir, 'sid');
+      expect(t.messages).toHaveLength(1);
+      const asst = t.messages[0]!;
+      expect(asst.role).toBe('assistant');
+      // The brain-dir file:// link is gone; the label survives as plain text.
+      expect(asst.text).not.toContain('file:///');
+      expect(asst.text).not.toContain('](');
+      expect(asst.text).toContain('Review it in implementation_plan.md.');
+    } finally {
+      cleanup(dir);
+    }
+  });
+
   test('malformed lines are skipped, never thrown', () => {
     const dir = makeTempDir();
     try {
@@ -257,7 +350,7 @@ describe('antigravity-cli getTranscript (stop reconcile)', () => {
       const env = { ...spawnEnv(), GEMINI_HOME: geminiHome };
       const sid = 'sess-agy-e2e-1';
 
-      runCli(dir, ['init', '--project', 'Antigravity Stop'], { env });
+      runCli(dir, ['track', '--project', 'Antigravity Stop'], { env });
       // Log the prompt live so the Stop reconcile has an in-window turn to attach
       // the plan and reply to (mirrors how the user-prompt hook would fire).
       runCli(dir, ['hook', 'user-prompt', '--tool', 'antigravity-cli'], {

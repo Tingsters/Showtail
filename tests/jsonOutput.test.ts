@@ -13,7 +13,7 @@ describe('--json output for the agent-driven loop', () => {
     try {
       writeFileSync(join(dir, 'README.md'), '# Demo\n');
 
-      let out = JSON.parse(run(dir, ['init', '--json']).stdout);
+      let out = JSON.parse(run(dir, ['track', '--json']).stdout);
       expect(out.created).toBe(true);
       expect(out.root).toBeTruthy();
 

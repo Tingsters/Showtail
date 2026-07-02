@@ -212,7 +212,7 @@ export const CAPABILITIES: Capability[] = [
         'Hooks wired to the IDE’s global ~/.gemini/config/hooks.json + contract-tested; not certified live (the IDE can’t be driven headlessly here).',
       ),
       'copilot-vscode': partial(
-        'Captured by the VS Code extension on save, not via lifecycle hooks.',
+        'Captured by the VS Code extension — saves are snapshotted, and native Copilot Chat is read from its on-disk session JSON (watched live, plus `import copilot`). File-based, not lifecycle hooks.',
       ),
     },
   },
@@ -220,7 +220,7 @@ export const CAPABILITIES: Capability[] = [
     id: 'auto-prompt-capture',
     label: 'Auto prompt capture',
     description: 'Your prompts are recorded automatically as you submit them.',
-    note: 'Live-certified for Claude Code + Codex; the CLI plugins are built but their live capture isn’t certified here. Copilot (VS Code) is model-driven.',
+    note: 'Live-certified for Claude Code + Codex; the CLI plugins are built but their live capture isn’t certified here. Copilot (VS Code) reads native chat prompts from the on-disk session JSON (contract-tested), not via hooks.',
     requires: hasHooks,
     surfaceRule: needHooks,
     overrides: {
@@ -235,20 +235,22 @@ export const CAPABILITIES: Capability[] = [
       'antigravity-ide': partial(
         'Hooks wired + contract-tested; live capture not certified (the IDE can’t be driven headlessly here).',
       ),
-      'copilot-vscode': partial('Model-driven via instructions — not guaranteed.'),
+      'copilot-vscode': partial(
+        'Native Copilot Chat prompts are read from the on-disk chat-session JSON (extension watcher + `import copilot`); contract-tested, but file-based rather than a certified live hook.',
+      ),
     },
   },
   {
     id: 'auto-file-capture',
     label: 'Auto file/edit capture',
     description: 'Files the tool edits are snapshotted as artifacts automatically.',
-    note: 'Live-certified for Claude Code + Antigravity CLI. Codex live apply_patch isn’t snapshotted headlessly; Copilot CLI fires no hooks in headless mode; Copilot (VS Code) snapshots on save with no AI diff.',
+    note: 'Live-certified for Claude Code + Antigravity CLI. Codex captures edits in real interactive sessions — the edited file is snapshotted and its AI diff (plus deletions) is reconciled from the session rollout at Stop (contract-tested) — but the headless harness can’t certify a live Codex edit. Copilot CLI fires no hooks in headless mode; Copilot (VS Code) snapshots on save with no AI diff.',
     requires: hasHooks,
     surfaceRule: needHooks,
     overrides: {
       'claude-code': full(),
       codex: partial(
-        'Contract-tested, but a live apply_patch edit was not snapshotted in headless Codex runs on this machine.',
+        'Works in real interactive sessions (file snapshotted; AI diff + deletions reconciled from the rollout at Stop) and contract-tested; headless `codex exec` doesn’t snapshot a live edit here, so it can’t be live-certified.',
       ),
       'copilot-cli': partial(
         'Hooks wired + contract-tested, but Copilot CLI fires no hooks in headless `-p` mode (verified with a token), so file capture can’t be certified here.',
@@ -273,6 +275,9 @@ export const CAPABILITIES: Capability[] = [
     overrides: {
       'claude-code': full(),
       codex: full(),
+      'copilot-vscode': partial(
+        'Copilot Chat replies are read from the on-disk session JSON (extension watcher + `import copilot`); contract-tested via the transcript parser, not a certified live run.',
+      ),
     },
   },
   {
@@ -294,16 +299,14 @@ export const CAPABILITIES: Capability[] = [
     label: 'Plan capture',
     description:
       'Plans the AI proposes are captured as a first-class item, with a saved, linkable plan file.',
-    note: 'Full for Claude Code + Antigravity CLI (Antigravity links its real plan.md). Codex captures plan content from the transcript (no native file). Antigravity IDE writes implementation_plan.md but has no plugin yet. Reconciled on the Stop hook, so — like AI-reply capture — it is certified by its contract test, not the headless live run (print mode never raises Stop).',
+    note: 'Full for Claude Code, Codex, and Antigravity CLI. Antigravity links its real plan.md; Claude Code and Codex materialize the transcript plan into a browsable, linkable file (Codex writes no native plan file). Antigravity IDE writes implementation_plan.md but has no plugin yet. Reconciled on the Stop hook — certified by its contract test, not the headless live run (print mode never raises Stop).',
     // A plan rides in on the same stop transcript path, so a real claim needs one.
     requires: hasTranscript,
     surfaceRule: needPlanFiles,
     overrides: {
       'claude-code': full(),
       'antigravity-cli': full(),
-      codex: partial(
-        'Plan content captured + materialized from the transcript; Codex writes no native plan file.',
-      ),
+      codex: full(),
       // antigravity-ide → derived 'planned' (planFiles surface, no plugin yet).
     },
   },
@@ -320,6 +323,7 @@ export const CAPABILITIES: Capability[] = [
       codex: full(),
       chatgpt: full(),
       'google-gemini': full(),
+      'antigravity-ide': full(),
     },
   },
   {

@@ -44,6 +44,12 @@ export interface HookTrace {
   turnId?: string;
   /** post-edit: how many files were snapshotted. */
   edits?: number;
+  /**
+   * post-edit: files recovered via the git backstop when structured parsing of
+   * a Codex raw-shell edit found nothing (included in `edits`). >0 flags that
+   * the fallback fired.
+   */
+  gitRecovered?: number;
   /** stop: AI replies captured. */
   replies?: number;
   /** stop: decisions captured. */
@@ -92,6 +98,41 @@ export function recordHookTrace(paths: ShowtailPaths, trace: HookTrace): void {
       // No file yet, or a concurrent rotate won the race — either is fine.
     }
     appendFileSync(file, JSON.stringify(trace) + '\n');
+  } catch {
+    // Diagnostics must never break a hook.
+  }
+}
+
+/**
+ * Opt-in raw-payload capture for debugging unknown host payload shapes (e.g.
+ * pinning down how a given agent delivers `apply_patch` to a PostToolUse hook).
+ * Off by default and gated behind `SHOWTAIL_DEBUG_PAYLOAD=1`; when on, appends
+ * the parsed stdin payload (plus event/tool) to `.showtail/diag/payloads.jsonl`.
+ * Like {@link recordHookTrace} it is best-effort and silent — never disturbs a
+ * hook. Not part of the trail; safe to leave in.
+ */
+export function recordRawPayload(
+  paths: ShowtailPaths,
+  event: string,
+  tool: Tool,
+  payload: unknown,
+): void {
+  if (process.env.SHOWTAIL_DEBUG_PAYLOAD !== '1') return;
+  try {
+    const dir = join(paths.base, 'diag');
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+    const file = join(dir, 'payloads.jsonl');
+    try {
+      if (statSync(file).size >= MAX_BYTES) {
+        renameSync(file, join(dir, 'payloads.1.jsonl'));
+      }
+    } catch {
+      // No file yet, or a concurrent rotate won the race — either is fine.
+    }
+    appendFileSync(
+      file,
+      JSON.stringify({ ts: new Date().toISOString(), event, tool, payload }) + '\n',
+    );
   } catch {
     // Diagnostics must never break a hook.
   }

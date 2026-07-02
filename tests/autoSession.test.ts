@@ -60,7 +60,7 @@ describe('automatic session lifecycle', () => {
     const dir = makeTempDir();
     try {
       writeFileSync(join(dir, 'package.json'), '{}\n');
-      run(dir, ['init']);
+      run(dir, ['track']);
       run(
         dir,
         ['hook', 'user-prompt'],
@@ -84,7 +84,7 @@ describe('automatic session lifecycle', () => {
     const dir = makeTempDir();
     try {
       writeFileSync(join(dir, 'package.json'), '{}\n');
-      run(dir, ['init']);
+      run(dir, ['track']);
       run(
         dir,
         ['hook', 'user-prompt'],

@@ -4,9 +4,12 @@ import { join, resolve } from 'node:path';
 import type { Config } from '../types.ts';
 import { establishIdentity } from '../core/authors.ts';
 import { gitToplevel } from '../core/git.ts';
+import { sessionTouchesPath, unplacedSessions } from '../core/ledger.ts';
 import { emitJson } from '../core/output.ts';
+import { makeId } from '../core/ids.ts';
 import {
   CONFIG_VERSION,
+  ensureTrailId,
   pathsForRoot,
   readConfig,
   writeConfig,
@@ -65,7 +68,12 @@ export async function ensureInitialized(
   options: EnsureInitOptions = {},
 ): Promise<{ created: boolean; paths: ShowtailPaths }> {
   const paths = pathsForRoot(root);
-  if (existsSync(paths.config)) return { created: false, paths };
+  if (existsSync(paths.config)) {
+    // Existing trail: upgrade it in place (mint trailId + bump version on a v3
+    // trail). No-op once already at the current version.
+    ensureTrailId(paths);
+    return { created: false, paths };
+  }
 
   // Create the shared directory tree (per-author folders are created on demand).
   for (const dir of [paths.base, paths.authorsDir, paths.objectsDir, paths.reportsDir]) {
@@ -84,6 +92,8 @@ export async function ensureInitialized(
     createdAt: new Date().toISOString(),
     anchor: resolve(root),
     anchorKind,
+    // Stable id the global ledger links sessions to (survives the repo moving).
+    trailId: makeId('trl'),
     settings: {
       git,
       captureAiOutput: true,
@@ -101,6 +111,31 @@ export async function ensureInitialized(
   writeFileSync(join(paths.base, '.gitignore'), GITIGNORE, 'utf8');
 
   return { created: true, paths };
+}
+
+/**
+ * Pull every inbox session whose captured work lives under `root` into this freshly
+ * created trail. This is what makes `showtail track <folder>` rescue work Showtail
+ * had parked in the inbox before the folder was a project (e.g. book exercises).
+ * Best-effort per session; a failure leaves that session in the inbox. Identity is
+ * already established by the caller, so `reattach` resolves the author without
+ * prompting. `reattach` is dynamically imported to avoid an init↔reattach cycle.
+ */
+async function backfillInboxUnder(root: string): Promise<number> {
+  const { reattachLedgerSession } = await import('./reattach.ts');
+  const sessions = unplacedSessions({ includeHidden: true }).filter(
+    (s) => s.status === 'inbox' && sessionTouchesPath(s, root),
+  );
+  let placed = 0;
+  for (const session of sessions) {
+    try {
+      await reattachLedgerSession(session, root);
+      placed += 1;
+    } catch {
+      /* best-effort — a failed session simply stays in the inbox */
+    }
+  }
+  return placed;
 }
 
 /**
@@ -149,8 +184,14 @@ export async function runInit(options: InitOptions = {}): Promise<void> {
   if (options.json) {
     await ensureInitialized(root, { project: options.project });
     // Register the local student silently when possible (no prompt in JSON mode).
-    await establishIdentity(paths, { cwd: root, allowPrompt: false });
-    emitJson({ created: true, root, anchorKind: readConfig(paths).anchorKind ?? null });
+    const jsonAuthor = await establishIdentity(paths, { cwd: root, allowPrompt: false });
+    const backfilled = jsonAuthor ? await backfillInboxUnder(root) : 0;
+    emitJson({
+      created: true,
+      root,
+      anchorKind: readConfig(paths).anchorKind ?? null,
+      backfilled,
+    });
     return;
   }
 
@@ -160,7 +201,7 @@ export async function runInit(options: InitOptions = {}): Promise<void> {
   if (resolve(root) === resolve(homedir())) {
     console.log('Warning: initializing Showtail in your HOME directory.');
     console.log('  Work in any subfolder would then be recorded into this one trail.');
-    console.log('  Prefer running `showtail init` inside your actual project folder.');
+    console.log('  Prefer running `showtail track` inside your actual project folder.');
     console.log('');
   }
 
@@ -199,5 +240,14 @@ export async function runInit(options: InitOptions = {}): Promise<void> {
     );
   }
   console.log('');
+  if (author) {
+    const backfilled = await backfillInboxUnder(root);
+    if (backfilled > 0) {
+      console.log(
+        `Pulled ${backfilled} already-captured session(s) here from your inbox.`,
+      );
+      console.log('');
+    }
+  }
   console.log('Next: run `showtail start` to begin your first session.');
 }

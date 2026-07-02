@@ -301,6 +301,20 @@ export function buildTurns(
       fallback(a.timestamp, a.actorSlug ?? '', a.sessionId ?? '');
     if (!turn) continue;
     const diff = a.diffHash ? (readObject(paths, a.diffHash) ?? undefined) : undefined;
+    // De-dupe one file per turn: a host can produce two artifacts for the same
+    // edit — a live snapshot (file hash, no diff) and a transcript-reconciled
+    // import (diff, no hash; e.g. Codex `apply_patch`). Collapse them so the file
+    // shows once, preferring the entry that carries a diff.
+    const existing = turn.codeChanges.find((c) => c.path === a.path);
+    if (existing) {
+      if (!existing.diff && diff) {
+        existing.diff = diff;
+        existing.diffLines = a.diffLines;
+      }
+      if (!existing.tool && a.tool) existing.tool = a.tool as Tool;
+      if (!existing.linkPath && a.linkPath) existing.linkPath = a.linkPath;
+      continue;
+    }
     turn.codeChanges.push({
       path: a.path,
       linkPath: a.linkPath,

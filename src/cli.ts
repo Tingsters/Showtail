@@ -14,6 +14,9 @@ import { runReport } from './commands/report.ts';
 import { runVerify } from './commands/verify.ts';
 import { runStatus } from './commands/status.ts';
 import { runSessions } from './commands/sessions.ts';
+import { runInbox } from './commands/inbox.ts';
+import { runIgnore } from './commands/ignore.ts';
+import { runMove } from './commands/move.ts';
 import { runHook, type HookEvent } from './commands/hook.ts';
 import { runImportUndo } from './commands/import.ts';
 import { eventTypeList } from './core/schema.ts';
@@ -27,7 +30,7 @@ import {
 import type { ConnectFlag, ImportRunOptions } from './plugins/types.ts';
 import type { Tool } from './types.ts';
 
-const VERSION = '0.10.1';
+const VERSION = '0.11.1';
 
 // Help-group headings (Commander 14 renders commands grouped under these).
 const G_START = 'Get started:';
@@ -65,6 +68,9 @@ program
       'files you build together, into a local, reviewable trail of how you worked.',
   )
   .configureHelp({ sortSubcommands: false })
+  // Point users at help after any parse error (e.g. a mistyped `-all` for `--all`),
+  // instead of leaving them with a bare "unknown option" line.
+  .showHelpAfterError('(run the command with --help to see valid options)')
   .version(VERSION, '-v, --version');
 
 // --- Get started ----------------------------------------------------------
@@ -85,8 +91,10 @@ program
   );
 
 program
-  .command('init')
-  .description('Set up Showtail in this project (creates the .showtail/ folder).')
+  .command('track [path]')
+  .description(
+    'Track a folder as a Showtail project (creates .showtail/) and pull its already-captured work out of the inbox. Any folder works — it need not be a code repo.',
+  )
   .helpGroup(G_START)
   .option(
     '-p, --project <name>',
@@ -94,8 +102,8 @@ program
   )
   .option('--json', 'output machine-readable JSON')
   .action(
-    action(async (opts: { project?: string; json?: boolean }) =>
-      runInit({ project: opts.project, json: opts.json }),
+    action(async (path: string | undefined, opts: { project?: string; json?: boolean }) =>
+      runInit({ cwd: path, project: opts.project, json: opts.json }),
     ),
   );
 
@@ -192,6 +200,72 @@ program
   .action(
     action(async (opts: { json?: boolean; all?: boolean }) =>
       runSessions({ json: opts.json, all: opts.all }),
+    ),
+  );
+
+program
+  .command('inbox')
+  .description(
+    'Real-project work captured but not yet placed. Pick to place (or dismiss) it. Scratch/folderless work is kept aside — see --all.',
+  )
+  .helpGroup(G_REVIEW)
+  .option(
+    '--all',
+    'also show scratch work kept aside (folderless/trivial/ignored/dismissed)',
+  )
+  .option('--json', 'output machine-readable JSON')
+  .addHelpText(
+    'after',
+    `
+Managing your inbox:
+  showtail inbox                     work waiting to be placed; in the picker, type
+                                     numbers to place, or 'd1,3' / 'dismiss all' to dismiss
+  showtail inbox --all               also show scratch kept aside (folderless/trivial/
+                                     ignored/dismissed), tagged with why
+  showtail track <folder>            make a folder a project and pull its captured work in
+  showtail ignore <folder>           keep a folder's work out of the inbox
+  showtail move <id> --to <folder>   place one specific session by id`,
+  )
+  .action(
+    action(async (opts: { json?: boolean; all?: boolean }) =>
+      runInbox({ json: opts.json, all: opts.all }),
+    ),
+  );
+
+program
+  .command('ignore [path]')
+  .description(
+    'Mark a folder as scratch so its captured sessions stay out of `showtail inbox` (still under --all). No path lists ignored folders.',
+  )
+  .helpGroup(G_REVIEW)
+  .option('--remove', 'stop ignoring the folder')
+  .option('--list', 'list the ignored folders')
+  .option('--json', 'output machine-readable JSON')
+  .addHelpText('after', '\nSee `showtail inbox --help` for the full inbox workflow.')
+  .action(
+    action(
+      async (
+        path: string | undefined,
+        opts: { remove?: boolean; list?: boolean; json?: boolean },
+      ) => runIgnore(path, { remove: opts.remove, list: opts.list, json: opts.json }),
+    ),
+  );
+
+program
+  .command('move [sessionId]')
+  .alias('reattach')
+  .description(
+    'Move a captured session to another project folder. With no id, lists every session (id + current folder) to pick from.',
+  )
+  .helpGroup(G_REVIEW)
+  .option(
+    '--to <path>',
+    'the project folder to move the session into (default: current dir)',
+  )
+  .option('--json', 'list all sessions as machine-readable JSON')
+  .action(
+    action(async (sessionId: string | undefined, opts: { to?: string; json?: boolean }) =>
+      runMove(sessionId, { to: opts.to, json: opts.json }),
     ),
   );
 
@@ -378,6 +452,8 @@ interface ImportCliOptions {
   session?: string;
   list?: boolean;
   model?: string;
+  auto?: boolean;
+  quiet?: boolean;
 }
 
 function toImportOptions(o: ImportCliOptions): ImportRunOptions {
@@ -391,6 +467,8 @@ function toImportOptions(o: ImportCliOptions): ImportRunOptions {
     session: o.session,
     list: o.list,
     model: o.model,
+    auto: o.auto,
+    quiet: o.quiet,
   };
 }
 
@@ -423,7 +501,12 @@ for (const p of importPlugins()) {
       .option('--no-responses', "don't import the AI's text responses, only your prompts")
       .option('--file <path>', 'import a specific transcript file by path')
       .option('-s, --session <id>', 'import into a specific Showtail session id')
-      .option('--model <model>', "the AI model, when the source doesn't record one");
+      .option('--model <model>', "the AI model, when the source doesn't record one")
+      .option(
+        '--auto',
+        "route by the transcript's edited-file paths into each project (headless capture)",
+      )
+      .option('--quiet', 'suppress the summary (used by the Copilot extension watcher)');
   }
 
   sub.action(

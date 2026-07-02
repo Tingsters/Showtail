@@ -2,7 +2,7 @@
 
 1. **Teacher:** Ask students to use Showtail for a project and commit
    `.showtail/` with their work.
-2. **Student:** Run `showtail setup` once (or `showtail init` then
+2. **Student:** Run `showtail setup` once (or `showtail track` then
    `showtail connect <tool>` per project) to turn on automatic capture.
 3. **Student:** Work on the project as usual — prompts and edits are captured for
    you. On a group project, each teammate's trail lands in their own

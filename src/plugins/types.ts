@@ -15,7 +15,10 @@
  *    transcript (share link, saved page, pasted text) into the trail.
  * Most plugins have one; Claude Code has both.
  */
+import type { EditedFile } from '../core/hookInput.ts';
 import type { Tool } from '../types.ts';
+
+export type { EditedFile };
 
 /** Where an integration is installed: per-user (all projects) or per-project. */
 export type InstallScope = 'user' | 'project';
@@ -120,11 +123,18 @@ export interface NormalizedHookEvent {
   suggestedDiff?: string;
   /** The AI model in effect for this event, if the tool exposes one (raw id). */
   model?: string;
+  /**
+   * Per-file edits with their own clean diffs (and deletions), when the host
+   * gives file-level detail (Codex `apply_patch`). Preferred over
+   * `editedFiles` + `suggestedDiff` when present, so each file renders only its
+   * own change — and removed files render as a deletion — exactly like Claude.
+   */
+  edits?: EditedFile[];
 }
 
 /** One message of a normalized transcript used for stop-time reconciliation. */
 export interface HookTranscriptMessage {
-  /** 'user' | 'assistant' | 'decision' | 'plan' (others, e.g. 'edit', are ignored). */
+  /** 'user' | 'assistant' | 'decision' | 'plan' | 'edit'. */
   role: string;
   text: string;
   timestamp?: string;
@@ -133,6 +143,13 @@ export interface HookTranscriptMessage {
   approved?: boolean;
   /** For an 'assistant' message: the model that produced it, if exposed (raw id). */
   model?: string;
+  /**
+   * For an 'edit' message: the per-file edits (clean diffs + deletions) recovered
+   * from the host's transcript/rollout. The generic Stop reconcile imports these
+   * as diff artifacts — the reliable diff source for hosts (Codex) whose live
+   * hook payload carries the file but not the diff.
+   */
+  edits?: EditedFile[];
 }
 
 /** A normalized conversation transcript, in order. */
@@ -179,6 +196,22 @@ export interface HookAdapter {
    * already on the transcript is materialized instead. Best-effort; never throws.
    */
   planFiles?(raw: unknown, root: string): DiscoveredPlanFile[];
+  /**
+   * Run the transcript reconcile on the `post-edit` hook too, not only on `Stop`.
+   * Set for hosts whose runtime never fires a stop/end hook (the Antigravity IDE
+   * only dispatches `PostToolUse`), so prompts/replies/plans are still captured.
+   * Safe because the reconcile dedups by sourceId; default (unset) = Stop-only.
+   */
+  reconcileOnPostEdit?: boolean;
+  /**
+   * When a `post-edit` hook captured nothing from the payload, fall back to
+   * snapshotting files git reports as changed (recently). Set for hosts that can
+   * edit files by running raw shell — where the touched path isn't in the
+   * structured payload (e.g. Codex's `shell_command` writing via PowerShell). The
+   * fallback only fires on an empty parse and requires a git repo, so it's inert
+   * for tools that always carry the path. Default (unset) = no git fallback.
+   */
+  recoverEditsFromGit?: boolean;
 }
 
 // --- Import (transcript) ---------------------------------------------------
@@ -199,6 +232,15 @@ export interface ImportRunOptions {
   list?: boolean;
   /** Fallback model id for imported replies when the source carries none (e.g. paste). */
   model?: string;
+  /**
+   * Route the import by the transcript's edited-file paths rather than into a
+   * single `cwd`-derived project. Used by the headless (extension-triggered)
+   * path, where no project folder is reliably open. Plugins that don't support
+   * it ignore the flag.
+   */
+  auto?: boolean;
+  /** Suppress the human-facing summary (used by the Copilot extension's live watcher). */
+  quiet?: boolean;
 }
 
 export interface ImportCapability {
