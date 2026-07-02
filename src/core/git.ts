@@ -50,34 +50,6 @@ export async function gitToplevel(cwd: string): Promise<string | undefined> {
 }
 
 /**
- * Repo-root-relative paths (posix separators) of files currently added or
- * modified in the working tree at `cwd` — staged or unstaged — excluding
- * deletions and rename-aways. Empty when git is unavailable, `cwd` isn't a repo,
- * or nothing changed.
- *
- * Used as a backstop to recover edits a tool made via raw shell (e.g. a path
- * held in a shell variable) that structured payload parsing couldn't see.
- * Returned relative (not absolute) so the caller resolves them against the trail
- * root with one consistent spelling — avoiding short-path/case mismatches
- * between git's output and the trail root.
- */
-export async function changedFiles(cwd: string): Promise<string[]> {
-  if (!(await isGitRepo(cwd))) return [];
-  // `-z`: NUL-terminated records, no path quoting/escaping to undo. Paths are
-  // relative to the repo root regardless of `cwd` being a subdir.
-  const out = await runGit(['status', '--porcelain', '--no-renames', '-z'], cwd);
-  if (!out) return [];
-  const files: string[] = [];
-  for (const rec of out.split('\0')) {
-    if (rec.length < 4) continue; // need 2-char status + space + path
-    if (rec.slice(0, 2).includes('D')) continue; // deletion — nothing to snapshot
-    const path = rec.slice(3);
-    if (path) files.push(path.replace(/\\/g, '/'));
-  }
-  return files;
-}
-
-/**
  * Return the current commit hash, or `undefined` if unavailable
  * (no git, not a repo, or a repo with no commits yet).
  */

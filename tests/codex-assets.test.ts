@@ -16,11 +16,9 @@ describe('codex assets stay in sync with the single source of truth', () => {
     );
   });
 
-  test('hook config targets apply_patch + shell_command and tags every command --tool codex', () => {
+  test('hook config targets apply_patch and tags every command --tool codex', () => {
     const json = codexHooksJson();
-    // Catch both Codex edit paths: the structured `apply_patch` tool and raw
-    // shell edits via `shell_command` (e.g. PowerShell Set-Content on Windows).
-    expect(json).toContain('"matcher": "apply_patch|shell_command"');
+    expect(json).toContain('"matcher": "apply_patch"');
     // Every Showtail command must carry the codex tool tag.
     const commands = Object.values(CODEX_HOOK_EVENTS).flatMap((groups) =>
       groups.flatMap((g) => g.hooks.map((h) => h.command)),

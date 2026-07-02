@@ -2,25 +2,18 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
-  readdirSync,
   renameSync,
-  rmSync,
   writeFileSync,
   appendFileSync,
 } from 'node:fs';
-import { homedir, tmpdir } from 'node:os';
+import { homedir } from 'node:os';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import type { Config, Session, State } from '../types.ts';
 import { gitToplevel } from './git.ts';
-import { makeId } from './ids.ts';
 
 export const SHOWTAIL_DIR = '.showtail';
-/**
- * Bumped to 4 for the stable `trailId` (the global ledger links sessions to a
- * trail by id, not by its movable path). Older trails are upgraded on read by
- * {@link ensureTrailId}.
- */
-export const CONFIG_VERSION = 4;
+/** Bumped to 3 for the per-author layout (one folder per student). */
+export const CONFIG_VERSION = 3;
 
 /**
  * A resolved view of a project's *shared* `.showtail/` layout. All paths are
@@ -74,10 +67,8 @@ export interface AuthorPaths {
   dir: string;
   /** `authors/<slug>/author.json`. */
   authorFile: string;
-  /** Legacy single sessions file `authors/<slug>/sessions.json` (read-only back-compat). */
+  /** `authors/<slug>/sessions.json`. */
   sessionsIndex: string;
-  /** `authors/<slug>/sessions/` — per-machine session shards (`<machineId>.json`). */
-  sessionsDir: string;
   /** `authors/<slug>/journal/` (segments live under `<machineId>/` subdirs). */
   journalDir: string;
 }
@@ -86,7 +77,7 @@ export interface AuthorPaths {
 export class NotInitializedError extends Error {
   constructor() {
     super(
-      'No .showtail/ folder found. Run `showtail track` first to start tracking your work.',
+      'No .showtail/ folder found. Run `showtail init` first to start tracking your work.',
     );
     this.name = 'NotInitializedError';
   }
@@ -125,7 +116,6 @@ export function authorPaths(
     dir,
     authorFile: join(dir, 'author.json'),
     sessionsIndex: join(dir, 'sessions.json'),
-    sessionsDir: join(dir, 'sessions'),
     journalDir: join(dir, 'journal'),
   };
 }
@@ -206,72 +196,6 @@ export function isEligibleAnchor(dir: string): boolean {
   return DEV_MARKERS.some((marker) => existsSync(join(resolved, marker)));
 }
 
-/**
- * Whether `dir` is the user's HOME — i.e. an existing `~/.showtail` is the
- * machine-wide catch-all, not a real project trail. Routing should never *place*
- * folderless work here (it belongs in the inbox); only an explicit, deliberate
- * trail at HOME would be one, and we don't auto-create those (see
- * {@link isEligibleAnchor}).
- */
-export function isHomedirCatchAll(dir: string): boolean {
-  return pathKey(dir) === pathKey(homedir());
-}
-
-/**
- * A case-normalized key for a resolved path, so comparisons are correct on
- * Windows — where the ledger records drive-relative, lowercase-drive paths
- * (`c:\Users\…`) while `homedir()`/`cwd` yield `C:\Users\…`. Case-folds only on
- * win32; POSIX paths are already case-sensitive and left as-is.
- */
-export function pathKey(p: string): string {
-  const r = resolve(p);
-  return process.platform === 'win32' ? r.toLowerCase() : r;
-}
-
-/** Whether `child` is `parent` or nested beneath it (case-insensitive on win32). */
-export function isPathUnder(child: string, parent: string): boolean {
-  const c = pathKey(child);
-  const p = pathKey(parent);
-  return c === p || c.startsWith(p + sep);
-}
-
-/**
- * Whether `dir` lives in a throwaway temp location (the OS temp dir, or a literal
- * `/tmp` / `\tmp`). Work in temp is scratch by default — a real case in the ledger
- * is a Maven project the AI scaffolded under `\tmp`. A pure path predicate; callers
- * decide when to apply it (see {@link eligibleProjectRoot}, which skips it under a
- * test ceiling so fixtures created in the OS temp dir aren't all treated as scratch).
- */
-export function isTempPath(dir: string): boolean {
-  return [tmpdir(), '/tmp', '\\tmp'].some((t) => isPathUnder(dir, t));
-}
-
-/**
- * The eligible project root enclosing `dir`, or null when `dir` is scratch.
- * Walks up (like {@link findRoot}) for either an existing `.showtail/` (a tracked
- * trail) or a `.git` (a real repo); a non-git, marker-only, *untracked* folder is
- * intentionally scratch until `showtail track`. A resolved root that is the home
- * dir or a temp dir is never eligible. Honors `SHOWTAIL_ROOT_CEILING` like
- * `findRoot` (and, in that hermetic-test mode, skips the temp-dir exclusion so
- * fixtures under the OS temp dir still resolve).
- */
-export function eligibleProjectRoot(dir: string): string | null {
-  const ceilingEnv = process.env.SHOWTAIL_ROOT_CEILING;
-  const ceiling = ceilingEnv && ceilingEnv.length > 0 ? resolve(ceilingEnv) : null;
-  let d = resolve(dir);
-  while (true) {
-    if (existsSync(join(d, SHOWTAIL_DIR)) || existsSync(join(d, '.git'))) {
-      if (isHomedirCatchAll(d)) return null;
-      if (!ceiling && isTempPath(d)) return null;
-      return d;
-    }
-    if (ceiling && d === ceiling) return null;
-    const parent = dirname(d);
-    if (parent === d) return null;
-    d = parent;
-  }
-}
-
 // --- JSON helpers ---------------------------------------------------------
 
 export function readJson<T>(file: string): T {
@@ -325,38 +249,6 @@ export function readConfig(paths: ShowtailPaths): Config {
 /** Write the project config (atomic temp+rename, symmetric with {@link readConfig}). */
 export function writeConfig(paths: ShowtailPaths, config: Config): void {
   writeJson(paths.config, config);
-}
-
-/**
- * Return this trail's stable id, minting and persisting one on a trail that
- * predates trail ids (upgrade-on-read). Also bumps the stored config version so
- * the upgrade happens once. Idempotent: a trail that already has a `trailId`
- * keeps it and no write occurs. The write is atomic (temp+rename) and tolerant
- * of a concurrent writer — both would mint, and the last write wins; the loser's
- * id simply isn't the one recorded, which the ledger reconciles on next sight.
- */
-export function ensureTrailId(paths: ShowtailPaths): string {
-  const config = readConfig(paths);
-  if (config.trailId) return config.trailId;
-  const trailId = makeId('trl');
-  config.trailId = trailId;
-  if (config.version < CONFIG_VERSION) config.version = CONFIG_VERSION;
-  writeConfig(paths, config);
-  return trailId;
-}
-
-/**
- * Whether this trail was written by a *newer* Showtail than the running binary
- * (its `config.version` exceeds {@link CONFIG_VERSION}). Used to warn that some
- * data — e.g. sessions written in a layout this binary doesn't know — may not be
- * visible, so the user knows to upgrade. Tolerant of a missing/corrupt config.
- */
-export function trailIsNewerThanBinary(paths: ShowtailPaths): boolean {
-  try {
-    return readConfig(paths).version > CONFIG_VERSION;
-  } catch {
-    return false;
-  }
 }
 
 export function readState(paths: ShowtailPaths): State {
@@ -413,98 +305,23 @@ export function turnForNativeSession(
 
 // --- Sessions (per author) ------------------------------------------------
 
-/**
- * Read every session for one author, aggregating the union of the legacy single
- * `sessions.json` (if present) and every per-machine shard under `sessions/`.
- * Sharding by machine is what lets the same student writing from two machines
- * merge through git without a conflict (the journal uses the same trick). A shard
- * entry wins over a legacy entry of the same id (legacy is processed first).
- */
 export function readSessions(author: AuthorPaths): Session[] {
-  const files: string[] = [];
-  if (existsSync(author.sessionsIndex)) files.push(author.sessionsIndex);
-  if (existsSync(author.sessionsDir)) {
-    for (const f of readdirSync(author.sessionsDir).sort()) {
-      if (f.endsWith('.json')) files.push(join(author.sessionsDir, f));
-    }
-  }
-  const byId = new Map<string, Session>();
-  for (const file of files) {
-    let rows: Array<Session & { claudeSessionId?: string }>;
-    try {
-      rows = readJson(file);
-    } catch {
-      continue; // A torn/partial shard must never break a read.
-    }
-    for (const s of rows) {
-      // Back-compat: older trails stored the host session id as `claudeSessionId`.
-      if (s.claudeSessionId && !s.nativeSessionId) {
-        s.nativeSessionId = s.claudeSessionId;
-        delete s.claudeSessionId;
-      }
-      byId.set(s.id, s);
-    }
-  }
-  return [...byId.values()];
-}
-
-/**
- * Persist this author's sessions for THIS machine only, into the per-machine
- * shard `sessions/<machineId>.json`. Callers pass the full read union; rows owned
- * by other machines (or legacy rows with no `machineId`) are filtered out and
- * left to their own file, so two machines never clobber each other on merge.
- * Requires `machineId` — like the journal, you can't write without knowing the
- * shard.
- */
-export function writeSessions(author: AuthorPaths, sessions: Session[]): void {
-  if (!author.machineId) {
-    throw new Error('Cannot write sessions without a machineId.');
-  }
-  const mine = sessions.filter((s) => s.machineId === author.machineId);
-  writeJson(join(author.sessionsDir, `${author.machineId}.json`), mine);
-}
-
-/**
- * Migrate a legacy single `sessions.json` into THIS machine's shard, so the old
- * sessions carry a `machineId` and can be closed/swept (a write-path no-op once
- * done — the legacy file is deleted). Idempotent and best-effort.
- *
- * Only runs when this machine is the trail's *sole* contributor (no other machine
- * has a journal shard): in a git-merged multi-machine repo the legacy file may hold
- * another machine's sessions, and claiming them would mis-attribute them — there we
- * leave it read-only (it still merges into reports via {@link readSessions}).
- */
-export function migrateLegacySessions(author: AuthorPaths): void {
-  if (!author.machineId || !existsSync(author.sessionsIndex)) return;
-  // Sole-contributor gate: bail if another machine has a journal shard.
-  if (existsSync(author.journalDir)) {
-    const others = readdirSync(author.journalDir).filter((m) => m !== author.machineId);
-    if (others.length > 0) return;
-  }
-  let legacy: Array<Session & { claudeSessionId?: string }>;
-  try {
-    legacy = readJson(author.sessionsIndex);
-  } catch {
-    return; // Corrupt legacy file — leave it for a human, never crash a write.
-  }
-  const shardFile = join(author.sessionsDir, `${author.machineId}.json`);
-  const byId = new Map<string, Session>();
-  if (existsSync(shardFile)) {
-    try {
-      for (const s of readJson<Session[]>(shardFile)) byId.set(s.id, s);
-    } catch {
-      /* ignore a torn shard; the legacy rows below still seed it */
-    }
-  }
-  for (const s of legacy) {
+  if (!existsSync(author.sessionsIndex)) return [];
+  const sessions = readJson<Array<Session & { claudeSessionId?: string }>>(
+    author.sessionsIndex,
+  );
+  // Back-compat: older trails stored the host session id as `claudeSessionId`.
+  for (const s of sessions) {
     if (s.claudeSessionId && !s.nativeSessionId) {
       s.nativeSessionId = s.claudeSessionId;
       delete s.claudeSessionId;
     }
-    if (!byId.has(s.id)) byId.set(s.id, { ...s, machineId: author.machineId });
   }
-  writeJson(shardFile, [...byId.values()]);
-  rmSync(author.sessionsIndex, { force: true });
+  return sessions;
+}
+
+export function writeSessions(author: AuthorPaths, sessions: Session[]): void {
+  writeJson(author.sessionsIndex, sessions);
 }
 
 /**

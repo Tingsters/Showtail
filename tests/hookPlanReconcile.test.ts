@@ -74,7 +74,7 @@ function tmp(): string {
 describe('Claude Code plan capture at Stop', () => {
   test('materializes the transcript plan into a linkable file', () => {
     const dir = tmp();
-    run(dir, ['track', '--project', 'Plan']);
+    run(dir, ['init', '--project', 'Plan']);
     run(
       dir,
       ['hook', 'user-prompt'],
@@ -101,7 +101,7 @@ describe('Claude Code plan capture at Stop', () => {
 
   test('a second Stop does not duplicate the plan or its file', () => {
     const dir = tmp();
-    run(dir, ['track', '--project', 'Plan']);
+    run(dir, ['init', '--project', 'Plan']);
     run(
       dir,
       ['hook', 'user-prompt'],
@@ -176,7 +176,7 @@ describe('Antigravity CLI plan capture at Stop', () => {
     const { transcriptPath } = seedAgy(home);
     const env = { ...spawnEnv(), GEMINI_HOME: home };
 
-    runCli(dir, ['track', '--project', 'Plan'], { env });
+    runCli(dir, ['init', '--project', 'Plan'], { env });
     runCli(dir, ['hook', 'user-prompt', '--tool', 'antigravity-cli'], {
       env,
       input: JSON.stringify({

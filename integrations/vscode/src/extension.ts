@@ -1,8 +1,7 @@
 import * as vscode from 'vscode';
 import { execFile, spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { homedir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { join } from 'node:path';
 import { promisify } from 'node:util';
 
 const execFileAsync = promisify(execFile);
@@ -71,178 +70,15 @@ function isInternalPath(p: string): boolean {
   return /(^|[\\/])(\.showtail|\.git|\.claude|node_modules)([\\/]|$)/.test(p);
 }
 
-/**
- * True when running inside Google's Antigravity IDE (a VS Code fork). Its
- * lifecycle hooks are unreliable, so there we capture via this extension (save
- * snapshots) plus the transcript import, and tag work `antigravity-ide`.
- */
-function isAntigravityHost(): boolean {
-  return /antigravity/i.test(vscode.env.appName ?? '');
-}
-
-/** The tool tag captures are recorded under, based on the host editor. */
-function captureTool(): string {
-  return isAntigravityHost() ? 'antigravity-ide' : 'github-copilot';
-}
-
-/**
- * Capture the Antigravity conversation by running `showtail import antigravity-ide
- * --auto`, debounced. `--auto` routes prompts/replies/edits by the transcript's
- * own file paths into each project (and a dedicated scratch trail), so this needs
- * no open folder — the IDE's extension host frequently has none. Idempotent, so
- * firing it on every transcript change converges on the full conversation.
- */
-let importTimer: NodeJS.Timeout | undefined;
-function scheduleAntigravityImport(): void {
-  if (importTimer) clearTimeout(importTimer);
-  importTimer = setTimeout(() => {
-    importTimer = undefined;
-    void runShowtail(['import', 'antigravity-ide', '--auto'], homedir()).then(() => {
-      output.appendLine('Captured the Antigravity conversation (auto-routed by edit paths).');
-    });
-  }, 3000);
-}
-
 export function activate(context: vscode.ExtensionContext): void {
   output = vscode.window.createOutputChannel('Showtail');
-  context.subscriptions.push(output, {
-    dispose: () => {
-      if (importTimer) clearTimeout(importTimer);
-      importTimer = undefined;
-    },
-  });
-  const host = isAntigravityHost() ? 'Antigravity IDE' : 'GitHub Copilot';
-  output.appendLine(`Showtail is capturing your ${host} work trail.`);
+  context.subscriptions.push(output);
+  output.appendLine('Showtail is capturing your GitHub Copilot work trail.');
 
   registerChatParticipant(context);
   registerSaveCapture(context);
   registerCommands(context);
-  if (isAntigravityHost()) {
-    registerAntigravity(context);
-  } else {
-    void maybeAutoInstallCopilot(context);
-    registerCopilotChatCapture(context);
-  }
-}
-
-/**
- * Capture **native** Copilot Chat by watching its on-disk session files. VS Code
- * persists every native turn (the normal chat box, not the `@showtail` participant)
- * as a `.jsonl` patch-journal (older builds: a single `.json`). We watch two places:
- *
- *  (a) **Folder chats** — `…/workspaceStorage/<hash>/chatSessions/*.{json,jsonl}`.
- *      `context.storageUri` points at this extension's own folder inside that same
- *      `<hash>` dir, so `chatSessions` is its sibling — no hash→folder mapping. These
- *      import into the open project's trail (`--file`).
- *  (b) **Empty-window chats** (no folder open) — `…/globalStorage/
- *      emptyWindowChatSessions/*.jsonl`. These have no project, so they import with
- *      `--auto`, which routes each turn by its edited-file paths into the enclosing
- *      `.showtail/` project (falling back to a machine-wide `~/.showtail`).
- *
- * Each change runs `showtail import copilot --file <path> [--auto] --quiet`, feeding
- * the new turns through the *same* parser + `sourceId` dedupe as the back-fill
- * command — so re-firing on every turn only appends what's new, and a later manual
- * `import copilot` never double-counts. This is what makes native chat — long assumed
- * uncapturable through the extension API — land in the trail.
- */
-function registerCopilotChatCapture(context: vscode.ExtensionContext): void {
-  const timers = new Map<string, NodeJS.Timeout>();
-  context.subscriptions.push({
-    dispose: () => {
-      for (const t of timers.values()) clearTimeout(t);
-      timers.clear();
-    },
-  });
-
-  // Debounced import of one changed chat-session file. `auto` routes no-folder
-  // chats by edited-file path; otherwise the chat imports into `cwd`'s trail.
-  const scheduleImport = (file: string, cwd: string, auto: boolean): void => {
-    const existing = timers.get(file);
-    if (existing) clearTimeout(existing);
-    timers.set(
-      file,
-      setTimeout(() => {
-        timers.delete(file);
-        // Replies import by default (the importer's --no-responses opts out), so we
-        // pass neither. --quiet suppresses the human summary; --auto routes by path.
-        const args = ['import', 'copilot', '--file', file, '--quiet'];
-        if (auto) args.push('--auto');
-        void runShowtail(args, cwd).then(() => {
-          output.appendLine(`Captured native Copilot Chat from ${file}`);
-        });
-      }, 2000),
-    );
-  };
-
-  const watch = (dir: string, onChange: (uri: vscode.Uri) => void, label: string): void => {
-    try {
-      const watcher = vscode.workspace.createFileSystemWatcher(
-        new vscode.RelativePattern(vscode.Uri.file(dir), '*.{json,jsonl}'),
-      );
-      watcher.onDidChange(onChange);
-      watcher.onDidCreate(onChange);
-      context.subscriptions.push(watcher);
-      output.appendLine(`Watching ${label} under ${dir}`);
-    } catch (err) {
-      output.appendLine(`Copilot Chat watch unavailable (${label}): ${(err as Error).message}`);
-    }
-  };
-
-  // (a) This workspace's chat sessions → the open folder's trail.
-  const storage = context.storageUri?.fsPath;
-  if (storage) {
-    const chatDir = join(dirname(storage), 'chatSessions');
-    watch(
-      chatDir,
-      (uri) => {
-        const cwd = folderFor(undefined);
-        // Only import into a tracked project; otherwise the CLI would just error out.
-        if (!cwd || !existsSync(join(cwd, '.showtail'))) return;
-        scheduleImport(uri.fsPath, cwd, false);
-      },
-      'native Copilot Chat sessions',
-    );
-  } else {
-    output.appendLine(
-      'No workspace storage yet — folder Copilot Chat capture starts once a folder is open.',
-    );
-  }
-
-  // (b) Empty-window (no-folder) chats → routed by edited-file path via --auto.
-  const global = context.globalStorageUri?.fsPath;
-  if (global) {
-    const emptyDir = join(dirname(global), 'emptyWindowChatSessions');
-    watch(
-      emptyDir,
-      (uri) => scheduleImport(uri.fsPath, homedir(), true),
-      'empty-window Copilot Chat sessions',
-    );
-  }
-}
-
-/**
- * Antigravity capture — host-independent. The agent runs in an extension host that
- * frequently has no workspace folder, and it edits files in the IDE's scratch
- * sandbox or an arbitrary project; relying on `workspace.workspaceFolders` misses
- * that work. Instead we watch the IDE's on-disk transcript (a global path) and run
- * `import antigravity-ide --auto`, which routes prompts/replies/edits by the
- * transcript's own file paths into each enclosing project (and a dedicated scratch
- * trail). Editor saves still snapshot files when a folder is open.
- */
-function registerAntigravity(context: vscode.ExtensionContext): void {
-  const brain = join(homedir(), '.gemini', 'antigravity-ide', 'brain');
-  try {
-    const watcher = vscode.workspace.createFileSystemWatcher(
-      new vscode.RelativePattern(vscode.Uri.file(brain), '**/transcript*.jsonl'),
-    );
-    watcher.onDidChange(() => scheduleAntigravityImport());
-    watcher.onDidCreate(() => scheduleAntigravityImport());
-    context.subscriptions.push(watcher);
-    output.appendLine(`Watching Antigravity transcripts under ${brain}`);
-  } catch (err) {
-    output.appendLine(`transcript watch unavailable: ${(err as Error).message}`);
-  }
-  scheduleAntigravityImport(); // capture anything already on disk at startup
+  void maybeAutoInstallCopilot(context);
 }
 
 /**
@@ -361,13 +197,6 @@ async function maybeNotifyUpdate(context: vscode.ExtensionContext, cwd: string):
  *   - plain text — records your prompt verbatim and gives a quick answer
  */
 function registerChatParticipant(context: vscode.ExtensionContext): void {
-  // VS Code forks (e.g. Antigravity) may not expose the chat API. Feature-detect
-  // so activation still succeeds there and the save-capture path keeps working.
-  if (typeof vscode.chat?.createChatParticipant !== 'function') {
-    output.appendLine('Chat API unavailable here — skipping the @showtail participant.');
-    return;
-  }
-  const tool = captureTool();
   const handler: vscode.ChatRequestHandler = async (request, _ctx, stream, token) => {
     const cwd = folderFor(undefined);
     if (!cwd) {
@@ -383,7 +212,7 @@ function registerChatParticipant(context: vscode.ExtensionContext): void {
       stream.markdown(
         m
           ? `Report written to \`${m[1].trim()}\`.`
-          : 'Could not generate a report. Run `showtail track` in this project first.',
+          : 'Could not generate a report. Run `showtail init` in this project first.',
       );
       return;
     }
@@ -408,7 +237,7 @@ function registerChatParticipant(context: vscode.ExtensionContext): void {
     let turnId: string | undefined;
     if (request.prompt.trim().length > 0) {
       const logged = await runShowtail(
-        ['log', '--type', 'prompt', '--text', request.prompt, '--tool', tool],
+        ['log', '--type', 'prompt', '--text', request.prompt, '--tool', 'github-copilot'],
         cwd,
       );
       turnId = loggedEventId(logged);
@@ -428,7 +257,7 @@ function registerChatParticipant(context: vscode.ExtensionContext): void {
         }
         // Capture the model's reply as ai_output, linked to the prompt's turn.
         if (full.trim().length > 0) {
-          const args = ['log', '--type', 'ai_output', '--tool', tool];
+          const args = ['log', '--type', 'ai_output', '--tool', 'github-copilot'];
           if (turnId) args.push('--turn', turnId);
           await runShowtailStdin(args, cwd, full);
         }
@@ -463,19 +292,15 @@ function registerSaveCapture(context: vscode.ExtensionContext): void {
     if (!cwd) return;
 
     // Collapse rapid saves of the same file into one snapshot.
-    const tool = captureTool();
     const existing = timers.get(file);
     if (existing) clearTimeout(existing);
     timers.set(
       file,
       setTimeout(() => {
         timers.delete(file);
-        void runShowtail(['artifact', file, '--tool', tool], cwd).then(() => {
-          output.appendLine(`snapshotted ${file}`);
-          // On Antigravity, a save means the agent/you just did work — pull the
-          // conversation transcript so prompts/replies land alongside the edit.
-          if (isAntigravityHost()) scheduleAntigravityImport();
-        });
+        void runShowtail(['artifact', file, '--tool', 'github-copilot'], cwd).then(
+          () => output.appendLine(`snapshotted ${file}`),
+        );
       }, 1500),
     );
   });
@@ -503,7 +328,7 @@ function registerCommands(context: vscode.ExtensionContext): void {
         await vscode.window.showTextDocument(doc);
       } else {
         vscode.window.showWarningMessage(
-          'Showtail: could not generate a report. Run `showtail track` in this project first.',
+          'Showtail: could not generate a report. Run `showtail init` in this project first.',
         );
       }
     }),

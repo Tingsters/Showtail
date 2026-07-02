@@ -1,9 +1,10 @@
 /**
- * Antigravity CLI — Google's `agy` command. A live-capture connect plugin with
- * a dedicated `hooks.json` plus a uniquely-named rules file, mirroring Codex.
+ * Antigravity CLI — Google's `agy` command. A live-capture connect plugin that
+ * REPLACES the now-EOL Gemini CLI: dedicated `hooks.json` plus a uniquely-named
+ * rules file, mirroring Codex.
  *
- * Antigravity shares `~/.gemini` with other tools and reads GEMINI.md /
- * AGENTS.md (AGENTS.md is managed by codex), so this plugin
+ * Antigravity shares `~/.gemini` with the (EOL) gemini-cli plugin and reads
+ * GEMINI.md / AGENTS.md (managed by gemini-cli / codex), so this plugin
  * deliberately writes to NEITHER. It uses Antigravity-specific paths — the
  * workspace `.agents/` dir and `~/.gemini/antigravity-cli/` — for both its
  * hooks file and its instructions file. See src/core/antigravityCli.ts for the

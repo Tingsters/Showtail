@@ -28,7 +28,6 @@ What this gives you:
 | ---- | ------------------ |
 | You submit a prompt | Logs it as a `prompt` event |
 | Codex edits a file with `apply_patch` | Snapshots that file as an `artifact`, with the patch as its diff |
-| Codex edits a file with `shell_command` (e.g. PowerShell `Set-Content`) | Snapshots the touched file(s), parsed from the command or recovered via `git` |
 | Codex replies | Logs the reply as an `ai_output` event |
 | Codex asks you to choose (`request_user_input`) | Logs your pick as a `decision` event |
 | Codex builds a plan (`update_plan`) | Logs it as a `plan` event (a to-do checklist; no approval badge) |
@@ -60,29 +59,16 @@ showtail disconnect codex                # Remove the AGENTS.md block and hooks
 
 ## Notes on Codex edits
 
-Codex applies file changes two ways, and Showtail captures both:
+Codex applies file changes through its `apply_patch` tool. Showtail parses those
+patches and snapshots the touched files.
 
-- **`apply_patch`** (its structured edit tool): Showtail parses the patch
-  envelope and snapshots the touched files. Each file is rendered with its own
-  clean `+`/`-` diff (no `*** Begin Patch`/`@@` markers), and a deleted file is
-  shown as removed (`-`) lines — the same way Claude Code's edits appear.
-- **`shell_command`** (raw shell — e.g. PowerShell `Set-Content`/`Out-File`,
-  `>`/`>>` redirects, `tee`, `sed -i`): Showtail parses common write patterns
-  from the command to find the file(s). When the path can't be parsed (for
-  example it's held in a shell variable like `$scratch`), Showtail falls back to
-  `git` and snapshots the files the command changed — so shell edits are captured
-  in a git repo even when the path isn't in the command text.
-
-Two cases still aren't auto-captured: a file created **and deleted within the
-same command** (nothing persists for the hook to snapshot), and shell writes in a
-**non-git** project whose path isn't in the command text. Record those manually:
+If Codex changes files by running raw shell commands, such as `sed`, those edits
+are not visible to the hook and are not auto-snapshotted. Record them manually
+when you want them in the trail:
 
 ```bash
 showtail artifact <file> --tool codex
 ```
-
-Debugging capture? Set `SHOWTAIL_DEBUG_PAYLOAD=1` to append each hook's raw
-payload to `.showtail/diag/payloads.jsonl` (local-only, off by default).
 
 As with the other integrations, everything stays local. There is no telemetry
 and no external calls.

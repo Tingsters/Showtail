@@ -59,11 +59,9 @@ export const ANTIGRAVITY_IDE_HOOK_NAMESPACE = 'showtail';
  */
 const HOOK_TIMEOUT_SECONDS = 30;
 export const ANTIGRAVITY_IDE_HOOK_EVENTS: HookEvents = {
-  // No `matcher` on PreInvocation/Stop: `matcher` is a TOOL-NAME filter, and these
-  // are not tool events — including one made the IDE skip them (only PostToolUse,
-  // which has real tool calls to match, fired). Matcher stays on PostToolUse only.
   PreInvocation: [
     {
+      matcher: '*',
       hooks: [
         {
           type: 'command',
@@ -87,6 +85,7 @@ export const ANTIGRAVITY_IDE_HOOK_EVENTS: HookEvents = {
   ],
   Stop: [
     {
+      matcher: '*',
       hooks: [
         {
           type: 'command',

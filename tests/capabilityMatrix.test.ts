@@ -110,12 +110,10 @@ describe('capability matrix invariants', () => {
     expect(INTEGRATIONS.every((i) => typeof i.surface.planFiles === 'boolean')).toBe(
       true,
     );
-    // Tools whose plan is captured + materialized to a linkable file: full.
-    // Claude Code and Codex materialize the transcript plan; Antigravity links a
-    // real plan.md. All three are full.
+    // Built, file-backed tools: full. Codex (transcript-only): partial.
     expect(status('claude-code')).toBe('full');
     expect(status('antigravity-cli')).toBe('full');
-    expect(status('codex')).toBe('full');
+    expect(status('codex')).toBe('partial');
     // Antigravity IDE writes a plan file but has no plugin yet → planned.
     expect(status('antigravity-ide')).toBe('planned');
     // Tools with no plan surface → unsupported.
@@ -128,7 +126,6 @@ describe('capability matrix invariants', () => {
     expect(claims.map((c) => c.integration).sort()).toEqual([
       'antigravity-cli',
       'claude-code',
-      'codex',
     ]);
     // Reconciled on the Stop hook (not raised by headless print mode), so — like
     // auto-ai-output-capture — it is not in the live-certified set.

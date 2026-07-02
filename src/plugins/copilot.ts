@@ -2,14 +2,8 @@
  * GitHub Copilot — project-scoped instructions in `.github/`, plus a VS Code
  * extension that does the actual capture. No lifecycle hooks, so no `hooksActive`
  * and no setup auto-connect (the extension sets each project up on first open).
- *
- * It also imports: native Copilot Chat persists every session to disk as JSON
- * (`…/workspaceStorage/<hash>/chatSessions/<uuid>.json`), so `import copilot`
- * back-fills past chats and the extension's live watcher feeds new turns through
- * the same path. See src/core/copilotChatTranscript.ts.
  */
 import { runCopilotInstall, runCopilotUninstall } from '../commands/copilot.ts';
-import { runImportCopilot } from '../commands/importCopilot.ts';
 import { copilotState, resolveCopilotTarget } from '../core/copilot.ts';
 import { commandOnPath } from '../core/detect.ts';
 import type { EnvironmentPlugin } from './types.ts';
@@ -60,25 +54,5 @@ export const copilotPlugin: EnvironmentPlugin = {
         updateAvailable: state.installed ? state.updateAvailable : undefined,
       };
     },
-  },
-
-  import: {
-    command: 'copilot',
-    aliases: ['github-copilot', 'copilot-chat'],
-    description:
-      'Import an existing native VS Code Copilot Chat session from disk into your trail.\n' +
-      "With no target, opens an interactive picker of this project's sessions " +
-      '(choose one or several); --list prints the same list non-interactively.',
-    shape: 'transcript',
-    run: (source, opts) =>
-      runImportCopilot(source, {
-        list: opts.list,
-        withResponses: opts.withResponses,
-        file: opts.file,
-        session: opts.session,
-        quiet: opts.quiet,
-        auto: opts.auto,
-        cwd: opts.cwd,
-      }),
   },
 };

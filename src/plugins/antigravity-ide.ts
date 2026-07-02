@@ -2,7 +2,7 @@
  * Antigravity IDE — Google's agentic IDE (a VS Code fork driven by the Gemini
  * language server). A live-capture connect plugin.
  *
- * The IDE shares `~/.gemini` with the Antigravity CLI but reads
+ * The IDE shares `~/.gemini` with the Antigravity CLI and gemini-cli but reads
  * its hooks from ONE global file in a *named-hooks* shape — `~/.gemini/config/
  * hooks.json` — distinct from the CLI's `.agents/` / `~/.gemini/antigravity-cli/`
  * map-shaped files. It writes a uniquely-named rules file (`AGY-IDE.showtail.md`)
@@ -13,22 +13,19 @@ import {
   runAntigravityIdeInstall,
   runAntigravityIdeUninstall,
 } from '../commands/antigravityIde.ts';
-import { runImportAntigravityIde } from '../commands/importAntigravityIde.ts';
 import {
   antigravityIdeAutoCaptureActive,
   antigravityIdeInstructionsState,
+  installAntigravityIdeHooks,
   resolveAntigravityIdeTarget,
   writeAntigravityIdeInstructions,
 } from '../core/antigravityIde.ts';
-import { installAntigravityIdeExtension } from '../core/antigravityIdeExtension.ts';
 import {
-  antigravityIdePlanFiles,
   locateAntigravityIdeTranscript,
   readAntigravityIdeTranscript,
 } from '../core/antigravityIdeTranscript.ts';
 import { homeDirExists } from '../core/detect.ts';
 import {
-  extractAntigravityEditedFiles,
   extractEditedFiles,
   extractPrompt,
   extractSessionId,
@@ -77,27 +74,32 @@ export const antigravityIdePlugin: EnvironmentPlugin = {
         description: 'install for this project only [default]',
       },
       {
+        name: 'hooks',
+        flag: '--no-hooks',
+        description: 'skip auto-capture hooks; log prompts/edits yourself',
+      },
+      {
         name: 'force',
         flag: '--force',
         description: 'overwrite existing instructions (take the latest)',
       },
     ],
-    applicableFlags: ['user', 'project', 'force'],
+    applicableFlags: ['user', 'project', 'hooks', 'force'],
 
     detect: () => homeDirExists('.antigravity-ide') || homeDirExists('.gemini'),
 
     autoConnect(cwd) {
       const target = resolveAntigravityIdeTarget('user', cwd);
       writeAntigravityIdeInstructions(target, {});
-      // Capture rides on the VS Code extension, not the IDE's (dead) hooks.
-      installAntigravityIdeExtension();
-      return { hooks: false };
+      installAntigravityIdeHooks(target);
+      return { hooks: true };
     },
 
     install: (opts) =>
       runAntigravityIdeInstall({
         user: opts.user,
         project: opts.project,
+        hooks: opts.hooks,
         force: opts.force,
         cwd: opts.cwd,
       }),
@@ -117,18 +119,15 @@ export const antigravityIdePlugin: EnvironmentPlugin = {
     },
 
     hooks: {
-      // The IDE's PostToolUse payload puts the edited path in `toolCall.args.
-      // TargetFile` (PascalCase, JSON-string-encoded), NOT Claude's
-      // `tool_input.file_path` — so use the Antigravity extractor first and fall
-      // back to the Claude-shaped one. Prompts/replies/plans are recovered from the
-      // transcript at Stop, so a missing live `prompt` field is fine.
+      // The IDE's PostToolUse/UserPromptSubmit payloads use file_path-style edit
+      // tools, so the same field extractors as Claude apply. Best-effort: see the
+      // validation caveat in the plan if the IDE's payload field names differ.
       parse(raw) {
         const p = raw as HookPayload;
-        const edited = extractAntigravityEditedFiles(p);
         return {
           nativeSessionId: extractSessionId(p),
           prompt: extractPrompt(p) ?? undefined,
-          editedFiles: edited.length > 0 ? edited : extractEditedFiles(p),
+          editedFiles: extractEditedFiles(p),
           suggestedDiff: extractSuggestedCode(p),
         };
       },
@@ -137,38 +136,8 @@ export const antigravityIdePlugin: EnvironmentPlugin = {
       internalPaths: [/(^|[\\/])\.gemini([\\/]|$)/, /(^|[\\/])\.agents([\\/]|$)/],
       // The IDE writes a per-conversation JSONL transcript under
       // ~/.gemini/antigravity-ide/brain; locate it (by session id, else newest)
-      // and reconcile prompts/replies/plans from it.
+      // and reconcile prompts/replies/plans from it at Stop.
       getTranscript: antigravityIdeGetTranscript,
-      // The IDE writes the session's implementation plan to
-      // brain/<id>/implementation_plan.md; surface it so the report links the
-      // canonical (final) plan file even after later edits.
-      planFiles(raw) {
-        return antigravityIdePlanFiles(extractSessionId(raw as HookPayload | null));
-      },
-      // This IDE build only dispatches PostToolUse hooks (PreInvocation/Stop never
-      // fire), so reconcile the transcript on post-edit instead of waiting for a
-      // Stop that won't come. Idempotent — see HookAdapter.reconcileOnPostEdit.
-      reconcileOnPostEdit: true,
     },
-  },
-
-  // Live hooks here are unreliable (only PostToolUse fires), so the complete,
-  // truthful record is the on-disk brain transcript — importing it captures the
-  // full conversation independent of hook timing. See commands/importAntigravityIde.
-  import: {
-    command: 'antigravity-ide',
-    aliases: ['agy-ide'],
-    description:
-      'Import an Antigravity IDE conversation (its brain transcript) into your trail.',
-    shape: 'transcript',
-    run: (source, opts) =>
-      runImportAntigravityIde(source, {
-        list: opts.list,
-        withResponses: opts.withResponses,
-        file: opts.file,
-        session: opts.session,
-        cwd: opts.cwd,
-        auto: opts.auto,
-      }),
   },
 };

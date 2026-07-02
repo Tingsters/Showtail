@@ -1,38 +1,8 @@
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { describe, expect, test } from 'bun:test';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { cleanup, makeTempDir, readJsonReport, runCli, spawnEnv } from './helpers.ts';
 import { isInternalPath } from '../src/commands/hook.ts';
-import { pathsForRoot } from '../src/core/storage.ts';
-import { readObject } from '../src/core/objects.ts';
-
-// Isolate the machine-local ledger per test: `run` spawns the CLI with
-// `spawnEnv()`, which inherits `process.env` — without this, `SHOWTAIL_HOME` is
-// unset and ledger writes hit the developer's real `~/.showtail-cli`, leaking
-// state across tests (and across the whole suite). A fresh temp home per test
-// keeps these hermetic; the spawned CLI picks it up via the spread of process.env.
-let prevLedgerHome: string | undefined;
-let ledgerHome: string | undefined;
-beforeEach(() => {
-  prevLedgerHome = process.env.SHOWTAIL_HOME;
-  ledgerHome = makeTempDir();
-  process.env.SHOWTAIL_HOME = ledgerHome;
-});
-afterEach(() => {
-  if (prevLedgerHome === undefined) delete process.env.SHOWTAIL_HOME;
-  else process.env.SHOWTAIL_HOME = prevLedgerHome;
-  if (ledgerHome) cleanup(ledgerHome);
-});
-
-/** The stored diff text for the latest artifact of `file` in `dir`'s trail. */
-function latestDiff(dir: string, file: string): string | undefined {
-  const tr = JSON.parse(runCli(dir, ['trace', file, '--format', 'json']).stdout);
-  const a = tr.artifacts[tr.artifacts.length - 1];
-  return a?.diffHash
-    ? (readObject(pathsForRoot(dir), a.diffHash) ?? undefined)
-    : undefined;
-}
 
 /** Run `showtail <args>` in `cwd`, optionally piping `input` to stdin. */
 function run(cwd: string, args: string[], input?: string) {
@@ -40,7 +10,7 @@ function run(cwd: string, args: string[], input?: string) {
 }
 
 function initProject(dir: string) {
-  run(dir, ['track', '--project', 'Hook Test']);
+  run(dir, ['init', '--project', 'Hook Test']);
 }
 
 /** A typed-user transcript line. Pass `sessionId: null` to omit the field. */
@@ -547,287 +517,39 @@ describe('hook command (end-to-end via stdin)', () => {
     }
   });
 
-  // Regression for the real Codex `custom_tool_call` shape: the envelope arrives
-  // flat (top-level `input` string + `name`), not nested under `tool_input`.
-  // The old parser dropped this, so Codex `apply_patch` edits weren't captured.
-  test('post-edit --tool codex snapshots a file from the flat custom_tool_call shape', () => {
+  test('post-edit --tool gemini-cli snapshots the edited file (new plugin, no core change)', () => {
     const dir = makeTempDir();
     try {
       initProject(dir);
-      writeFileSync(join(dir, 'hello_world.py'), 'print("Hello, world!")\n');
+      writeFileSync(join(dir, 'svc.ts'), 'export const x = 1;');
       const payload = JSON.stringify({
         cwd: dir,
-        name: 'apply_patch',
-        arguments: null,
-        input:
-          '*** Begin Patch\n*** Add File: hello_world.py\n' +
-          '+print("Hello, world!")\n*** End Patch\n',
+        tool_name: 'write_file',
+        tool_input: { file_path: join(dir, 'svc.ts'), content: 'export const x = 2;' },
       });
-      const r = run(dir, ['hook', 'post-edit', '--tool', 'codex'], payload);
+      const r = run(dir, ['hook', 'post-edit', '--tool', 'gemini-cli'], payload);
       expect(r.code).toBe(0);
-      const trace = run(dir, ['trace', 'hello_world.py', '--format', 'json']);
+      const trace = run(dir, ['trace', 'svc.ts', '--format', 'json']);
       const data = JSON.parse(trace.stdout);
       expect(data.artifacts.length).toBe(1);
-      expect(data.artifacts[0].tool).toBe('codex');
+      expect(data.artifacts[0].tool).toBe('gemini-cli');
     } finally {
       cleanup(dir);
     }
   });
 
-  test('post-edit --tool codex snapshots a file from a shell_command Set-Content', () => {
+  test('user-prompt --tool gemini-cli tags the prompt as gemini-cli', () => {
     const dir = makeTempDir();
     try {
       initProject(dir);
-      writeFileSync(join(dir, 'notes.txt'), 'hello from set-content\n');
-      const payload = JSON.stringify({
-        cwd: dir,
-        tool_name: 'shell_command',
-        tool_input: { command: "Set-Content -LiteralPath 'notes.txt' -Value 'hi'" },
-      });
-      const r = run(dir, ['hook', 'post-edit', '--tool', 'codex'], payload);
+      const payload = JSON.stringify({ cwd: dir, prompt: 'add a cache layer' });
+      const r = run(dir, ['hook', 'user-prompt', '--tool', 'gemini-cli'], payload);
       expect(r.code).toBe(0);
-      const trace = run(dir, ['trace', 'notes.txt', '--format', 'json']);
-      const data = JSON.parse(trace.stdout);
-      expect(data.artifacts.length).toBe(1);
-      expect(data.artifacts[0].tool).toBe('codex');
+      run(dir, ['report', '--format', 'json']);
+      const data = readJsonReport(dir);
+      expect(data.turns[0].prompt.tool).toBe('gemini-cli');
     } finally {
       cleanup(dir);
-    }
-  });
-
-  // Git backstop: a shell_command whose path lives in a variable can't be parsed,
-  // so the hook falls back to git to recover the file Codex actually changed.
-  test('post-edit --tool codex recovers an unparsable shell edit via git', () => {
-    const dir = makeTempDir();
-    try {
-      // git must exist and the trail must sit in a repo for the fallback to run.
-      const gitInit = spawnSync('git', ['init'], { cwd: dir, encoding: 'utf8' });
-      if (gitInit.status !== 0) return; // no git available — skip silently
-      initProject(dir);
-      writeFileSync(join(dir, 'built.py'), 'print("from a variable path")\n');
-      const payload = JSON.stringify({
-        cwd: dir,
-        tool_name: 'shell_command',
-        // Path held in a PowerShell variable — unparsable from the command text.
-        tool_input: { command: "Set-Content -LiteralPath $scratch -Value 'x'" },
-      });
-      const r = run(dir, ['hook', 'post-edit', '--tool', 'codex'], payload);
-      expect(r.code).toBe(0);
-      const trace = run(dir, ['trace', 'built.py', '--format', 'json']);
-      const data = JSON.parse(trace.stdout);
-      expect(data.artifacts.length).toBe(1);
-      expect(data.artifacts[0].tool).toBe('codex');
-    } finally {
-      cleanup(dir);
-    }
-  });
-
-  // Parity with Claude: a Codex apply_patch edit stores a CLEAN per-file diff
-  // (no `*** Begin Patch`/`@@` envelope cruft), the same shape Claude stores.
-  test('post-edit --tool codex stores a clean Claude-style diff (no envelope markers)', () => {
-    const dir = makeTempDir();
-    try {
-      initProject(dir);
-      writeFileSync(join(dir, 'hello_world.py'), 'print("Hello, world!")\n');
-      const payload = JSON.stringify({
-        cwd: dir,
-        name: 'apply_patch',
-        input:
-          '*** Begin Patch\n*** Add File: hello_world.py\n' +
-          '+print("Hello, world!")\n*** End Patch\n',
-      });
-      const r = run(dir, ['hook', 'post-edit', '--tool', 'codex'], payload);
-      expect(r.code).toBe(0);
-      const diff = latestDiff(dir, 'hello_world.py');
-      expect(diff).toBe('+ print("Hello, world!")');
-      expect(diff).not.toContain('*** Begin Patch');
-      expect(diff).not.toContain('*** Add File');
-    } finally {
-      cleanup(dir);
-    }
-  });
-
-  // Parity with Claude: a Codex file deletion shows the removed code as red `- `
-  // lines, reconstructed from the file's earlier snapshot in the trail.
-  test('post-edit --tool codex renders a deletion as removed (- ) lines', () => {
-    const dir = makeTempDir();
-    try {
-      initProject(dir);
-      writeFileSync(join(dir, 'hello_world.py'), 'print("hi")\n');
-      // 1) Codex creates the file.
-      run(
-        dir,
-        ['hook', 'post-edit', '--tool', 'codex'],
-        JSON.stringify({
-          cwd: dir,
-          name: 'apply_patch',
-          input:
-            '*** Begin Patch\n*** Add File: hello_world.py\n+print("hi")\n*** End Patch\n',
-        }),
-      );
-      // 2) Codex deletes it — the envelope carries no body.
-      const r = run(
-        dir,
-        ['hook', 'post-edit', '--tool', 'codex'],
-        JSON.stringify({
-          cwd: dir,
-          name: 'apply_patch',
-          input: '*** Begin Patch\n*** Delete File: hello_world.py\n*** End Patch\n',
-        }),
-      );
-      expect(r.code).toBe(0);
-      // The latest artifact for the file is the deletion, shown as removed lines.
-      expect(latestDiff(dir, 'hello_world.py')).toBe('- print("hi")');
-    } finally {
-      cleanup(dir);
-    }
-  });
-
-  // Parity with Claude: each file in a multi-file patch gets only ITS own diff,
-  // not the whole envelope.
-  test('post-edit --tool codex attaches each file only its own diff (multi-file)', () => {
-    const dir = makeTempDir();
-    try {
-      initProject(dir);
-      writeFileSync(join(dir, 'a.ts'), 'export const a = 2;\n');
-      writeFileSync(join(dir, 'b.ts'), 'export const b = 9;\n');
-      const payload = JSON.stringify({
-        cwd: dir,
-        name: 'apply_patch',
-        input:
-          '*** Begin Patch\n' +
-          '*** Add File: a.ts\n+export const a = 2;\n' +
-          '*** Update File: b.ts\n@@\n-export const b = 1;\n+export const b = 9;\n' +
-          '*** End Patch\n',
-      });
-      expect(run(dir, ['hook', 'post-edit', '--tool', 'codex'], payload).code).toBe(0);
-      expect(latestDiff(dir, 'a.ts')).toBe('+ export const a = 2;');
-      const bDiff = latestDiff(dir, 'b.ts');
-      expect(bDiff).toBe('- export const b = 1;\n+ export const b = 9;');
-      expect(bDiff).not.toContain('a.ts'); // not the whole envelope
-    } finally {
-      cleanup(dir);
-    }
-  });
-
-  // The real fix: Codex's live hook payload carries the file but not the diff, so
-  // the diff must come from the rollout at Stop. Drive a Stop reconcile over a
-  // rollout (create then delete, in two turns) and assert the report gets a clean
-  // `+ ` diff for the create and a `- ` diff for the delete — like Claude.
-  test('Stop reconcile imports clean per-file diffs + deletions from the codex rollout', () => {
-    const dir = makeTempDir();
-    const codexHome = makeTempDir();
-    try {
-      initProject(dir);
-      const sid = '019ef000-0000-7000-8000-000000000abc';
-      const line = (o: unknown) => JSON.stringify(o);
-      const rollout =
-        [
-          {
-            timestamp: '2099-06-24T10:00:00.000Z',
-            type: 'session_meta',
-            payload: { id: sid, cwd: dir },
-          },
-          {
-            timestamp: '2099-06-24T10:00:01.000Z',
-            type: 'event_msg',
-            payload: { type: 'user_message', message: 'create a hello world' },
-          },
-          {
-            timestamp: '2099-06-24T10:00:02.000Z',
-            type: 'response_item',
-            payload: {
-              type: 'custom_tool_call',
-              call_id: 'call_add',
-              name: 'apply_patch',
-              input:
-                '*** Begin Patch\n*** Add File: hello_world.py\n+print("hi")\n*** End Patch\n',
-            },
-          },
-          {
-            timestamp: '2099-06-24T10:00:03.000Z',
-            type: 'event_msg',
-            payload: { type: 'agent_message', message: 'Created it.' },
-          },
-          {
-            timestamp: '2099-06-24T10:00:04.000Z',
-            type: 'event_msg',
-            payload: { type: 'user_message', message: 'delete it' },
-          },
-          {
-            timestamp: '2099-06-24T10:00:05.000Z',
-            type: 'response_item',
-            payload: {
-              type: 'custom_tool_call',
-              call_id: 'call_del',
-              name: 'apply_patch',
-              input: '*** Begin Patch\n*** Delete File: hello_world.py\n*** End Patch\n',
-            },
-          },
-          {
-            timestamp: '2099-06-24T10:00:06.000Z',
-            type: 'event_msg',
-            payload: { type: 'agent_message', message: 'Deleted it.' },
-          },
-        ]
-          .map(line)
-          .join('\n') + '\n';
-      const day = join(codexHome, 'sessions', '2026', '06', '24');
-      mkdirSync(day, { recursive: true });
-      writeFileSync(
-        join(day, `rollout-2026-06-24T10-00-00-${sid}.jsonl`),
-        rollout,
-        'utf8',
-      );
-
-      const env = { ...spawnEnv(), CODEX_HOME: codexHome };
-      const run2 = (args: string[], input: string) => runCli(dir, args, { input, env });
-      run2(
-        ['hook', 'session-start', '--tool', 'codex'],
-        line({ cwd: dir, source: 'startup', session_id: sid }),
-      );
-      run2(
-        ['hook', 'user-prompt', '--tool', 'codex'],
-        line({ cwd: dir, prompt: 'create a hello world', session_id: sid }),
-      );
-      run2(
-        ['hook', 'user-prompt', '--tool', 'codex'],
-        line({ cwd: dir, prompt: 'delete it', session_id: sid }),
-      );
-      const r = run2(
-        ['hook', 'stop', '--tool', 'codex'],
-        line({ cwd: dir, session_id: sid }),
-      );
-      expect(r.code).toBe(0);
-
-      // Both the create (clean `+ `) and the delete (`- `) are recorded, no envelope.
-      const tr = JSON.parse(
-        runCli(dir, ['trace', 'hello_world.py', '--format', 'json']).stdout,
-      );
-      const diffs = tr.artifacts
-        .filter((a: { diffHash?: string }) => a.diffHash)
-        .map((a: { diffHash: string }) => readObject(pathsForRoot(dir), a.diffHash));
-      expect(diffs).toContain('+ print("hi")');
-      expect(diffs).toContain('- print("hi")');
-      expect(diffs.every((d: string | null) => !d?.includes('*** Begin Patch'))).toBe(
-        true,
-      );
-
-      // And they actually render in the report, attributed to a turn (the bug was
-      // a captured file with no diff). The create shows `+ `, the delete `- `.
-      runCli(dir, ['report', '--format', 'json']);
-      const report = readJsonReport(dir);
-      const codeDiffs = report.turns
-        .flatMap(
-          (t: { codeChanges?: { path: string; diff?: string }[] }) => t.codeChanges ?? [],
-        )
-        .filter((c: { path: string }) => c.path === 'hello_world.py')
-        .map((c: { diff?: string }) => c.diff);
-      expect(codeDiffs).toContain('+ print("hi")');
-      expect(codeDiffs).toContain('- print("hi")');
-    } finally {
-      cleanup(dir);
-      cleanup(codexHome);
     }
   });
 
@@ -1158,208 +880,6 @@ describe('hook trace (diagnostic log)', () => {
       expect(existsSync(join(dir, '.showtail', 'diag', 'hooks.jsonl'))).toBe(false);
     } finally {
       cleanup(dir);
-    }
-  });
-});
-
-describe('Antigravity hooks: stdout "decision" contract (never fail-closed)', () => {
-  // Antigravity reads a JSON decision from the hook's stdout and blocks the
-  // tool/model if it's missing or invalid. Showtail only observes, so every
-  // Antigravity hook must print {"decision":"allow"} and exit 0.
-  const ALLOW = '{"decision":"allow"}';
-
-  test('post-edit + user-prompt --tool antigravity-ide print allow, exit 0, and still capture', () => {
-    const dir = makeTempDir();
-    try {
-      initProject(dir);
-      const up = run(
-        dir,
-        ['hook', 'user-prompt', '--tool', 'antigravity-ide'],
-        JSON.stringify({ cwd: dir, prompt: 'agy: add a helper' }),
-      );
-      expect(up.code).toBe(0);
-      expect(up.stdout.trim()).toBe(ALLOW);
-
-      const file = join(dir, 'helper.ts');
-      writeFileSync(file, 'export const x = 1;');
-      const pe = run(
-        dir,
-        ['hook', 'post-edit', '--tool', 'antigravity-ide'],
-        JSON.stringify({
-          cwd: dir,
-          tool_name: 'write_to_file',
-          tool_input: { file_path: file },
-        }),
-      );
-      expect(pe.code).toBe(0);
-      expect(pe.stdout.trim()).toBe(ALLOW);
-
-      // The decision output is a side effect on top of capture, not instead of it.
-      run(dir, ['report', '--format', 'json']);
-      expect(JSON.stringify(readJsonReport(dir))).toContain('add a helper');
-    } finally {
-      cleanup(dir);
-    }
-  });
-
-  test('emits allow even with no trail (uninitialized) — capture no-ops, host not blocked', () => {
-    const dir = makeTempDir(); // deliberately NOT initialized
-    try {
-      const r = run(
-        dir,
-        ['hook', 'post-edit', '--tool', 'antigravity-ide'],
-        JSON.stringify({
-          cwd: dir,
-          tool_name: 'write_to_file',
-          tool_input: { file_path: join(dir, 'x.ts') },
-        }),
-      );
-      expect(r.code).toBe(0);
-      expect(r.stdout.trim()).toBe(ALLOW);
-    } finally {
-      cleanup(dir);
-    }
-  });
-
-  test('antigravity-cli hooks also emit the allow decision', () => {
-    const dir = makeTempDir();
-    try {
-      initProject(dir);
-      const r = run(
-        dir,
-        ['hook', 'stop', '--tool', 'antigravity-cli'],
-        JSON.stringify({ cwd: dir }),
-      );
-      expect(r.code).toBe(0);
-      expect(r.stdout.trim()).toBe(ALLOW);
-    } finally {
-      cleanup(dir);
-    }
-  });
-
-  test('non-Antigravity tool (claude-code) does NOT emit a decision', () => {
-    const dir = makeTempDir();
-    try {
-      initProject(dir);
-      const r = run(
-        dir,
-        ['hook', 'post-edit'], // default tool = claude-code
-        JSON.stringify({
-          cwd: dir,
-          tool_name: 'Edit',
-          tool_input: { file_path: join(dir, 'y.ts') },
-        }),
-      );
-      expect(r.code).toBe(0);
-      expect(r.stdout).toBe(''); // unchanged: claude-code hooks stay silent
-    } finally {
-      cleanup(dir);
-    }
-  });
-});
-
-describe('Antigravity IDE: reconcile the transcript on PostToolUse (Stop never fires here)', () => {
-  test('post-edit back-fills the prompt + reply from the IDE brain transcript', () => {
-    const home = makeTempDir();
-    const dir = makeTempDir();
-    const gemini = join(home, '.gemini');
-    try {
-      initProject(dir);
-      // Seed the brain transcript the IDE adapter locates (newest under brain/).
-      // Future timestamps keep the prompt in-window vs the session that opens now.
-      const ts = new Date(Date.now() + 5000).toISOString();
-      const logs = join(
-        gemini,
-        'antigravity-ide',
-        'brain',
-        'conv-ide-1',
-        '.system_generated',
-        'logs',
-      );
-      mkdirSync(logs, { recursive: true });
-      writeFileSync(
-        join(logs, 'transcript.jsonl'),
-        [
-          {
-            step_index: 1,
-            source: 'USER_EXPLICIT',
-            type: 'USER_INPUT',
-            content: '<USER_REQUEST>add a retry helper</USER_REQUEST>',
-            created_at: ts,
-          },
-          {
-            step_index: 2,
-            source: 'MODEL',
-            type: 'PLANNER_RESPONSE',
-            status: 'DONE',
-            content: 'Added the retry helper.',
-            created_at: ts,
-          },
-        ]
-          .map((l) => JSON.stringify(l))
-          .join('\n') + '\n',
-      );
-
-      const env = { ...spawnEnv(), GEMINI_HOME: gemini };
-      // No user-prompt/stop hooks fire in this IDE — only post-edit. It must still
-      // reconcile the transcript (reconcileOnPostEdit) so the convo is captured.
-      const r = runCli(dir, ['hook', 'post-edit', '--tool', 'antigravity-ide'], {
-        input: JSON.stringify({ cwd: dir }),
-        env,
-      });
-      expect(r.code).toBe(0);
-      expect(r.stdout.trim()).toBe('{"decision":"allow"}');
-
-      runCli(dir, ['report', '--format', 'json'], { env });
-      const blob = JSON.stringify(readJsonReport(dir));
-      expect(blob).toContain('add a retry helper'); // prompt back-filled from transcript
-      expect(blob).toContain('Added the retry helper.'); // reply reconciled
-    } finally {
-      cleanup(dir);
-      cleanup(home);
-    }
-  });
-
-  test('claude-code post-edit does NOT reconcile (Stop-only; no behavior change)', () => {
-    const home = makeTempDir();
-    const dir = makeTempDir();
-    const gemini = join(home, '.gemini');
-    try {
-      initProject(dir);
-      const ts = new Date(Date.now() + 5000).toISOString();
-      const logs = join(
-        gemini,
-        'antigravity-ide',
-        'brain',
-        'conv-x',
-        '.system_generated',
-        'logs',
-      );
-      mkdirSync(logs, { recursive: true });
-      writeFileSync(
-        join(logs, 'transcript.jsonl'),
-        JSON.stringify({
-          step_index: 1,
-          type: 'USER_INPUT',
-          content: '<USER_REQUEST>should not be captured</USER_REQUEST>',
-          created_at: ts,
-        }) + '\n',
-      );
-      // claude-code lacks reconcileOnPostEdit, so a post-edit must not pull the
-      // IDE transcript (it would also resolve a different adapter anyway).
-      runCli(dir, ['hook', 'post-edit'], {
-        input: JSON.stringify({
-          cwd: dir,
-          tool_name: 'Edit',
-          tool_input: { file_path: join(dir, 'z.ts') },
-        }),
-        env: { ...spawnEnv(), GEMINI_HOME: gemini },
-      });
-      runCli(dir, ['report', '--format', 'json']);
-      expect(JSON.stringify(readJsonReport(dir))).not.toContain('should not be captured');
-    } finally {
-      cleanup(dir);
-      cleanup(home);
     }
   });
 });

@@ -156,14 +156,10 @@ describe('parseCodexTranscript', () => {
       expect(blob).not.toContain('config.toml');
 
       // The edit's absolute envelope path is normalized to a repo-relative file,
-      // and the apply_patch envelope becomes a CLEAN per-file diff (Claude-style
-      // `+ ` lines, no `*** Begin Patch`/`@@`).
+      // and the apply_patch envelope is captured as the edit's diff.
       const edit = parsed.messages.find((m) => m.role === 'edit')!;
       expect(edit.files).toEqual(['notes.txt']);
-      expect(edit.edits).toHaveLength(1);
-      expect(edit.edits![0]!.file).toBe('notes.txt');
-      expect(edit.edits![0]!.diff).toContain('+ banana-codex');
-      expect(edit.edits![0]!.diff).not.toContain('*** Begin Patch');
+      expect(edit.diff).toContain('+banana-codex');
 
       // The plan renders the steps as a status checklist, keyed by call_id.
       const plan = parsed.messages.find((m) => m.role === 'plan')!;
@@ -179,23 +175,14 @@ describe('parseCodexTranscript', () => {
     }
   });
 
-  test('parseCodexRollout keeps edits (with clean per-file diffs) + prompt/plan/reply', () => {
+  test('parseCodexRollout drops edits, keeping prompt/plan/reply', () => {
     const dir = makeTempDir();
     try {
       const t = parseCodexRollout(makeRollout(dir), dir);
       expect(t.sessionId).toBe('sess-codex-1');
-      // Edits now flow through too (the reconcile imports their diffs).
-      expect(t.messages.map((m) => m.role)).toEqual([
-        'user',
-        'plan',
-        'edit',
-        'assistant',
-      ]);
+      // The plan flows through (between prompt and reply); the edit is dropped.
+      expect(t.messages.map((m) => m.role)).toEqual(['user', 'plan', 'assistant']);
       expect(t.messages[0]!.text).toContain('banana-codex');
-      // The edit carries clean per-file diffs (no raw envelope).
-      const edit = t.messages.find((m) => m.role === 'edit')!;
-      expect(edit.edits?.[0]?.file).toBe('notes.txt');
-      expect(edit.edits?.[0]?.diff).toContain('+ banana-codex');
       const plan = t.messages.find((m) => m.role === 'plan')!;
       expect(plan.text).toContain('Read notes.txt');
       // Codex plans are headless — never approved/revised, so they carry no
@@ -313,7 +300,7 @@ describe('apply_patch absolute-path capture (regression)', () => {
   test('a post-edit apply_patch payload with an ABSOLUTE path produces an artifact', () => {
     const dir = makeTempDir();
     try {
-      run(dir, ['track', '--project', 'Codex Abs Path']);
+      run(dir, ['init', '--project', 'Codex Abs Path']);
       writeFileSync(join(dir, 'parser.ts'), 'export const x = 1;');
 
       // The real Codex bug: the envelope carries an ABSOLUTE file path. Before the
@@ -348,7 +335,7 @@ describe('codex getTranscript (stop reconcile)', () => {
     const prev = process.env.CODEX_HOME;
     process.env.CODEX_HOME = codexHome;
     try {
-      run(dir, ['track', '--project', 'Codex Stop']);
+      run(dir, ['init', '--project', 'Codex Stop']);
       // Place a rollout where Codex would, named with the session id, recording
       // a prompt + reply for this project (cwd === dir).
       const day = join(codexHome, 'sessions', '2026', '06', '22');
@@ -401,7 +388,7 @@ describe('codex getTranscript (stop reconcile)', () => {
     const prev = process.env.CODEX_HOME;
     process.env.CODEX_HOME = codexHome;
     try {
-      run(dir, ['track', '--project', 'Codex Plan Stop']);
+      run(dir, ['init', '--project', 'Codex Plan Stop']);
       run(dir, ['hook', 'session-start']);
 
       const day = join(codexHome, 'sessions', '2026', '06', '22');

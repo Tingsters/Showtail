@@ -9,7 +9,6 @@ import {
   markdownToHtml,
   renderHtml,
   renderMarkdown,
-  renderRichText,
 } from '../src/core/report.ts';
 import { startSession } from '../src/core/sessions.ts';
 import { pathsForRoot, readConfig } from '../src/core/storage.ts';
@@ -264,58 +263,5 @@ describe('report', () => {
     expect(markdownToHtml('a `code` word')).toContain('<code>code</code>');
     expect(markdownToHtml('_quiet_')).toContain('<em>quiet</em>');
     expect(markdownToHtml('> a quote')).toContain('<blockquote>a quote</blockquote>');
-  });
-
-  describe('renderRichText (card bodies, e.g. plan cards)', () => {
-    test('coalesces a multi-line blockquote into a single box', () => {
-      const html = renderRichText('> line one\n> line two');
-      expect(html.match(/<blockquote/g)?.length).toBe(1);
-      expect(html).toContain('line one');
-      expect(html).toContain('line two');
-    });
-
-    test('renders a GitHub callout with a label, not the raw marker', () => {
-      const html = renderRichText('> [!NOTE]\n> Heads up.');
-      expect(html).toContain('class="callout callout-note"');
-      expect(html).toContain('<p class="callout-label">Note</p>');
-      expect(html).toContain('Heads up.');
-      expect(html).not.toContain('[!NOTE]');
-    });
-
-    test('renders a list inside a blockquote as real list items', () => {
-      const html = renderRichText('> - first\n> - second');
-      expect(html).toContain('<blockquote>');
-      expect(html).toContain('<ul>');
-      expect(html).toContain('<li>first</li>');
-      expect(html).toContain('<li>second</li>');
-    });
-
-    test('nests an indented sub-list inside its parent item', () => {
-      const html = renderRichText('- outer\n  - inner');
-      // The nested <ul> lives inside the outer <li>, before its </li>.
-      expect(html).toContain('<li>outer<ul><li>inner</li></ul></li>');
-    });
-
-    test('shows a non-http link as its label, dropping the dead target', () => {
-      const html = renderRichText(
-        '[game.py](file:///C:/Users/me/.gemini/scratch/game.py)',
-      );
-      expect(html).toContain('game.py');
-      expect(html).not.toContain('file://');
-      expect(html).not.toContain('](');
-    });
-
-    test('preserves ordered-list numbering via start when it begins past 1', () => {
-      const html = renderRichText('2. second\n3. third');
-      expect(html).toContain('<ol start="2">');
-      // A normal list from 1 stays clean (no start attribute).
-      expect(renderRichText('1. a\n2. b')).toContain('<ol>');
-    });
-
-    test('still renders fenced code as a code block', () => {
-      const html = renderRichText('Run:\n```bash\npython game.py\n```');
-      expect(html).toContain('class="codeblock"');
-      expect(html).toContain('python game.py');
-    });
   });
 });

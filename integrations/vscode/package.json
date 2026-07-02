@@ -1,8 +1,8 @@
 {
   "name": "showtail",
   "displayName": "Showtail",
-  "description": "Show your work: capture your AI coding prompts and edits (GitHub Copilot, Antigravity IDE) into a local provenance trail.",
-  "version": "0.6.4",
+  "description": "Show your work: capture your GitHub Copilot prompts and edits into a local provenance trail.",
+  "version": "0.5.0",
   "publisher": "Tingsters",
   "license": "Apache-2.0",
   "repository": {

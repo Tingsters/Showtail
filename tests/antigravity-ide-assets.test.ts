@@ -32,14 +32,9 @@ describe('antigravity-ide assets stay in sync with the single source of truth', 
       'PostToolUse',
       'Stop',
     ]);
-    // `matcher` is a TOOL-NAME filter, so it belongs only on the tool event
-    // (PostToolUse = '*' = all tools). PreInvocation/Stop are not tool events; a
-    // matcher there made the IDE skip them, so they carry none.
-    for (const g of ANTIGRAVITY_IDE_HOOK_EVENTS.PostToolUse!) expect(g.matcher).toBe('*');
-    for (const event of ['PreInvocation', 'Stop'] as const) {
-      for (const g of ANTIGRAVITY_IDE_HOOK_EVENTS[event]!) {
-        expect(g.matcher).toBeUndefined();
-      }
+    // Matcher is a tool-name glob, not a regex; every group uses '*' (all tools).
+    for (const groups of Object.values(ANTIGRAVITY_IDE_HOOK_EVENTS)) {
+      for (const g of groups) expect(g.matcher).toBe('*');
     }
   });
 

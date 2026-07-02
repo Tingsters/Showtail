@@ -66,16 +66,11 @@ export async function runSetup(options: SetupOptions = {}): Promise<void> {
 
   // The single switch that turns automatic tracking on everywhere.
   const setupCompletedAt = new Date().toISOString();
-  const existing = readGlobalConfig();
   writeGlobalConfig({
-    ...existing,
+    ...readGlobalConfig(),
     version: 1,
     autoInit: true,
     setupCompletedAt,
-    // Set-once capture watermark (never rewritten, unlike setupCompletedAt): the
-    // natural "started using Showtail" moment. Auto-backfill skips history older
-    // than this so a re-`setup`/update never resurrects pre-Showtail chats.
-    captureSince: existing.captureSince ?? setupCompletedAt,
   });
 
   if (options.json) {

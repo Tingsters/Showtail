@@ -11,4 +11,4 @@
 export { buildReportData, buildToolBlocks, buildTurns } from './report/data.ts';
 export { renderMarkdown } from './report/markdown.ts';
 export { renderHtml } from './report/html.ts';
-export { markdownToHtml, renderRichText } from './report/mdToHtml.ts';
+export { markdownToHtml } from './report/mdToHtml.ts';

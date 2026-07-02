@@ -196,14 +196,6 @@ export interface ImportEditArtifactInput {
   sourceId?: string;
   /** Groups this with its import run so `import undo` removes it with the batch. */
   batchId?: string;
-  /**
-   * SHA-256 of the file at capture time. A projection from the ledger passes the
-   * hash it captured live, so the projected snapshot keeps its integrity hash even
-   * though this path never reads the file from disk.
-   */
-  sha256?: string;
-  /** Git commit captured live, carried through a projection (see {@link sha256}). */
-  gitCommit?: string;
 }
 
 /**
@@ -251,13 +243,10 @@ export function importEditArtifact(
     conv: input.sessionId,
     actorSlug: author.slug,
     path: input.path,
+    // No sha256: imported edits aren't a live snapshot of the file on disk.
     diffHash: writeObject(paths, cleaned),
     diffLines: countDiffLines(cleaned),
   };
-  // A live capture's hash/commit, carried through the projection (a plain import
-  // has neither — it never saw the file on disk).
-  if (input.sha256) entry.sha256 = input.sha256;
-  if (input.gitCommit) entry.gitCommit = input.gitCommit;
   if (input.tool) entry.tool = input.tool;
   if (input.turnId) entry.turn = input.turnId;
   if (input.sourceId) entry.sourceId = input.sourceId;

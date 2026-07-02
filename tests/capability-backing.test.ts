@@ -27,7 +27,6 @@ import {
 } from './helpers.ts';
 import { runInit } from '../src/commands/init.ts';
 import { runImportClaudeCode } from '../src/commands/importClaude.ts';
-import { importAntigravityIdeTranscript } from '../src/commands/importAntigravityIde.ts';
 import { parseTranscript as parseChatgpt } from '../src/core/chatgpt.ts';
 import { parseTranscript as parseGemini } from '../src/core/gemini.ts';
 import { importConversation } from '../src/core/importCommon.ts';
@@ -37,8 +36,6 @@ import {
   importCodexTranscript,
 } from '../src/core/codexTranscript.ts';
 import { readAllEvents } from '../src/core/events.ts';
-import { readAllArtifacts } from '../src/core/artifacts.ts';
-import { readObject } from '../src/core/objects.ts';
 import { pathsForRoot } from '../src/core/storage.ts';
 import { getPluginById } from '../src/plugins/registry.ts';
 import { resolveTarget, skillState } from '../src/core/skill.ts';
@@ -140,7 +137,7 @@ function backCapture(
 ) {
   const dir = makeTempDir();
   try {
-    run(dir, ['track', '--project', 'Cap']);
+    run(dir, ['init', '--project', 'Cap']);
     run(
       dir,
       ['hook', 'user-prompt', '--tool', toolId],
@@ -156,20 +153,7 @@ function backCapture(
             input: `*** Begin Patch\n*** Update File: ${filePath}\n@@\n-1\n+2\n*** End Patch`,
           },
         }
-      : toolId === 'copilot-cli'
-        ? // Copilot CLI's real postToolUse shape: camelCase fields, `toolArgs` a
-          // JSON STRING, edit signalled by old_str/new_str (a `view` read has neither).
-          {
-            cwd: dir,
-            sessionId: 'cc-sess-1',
-            toolName: 'edit',
-            toolArgs: JSON.stringify({
-              path: filePath,
-              old_str: 'export const x = 1;',
-              new_str: 'export const x = 2;',
-            }),
-          }
-        : { cwd: dir, tool_name: edit.editTool, tool_input: { file_path: filePath } };
+      : { cwd: dir, tool_name: edit.editTool, tool_input: { file_path: filePath } };
     const r = run(dir, ['hook', 'post-edit', '--tool', toolId], JSON.stringify(payload));
     expect(r.code).toBe(0);
     run(dir, ['report', '--format', 'json']);
@@ -188,7 +172,7 @@ describe('backing: automatic capture via hooks', () => {
   test('Claude Code: prompt, edit, and AI-reply reconcile', () => {
     const dir = makeTempDir();
     try {
-      run(dir, ['track', '--project', 'Backing']);
+      run(dir, ['init', '--project', 'Backing']);
       run(
         dir,
         ['hook', 'user-prompt'],
@@ -290,60 +274,6 @@ describe('backing: Codex transcript (AI-reply + import)', () => {
       cleanup(dir);
     }
   });
-
-  // The REAL file-capture contract: Codex's apply_patch envelope (which arrives in
-  // the rollout, not the live hook payload) reconciles into a CLEAN per-file diff
-  // artifact — no `*** Begin Patch` cruft. This is the path the Stop reconcile and
-  // `import codex` share; the live hook auto-firing is certified separately in the
-  // verification ledger.
-  test('a Codex apply_patch edit reconciles a clean per-file diff', async () => {
-    const dir = makeTempDir();
-    try {
-      await runInit({ cwd: dir });
-      const author = authorFor(pathsForRoot(dir));
-      const rollout = [
-        {
-          timestamp: '2026-06-10T10:00:00.000Z',
-          type: 'session_meta',
-          payload: { id: 'sfc', cwd: dir },
-        },
-        {
-          timestamp: '2026-06-10T10:00:01.000Z',
-          type: 'event_msg',
-          payload: { type: 'user_message', message: 'create svc' },
-        },
-        {
-          timestamp: '2026-06-10T10:00:02.000Z',
-          type: 'response_item',
-          payload: {
-            type: 'custom_tool_call',
-            call_id: 'c1',
-            name: 'apply_patch',
-            input:
-              '*** Begin Patch\n*** Add File: svc.ts\n+export const x = 1;\n*** End Patch\n',
-          },
-        },
-      ]
-        .map((l) => JSON.stringify(l))
-        .join('\n');
-      const transcript = parseCodexTranscript(rollout, dir);
-      const res = await importCodexTranscript(author, transcript, {
-        withResponses: true,
-      });
-      expect(res.edits).toBe(1);
-      const art = readAllArtifacts(pathsForRoot(dir))
-        .filter((a) => a.path === 'svc.ts')
-        .at(-1);
-      const diff = art?.diffHash
-        ? readObject(pathsForRoot(dir), art.diffHash)
-        : undefined;
-      expect(diff).toContain('+ export const x = 1;'); // Claude-style clean diff
-      expect(diff).not.toContain('*** Begin Patch'); // no envelope cruft
-      markPassed('auto-file-capture:codex');
-    } finally {
-      cleanup(dir);
-    }
-  });
 });
 
 describe('backing: session import / backfill', () => {
@@ -368,57 +298,6 @@ describe('backing: session import / backfill', () => {
       const prompts = readAllEvents(pathsForRoot(dir)).filter((e) => e.type === 'prompt');
       expect(prompts.some((e) => e.tool === 'claude-code')).toBe(true);
       markPassed('session-import:claude-code');
-    } finally {
-      cleanup(dir);
-    }
-  });
-
-  test('Antigravity IDE transcript import logs prompt + reply tagged antigravity-ide', async () => {
-    const dir = makeTempDir();
-    try {
-      await runInit({ cwd: dir });
-      const author = authorFor(pathsForRoot(dir));
-      const res = await importAntigravityIdeTranscript(
-        author,
-        {
-          sessionId: 'conv-imp',
-          messages: [
-            {
-              role: 'user',
-              text: 'imported agy-ide prompt',
-              sourceId: 'agy:user:conv-imp:0',
-            },
-            { role: 'assistant', text: 'the reply', sourceId: 'agy:asst:conv-imp:1' },
-          ],
-        },
-        { withResponses: true },
-      );
-      expect(res.prompts).toBeGreaterThanOrEqual(1);
-      const events = readAllEvents(pathsForRoot(dir));
-      expect(
-        events.some((e) => e.type === 'prompt' && e.tool === 'antigravity-ide'),
-      ).toBe(true);
-      expect(
-        events.some((e) => e.type === 'ai_output' && e.tool === 'antigravity-ide'),
-      ).toBe(true);
-      // Idempotent: a second import of the same transcript adds nothing new.
-      const again = await importAntigravityIdeTranscript(
-        author,
-        {
-          sessionId: 'conv-imp',
-          messages: [
-            {
-              role: 'user',
-              text: 'imported agy-ide prompt',
-              sourceId: 'agy:user:conv-imp:0',
-            },
-          ],
-        },
-        { withResponses: true },
-      );
-      expect(again.prompts).toBe(0);
-      expect(again.skipped).toBeGreaterThanOrEqual(1);
-      markPassed('session-import:antigravity-ide');
     } finally {
       cleanup(dir);
     }
@@ -496,7 +375,7 @@ describe('backing: plan capture', () => {
   test('Claude Code: an ExitPlanMode plan is materialized + linked at Stop', () => {
     const dir = makeTempDir();
     try {
-      run(dir, ['track', '--project', 'PlanCap']);
+      run(dir, ['init', '--project', 'PlanCap']);
       run(
         dir,
         ['hook', 'user-prompt'],
@@ -565,58 +444,6 @@ describe('backing: plan capture', () => {
     }
   });
 
-  test('Codex: an update_plan plan is captured + materialized to a linkable file', async () => {
-    const dir = makeTempDir();
-    try {
-      await runInit({ cwd: dir });
-      const author = authorFor(pathsForRoot(dir));
-      const rollout = [
-        {
-          timestamp: '2026-06-10T10:00:00.000Z',
-          type: 'session_meta',
-          payload: { id: 'spc', cwd: dir },
-        },
-        {
-          timestamp: '2026-06-10T10:00:01.000Z',
-          type: 'event_msg',
-          payload: { type: 'user_message', message: 'plan it' },
-        },
-        {
-          timestamp: '2026-06-10T10:00:02.000Z',
-          type: 'response_item',
-          payload: {
-            type: 'function_call',
-            name: 'update_plan',
-            call_id: 'pl1',
-            arguments: JSON.stringify({
-              plan: [
-                { step: 'Read the file', status: 'completed' },
-                { step: 'Make the change', status: 'pending' },
-              ],
-            }),
-          },
-        },
-      ]
-        .map((l) => JSON.stringify(l))
-        .join('\n');
-      const transcript = parseCodexTranscript(rollout, dir);
-      const res = await importCodexTranscript(author, transcript, {
-        withResponses: true,
-      });
-      expect(res.plans).toBe(1);
-      run(dir, ['report', '--format', 'json']);
-      const data = readJsonReport(dir);
-      expect(data.plans.length).toBe(1);
-      // Codex writes no native plan file; the transcript plan is materialized to a
-      // browsable, linkable file — like Claude Code's.
-      expect(data.plans[0].planPath).toMatch(/^plans\//);
-      expect(existsSync(join(dir, '.showtail', data.plans[0].planPath))).toBe(true);
-      markPassed('plan-capture:codex');
-    } finally {
-      cleanup(dir);
-    }
-  });
-
   test('Antigravity CLI: the on-disk plan.md is linked at Stop', () => {
     const home = makeTempDir();
     const dir = makeTempDir();
@@ -651,7 +478,7 @@ describe('backing: plan capture', () => {
       writeFileSync(join(brain, 'plan.md'), '# Plan\n- from disk\n');
       const env = { ...spawnEnv(), GEMINI_HOME: home };
 
-      runCli(dir, ['track', '--project', 'PlanCap'], { env });
+      runCli(dir, ['init', '--project', 'PlanCap'], { env });
       runCli(dir, ['hook', 'user-prompt', '--tool', 'antigravity-cli'], {
         env,
         input: JSON.stringify({ conversationId: SID, prompt: 'add retry' }),
@@ -680,7 +507,7 @@ describe('backing: decision capture', () => {
   test('Claude Code: an AskUserQuestion choice is captured as a decision at Stop', () => {
     const dir = makeTempDir();
     try {
-      run(dir, ['track', '--project', 'DecisionCap']);
+      run(dir, ['init', '--project', 'DecisionCap']);
       run(
         dir,
         ['hook', 'user-prompt'],
@@ -820,7 +647,7 @@ describe('backing: redaction and the cross-tool timeline', () => {
   test('a tagged prompt per tool is scrubbed before store and lands on the timeline', () => {
     const dir = makeTempDir();
     try {
-      run(dir, ['track', '--project', 'Timeline']);
+      run(dir, ['init', '--project', 'Timeline']);
       run(dir, ['start']);
       const SECRET = 'AKIAIOSFODNN7EXAMPLE';
       const tools = [

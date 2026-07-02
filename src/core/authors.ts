@@ -8,11 +8,11 @@
 import { existsSync, mkdirSync, readdirSync } from 'node:fs';
 import {
   authorPaths,
-  migrateLegacySessions,
   readJson,
   readState,
   updateState,
   writeJson,
+  writeSessions,
   type AuthorPaths,
   type ShowtailPaths,
 } from './storage.ts';
@@ -94,9 +94,7 @@ export function ensureAuthor(
       createdAt: new Date().toISOString(),
     });
   }
-  // Session shards are created on first write (per-machine). No empty file is
-  // seeded here — `readSessions` already tolerates their absence, and seeding one
-  // would clobber this machine's shard on every re-run.
+  if (!existsSync(ap.sessionsIndex)) writeSessions(ap, []);
   return ap;
 }
 
@@ -140,26 +138,12 @@ export async function requireActiveAuthor(
   opts: { cwd: string; allowPrompt?: boolean },
 ): Promise<AuthorPaths> {
   const existing = activeAuthorPaths(paths);
-  if (existing) {
-    try {
-      migrateLegacySessions(existing);
-    } catch {
-      /* best-effort */
-    }
-    return existing;
-  }
+  if (existing) return existing;
   const established = await establishIdentity(paths, {
     cwd: opts.cwd,
     allowPrompt: opts.allowPrompt ?? true,
   });
-  if (established) {
-    try {
-      migrateLegacySessions(established);
-    } catch {
-      /* best-effort */
-    }
-    return established;
-  }
+  if (established) return established;
   throw new Error(
     'Could not determine who you are. Set your git identity ' +
       '(`git config user.email "you@example.com"`) or run `gh auth login`, then try again.',

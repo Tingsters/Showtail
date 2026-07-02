@@ -31,16 +31,10 @@ describe('copilot-cli install / uninstall', () => {
       expect(body).toContain("applyTo: '**'");
       expect(copilotCliHooksInstalledAt(target.hooksFile)).toBe(true);
 
-      // The four Copilot lifecycle events are present (Copilot's real camelCase
-      // event names — not Claude's PascalCase), with the version envelope.
+      // The four Copilot lifecycle events are present, with the version envelope.
       const hooks = JSON.parse(readFileSync(target.hooksFile, 'utf8'));
       expect(hooks.version).toBe(1);
-      for (const event of [
-        'sessionStart',
-        'userPromptSubmitted',
-        'postToolUse',
-        'sessionEnd',
-      ]) {
+      for (const event of ['SessionStart', 'UserPromptSubmit', 'PostToolUse', 'Stop']) {
         expect(Array.isArray(hooks.hooks[event])).toBe(true);
       }
 
@@ -65,7 +59,7 @@ describe('copilot-cli install / uninstall', () => {
       expect(body.match(/showtail:start/g)?.length).toBe(1);
 
       const hooks = JSON.parse(readFileSync(target.hooksFile, 'utf8'));
-      const post = hooks.hooks.postToolUse as Array<{ hooks: { command: string }[] }>;
+      const post = hooks.hooks.PostToolUse as Array<{ hooks: { command: string }[] }>;
       const ours = post.filter((g) => g.hooks?.[0]?.command?.includes('showtail hook'));
       expect(ours).toHaveLength(1);
     } finally {
@@ -148,7 +142,7 @@ describe('copilot-cli install / uninstall', () => {
   test('merging the hook events is idempotent', () => {
     const once = mergeHookEvents({ version: 1 }, COPILOT_CLI_HOOK_EVENTS);
     const twice = mergeHookEvents(once, COPILOT_CLI_HOOK_EVENTS);
-    const post = (twice.hooks as Record<string, unknown[]>).postToolUse as Array<{
+    const post = (twice.hooks as Record<string, unknown[]>).PostToolUse as Array<{
       hooks: { command: string }[];
     }>;
     const ours = post.filter((g) => g.hooks?.[0]?.command?.includes('showtail hook'));

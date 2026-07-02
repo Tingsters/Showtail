@@ -1,12 +1,10 @@
 import { describe, expect, test } from 'bun:test';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { homedir } from 'node:os';
 import {
   NotInitializedError,
   appendJsonl,
   findRoot,
-  isHomedirCatchAll,
   pathsForRoot,
   readJsonl,
   requirePaths,
@@ -17,12 +15,6 @@ import {
 import { cleanup, makeTempDir } from './helpers.ts';
 
 describe('storage', () => {
-  test('isHomedirCatchAll only matches the home directory', () => {
-    expect(isHomedirCatchAll(homedir())).toBe(true);
-    expect(isHomedirCatchAll(join(homedir(), 'projects', 'app'))).toBe(false);
-    expect(isHomedirCatchAll(makeTempDir())).toBe(false);
-  });
-
   test('JSON round-trips', () => {
     const dir = makeTempDir();
     try {

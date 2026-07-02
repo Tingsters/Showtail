@@ -121,28 +121,6 @@ blockquote {
   border-left: 3px solid #c9c9d2;
   color: #4a4a52;
 }
-/* GitHub-style callouts (`> [!NOTE]`): a labelled, tinted blockquote. */
-.ai-text blockquote.callout {
-  border-radius: 0 0.25rem 0.25rem 0;
-  background: #f4f4f8;
-}
-.ai-text .callout-label {
-  margin: 0 0 0.2rem;
-  font-weight: 600;
-  font-size: 0.85em;
-  letter-spacing: 0.02em;
-}
-.ai-text blockquote.callout p { margin: 0.2rem 0; }
-.ai-text blockquote.callout-note { border-left-color: #3a6df0; }
-.ai-text blockquote.callout-note .callout-label { color: #3a6df0; }
-.ai-text blockquote.callout-tip { border-left-color: #1a9d52; }
-.ai-text blockquote.callout-tip .callout-label { color: #1a9d52; }
-.ai-text blockquote.callout-important { border-left-color: #8250df; }
-.ai-text blockquote.callout-important .callout-label { color: #8250df; }
-.ai-text blockquote.callout-warning { border-left-color: #d4a72c; }
-.ai-text blockquote.callout-warning .callout-label { color: #b07d12; }
-.ai-text blockquote.callout-caution { border-left-color: #d1242f; }
-.ai-text blockquote.callout-caution .callout-label { color: #d1242f; }
 .turn-close {
   display: block;
   width: 100%;
@@ -313,17 +291,6 @@ pre.codeblock code { background: none; padding: 0; font-size: inherit; border-ra
   .ai-text a { color: #aab0ff; }
   .file-link { color: #aab0ff; }
   .ai-text blockquote { border-left-color: #4a4a52; color: #b8b8c2; }
-  .ai-text blockquote.callout { background: #20202a; }
-  .ai-text blockquote.callout-note .callout-label { color: #79a0ff; }
-  .ai-text blockquote.callout-note { border-left-color: #4f7cf5; }
-  .ai-text blockquote.callout-tip .callout-label { color: #56c98a; }
-  .ai-text blockquote.callout-tip { border-left-color: #2ba35f; }
-  .ai-text blockquote.callout-important .callout-label { color: #b692f0; }
-  .ai-text blockquote.callout-important { border-left-color: #9a6cf0; }
-  .ai-text blockquote.callout-warning .callout-label { color: #e0b257; }
-  .ai-text blockquote.callout-warning { border-left-color: #d4a72c; }
-  .ai-text blockquote.callout-caution .callout-label { color: #f2756f; }
-  .ai-text blockquote.callout-caution { border-left-color: #e0555c; }
   .turn-close { color: #b8b8c2; background: #242429; border-top-color: #34343a; }
   .turn-close:hover { background: #2c2c33; color: #e4e4ea; }
   .decision { background: #2b2519; border-left-color: #b9842a; }

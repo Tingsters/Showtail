@@ -14,7 +14,7 @@ showtail setup     # one-time: connect your AI tools and turn on automatic track
 showtail report    # generate the report for your educator
 ```
 
-Once a tool is connected, Showtail sets up each project for you the first time you work in it — there is no separate init step to remember. Prefer to wire up one project by hand? Use [`showtail track` then `showtail connect <tool>`](https://tingsters.github.io/Showtail/getting-started/quickstart/#wiring-up-one-project-by-hand) instead.
+Once a tool is connected, Showtail sets up each project for you the first time you work in it — there is no separate init step to remember. Prefer to wire up one project by hand? Use [`showtail init` then `showtail connect <tool>`](https://tingsters.github.io/Showtail/getting-started/quickstart/#wiring-up-one-project-by-hand) instead.
 
 ## 📚 Documentation
 
