@@ -312,6 +312,11 @@ export function parseAntigravityCliTranscript(
   // own per-turn index), else a running fallback, so re-reads of the same
   // append-only transcript dedupe deterministically.
   let seq = 0;
+  // Antigravity records no per-message model, but each USER_INPUT embeds a
+  // `<USER_SETTINGS_CHANGE>` note "Model Selection ... to <model>" when the model
+  // is chosen/changed (already human-readable, e.g. "Gemini 3.5 Flash (Medium)").
+  // Track the latest and stamp it on the MODEL-sourced replies/plans that follow.
+  let currentModel: string | undefined;
 
   for (const rawLine of content.split(/\r?\n/)) {
     const line = rawLine.trim();
@@ -331,7 +336,14 @@ export function parseAntigravityCliTranscript(
     const idx = typeof stepIndex === 'number' ? String(stepIndex) : `n${seq++}`;
 
     if (type === 'USER_INPUT') {
-      const text = cleanUserContent(asString(prop(obj, 'content')) ?? '');
+      const raw = asString(prop(obj, 'content')) ?? '';
+      // Pick up a model choice/switch embedded in the settings-change note, e.g.
+      // "...`Model Selection` from None to Gemini 3.5 Flash (Medium). No need...".
+      // Stop at the sentence-ending ". " (or newline/end) — not the version dot in
+      // "3.5", so the full "Gemini 3.5 Flash (Medium)" is captured.
+      const m = /Model Selection[^\n]*?\bto\s+(.+?)(?:\.\s|\.$|\n|$)/.exec(raw);
+      if (m) currentModel = m[1]!.trim();
+      const text = cleanUserContent(raw);
       if (!text) continue;
       messages.push({
         role: 'user',
@@ -355,6 +367,7 @@ export function parseAntigravityCliTranscript(
         timestamp,
         sourceId: `agy:plan:${sid}:${idx}`,
         approved,
+        model: currentModel,
       });
       continue;
     }
@@ -392,6 +405,7 @@ export function parseAntigravityCliTranscript(
           timestamp,
           sourceId: `agy:plan:${sid}:${idx}:${i}`,
           approved: true, // a recorded plan call is one the run proceeded on
+          model: currentModel,
         });
         emittedPlan = true;
       }
@@ -405,6 +419,7 @@ export function parseAntigravityCliTranscript(
           text,
           timestamp,
           sourceId: `agy:asst:${sid}:${idx}`,
+          model: currentModel,
         });
       }
       // tool-only PLANNER_RESPONSE turns (edits/reads/commands) carry no reply

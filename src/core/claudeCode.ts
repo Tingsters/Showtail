@@ -69,6 +69,8 @@ export interface ClaudeMessage {
   questions?: DecisionQuestion[];
   /** For plans: whether the student approved it (resolved in the second pass). */
   approved?: boolean;
+  /** For an assistant reply: the model id from the transcript line (`message.model`). */
+  model?: string;
 }
 
 /** A normalized transcript: just the messages we care about, in order. */
@@ -410,7 +412,8 @@ function handleUser(obj: unknown): ClaudeMessage | null {
 /** Assistant turns: text parts become one reply; Edit/Write/MultiEdit become edits. */
 function handleAssistant(obj: unknown, root: string): ClaudeMessage[] {
   const msg = prop(obj, 'message');
-  if (!msg || prop(msg, 'model') === '<synthetic>') return [];
+  const model = asString(prop(msg, 'model'));
+  if (!msg || model === '<synthetic>') return [];
   const content = asArray(prop(msg, 'content'));
   if (!content) return [];
 
@@ -474,6 +477,7 @@ function handleAssistant(obj: unknown, root: string): ClaudeMessage[] {
       text: texts.join('\n'),
       timestamp,
       sourceId: uuid || `cc:asst:${texts[0]!.slice(0, 24)}`,
+      model,
     });
   }
 
@@ -568,6 +572,7 @@ export async function importClaudeTranscript(
       type,
       text: msg.text,
       tool: 'claude-code',
+      model: msg.model,
       timestamp: msg.timestamp,
       sourceId: msg.sourceId,
       batchId: options.batchId,

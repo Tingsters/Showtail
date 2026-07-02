@@ -1,6 +1,13 @@
 import type { ReportData, Turn } from '../../types.ts';
 import { PLAN_APPROVED_TAG, PLAN_REVISED_TAG } from '../plans.ts';
-import { nameBySlugMap, shouldShowAuthor, toolLabel, turnTimeline } from './data.ts';
+import {
+  modelLabel,
+  nameBySlugMap,
+  shouldShowAuthor,
+  toolLabel,
+  turnModels,
+  turnTimeline,
+} from './data.ts';
 import { staticUtc, timeToken } from './time.ts';
 
 /** A unique token swapped for the interactive turns HTML after Markdown→HTML. */
@@ -46,6 +53,7 @@ export function buildMarkdown(data: ReportData, turnsPlaceholder = false): strin
     ...metadataSection(data, fmt),
     ...contributorsSection(data),
     ...toolsSection(data, fmt),
+    ...modelsSection(data),
     ...plansSection(data),
     ...turnsSection(data, turnsPlaceholder),
     ...authorshipSection(data),
@@ -146,6 +154,21 @@ function toolsSection(data: ReportData, fmt: (iso: string) => string): string[] 
 }
 
 /**
+ * Models used — which AI model(s) produced the responses. Only rendered when at
+ * least one model was captured (older/model-less trails skip it entirely), so it
+ * never shows an empty section.
+ */
+function modelsSection(data: ReportData): string[] {
+  if (data.models.length === 0) return [];
+  const lines = ['## Models used', ''];
+  for (const m of data.models) {
+    lines.push(`- **${modelLabel(m.model)}** — ${m.events} response(s)`);
+  }
+  lines.push('');
+  return lines;
+}
+
+/**
  * Prompts & AI exchanges — the heart of the report. In HTML this becomes
  * collapsible cards; in Markdown it reads top-to-bottom.
  */
@@ -182,7 +205,10 @@ export function renderMarkdown(data: ReportData): string {
 /** Append one turn as readable Markdown (used for the canonical text export). */
 function turnMarkdown(lines: string[], turn: Turn, author?: string): void {
   const who = author ? ` · **${author}**` : '';
-  const meta = `\`${staticUtc(turn.prompt.timestamp)}\` · \`${toolLabel(turn.tool)}\`${who}`;
+  const models = turnModels(turn)
+    .map((m) => ` · \`${modelLabel(m)}\``)
+    .join('');
+  const meta = `\`${staticUtc(turn.prompt.timestamp)}\` · \`${toolLabel(turn.tool)}\`${models}${who}`;
   lines.push(`**Prompt** · ${meta}`, '');
   lines.push(turn.prompt.text, '');
   // AI replies, decisions, and code changes interleaved in the order they happened.

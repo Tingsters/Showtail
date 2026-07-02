@@ -60,6 +60,13 @@ export interface Event {
   gitCommit?: string;
   /** Which tool the work flowed through (claude-code, github-copilot, chatgpt, cli). */
   tool?: Tool;
+  /**
+   * The AI model that produced this event (raw id as the tool reports it, e.g.
+   * `claude-opus-4-8`, `gpt-5.5`, `Gemini 3.5 Flash`). Set on an `ai_output` when
+   * the tool exposes a model, else on the `prompt` for tools that only capture
+   * prompts. Prettified at render via `labelForModel`. Absent on older trails.
+   */
+  model?: string;
   /** Stable id from an external source (e.g. a ChatGPT message id) for idempotent imports. */
   sourceId?: string;
   /** Groups events written by a single import run, so one paste can be undone as a batch. */
@@ -217,6 +224,12 @@ export interface ToolUsage {
   events: number;
 }
 
+/** How many AI responses used a given model (raw id; label computed at render). */
+export interface ModelUsage {
+  model: string;
+  events: number;
+}
+
 /**
  * A contiguous block of activity through one tool. Consecutive same-tool events
  * collapse into one block, so the list of blocks reads as the student's path
@@ -269,6 +282,8 @@ export interface ReportData {
   contributors: Contributor[];
   /** Per-tool event totals. */
   tools: ToolUsage[];
+  /** Per-model response totals (only models Showtail captured; empty when none). */
+  models: ModelUsage[];
   /** Chronological blocks of tool usage; boundaries are tool switches. */
   toolTimeline: ToolBlock[];
   /** Prompt-and-AI exchanges, each rendered as a collapsible card. */
@@ -373,6 +388,8 @@ export interface JournalEntry {
   tags?: string[];
   gitCommit?: string;
   sourceId?: string;
+  /** The AI model that produced this event (raw id). See {@link Event.model}. */
+  model?: string;
   /** For a `plan` event: trail-relative path of the saved plan file (`plans/<id>.md`). */
   planPath?: string;
   // --- artifact-specific ---

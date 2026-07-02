@@ -3,6 +3,7 @@ import type {
   Artifact,
   Contributor,
   Event,
+  ModelUsage,
   ReportData,
   ReportPlan,
   Tool,
@@ -11,7 +12,7 @@ import type {
   Turn,
   TurnCodeChange,
 } from '../../types.ts';
-import { labelForTool } from '../../plugins/registry.ts';
+import { labelForModel, labelForTool } from '../../plugins/registry.ts';
 import { PLAN_APPROVED_TAG, PLAN_REVISED_TAG, splitPlanText } from '../plans.ts';
 import { readAllArtifacts } from '../artifacts.ts';
 import { authorPaths, readConfig, readSessions, type ShowtailPaths } from '../storage.ts';
@@ -27,6 +28,26 @@ export function toolOf(event: Event): Tool {
 
 export function toolLabel(tool: Tool): string {
   return labelForTool(tool);
+}
+
+export function modelLabel(model: string): string {
+  return labelForModel(model);
+}
+
+/**
+ * The distinct models used within one turn — from its AI replies, falling back
+ * to the prompt (live-hook tools that only capture prompts stamp the model
+ * there). In first-seen order; normally exactly one, empty when no model was
+ * captured. Used for the per-turn model badge / meta line.
+ */
+export function turnModels(turn: Turn): string[] {
+  const out: string[] = [];
+  const add = (m?: string) => {
+    if (m && !out.includes(m)) out.push(m);
+  };
+  for (const e of turn.aiOutputs) add(e.model);
+  add(turn.prompt.model);
+  return out;
 }
 
 /**
@@ -74,6 +95,7 @@ export function buildReportData(
   );
 
   const tools = buildToolUsage(events);
+  const models = buildModelUsage(events);
   const sorted = sortByTime(events);
 
   const slugsInScope = onlySlug ? [onlySlug] : authorSlugs(paths);
@@ -110,6 +132,7 @@ export function buildReportData(
     },
     contributors,
     tools,
+    models,
     toolTimeline: buildToolBlocks(sorted),
     turns: buildTurns(withSession, artifacts, paths),
     plans: buildReportPlans(sorted),
@@ -337,6 +360,17 @@ function buildToolUsage(events: Event[]): ToolUsage[] {
   }
   return [...counts.entries()]
     .map(([tool, count]) => ({ tool, events: count }))
+    .sort((a, b) => b.events - a.events);
+}
+
+/** Count events per model (only those with a captured model), busiest first. */
+function buildModelUsage(events: Event[]): ModelUsage[] {
+  const counts = new Map<string, number>();
+  for (const e of events) {
+    if (e.model) counts.set(e.model, (counts.get(e.model) ?? 0) + 1);
+  }
+  return [...counts.entries()]
+    .map(([model, count]) => ({ model, events: count }))
     .sort((a, b) => b.events - a.events);
 }
 

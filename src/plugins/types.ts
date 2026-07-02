@@ -118,6 +118,8 @@ export interface NormalizedHookEvent {
   editedFiles: string[];
   /** AI-suggested diff/code for the edit, if captured. */
   suggestedDiff?: string;
+  /** The AI model in effect for this event, if the tool exposes one (raw id). */
+  model?: string;
 }
 
 /** One message of a normalized transcript used for stop-time reconciliation. */
@@ -129,6 +131,8 @@ export interface HookTranscriptMessage {
   sourceId: string;
   /** For a 'plan' message: whether the student approved it. */
   approved?: boolean;
+  /** For an 'assistant' message: the model that produced it, if exposed (raw id). */
+  model?: string;
 }
 
 /** A normalized conversation transcript, in order. */
@@ -193,6 +197,8 @@ export interface ImportRunOptions {
   yes?: boolean;
   date?: string;
   list?: boolean;
+  /** Fallback model id for imported replies when the source carries none (e.g. paste). */
+  model?: string;
 }
 
 export interface ImportCapability {

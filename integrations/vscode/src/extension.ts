@@ -10,7 +10,9 @@ let output: vscode.OutputChannel;
 
 /** The configured `showtail` binary (on PATH by default). */
 function showtailBin(): string {
-  return vscode.workspace.getConfiguration('showtail').get<string>('binaryPath') || 'showtail';
+  return (
+    vscode.workspace.getConfiguration('showtail').get<string>('binaryPath') || 'showtail'
+  );
 }
 
 /** Run the showtail CLI; never throw — capture must never disrupt the editor. */
@@ -103,7 +105,9 @@ async function ensureTracked(cwd: string): Promise<boolean> {
   if (!caps.autoInit) return false; // opt-in off — respect it
   await runShowtail(['ensure'], cwd);
   if (!existsSync(join(cwd, '.showtail'))) return false;
-  output.appendLine('Showtail started a trail for this project (automatic tracking is on).');
+  output.appendLine(
+    'Showtail started a trail for this project (automatic tracking is on).',
+  );
   return true;
 }
 
@@ -135,7 +139,9 @@ async function maybeAutoInstallCopilot(context: vscode.ExtensionContext): Promis
     // a block you've customized is kept, not overwritten).
     await runShowtail(['connect', 'copilot', '--no-extension'], cwd);
     await context.workspaceState.update(KEY, true);
-    output.appendLine('Showtail Copilot instructions checked (untouched blocks refreshed).');
+    output.appendLine(
+      'Showtail Copilot instructions checked (untouched blocks refreshed).',
+    );
     await maybeNotifyUpdate(context, cwd);
     return;
   }
@@ -157,7 +163,10 @@ async function maybeAutoInstallCopilot(context: vscode.ExtensionContext): Promis
  * When the instructions were customized AND a newer Showtail version exists,
  * nudge once (per update episode) — never overwriting the user's edits.
  */
-async function maybeNotifyUpdate(context: vscode.ExtensionContext, cwd: string): Promise<void> {
+async function maybeNotifyUpdate(
+  context: vscode.ExtensionContext,
+  cwd: string,
+): Promise<void> {
   const NOTIFY_KEY = 'showtail.copilotUpdateNotified';
   const status = await runShowtail(['status', '--json'], cwd);
   let updateAvailable = false;
@@ -219,7 +228,9 @@ function registerChatParticipant(context: vscode.ExtensionContext): void {
     if (request.command === 'verify' || request.command === 'status') {
       const args = request.command === 'verify' ? ['verify'] : ['status'];
       const out = await runShowtail(args, cwd);
-      stream.markdown('```\n' + (out ?? 'showtail was not found on your PATH.').trim() + '\n```');
+      stream.markdown(
+        '```\n' + (out ?? 'showtail was not found on your PATH.').trim() + '\n```',
+      );
       return;
     }
     if (request.command === 'trace') {
@@ -259,6 +270,10 @@ function registerChatParticipant(context: vscode.ExtensionContext): void {
         if (full.trim().length > 0) {
           const args = ['log', '--type', 'ai_output', '--tool', 'github-copilot'];
           if (turnId) args.push('--turn', turnId);
+          // Record which model produced the reply (e.g. "gpt-4o"); `family` is the
+          // stable coarse id, falling back to the exact deployed `id`.
+          const modelId = model.family ?? model.id;
+          if (modelId) args.push('--model', modelId);
           await runShowtailStdin(args, cwd, full);
         }
       }
@@ -298,8 +313,8 @@ function registerSaveCapture(context: vscode.ExtensionContext): void {
       file,
       setTimeout(() => {
         timers.delete(file);
-        void runShowtail(['artifact', file, '--tool', 'github-copilot'], cwd).then(
-          () => output.appendLine(`snapshotted ${file}`),
+        void runShowtail(['artifact', file, '--tool', 'github-copilot'], cwd).then(() =>
+          output.appendLine(`snapshotted ${file}`),
         );
       }, 1500),
     );

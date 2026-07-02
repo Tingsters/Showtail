@@ -3,7 +3,14 @@ import TIMEZONE_JS from '../../../assets/report/timezone.js' with { type: 'text'
 import type { ReportData, Turn } from '../../types.ts';
 import { escapeHtml, firstLine } from '../html.ts';
 import { highlightCode } from '../highlight.ts';
-import { nameBySlugMap, shouldShowAuthor, toolLabel, turnTimeline } from './data.ts';
+import {
+  modelLabel,
+  nameBySlugMap,
+  shouldShowAuthor,
+  toolLabel,
+  turnModels,
+  turnTimeline,
+} from './data.ts';
 import { PLAN_APPROVED_TAG, PLAN_REVISED_TAG, splitPlanText } from '../plans.ts';
 import { buildMarkdown, fileHref, planHref, TURNS_PLACEHOLDER } from './markdown.ts';
 import { markdownToHtml, renderRichText } from './mdToHtml.ts';
@@ -71,6 +78,11 @@ function renderTurnSummary(
   const authorBadge = authorName
     ? `<span class="badge badge--author" data-author="${escapeHtml(turn.actorSlug)}">${escapeHtml(authorName)}</span>`
     : '';
+  // The model(s) this exchange used, as a secondary (outlined) badge next to the
+  // tool badge. Normally one; omitted entirely when no model was captured.
+  const modelBadges = turnModels(turn)
+    .map((m) => `<span class="badge badge--model">${escapeHtml(modelLabel(m))}</span>`)
+    .join('');
   return (
     '<summary>' +
     `<span class="prompt-text">${escapeHtml(firstLine(turn.prompt.text))}</span>` +
@@ -78,6 +90,7 @@ function renderTurnSummary(
     '<span class="meta-top">' +
     authorBadge +
     `<span class="badge badge--${escapeHtml(turn.tool)}">${escapeHtml(toolLabel(turn.tool))}</span>` +
+    modelBadges +
     `<span class="time">${timeTag(turn.prompt.timestamp)}</span>` +
     '</span>' +
     (stat ? `<span class="stat">${escapeHtml(stat)}</span>` : '') +

@@ -33,6 +33,8 @@ export interface NewEventInput {
   tags?: string[];
   /** Which tool the work flowed through. Defaults to "cli". */
   tool?: Tool;
+  /** The AI model that produced this event (raw id), when the tool exposes one. */
+  model?: string;
   /** Override the timestamp (for imports of past activity). Defaults to now. */
   timestamp?: string;
   /** Stable external id for idempotent imports (e.g. a ChatGPT message id). */
@@ -110,6 +112,7 @@ export async function logEvent(
   if (hits > 0) entry.redacted = hits;
   if (input.files && input.files.length > 0) entry.files = input.files;
   if (input.tags && input.tags.length > 0) entry.tags = input.tags;
+  if (input.model) entry.model = input.model;
   if (input.sourceId) entry.sourceId = input.sourceId;
   if (input.batchId) entry.batch = input.batchId;
   if (input.turnId) entry.turn = input.turnId;
@@ -145,6 +148,7 @@ export function eventFromEntry(
   if (entry.files && entry.files.length > 0) event.files = entry.files;
   if (entry.tags && entry.tags.length > 0) event.tags = entry.tags;
   if (entry.gitCommit) event.gitCommit = entry.gitCommit;
+  if (entry.model) event.model = entry.model;
   if (entry.sourceId) event.sourceId = entry.sourceId;
   if (entry.batch) event.batchId = entry.batch;
   if (entry.turn) event.turnId = entry.turn;

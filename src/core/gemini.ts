@@ -201,6 +201,31 @@ function at(node: unknown, path: number[]): unknown {
 }
 
 /**
+ * The model name for the conversation, if the payload carries it. It sits in the
+ * conversation-metadata list (`payload[0][2]`, alongside the title) as a triple
+ * `[2, <responseId>, "<model>"]` — already a human-readable name (e.g. "3.5
+ * Flash"). We scan for that shape rather than a fixed index, so a positional
+ * shift doesn't silently drop it. Conversation-level (one model per share).
+ */
+function modelFromPayload(payload: unknown): string | undefined {
+  const meta = at(payload, [0, 2]);
+  if (!Array.isArray(meta)) return undefined;
+  for (const el of meta) {
+    if (
+      Array.isArray(el) &&
+      el.length === 3 &&
+      el[0] === 2 &&
+      typeof el[1] === 'string' &&
+      typeof el[2] === 'string' &&
+      el[2].trim()
+    ) {
+      return el[2].trim();
+    }
+  }
+  return undefined;
+}
+
+/**
  * Pull the title and ordered turns out of the decoded payload. Each turn yields
  * a user prompt then the model's answer (interleaved order so the report pairs
  * them into one exchange). The response id `r_…` is unique per turn → the dedup
@@ -215,18 +240,24 @@ function conversationFromPayload(payload: unknown): ParsedConversation | null {
     typeof rawTitle === 'string' && rawTitle.trim()
       ? rawTitle.trim()
       : 'Gemini conversation';
+  const model = modelFromPayload(payload);
 
   const messages: ParsedMessage[] = [];
   for (const turn of turns) {
     const rid = at(turn, [0, 1]);
     const id = typeof rid === 'string' ? rid : '';
     const user = at(turn, [2, 0, 0]);
-    const model = at(turn, [3, 0, 0, 1, 0]);
+    const answer = at(turn, [3, 0, 0, 1, 0]);
     if (typeof user === 'string' && user.trim()) {
       messages.push({ id, role: 'user', text: user.trim() });
     }
-    if (typeof model === 'string' && model.trim()) {
-      messages.push({ id: id ? `${id}:r` : '', role: 'assistant', text: model.trim() });
+    if (typeof answer === 'string' && answer.trim()) {
+      messages.push({
+        id: id ? `${id}:r` : '',
+        role: 'assistant',
+        text: answer.trim(),
+        model,
+      });
     }
   }
   return { title, messages };

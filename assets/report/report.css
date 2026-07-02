@@ -90,6 +90,17 @@ blockquote {
 .badge--codex          { background: #e7defb; color: #5b3a9c; }
 .badge--github-copilot { background: #e2e5ec; color: #3a4253; }
 .badge--cli            { background: #ebe8e2; color: #5a554b; }
+/* Model badge: a secondary tier between the filled tool badge and the muted
+   date/stat — a hollow outlined pill, so it reads as "which model" without
+   competing with the colored tool pill. Border eats into the padding so its
+   height matches the filled badges. */
+.badge--model {
+  background: transparent;
+  border: 1px solid #d3d5e0;
+  color: #4a4f78;
+  font-weight: 500;
+  padding: calc(0.08rem - 1px) calc(0.45rem - 1px);
+}
 .turn .time { font-size: 0.78rem; color: #8a8a94; }
 /* Right-hand meta column: badge + time on top, the edit-count tucked directly
    beneath them and right-aligned. Stacking it here means it shares the vertical
@@ -275,6 +286,7 @@ pre.codeblock code { background: none; padding: 0; font-size: inherit; border-ra
   .badge--codex          { background: #322a4d; color: #cdb6f5; }
   .badge--github-copilot { background: #2d313c; color: #c2c9d8; }
   .badge--cli            { background: #33312b; color: #cfc9bb; }
+  .badge--model          { background: transparent; border: 1px solid #3a3f52; color: #b9bde0; }
   pre.diff { background: #242429; }
   .dline.add { background: rgba(46, 160, 67, 0.15); }
   .dline.del { background: rgba(248, 81, 73, 0.15); }

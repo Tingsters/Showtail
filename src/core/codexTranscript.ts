@@ -37,6 +37,9 @@
  *     `{ answers: { <id>: { answers: [label, …] } } }` (or a plain "unavailable in
  *     Default mode" string when the picker didn't run). We render it as a `decision`,
  *     identically to Claude's.
+ *   - `turn_context` — per-turn metadata; `payload.model` is the model in effect
+ *     for that turn (e.g. `gpt-5.5`). Tracked and stamped onto the replies that
+ *     follow, so the report shows which model produced each answer.
  *
  * Everything is local and best-effort: malformed lines are skipped, never thrown.
  */
@@ -72,6 +75,8 @@ export interface CodexMessage {
   files?: string[];
   /** For edits: the apply_patch envelope (a +/- diff), captured for the report. */
   diff?: string;
+  /** For an assistant reply: the model in effect (from `turn_context.model`, e.g. `gpt-5.5`). */
+  model?: string;
 }
 
 /** A normalized rollout: the messages we care about, in order. */
@@ -246,6 +251,10 @@ export function parseCodexTranscript(content: string, root: string): CodexTransc
   let asstSeq = 0;
   let planSeq = 0;
   let decisionSeq = 0;
+  // The model in effect, updated by each `turn_context` line (Codex records it
+  // per turn, not per message), so replies are stamped with the model that was
+  // active when they were produced — correct even across a mid-session switch.
+  let currentModel: string | undefined;
 
   // Parse every line once (malformed lines skipped), then scan twice: first to
   // index tool-call *outputs* by call_id (a decision's answer is on a later line
@@ -283,6 +292,18 @@ export function parseCodexTranscript(content: string, root: string): CodexTransc
     if (type === 'session_meta') {
       const id = asString(prop(payload, 'id'));
       if (id && !sessionId) sessionId = id;
+      // Older rollouts may carry the model on session_meta; used only as a
+      // fallback until the first turn_context sets the authoritative per-turn model.
+      const smModel = asString(prop(payload, 'model'));
+      if (smModel && !currentModel) currentModel = smModel;
+      continue;
+    }
+
+    // Per-turn context: carries the active model (e.g. `gpt-5.5`). Verified against
+    // real rollouts at `turn_context.payload.model`.
+    if (type === 'turn_context') {
+      const tcModel = asString(prop(payload, 'model'));
+      if (tcModel) currentModel = tcModel;
       continue;
     }
 
@@ -305,6 +326,7 @@ export function parseCodexTranscript(content: string, root: string): CodexTransc
         text,
         timestamp,
         sourceId: `codex:asst:${sessionId ?? '?'}:${asstSeq++}`,
+        model: currentModel,
       });
     } else if (type === 'event_msg' && pType === 'item_completed') {
       // Codex's other plan shape: a completed `Plan` item carrying the full plan
@@ -509,6 +531,7 @@ export function parseCodexRollout(content: string, root: string): HookTranscript
       text: m.text,
       timestamp: m.timestamp,
       sourceId: m.sourceId,
+      model: m.model,
     });
   }
   return { sessionId: parsed.sessionId, messages };
@@ -693,6 +716,7 @@ export async function importCodexTranscript(
       type,
       text: msg.text,
       tool: 'codex',
+      model: msg.model,
       timestamp: msg.timestamp,
       sourceId: msg.sourceId,
       batchId: options.batchId,

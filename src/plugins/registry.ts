@@ -83,3 +83,43 @@ export function labelForTool(tool: string): string {
   if (tool === 'cli') return 'CLI';
   return getPluginById(tool as Tool)?.label ?? tool;
 }
+
+/** Capitalize the first letter, lower-case the rest (for a model variant word). */
+function cap(s: string): string {
+  return s ? s[0]!.toUpperCase() + s.slice(1).toLowerCase() : s;
+}
+
+/**
+ * Human label for a raw model id, so reports read naturally across every tool:
+ * `claude-opus-4-8` → "Opus 4.8", `gpt-5.3-codex` → "GPT-5.3 Codex", `gpt-5.5` →
+ * "GPT-5.5", `gemini-2.5-pro` → "Gemini 2.5 Pro", and the human-readable names
+ * Gemini share ("3.5 Flash") and Antigravity ("Gemini 3.5 Flash (Medium)") emit
+ * → "Gemini 3.5 Flash". Any context-window suffix (`[1m]`, `[200k]`) is stripped.
+ * Falls back to the raw string so an unknown or brand-new id still renders and
+ * never throws.
+ */
+export function labelForModel(model: string): string {
+  const raw = model.replace(/\s*\[[^\]]*\]\s*$/, '').trim();
+  if (!raw) return model.trim();
+
+  // Anthropic: claude-<family>-<maj>-<min>[-…] → "Opus 4.8"
+  const claude = /^claude-(opus|sonnet|haiku)-(\d+)-(\d+)\b/i.exec(raw);
+  if (claude) return `${cap(claude[1]!)} ${claude[2]}.${claude[3]}`;
+
+  // OpenAI GPT: gpt-<ver>[-codex] → "GPT-5.3 Codex" / "GPT-5.5"
+  const gpt = /^gpt-([\d.]+)(?:-(codex))?/i.exec(raw);
+  if (gpt) return `GPT-${gpt[1]}${gpt[2] ? ' Codex' : ''}`;
+
+  // OpenAI o-series: o3, o1-mini (a digit must follow "o", so "opus" won't match).
+  if (/^o\d+(?:-\w+)?$/i.test(raw)) return raw.toLowerCase();
+
+  // Gemini slug: gemini-<ver>-<variant> → "Gemini 2.5 Pro"
+  const gemSlug = /^gemini-([\d.]+)-(pro|flash|ultra|nano)\b/i.exec(raw);
+  if (gemSlug) return `Gemini ${gemSlug[1]} ${cap(gemSlug[2]!)}`;
+
+  // Human-readable Gemini names: "3.5 Flash" / "Gemini 3.5 Flash (Medium)".
+  const gemHuman = /^(?:gemini\s+)?(\d+\.\d+)\s+(pro|flash|ultra|nano)\b/i.exec(raw);
+  if (gemHuman) return `Gemini ${gemHuman[1]} ${cap(gemHuman[2]!)}`;
+
+  return raw;
+}

@@ -59,6 +59,10 @@ export function validateEvent(value: unknown): ValidationIssue[] {
   if (e.tool !== undefined && typeof e.tool !== 'string') {
     issues.push({ field: 'tool', message: 'tool must be a string' });
   }
+  // `model` is likewise forward-compatible: any string, absent on older trails.
+  if (e.model !== undefined && typeof e.model !== 'string') {
+    issues.push({ field: 'model', message: 'model must be a string' });
+  }
   return issues;
 }
 

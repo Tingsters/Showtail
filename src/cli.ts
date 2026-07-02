@@ -137,6 +137,10 @@ program
   .option('-x, --text <text>', 'the content (or pipe it via stdin)')
   .option('-f, --files <files>', 'comma-separated related files')
   .option('--tool <tool>', 'tool this came through (e.g. claude-code, codex, cli)')
+  .option(
+    '--model <model>',
+    'the AI model that produced this (e.g. claude-opus-4-8, gpt-5.5)',
+  )
   .option('-s, --session <id>', 'log to a specific session id')
   .option(
     '--turn <id>',
@@ -149,6 +153,7 @@ program
         text?: string;
         files?: string;
         tool?: string;
+        model?: string;
         session?: string;
         turn?: string;
       }) => runLog(opts),
@@ -372,6 +377,7 @@ interface ImportCliOptions {
   date?: string;
   session?: string;
   list?: boolean;
+  model?: string;
 }
 
 function toImportOptions(o: ImportCliOptions): ImportRunOptions {
@@ -384,6 +390,7 @@ function toImportOptions(o: ImportCliOptions): ImportRunOptions {
     date: o.date,
     session: o.session,
     list: o.list,
+    model: o.model,
   };
 }
 
@@ -405,13 +412,18 @@ for (const p of importPlugins()) {
         '--date <yyyy-mm-dd>',
         'date a pasted conversation so it lands on the timeline',
       )
-      .option('-s, --session <id>', 'import into a specific session id');
+      .option('-s, --session <id>', 'import into a specific session id')
+      .option(
+        '--model <model>',
+        "the AI model, when the source doesn't record one (e.g. a paste)",
+      );
   } else {
     sub
       .option('--list', "list this project's transcripts and exit")
       .option('--no-responses', "don't import the AI's text responses, only your prompts")
       .option('--file <path>', 'import a specific transcript file by path')
-      .option('-s, --session <id>', 'import into a specific Showtail session id');
+      .option('-s, --session <id>', 'import into a specific Showtail session id')
+      .option('--model <model>', "the AI model, when the source doesn't record one");
   }
 
   sub.action(

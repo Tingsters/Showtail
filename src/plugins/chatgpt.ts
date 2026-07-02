@@ -27,6 +27,7 @@ export const chatgptPlugin: EnvironmentPlugin = {
         date: opts.date,
         session: opts.session,
         cwd: opts.cwd,
+        model: opts.model,
       }),
   },
 };

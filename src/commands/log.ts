@@ -9,6 +9,8 @@ export interface LogOptions {
   text?: string;
   files?: string;
   tool?: string;
+  /** The AI model that produced this event (raw id), when known. */
+  model?: string;
   session?: string;
   /** Link this event to a prompt's turn (e.g. an `ai_output` for a prompt). */
   turn?: string;
@@ -66,6 +68,7 @@ export async function runLog(options: LogOptions): Promise<void> {
     text,
     files,
     tool: options.tool as Tool | undefined,
+    model: options.model,
     sessionId: options.session,
     turnId: options.turn,
   });

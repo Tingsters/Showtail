@@ -112,11 +112,16 @@ function conversationFromData(data: unknown): ParsedConversation {
     asArray(prop(data, 'linear_conversation')) ??
     (mapping ? orderedFromMapping(mapping) : []);
 
+  // Conversation-level model, used as a fallback for assistant turns whose own
+  // metadata omits `model_slug`.
+  const defaultModel = asString(prop(data, 'default_model_slug'));
+
   const messages: ParsedMessage[] = [];
   for (const node of nodes) {
     const msg = prop(node, 'message');
     if (!isObject(msg)) continue;
-    if (prop(prop(msg, 'metadata'), 'is_visually_hidden_from_conversation')) continue;
+    const metadata = prop(msg, 'metadata');
+    if (prop(metadata, 'is_visually_hidden_from_conversation')) continue;
     // Skip tool-directed messages (e.g. ChatGPT's internal web-search queries):
     // real user/assistant turns are addressed to "all".
     const recipient = prop(msg, 'recipient');
@@ -125,11 +130,15 @@ function conversationFromData(data: unknown): ParsedConversation {
     if (role === undefined) continue;
     const text = extractText(prop(msg, 'content'));
     if (!text.trim()) continue;
+    const model =
+      asString(prop(metadata, 'model_slug')) ??
+      (role === 'assistant' ? defaultModel : undefined);
     messages.push({
       id: asString(prop(msg, 'id')) ?? '',
       role,
       text,
       createTime: asNumber(prop(msg, 'create_time')),
+      model,
     });
   }
 

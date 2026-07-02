@@ -19,6 +19,8 @@ export interface ParsedMessage {
   text: string;
   /** Epoch seconds, when present. */
   createTime?: number;
+  /** The AI model that produced this message (raw id), when the source exposes one. */
+  model?: string;
 }
 
 export interface ParsedConversation {
@@ -135,6 +137,8 @@ export interface ImportOptions {
   sessionId?: string;
   /** Tag every imported event with this batch id so the import can be undone. */
   batchId?: string;
+  /** Fallback model id for imported `ai_output`s when the source has none (e.g. paste). */
+  model?: string;
 }
 
 export interface ImportResult {
@@ -191,6 +195,8 @@ export async function importConversation(
       type,
       text: msg.text,
       tool,
+      // The source's per-message model, falling back to an `--model` override for replies.
+      model: type === 'ai_output' ? (msg.model ?? options.model) : msg.model,
       timestamp,
       sourceId,
       batchId: options.batchId,

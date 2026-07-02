@@ -34,6 +34,8 @@ export interface ImportGeminiOptions {
   text?: string;
   /** Stamp timestamp-less events with this date (YYYY-MM-DD) so they land on the timeline. */
   date?: string;
+  /** Fallback model id for imported replies when the source has none (e.g. paste). */
+  model?: string;
 }
 
 const SHARE_RE =
@@ -152,6 +154,7 @@ export async function runImportGemini(
     withResponses: options.withResponses,
     sessionId: options.session,
     batchId,
+    model: options.model,
   });
 
   const print = { tool: 'google-gemini', assistantLabel: 'Gemini', privacyOrg: 'Google' };

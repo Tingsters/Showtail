@@ -55,6 +55,8 @@ export interface CopilotCliMessage {
   sourceId: string;
   /** For edits: the repo-relative file path(s) Copilot touched. */
   files?: string[];
+  /** For an assistant reply: the model id (`data.model`, e.g. `gpt-5.3-codex`). */
+  model?: string;
 }
 
 /** A normalized session: the messages we care about, in order. */
@@ -248,6 +250,7 @@ export function parseCopilotCliSession(
         sourceId: messageId
           ? `copilot:asst:${messageId}`
           : `copilot:asst:${sessionId ?? '?'}:${asstSeq++}`,
+        model: asString(prop(data, 'model')),
       });
     } else if (type === 'tool.execution_start') {
       const file = editedFile(prop(data, 'arguments'));
@@ -293,6 +296,7 @@ export function parseCopilotCliTranscript(content: string, root: string): HookTr
       text: m.text,
       timestamp: m.timestamp,
       sourceId: m.sourceId,
+      model: m.model,
     });
   }
   return { sessionId: parsed.sessionId, messages };

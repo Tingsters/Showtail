@@ -281,6 +281,8 @@ async function handleUserPrompt(
     type: 'prompt',
     text,
     tool,
+    // Live-hook tools that only capture prompts (no AI text) carry the model here.
+    model: ev.model,
     sessionId,
   });
   trace.sessionId = session.id;
@@ -563,6 +565,7 @@ async function reconcileTranscript(
         type: 'ai_output',
         text: msg.text,
         tool,
+        model: msg.model,
         // Stamp with the transcript message time (not now, the Stop time), so the
         // reply orders chronologically against edits in the report.
         timestamp: msg.timestamp,

@@ -30,6 +30,12 @@ function makeRollout(dir: string): string {
       type: 'event_msg',
       payload: { type: 'task_started' },
     },
+    // Per-turn context carries the active model, stamped onto the replies below.
+    {
+      timestamp: '2026-06-22T23:57:02.500Z',
+      type: 'turn_context',
+      payload: { model: 'gpt-5.5', cwd: dir },
+    },
     // The wrapped duplicate prompt (AGENTS.md/developer chrome) — must be dropped.
     {
       timestamp: '2026-06-22T23:57:03.000Z',
@@ -160,6 +166,10 @@ describe('parseCodexTranscript', () => {
       const edit = parsed.messages.find((m) => m.role === 'edit')!;
       expect(edit.files).toEqual(['notes.txt']);
       expect(edit.diff).toContain('+banana-codex');
+
+      // The reply is stamped with the model from the turn_context line.
+      const reply = parsed.messages.find((m) => m.role === 'assistant')!;
+      expect(reply.model).toBe('gpt-5.5');
 
       // The plan renders the steps as a status checklist, keyed by call_id.
       const plan = parsed.messages.find((m) => m.role === 'plan')!;

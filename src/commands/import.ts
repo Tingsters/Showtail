@@ -35,6 +35,8 @@ export interface ImportChatgptOptions {
   text?: string;
   /** Stamp pasted events with this date (YYYY-MM-DD) so they land on the timeline. */
   date?: string;
+  /** Fallback model id for imported replies when the source has none (e.g. paste). */
+  model?: string;
 }
 
 const SHARE_RE = /^https:\/\/(chatgpt\.com|chat\.openai\.com)\/share\/[\w-]+/i;
@@ -237,6 +239,7 @@ export async function runImportChatgpt(
     withResponses: options.withResponses,
     sessionId: options.session,
     batchId,
+    model: options.model,
   });
 
   const print = { tool: 'chatgpt', assistantLabel: 'ChatGPT', privacyOrg: 'OpenAI' };

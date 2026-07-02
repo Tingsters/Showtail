@@ -492,6 +492,7 @@ describe('turn timeline (chronological interleaving)', () => {
       summary: { sessions: 1, events: 3, artifacts: 2, decisions: 1, plans: 0 },
       contributors: [{ slug: 'x', name: 'X', events: 3, artifacts: 2 }],
       tools: [{ tool: 'claude-code', events: 3 }],
+      models: [],
       toolTimeline: [],
       turns: [interleavedTurn()],
       plans: [],
@@ -516,6 +517,7 @@ describe('turn timeline (chronological interleaving)', () => {
       summary: { sessions: 1, events: 1, artifacts: 1, decisions: 0, plans: 0 },
       contributors: [{ slug: 'x', name: 'X', events: 1, artifacts: 1 }],
       tools: [{ tool: 'claude-code', events: 1 }],
+      models: [],
       toolTimeline: [],
       turns: [
         {
