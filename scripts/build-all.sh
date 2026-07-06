@@ -24,7 +24,10 @@ build bun-windows-x64  showtail-windows-x64.exe
 # `showtail.vsix`, so `connect antigravity-ide` can install it from disk (the
 # installer must copy this next to the binary too — see bundledVsixPath()).
 echo "Packaging the Showtail VS Code extension..."
-( cd integrations/vscode && bun run package )
+# The extension is its own package with its own devDeps (esbuild, vsce) — install
+# them before packaging, or `bun run package` fails with "Cannot find module
+# 'esbuild'" (the deps aren't hoisted into the root node_modules).
+( cd integrations/vscode && bun install && bun run package )
 vsix="$(ls -t integrations/vscode/showtail-*.vsix | head -1)"
 cp "$vsix" dist/showtail.vsix
 echo "Bundled extension: $(basename "$vsix") -> dist/showtail.vsix"

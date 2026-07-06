@@ -102,7 +102,8 @@ export function captureTranscriptToLedger(
   let lastPromptKey = currentTurnKey;
   for (const msg of transcript.messages) {
     if (msg.role === 'user') {
-      let recId = promptBySourceId.get(msg.sourceId) ?? promptByText.get(msg.text)?.shift();
+      let recId =
+        promptBySourceId.get(msg.sourceId) ?? promptByText.get(msg.text)?.shift();
       if (!recId) {
         // Snapshot says missing — but the live hook for this turn may have appended
         // it after we read (see the function header). Re-read fresh and retry before
