@@ -250,6 +250,15 @@ pre.diff {
 .dline { display: block; padding-right: 0.8rem; }
 .dline.add { background: #e6ffec; }
 .dline.del { background: #ffebe9; }
+/* Entity-level change summary ("Changed foo() · Added Bar"). */
+.entity-changes {
+  margin: 0.25rem 0 0.1rem;
+  font-size: 0.78rem;
+  color: #6b6b76;
+  line-height: 1.6;
+}
+.entity-changes code { font-size: 0.82em; background: #ecedf1; }
+.ent-label { font-weight: 600; color: #4a4a52; }
 .dmark {
   display: inline-block;
   width: 1.6rem;

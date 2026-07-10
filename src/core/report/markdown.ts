@@ -1,4 +1,5 @@
-import type { ReportData, Turn } from '../../types.ts';
+import type { EntityDelta, ReportData, Turn } from '../../types.ts';
+import { hasEntityChanges } from '../entities.ts';
 import { PLAN_APPROVED_TAG, PLAN_REVISED_TAG } from '../plans.ts';
 import {
   modelLabel,
@@ -9,6 +10,19 @@ import {
   turnTimeline,
 } from './data.ts';
 import { staticUtc, timeToken } from './time.ts';
+
+/** A one-line "Changed X · Added Y · Removed Z" summary, or '' when there's nothing. */
+function entityChangesLine(delta: EntityDelta | undefined): string {
+  if (!hasEntityChanges(delta)) return '';
+  const seg = (label: string, items: string[]): string =>
+    items.length === 0 ? '' : `${label} ${items.map((i) => `\`${i}\``).join(', ')}`;
+  const parts = [
+    seg('Changed', delta.changed),
+    seg('Added', delta.added),
+    seg('Removed', delta.removed),
+  ].filter(Boolean);
+  return `↳ _${parts.join(' · ')}_`;
+}
 
 /** A unique token swapped for the interactive turns HTML after Markdown→HTML. */
 export const TURNS_PLACEHOLDER = 'SHOWTAIL_TURNS_PLACEHOLDER';
@@ -241,6 +255,8 @@ function turnMarkdown(lines: string[], turn: Turn, author?: string): void {
         // No diff captured — name the changed file without promising code below it.
         lines.push(`_Changed file — ${link}${stat}._`, '');
       }
+      const entityLine = entityChangesLine(code.entityChanges);
+      if (entityLine) lines.push(entityLine, '');
     }
   }
 }

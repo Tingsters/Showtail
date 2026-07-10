@@ -87,6 +87,39 @@ export interface Event {
   actorSlug: ActorSlug;
 }
 
+/**
+ * One named code entity (a function, class, method, struct…) found in a file at
+ * capture time. Deliberately compact and content-free: it records the entity's
+ * name, kind, line span, and a hash of its source — never the source itself — so
+ * comparing two snapshots reveals *which* functions/classes changed without ever
+ * storing code (keeping the trail's privacy posture intact). See `EntityDelta`.
+ */
+export interface EntitySig {
+  /** Qualified name, e.g. `Foo.bar` for a method `bar` inside class `Foo`. */
+  name: string;
+  /** Coarse kind of the entity (function, method, class, struct, …). */
+  kind: string;
+  /** 1-based first line of the entity's definition. */
+  startLine: number;
+  /** 1-based last line of the entity's definition. */
+  endLine: number;
+  /** SHA-256 (hex) of the entity's source span — changes iff the body changed. */
+  hash: string;
+}
+
+/**
+ * The entity-level difference between two consecutive snapshots of one file:
+ * which named entities were added, removed, or had their body changed. Values
+ * are display labels (e.g. `parseConfig()`, `Foo.bar()`, `Widget`). Undefined
+ * (rather than empty) when a delta couldn't be computed — the file's language
+ * isn't supported or a prior snapshot carried no entity data.
+ */
+export interface EntityDelta {
+  added: string[];
+  removed: string[];
+  changed: string[];
+}
+
 /** A recorded snapshot of a file (its hash at a point in time). */
 export interface Artifact {
   /** Short unique id, e.g. "art_lqz3k8_a1b2". */
@@ -120,6 +153,13 @@ export interface Artifact {
   diffHash?: string;
   /** Number of changed lines in the captured diff (for a quick "~N lines" stat). */
   diffLines?: number;
+  /**
+   * The named code entities (functions, classes, …) present in the file at this
+   * snapshot, when its language is supported. Comparing consecutive snapshots'
+   * signatures yields the {@link EntityDelta} shown in reports. Absent for
+   * unsupported languages or trails captured before entity extraction existed.
+   */
+  entities?: EntitySig[];
 }
 
 /** Metadata about a single work session. */
@@ -200,6 +240,12 @@ export interface Config {
     captureAiOutput?: boolean;
     /** Capture AI-suggested code/diffs alongside edits. Default on. */
     captureCode?: boolean;
+    /**
+     * Extract which named entities (functions, classes, …) changed in each
+     * captured file, using bundled tree-sitter grammars. Default on; degrades
+     * silently for unsupported languages. Off means file+line granularity only.
+     */
+    captureEntities?: boolean;
     /**
      * Minutes of inactivity after which an open session is automatically closed
      * (stamped at its last event). Defaults to 60 when absent.
@@ -337,6 +383,11 @@ export interface TurnCodeChange {
   /** The suggested diff/new-content, resolved from the object store (if captured). */
   diff?: string;
   diffLines?: number;
+  /**
+   * Which named entities changed versus the previous snapshot of this path, when
+   * both snapshots carry entity data. Omitted when a delta can't be computed.
+   */
+  entityChanges?: EntityDelta;
   tool?: Tool;
   timestamp: string;
 }
@@ -414,4 +465,6 @@ export interface JournalEntry {
   sha256?: string;
   diffHash?: string;
   diffLines?: number;
+  /** Named code entities present at this snapshot (see {@link EntitySig}). */
+  entities?: EntitySig[];
 }

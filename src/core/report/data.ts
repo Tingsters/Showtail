@@ -20,6 +20,8 @@ import { readJournal } from '../journal.ts';
 import { authorSlugs, readAllAuthors } from '../authors.ts';
 import { readAllEventsWithSession, type EventWithSession } from '../events.ts';
 import { readObject } from '../objects.ts';
+import { diffEntities } from '../entities.ts';
+import type { EntityDelta, EntitySig } from '../../types.ts';
 
 /** The tool an event flowed through (defaults to "cli" for older/manual events). */
 export function toolOf(event: Event): Tool {
@@ -295,6 +297,8 @@ export function buildTurns(
     if (turn) turn.plans.push(event);
   }
 
+  const entityChangesById = computeEntityDeltas(artifacts);
+
   for (const a of artifacts) {
     const turn =
       (a.turnId ? turnByPrompt.get(a.turnId) : undefined) ??
@@ -320,12 +324,34 @@ export function buildTurns(
       linkPath: a.linkPath,
       diff,
       diffLines: a.diffLines,
+      entityChanges: entityChangesById.get(a.id),
       tool: a.tool as Tool | undefined,
       timestamp: a.timestamp,
     });
   }
 
   return turns;
+}
+
+/**
+ * Compute each artifact's entity-level delta versus the previous snapshot of the
+ * same file. Walking every author's snapshots for a path in timestamp order means
+ * a delta reflects the file's real history — even across teammates editing it —
+ * and the first snapshot of a path (no prior state) yields no delta. Keyed by
+ * artifact id so `buildTurns` can attach it without re-sorting.
+ */
+function computeEntityDeltas(
+  artifacts: Artifact[],
+): Map<string, EntityDelta | undefined> {
+  const byTime = [...artifacts].sort((a, b) => a.timestamp.localeCompare(b.timestamp));
+  const prevByPath = new Map<string, EntitySig[] | undefined>();
+  const out = new Map<string, EntityDelta | undefined>();
+  for (const a of byTime) {
+    const prev = prevByPath.get(a.path);
+    out.set(a.id, diffEntities(prev, a.entities));
+    prevByPath.set(a.path, a.entities);
+  }
+  return out;
 }
 
 /** One rendered item inside a turn, tagged for the renderer. */

@@ -861,6 +861,63 @@ describe('backing: redaction and the cross-tool timeline', () => {
   });
 });
 
+describe('backing: entity-level diffs', () => {
+  test('captured snapshots record entities, and trace shows what changed', () => {
+    const dir = makeTempDir();
+    try {
+      run(dir, ['track', '--project', 'Entities']);
+      const file = join(dir, 'mod.ts');
+
+      // v1 snapshot via the manual artifact command. A repo-relative path is
+      // what a student types and what keeps the stored path stable across the
+      // artifact command and hook surfaces.
+      writeFileSync(
+        file,
+        'export function foo() { return 1 }\nclass Widget { render() {} }\n',
+      );
+      expect(run(dir, ['artifact', 'mod.ts']).code).toBe(0);
+
+      // v2 via the real Claude Code post-edit hook (claude-code integration):
+      // change foo's body, drop Widget.render, add bar.
+      writeFileSync(
+        file,
+        'export function foo() { return 2 }\nclass Widget {}\nfunction bar() {}\n',
+      );
+      const edit = run(
+        dir,
+        ['hook', 'post-edit'],
+        JSON.stringify({
+          hook_event_name: 'PostToolUse',
+          cwd: dir,
+          tool_name: 'Edit',
+          tool_input: { file_path: file },
+        }),
+      );
+      expect(edit.code).toBe(0);
+
+      // Entities are recorded on each snapshot.
+      const traceJson = run(dir, ['trace', 'mod.ts', '--format', 'json']);
+      const parsed = JSON.parse(traceJson.stdout);
+      expect(parsed.artifacts.length).toBeGreaterThanOrEqual(2);
+      const firstNames = parsed.artifacts[0].entities.map(
+        (e: { name: string }) => e.name,
+      );
+      expect(firstNames).toContain('foo');
+      expect(firstNames).toContain('Widget.render');
+
+      // The text trace surfaces the entity-level delta between snapshots.
+      const traceText = run(dir, ['trace', 'mod.ts']);
+      expect(traceText.stdout).toContain('foo()');
+      expect(traceText.stdout).toContain('bar()'); // added
+      expect(traceText.stdout).toContain('Widget.render()'); // removed
+
+      markPassed('entity-diff:claude-code');
+    } finally {
+      cleanup(dir);
+    }
+  });
+});
+
 describe('backing: marketplace / extension install', () => {
   test('Claude Code ships a plugin marketplace entry', () => {
     expect(

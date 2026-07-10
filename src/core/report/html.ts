@@ -1,6 +1,7 @@
 import REPORT_CSS from '../../../assets/report/report.css' with { type: 'text' };
 import TIMEZONE_JS from '../../../assets/report/timezone.js' with { type: 'text' };
-import type { ReportData, Turn } from '../../types.ts';
+import type { EntityDelta, ReportData, Turn } from '../../types.ts';
+import { hasEntityChanges } from '../entities.ts';
 import { escapeHtml, firstLine } from '../html.ts';
 import { highlightCode } from '../highlight.ts';
 import {
@@ -147,6 +148,7 @@ function renderTimelineItem(item: ReturnType<typeof turnTimeline>[number]): stri
   }
   const code = item.change;
   const stat = code.diffLines ? ` (~${code.diffLines} line(s))` : '';
+  const entities = entityChangesHtml(code.entityChanges);
   const fileLink =
     `<a class="file-link" href="${escapeHtml(fileHref(code.linkPath ?? code.path))}" ` +
     'target="_blank" rel="noopener" onclick="event.stopPropagation()">' +
@@ -157,13 +159,33 @@ function renderTimelineItem(item: ReturnType<typeof turnTimeline>[number]): stri
     return [
       '<details class="code">',
       `<summary>${fileLink}${escapeHtml(stat)}</summary>`,
+      entities,
       diffHtml(code.diff),
       '</details>',
-    ].join('\n');
+    ]
+      .filter(Boolean)
+      .join('\n');
   }
   // No inline diff (e.g. a file snapshot with no suggested code, or a Codex shell
   // edit). Render a plain file row — not an expander that opens to nothing.
-  return `<div class="code code-file">${fileLink}${escapeHtml(stat)}</div>`;
+  return `<div class="code code-file">${fileLink}${escapeHtml(stat)}${entities}</div>`;
+}
+
+/** A compact "Changed X · Added Y · Removed Z" line of entity-level changes. */
+function entityChangesHtml(delta: EntityDelta | undefined): string {
+  if (!hasEntityChanges(delta)) return '';
+  const seg = (label: string, items: string[]): string =>
+    items.length === 0
+      ? ''
+      : `<span class="ent-seg"><span class="ent-label">${label}</span> ` +
+        items.map((i) => `<code>${escapeHtml(i)}</code>`).join(', ') +
+        '</span>';
+  const parts = [
+    seg('Changed', delta.changed),
+    seg('Added', delta.added),
+    seg('Removed', delta.removed),
+  ].filter(Boolean);
+  return `<div class="entity-changes">${parts.join(' · ')}</div>`;
 }
 
 /** Render the interactive exchange cards (escaped; no scripts). */

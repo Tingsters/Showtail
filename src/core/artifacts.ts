@@ -1,6 +1,7 @@
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import type { Artifact, JournalEntry, Tool } from '../types.ts';
+import { extractEntities, supportsEntities } from './entities.ts';
 import { maybeCurrentCommit } from './git.ts';
 import { sha256OfFile } from './hash.ts';
 import { makeId } from './ids.ts';
@@ -18,6 +19,10 @@ import { authorSlugs } from './authors.ts';
 
 /** Cap a single captured diff so one huge edit can't bloat the store. */
 const MAX_DIFF_BYTES = 64 * 1024;
+
+/** Skip entity extraction on very large files — a generated/vendored blob isn't
+ * worth parsing and could stall capture. */
+const MAX_ENTITY_BYTES = 2 * 1024 * 1024;
 
 /**
  * The display path to record for an edited file. A file edited inside a git
@@ -81,6 +86,7 @@ export function artifactFromEntry(entry: JournalEntry): Artifact {
   if (entry.turn) artifact.turnId = entry.turn;
   if (entry.diffHash) artifact.diffHash = entry.diffHash;
   if (entry.diffLines !== undefined) artifact.diffLines = entry.diffLines;
+  if (entry.entities) artifact.entities = entry.entities;
   return artifact;
 }
 
@@ -170,6 +176,22 @@ export async function addArtifact(
     entry.diffHash = writeObject(paths, cleaned);
     entry.diffLines = countDiffLines(cleaned);
     if (hits > 0) entry.redacted = hits;
+  }
+
+  // Record which named entities (functions, classes…) the file now contains, so
+  // the report can show *what* changed, not just that the file did. Metadata
+  // only — no source is stored — and fully best-effort: a parse failure or an
+  // unsupported language just leaves `entities` unset.
+  if (config.settings.captureEntities !== false && supportsEntities(absPath)) {
+    try {
+      const content = readFileSync(absPath, 'utf8');
+      if (Buffer.byteLength(content) <= MAX_ENTITY_BYTES) {
+        const entities = await extractEntities(content, repoPath);
+        if (entities) entry.entities = entities;
+      }
+    } catch {
+      // Never let entity capture break the snapshot.
+    }
   }
 
   appendJournal(author, entry);

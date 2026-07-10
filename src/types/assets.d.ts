@@ -19,3 +19,11 @@ declare module '*.js' {
   const content: string;
   export default content;
 }
+
+// WASM grammars are embedded with `import x from './g.wasm' with { type: 'file' }`,
+// which resolves to a filesystem path string (real in dev, virtual in the compiled
+// binary) that Bun.file() can read.
+declare module '*.wasm' {
+  const path: string;
+  export default path;
+}
