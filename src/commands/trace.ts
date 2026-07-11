@@ -1,6 +1,6 @@
-import type { Artifact, EntityDelta, Event } from '../types.ts';
+import type { Artifact, EntityChanges, Event } from '../types.ts';
 import { readAllArtifacts } from '../core/artifacts.ts';
-import { diffEntities, hasEntityChanges } from '../core/entities.ts';
+import { diffEntitiesDetailed, hasEntityChanges } from '../core/entities.ts';
 import { readAllEvents } from '../core/events.ts';
 import { requirePaths, toRepoRelative } from '../core/storage.ts';
 import { emitJson } from '../core/output.ts';
@@ -23,17 +23,16 @@ const TYPE_LABELS: Record<string, string> = {
   artifact: 'Artifact',
 };
 
-/** One-line "changed X · added Y · removed Z" for the text trace. */
-function formatDelta(delta: EntityDelta): string {
-  const seg = (label: string, items: string[]): string =>
-    items.length === 0 ? '' : `${label} ${items.join(', ')}`;
+/** Indented, glyph-prefixed `<glyph> <kind> <name> <verb>` lines for the text trace. */
+function formatDeltaLines(changes: EntityChanges): string[] {
+  const row = (glyph: string, kind: string, name: string, verb: string): string =>
+    `      ${glyph} ${kind} ${name} ${verb}`;
   return [
-    seg('changed', delta.changed),
-    seg('added', delta.added),
-    seg('removed', delta.removed),
-  ]
-    .filter(Boolean)
-    .join(' · ');
+    ...changes.added.map((e) => row('+', e.kind, e.name, 'added')),
+    ...changes.changed.map((e) => row('~', e.kind, e.name, 'changed')),
+    ...changes.renamed.map((r) => row('~', r.kind, `${r.from} → ${r.to}`, 'renamed')),
+    ...changes.removed.map((e) => row('-', e.kind, e.name, 'removed')),
+  ];
 }
 
 /** Collect everything Showtail knows about one file. */
@@ -73,8 +72,10 @@ export async function runTrace(file: string, options: TraceOptions): Promise<voi
     for (const a of result.artifacts) {
       const commit = a.gitCommit ? `  commit ${a.gitCommit.slice(0, 10)}` : '';
       console.log(`  ${a.timestamp}  ${a.sha256.slice(0, 16)}…${commit}`);
-      const delta = diffEntities(prevEntities, a.entities);
-      if (hasEntityChanges(delta)) console.log(`      ↳ ${formatDelta(delta)}`);
+      const changes = diffEntitiesDetailed(prevEntities, a.entities);
+      if (hasEntityChanges(changes)) {
+        for (const line of formatDeltaLines(changes)) console.log(line);
+      }
       prevEntities = a.entities;
     }
   }

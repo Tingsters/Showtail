@@ -1,6 +1,6 @@
 import REPORT_CSS from '../../../assets/report/report.css' with { type: 'text' };
 import TIMEZONE_JS from '../../../assets/report/timezone.js' with { type: 'text' };
-import type { EntityDelta, ReportData, Turn } from '../../types.ts';
+import type { EntityChanges, ReportData, Turn } from '../../types.ts';
 import { hasEntityChanges } from '../entities.ts';
 import { escapeHtml, firstLine } from '../html.ts';
 import { highlightCode } from '../highlight.ts';
@@ -171,21 +171,32 @@ function renderTimelineItem(item: ReturnType<typeof turnTimeline>[number]): stri
   return `<div class="code code-file">${fileLink}${escapeHtml(stat)}${entities}</div>`;
 }
 
-/** A compact "Changed X · Added Y · Removed Z" line of entity-level changes. */
-function entityChangesHtml(delta: EntityDelta | undefined): string {
-  if (!hasEntityChanges(delta)) return '';
-  const seg = (label: string, items: string[]): string =>
-    items.length === 0
-      ? ''
-      : `<span class="ent-seg"><span class="ent-label">${label}</span> ` +
-        items.map((i) => `<code>${escapeHtml(i)}</code>`).join(', ') +
-        '</span>';
-  const parts = [
-    seg('Changed', delta.changed),
-    seg('Added', delta.added),
-    seg('Removed', delta.removed),
-  ].filter(Boolean);
-  return `<div class="entity-changes">${parts.join(' · ')}</div>`;
+/**
+ * An indented, glyph-prefixed list of the entities a code change touched —
+ * mirroring Entire's `<glyph> <kind> <name> <verb>` presentation so a reviewer
+ * can scan what functions/classes were added, changed, removed, or renamed.
+ */
+function entityChangesHtml(changes: EntityChanges | undefined): string {
+  if (!hasEntityChanges(changes)) return '';
+  const row = (
+    cls: string,
+    glyph: string,
+    kind: string,
+    name: string,
+    verb: string,
+  ): string =>
+    `<li class="${cls}"><span class="cs-glyph">${glyph}</span> ` +
+    `<span class="ent-kind">${escapeHtml(kind)}</span> <code>${escapeHtml(name)}</code> ` +
+    `<span class="ent-verb">${verb}</span></li>`;
+  const rows = [
+    ...changes.added.map((e) => row('cs-add', '+', e.kind, e.name, 'added')),
+    ...changes.changed.map((e) => row('cs-change', '~', e.kind, e.name, 'changed')),
+    ...changes.renamed.map((r) =>
+      row('cs-rename', '~', r.kind, `${r.from} → ${r.to}`, 'renamed'),
+    ),
+    ...changes.removed.map((e) => row('cs-remove', '-', e.kind, e.name, 'removed')),
+  ];
+  return `<ul class="entity-changes">${rows.join('')}</ul>`;
 }
 
 /** Render the interactive exchange cards (escaped; no scripts). */

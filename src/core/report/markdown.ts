@@ -1,4 +1,4 @@
-import type { EntityDelta, ReportData, Turn } from '../../types.ts';
+import type { EntityChanges, ReportData, Turn } from '../../types.ts';
 import { hasEntityChanges } from '../entities.ts';
 import { PLAN_APPROVED_TAG, PLAN_REVISED_TAG } from '../plans.ts';
 import {
@@ -11,17 +11,22 @@ import {
 } from './data.ts';
 import { staticUtc, timeToken } from './time.ts';
 
-/** A one-line "Changed X · Added Y · Removed Z" summary, or '' when there's nothing. */
-function entityChangesLine(delta: EntityDelta | undefined): string {
-  if (!hasEntityChanges(delta)) return '';
-  const seg = (label: string, items: string[]): string =>
-    items.length === 0 ? '' : `${label} ${items.map((i) => `\`${i}\``).join(', ')}`;
-  const parts = [
-    seg('Changed', delta.changed),
-    seg('Added', delta.added),
-    seg('Removed', delta.removed),
-  ].filter(Boolean);
-  return `↳ _${parts.join(' · ')}_`;
+/**
+ * An indented sub-list of the entities a code change touched, one per line, framed
+ * `<kind> <name> — <verb>` (kind-led, like Entire). Markdown uses uniform `-`
+ * bullets rather than literal `+`/`~`/`-` glyphs, which would collide with list
+ * syntax; the colored glyphs live in the HTML renderer. Empty when nothing changed.
+ */
+function entityChangesBlock(changes: EntityChanges | undefined): string[] {
+  if (!hasEntityChanges(changes)) return [];
+  const row = (kind: string, name: string, verb: string): string =>
+    `  - ${kind} \`${name}\` — ${verb}`;
+  return [
+    ...changes.added.map((e) => row(e.kind, e.name, 'added')),
+    ...changes.changed.map((e) => row(e.kind, e.name, 'changed')),
+    ...changes.renamed.map((r) => row(r.kind, `${r.from} → ${r.to}`, 'renamed')),
+    ...changes.removed.map((e) => row(e.kind, e.name, 'removed')),
+  ];
 }
 
 /** A unique token swapped for the interactive turns HTML after Markdown→HTML. */
@@ -255,8 +260,8 @@ function turnMarkdown(lines: string[], turn: Turn, author?: string): void {
         // No diff captured — name the changed file without promising code below it.
         lines.push(`_Changed file — ${link}${stat}._`, '');
       }
-      const entityLine = entityChangesLine(code.entityChanges);
-      if (entityLine) lines.push(entityLine, '');
+      const entityBlock = entityChangesBlock(code.entityChanges);
+      if (entityBlock.length) lines.push(...entityBlock, '');
     }
   }
 }

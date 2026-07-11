@@ -92,7 +92,7 @@ export interface Event {
  * capture time. Deliberately compact and content-free: it records the entity's
  * name, kind, line span, and a hash of its source — never the source itself — so
  * comparing two snapshots reveals *which* functions/classes changed without ever
- * storing code (keeping the trail's privacy posture intact). See `EntityDelta`.
+ * storing code (keeping the trail's privacy posture intact). See `EntityChanges`.
  */
 export interface EntitySig {
   /** Qualified name, e.g. `Foo.bar` for a method `bar` inside class `Foo`. */
@@ -107,17 +107,28 @@ export interface EntitySig {
   hash: string;
 }
 
+/** One entity named in a change list: its coarse kind and qualified name. */
+export interface EntityChangeItem {
+  /** Coarse kind (function, method, class, struct, …). Leads the rendered row. */
+  kind: string;
+  /** Qualified name, e.g. `Foo.bar`. */
+  name: string;
+}
+
 /**
  * The entity-level difference between two consecutive snapshots of one file:
- * which named entities were added, removed, or had their body changed. Values
- * are display labels (e.g. `parseConfig()`, `Foo.bar()`, `Widget`). Undefined
- * (rather than empty) when a delta couldn't be computed — the file's language
- * isn't supported or a prior snapshot carried no entity data.
+ * which named entities were added, changed (body differs), removed, or renamed
+ * (same body, new name — detected via the entity hash). Rendered inline under
+ * each code change as a glyph list. Undefined (rather than all-empty) when a
+ * delta couldn't be computed — the file's language isn't supported or a prior
+ * snapshot carried no entity data.
  */
-export interface EntityDelta {
-  added: string[];
-  removed: string[];
-  changed: string[];
+export interface EntityChanges {
+  added: EntityChangeItem[];
+  changed: EntityChangeItem[];
+  removed: EntityChangeItem[];
+  /** Entities whose body is unchanged but whose (qualified) name changed. */
+  renamed: { kind: string; from: string; to: string }[];
 }
 
 /** A recorded snapshot of a file (its hash at a point in time). */
@@ -156,7 +167,7 @@ export interface Artifact {
   /**
    * The named code entities (functions, classes, …) present in the file at this
    * snapshot, when its language is supported. Comparing consecutive snapshots'
-   * signatures yields the {@link EntityDelta} shown in reports. Absent for
+   * signatures yields the {@link EntityChanges} shown in reports. Absent for
    * unsupported languages or trails captured before entity extraction existed.
    */
   entities?: EntitySig[];
@@ -387,7 +398,7 @@ export interface TurnCodeChange {
    * Which named entities changed versus the previous snapshot of this path, when
    * both snapshots carry entity data. Omitted when a delta can't be computed.
    */
-  entityChanges?: EntityDelta;
+  entityChanges?: EntityChanges;
   tool?: Tool;
   timestamp: string;
 }

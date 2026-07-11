@@ -905,11 +905,12 @@ describe('backing: entity-level diffs', () => {
       expect(firstNames).toContain('foo');
       expect(firstNames).toContain('Widget.render');
 
-      // The text trace surfaces the entity-level delta between snapshots.
+      // The text trace surfaces the entity-level delta between snapshots, framed
+      // "<glyph> <kind> <name> <verb>".
       const traceText = run(dir, ['trace', 'mod.ts']);
-      expect(traceText.stdout).toContain('foo()');
-      expect(traceText.stdout).toContain('bar()'); // added
-      expect(traceText.stdout).toContain('Widget.render()'); // removed
+      expect(traceText.stdout).toContain('~ function foo changed');
+      expect(traceText.stdout).toContain('+ function bar added');
+      expect(traceText.stdout).toContain('- method Widget.render removed');
 
       markPassed('entity-diff:claude-code');
     } finally {

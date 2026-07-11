@@ -20,8 +20,8 @@ import { readJournal } from '../journal.ts';
 import { authorSlugs, readAllAuthors } from '../authors.ts';
 import { readAllEventsWithSession, type EventWithSession } from '../events.ts';
 import { readObject } from '../objects.ts';
-import { diffEntities } from '../entities.ts';
-import type { EntityDelta, EntitySig } from '../../types.ts';
+import { diffEntitiesDetailed, hasEntityChanges } from '../entities.ts';
+import type { EntityChanges, EntitySig } from '../../types.ts';
 
 /** The tool an event flowed through (defaults to "cli" for older/manual events). */
 export function toolOf(event: Event): Tool {
@@ -307,8 +307,10 @@ export function buildTurns(
     const diff = a.diffHash ? (readObject(paths, a.diffHash) ?? undefined) : undefined;
     // De-dupe one file per turn: a host can produce two artifacts for the same
     // edit — a live snapshot (file hash, no diff) and a transcript-reconciled
-    // import (diff, no hash; e.g. Codex `apply_patch`). Collapse them so the file
-    // shows once, preferring the entry that carries a diff.
+    // import (diff, no hash; e.g. Codex `apply_patch`) — and an agent may edit a
+    // file more than once per turn. Collapse them so the file shows once,
+    // preferring the entry that carries a diff and the latest real entity delta.
+    const incomingEntities = entityChangesById.get(a.id);
     const existing = turn.codeChanges.find((c) => c.path === a.path);
     if (existing) {
       if (!existing.diff && diff) {
@@ -317,6 +319,10 @@ export function buildTurns(
       }
       if (!existing.tool && a.tool) existing.tool = a.tool as Tool;
       if (!existing.linkPath && a.linkPath) existing.linkPath = a.linkPath;
+      // Adopt a later snapshot's entity delta: the first artifact for a path is
+      // often its creation (no prior state → no delta), while a subsequent edit
+      // in the same turn is what actually changed functions/classes.
+      if (hasEntityChanges(incomingEntities)) existing.entityChanges = incomingEntities;
       continue;
     }
     turn.codeChanges.push({
@@ -324,7 +330,7 @@ export function buildTurns(
       linkPath: a.linkPath,
       diff,
       diffLines: a.diffLines,
-      entityChanges: entityChangesById.get(a.id),
+      entityChanges: incomingEntities,
       tool: a.tool as Tool | undefined,
       timestamp: a.timestamp,
     });
@@ -342,13 +348,13 @@ export function buildTurns(
  */
 function computeEntityDeltas(
   artifacts: Artifact[],
-): Map<string, EntityDelta | undefined> {
+): Map<string, EntityChanges | undefined> {
   const byTime = [...artifacts].sort((a, b) => a.timestamp.localeCompare(b.timestamp));
   const prevByPath = new Map<string, EntitySig[] | undefined>();
-  const out = new Map<string, EntityDelta | undefined>();
+  const out = new Map<string, EntityChanges | undefined>();
   for (const a of byTime) {
     const prev = prevByPath.get(a.path);
-    out.set(a.id, diffEntities(prev, a.entities));
+    out.set(a.id, diffEntitiesDetailed(prev, a.entities));
     prevByPath.set(a.path, a.entities);
   }
   return out;

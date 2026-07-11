@@ -5,7 +5,7 @@ import { runInit } from '../src/commands/init.ts';
 import { addArtifact } from '../src/core/artifacts.ts';
 import { logEvent } from '../src/core/events.ts';
 import {
-  diffEntities,
+  diffEntitiesDetailed,
   entityLabel,
   extractEntities,
   hasEntityChanges,
@@ -106,7 +106,7 @@ describe('every bundled grammar extracts entities', () => {
   }
 });
 
-describe('diffEntities', () => {
+describe('diffEntitiesDetailed', () => {
   const sig = (name: string, kind: string, hash: string) => ({
     name,
     kind,
@@ -114,34 +114,62 @@ describe('diffEntities', () => {
     endLine: 1,
     hash,
   });
+  const names = (items: { name: string }[]) => items.map((i) => i.name);
 
-  test('classifies added, removed, and changed by kind+name and body hash', () => {
+  test('classifies added, changed, and removed by kind+name and body hash', () => {
     const prev = [sig('foo', 'function', 'h1'), sig('gone', 'function', 'h2')];
     const next = [sig('foo', 'function', 'CHANGED'), sig('added', 'function', 'h3')];
-    const delta = diffEntities(prev, next)!;
-    expect(delta.changed).toEqual(['foo()']);
-    expect(delta.added).toEqual(['added()']);
-    expect(delta.removed).toEqual(['gone()']);
+    const d = diffEntitiesDetailed(prev, next)!;
+    expect(d.changed).toEqual([{ kind: 'function', name: 'foo' }]);
+    expect(d.added).toEqual([{ kind: 'function', name: 'added' }]);
+    expect(d.removed).toEqual([{ kind: 'function', name: 'gone' }]);
+    expect(d.renamed).toEqual([]);
   });
 
-  test('unchanged bodies produce an empty (but defined) delta', () => {
+  test('detects a rename (same kind + body hash) instead of add + remove', () => {
+    const prev = [sig('parseCfg', 'function', 'SAME'), sig('keep', 'function', 'k')];
+    const next = [sig('parseConfig', 'function', 'SAME'), sig('keep', 'function', 'k')];
+    const d = diffEntitiesDetailed(prev, next)!;
+    expect(d.renamed).toEqual([
+      { kind: 'function', from: 'parseCfg', to: 'parseConfig' },
+    ]);
+    expect(d.added).toEqual([]);
+    expect(d.removed).toEqual([]);
+    expect(d.changed).toEqual([]);
+  });
+
+  test('a renamed-and-edited entity (hash differs) stays as add + remove', () => {
+    const prev = [sig('old', 'function', 'h1')];
+    const next = [sig('new', 'function', 'h2')];
+    const d = diffEntitiesDetailed(prev, next)!;
+    expect(d.renamed).toEqual([]);
+    expect(names(d.added)).toEqual(['new']);
+    expect(names(d.removed)).toEqual(['old']);
+  });
+
+  test('unchanged bodies produce an empty (but defined) change set', () => {
     const same = [sig('foo', 'function', 'h1')];
-    const delta = diffEntities(same, [sig('foo', 'function', 'h1')])!;
-    expect(hasEntityChanges(delta)).toBe(false);
+    const d = diffEntitiesDetailed(same, [sig('foo', 'function', 'h1')])!;
+    expect(hasEntityChanges(d)).toBe(false);
   });
 
   test('undefined when there is no prior snapshot or language is unsupported', () => {
-    expect(diffEntities(undefined, [sig('foo', 'function', 'h')])).toBeUndefined();
-    expect(diffEntities([sig('foo', 'function', 'h')], undefined)).toBeUndefined();
+    expect(
+      diffEntitiesDetailed(undefined, [sig('foo', 'function', 'h')]),
+    ).toBeUndefined();
+    expect(
+      diffEntitiesDetailed([sig('foo', 'function', 'h')], undefined),
+    ).toBeUndefined();
   });
 
   test('same name, different kind are distinct entities', () => {
     const prev = [sig('X', 'class', 'h1')];
     const next = [sig('X', 'function', 'h2')];
-    const delta = diffEntities(prev, next)!;
-    expect(delta.added).toEqual(['X()']); // the function
-    expect(delta.removed).toEqual(['X']); // the class
-    expect(delta.changed).toEqual([]);
+    const d = diffEntitiesDetailed(prev, next)!;
+    expect(d.added).toEqual([{ kind: 'function', name: 'X' }]);
+    expect(d.removed).toEqual([{ kind: 'class', name: 'X' }]);
+    expect(d.changed).toEqual([]);
+    expect(d.renamed).toEqual([]);
   });
 });
 
@@ -187,20 +215,87 @@ describe('report surfaces entity changes', () => {
         sessionId: t2.session.id,
       });
 
+      // t3: rename bar → initialize (identical body) — should surface as a rename.
+      const t3 = await logEvent(author, { type: 'prompt', text: 'rename the helper' });
+      writeFileSync(
+        file,
+        'export function foo(){ return 2 }\nclass Widget{}\nfunction initialize(){}\n',
+      );
+      await addArtifact(author, {
+        filePath: 'mod.ts',
+        turnId: t3.event.id,
+        sessionId: t3.session.id,
+      });
+
       const data = buildReportData(paths);
-      const changes = data.turns.flatMap((t) => t.codeChanges);
-      const delta = changes.map((c) => c.entityChanges).find(hasEntityChanges);
-      expect(delta).toBeDefined();
-      expect(delta!.changed).toContain('foo()');
-      expect(delta!.added).toContain('bar()');
-      expect(delta!.removed).toContain('Widget.render()');
+      const deltas = data.turns
+        .flatMap((t) => t.codeChanges)
+        .map((c) => c.entityChanges)
+        .filter(hasEntityChanges);
+      const names = (items: { name: string }[]) => items.map((i) => i.name);
+
+      // The "revise" turn: foo body changed, bar added, Widget.render removed.
+      const revise = deltas.find((d) => names(d.changed).includes('foo'))!;
+      expect(revise).toBeDefined();
+      expect(revise.changed).toContainEqual({ kind: 'function', name: 'foo' });
+      expect(names(revise.added)).toContain('bar');
+      expect(names(revise.removed)).toContain('Widget.render');
+
+      // The "rename" turn: bar → initialize as a single renamed row (no add/remove).
+      const rename = deltas.find((d) => d.renamed.length > 0)!;
+      expect(rename).toBeDefined();
+      expect(rename.renamed).toContainEqual({
+        kind: 'function',
+        from: 'bar',
+        to: 'initialize',
+      });
 
       const html = renderHtml(data);
-      expect(html).toContain('entity-changes');
-      expect(html).toContain('foo()');
+      expect(html).toContain('class="entity-changes"');
+      expect(html).toContain('<code>foo</code>'); // kind-led, no parens
+      expect(html).toContain('bar → initialize');
+      expect(html).toContain('renamed');
 
       const md = renderMarkdown(data);
-      expect(md).toContain('foo()');
+      expect(md).toContain('function `foo` — changed');
+      expect(md).toContain('`bar → initialize` — renamed');
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('a file edited twice in one turn keeps the later edit’s entity delta', async () => {
+    const dir = makeTempDir();
+    try {
+      await runInit({ cwd: dir });
+      const paths = pathsForRoot(dir);
+      const author = authorFor(paths);
+      const file = join(dir, 'x.ts');
+
+      // Both edits land in one turn (same turnId) → the report collapses them to a
+      // single code change. The first is the file's creation (no prior state → no
+      // delta); the collapsed row must still surface the second edit's real delta.
+      const t = await logEvent(author, { type: 'prompt', text: 'work' });
+      writeFileSync(file, 'function a(){}\n');
+      await addArtifact(author, {
+        filePath: 'x.ts',
+        turnId: t.event.id,
+        sessionId: t.session.id,
+      });
+      writeFileSync(file, 'function a(){}\nfunction b(){}\n');
+      await addArtifact(author, {
+        filePath: 'x.ts',
+        turnId: t.event.id,
+        sessionId: t.session.id,
+      });
+
+      const data = buildReportData(paths);
+      const changes = data.turns
+        .flatMap((turn) => turn.codeChanges)
+        .filter((c) => c.path === 'x.ts');
+      expect(changes.length).toBe(1); // collapsed to one row
+      expect(hasEntityChanges(changes[0]!.entityChanges)).toBe(true);
+      expect(changes[0]!.entityChanges!.added.map((i) => i.name)).toContain('b');
     } finally {
       cleanup(dir);
     }
