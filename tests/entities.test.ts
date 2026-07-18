@@ -153,13 +153,25 @@ describe('diffEntitiesDetailed', () => {
     expect(hasEntityChanges(d)).toBe(false);
   });
 
-  test('undefined when there is no prior snapshot or language is unsupported', () => {
-    expect(
-      diffEntitiesDetailed(undefined, [sig('foo', 'function', 'h')]),
-    ).toBeUndefined();
+  test('first snapshot (no prior) lists all current entities as added', () => {
+    const d = diffEntitiesDetailed(undefined, [
+      sig('play', 'function', 'h1'),
+      sig('main', 'function', 'h2'),
+    ])!;
+    expect(names(d.added)).toEqual(['main', 'play']);
+    expect(d.changed).toEqual([]);
+    expect(d.removed).toEqual([]);
+    expect(d.renamed).toEqual([]);
+  });
+
+  test('undefined only when the current snapshot has no entity data', () => {
+    // Unsupported / uncaptured current side → nothing to show.
     expect(
       diffEntitiesDetailed([sig('foo', 'function', 'h')], undefined),
     ).toBeUndefined();
+    expect(diffEntitiesDetailed(undefined, undefined)).toBeUndefined();
+    // A supported-but-empty current file is "computed, nothing" (defined, empty).
+    expect(hasEntityChanges(diffEntitiesDetailed(undefined, []))).toBe(false);
   });
 
   test('same name, different kind are distinct entities', () => {
@@ -233,6 +245,13 @@ describe('report surfaces entity changes', () => {
         .map((c) => c.entityChanges)
         .filter(hasEntityChanges);
       const names = (items: { name: string }[]) => items.map((i) => i.name);
+
+      // The "create" turn (first snapshot, no prior): every entity shows as added.
+      const create = deltas.find((d) => names(d.added).includes('Widget'))!;
+      expect(create).toBeDefined();
+      expect(names(create.added).sort()).toEqual(['Widget', 'Widget.render', 'foo']);
+      expect(create.changed).toEqual([]);
+      expect(create.removed).toEqual([]);
 
       // The "revise" turn: foo body changed, bar added, Widget.render removed.
       const revise = deltas.find((d) => names(d.changed).includes('foo'))!;
