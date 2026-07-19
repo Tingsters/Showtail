@@ -83,15 +83,16 @@ you sent and the files you changed — captured **automatically** to a plain
 
 ---
 
-## Get going in three commands
+## Install, then just work
 
 ```bash
-showtail setup     # one-time: connect your AI tools and turn on automatic tracking
+# Install (below) — that's it, tracking is on and your AI tools are connected.
 # ...just work — your prompts and edits are captured automatically...
-showtail report    # generate the report for your educator
+showtail report    # when you're done: generate the report for your educator
 ```
 
-Once a tool is connected, Showtail sets up the project for you on first use —
-there is no separate "init" step to remember.
+There is **no setup command**. Installing turns tracking on and connects your AI tools —
+including ones you install later — and Showtail sets up each project on first use. Nothing
+to remember.
 
 [Read the full quickstart →](getting-started/quickstart.md)

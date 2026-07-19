@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { autoConnectNewlyDetected } from '../src/core/autoConnectSweep.ts';
 import type { ConnectPlugin } from '../src/plugins/registry.ts';
@@ -130,6 +130,55 @@ describe('autoConnectNewlyDetected sweep', () => {
     const result = autoConnectNewlyDetected('/repo', [afterDisconnect.plugin]);
     expect(result).toEqual([]);
     expect(afterDisconnect.calls()).toBe(0);
+  });
+
+  test('connectAll pre-wires an UNinstalled tool so a later install never loses work', () => {
+    enableAutoInit(home);
+    const absent = fakePlugin({ cliName: 'codex', detected: false, connected: false });
+
+    // Detected-only mode leaves it alone (baseline)...
+    expect(autoConnectNewlyDetected('/repo', [absent.plugin])).toEqual([]);
+    expect(absent.calls()).toBe(0);
+
+    // ...but connectAll wires it up even though it isn't installed.
+    const wired = fakePlugin({ cliName: 'codex', detected: false, connected: false });
+    const result = autoConnectNewlyDetected('/repo', [wired.plugin], {
+      connectAll: true,
+    });
+    expect(result.map((r) => r.tool)).toEqual(['codex']);
+    expect(wired.calls()).toBe(1);
+    expect(handledTools(home)).toContain('codex');
+  });
+
+  test('a Showtail version bump refreshes an already-wired tool once', () => {
+    enableAutoInit(home);
+    const f = fakePlugin({ cliName: 'claude', detected: true, connected: false });
+
+    autoConnectNewlyDetected('/repo', [f.plugin]);
+    expect(f.calls()).toBe(1); // first wire
+
+    // Pretend the hooks were written by an older Showtail.
+    const cfgPath = join(home, 'config.json');
+    const cfg = JSON.parse(readFileSync(cfgPath, 'utf8'));
+    cfg.wiringVersion = '0.0.0';
+    writeFileSync(cfgPath, JSON.stringify(cfg));
+
+    // The next sweep re-runs autoConnect once to refresh the hook format...
+    autoConnectNewlyDetected('/repo', [f.plugin]);
+    expect(f.calls()).toBe(2);
+
+    // ...and once the wiring is current again, further sweeps are no-ops.
+    autoConnectNewlyDetected('/repo', [f.plugin]);
+    expect(f.calls()).toBe(2);
+  });
+
+  test('records the wiring version so the refresh check is stable', () => {
+    enableAutoInit(home);
+    const f = fakePlugin({ cliName: 'claude', detected: true, connected: false });
+    autoConnectNewlyDetected('/repo', [f.plugin]);
+    const cfg = JSON.parse(readFileSync(join(home, 'config.json'), 'utf8'));
+    expect(typeof cfg.wiringVersion).toBe('string');
+    expect(cfg.wiringVersion.length).toBeGreaterThan(0);
   });
 
   test('skips plugins without an autoConnect (manual-only, e.g. an IDE extension)', () => {

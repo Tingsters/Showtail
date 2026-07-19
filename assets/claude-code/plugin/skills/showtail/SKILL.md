@@ -16,9 +16,9 @@ student works. Everything is stored locally under `.showtail/`. Never send it an
 
 ## 1. Make sure it's set up
 
-Tracking is normally **automatic**: once the student has run `showtail setup` (a one-time step),
-a trail is created for them the first time they use AI in a project, and sessions open and close
-on their own. You usually don't have to do anything here.
+Tracking is **automatic** — it turns on when the student installs Showtail (there is no setup
+command to run). A trail is created for them the first time they use AI in a project, and sessions
+open and close on their own. You usually don't have to do anything here.
 
 - If a project somehow has no `.showtail/` folder, run `showtail ensure` — it initializes the
   trail at the right place (the git repo root, or the working folder) and opens a session. It is
@@ -72,17 +72,17 @@ looks finished.
 
 | Command | What it does |
 |---|---|
-| `showtail setup` | One-time: connect tools and turn on automatic tracking |
 | `showtail ensure [--json]` | Make sure the project is initialized and a session is open (idempotent) |
 | `showtail capabilities [--json]` | Report tracking state and what to do next (never errors) |
 | `showtail status [--json]` | Current session + whether auto-capture hooks are active |
-| `showtail connect claude` | Turn on automatic capture for Claude Code |
-| `showtail start [--json]` | Begin a work session |
-| `showtail end [--json]` | Close the current session |
 | `showtail sessions [--json]` | List your work sessions |
 | `showtail report [--format json] [--json]` | Generate the report (`--json` prints the written paths) |
 | `showtail verify` | Check the trail is valid and consistent |
 | `showtail trace <file>` | Show a file's provenance trail |
+
+Tracking turns on automatically at install and each project initializes on first use, so
+there's no `setup`/`connect`/`start`/`end` to run. If a student wants to turn tracking off,
+that's `showtail setup --off`.
 
 Event types: `prompt`, `ai_output`, `artifact`, `decision` (the student's choice when you pause to
 ask via AskUserQuestion) — all captured automatically when hooks are on.

@@ -1,9 +1,12 @@
 # Example classroom workflow
 
-1. **Teacher:** Ask students to use Showtail for a project and commit
-   `.showtail/` with their work.
-2. **Student:** Run `showtail setup` once (or `showtail track` then
-   `showtail connect <tool>` per project) to turn on automatic capture.
+1. **Teacher:** Ask students to install Showtail, use it for a project, and commit
+   `.showtail/` with their work. Tip: have students install their AI tool *before*
+   Showtail (or just install Showtail last) — installing Showtail turns tracking on and
+   connects the tools it finds, and pre-wires the rest so a tool added later is captured
+   too.
+2. **Student:** Install Showtail. That's it — tracking is on, no command to run. (To turn
+   it off: `showtail setup --off`.)
 3. **Student:** Work on the project as usual — prompts and edits are captured for
    you. On a group project, each teammate's trail lands in their own
    `authors/<slug>/` folder and merges through git without conflicts.

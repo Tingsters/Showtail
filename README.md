@@ -9,12 +9,15 @@
 Showtail writes that record to a plain `.showtail/` folder inside your project. There are no accounts, no cloud service, and no telemetry. It is just local files that you and your educator can open, review, and commit with the rest of your work.
 
 ```bash
-showtail setup     # one-time: connect your AI tools and turn on automatic tracking
-# ...now just work — your prompts and edits are captured automatically...
-showtail report    # generate the report for your educator
+# Install (below), then just work — your prompts and edits are captured automatically.
+showtail report    # when you're done: generate the report for your educator
 ```
 
-Once a tool is connected, Showtail sets up each project for you the first time you work in it — there is no separate init step to remember. Prefer to wire up one project by hand? Use [`showtail track` then `showtail connect <tool>`](https://tingsters.github.io/Showtail/getting-started/quickstart/#wiring-up-one-project-by-hand) instead.
+**There is no setup step.** Installing turns tracking on and connects your AI tools for
+you — including ones you install later — so a student never has to run a command to get
+started. Just install, work, and generate a report at the end. Prefer to wire up one
+project by hand, or turn tracking off? See [`showtail track`](https://tingsters.github.io/Showtail/getting-started/quickstart/#wiring-up-one-project-by-hand)
+and `showtail setup --off`.
 
 ## 📚 Documentation
 

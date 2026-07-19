@@ -27,7 +27,7 @@ showtail status --json
 
   (Better: suggest the student turn hooks on so this is automatic.)
 
-Tracking is normally automatic once the student has run `showtail setup` (a one-time step): a
+Tracking is automatic — it turns on when the student installs Showtail: a
 trail is created on first use and sessions open and close on their own. If a project somehow has
 no `.showtail/` folder, run `showtail ensure` — it initializes at the right place (the git repo
 root, or the working folder) and opens a session. It is safe to run anytime.

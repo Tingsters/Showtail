@@ -10,20 +10,25 @@ showtail <command> [options]
 Global flags: `-v, --version` prints the version. Most commands accept `--json`
 for machine-readable output (noted below).
 
-## Get started
+## Getting started — nothing to run
+
+Tracking turns on **when you install** (see [Installation](../getting-started/installation.md)):
+Showtail connects the AI tools it finds and pre-wires the ones it supports, so a tool you
+install later is captured too. You never run a getting-started command — just work, then
+`showtail report`. So there is no "Get started" group in `showtail --help`.
+
+## Manage tracking (optional)
 
 | Command | What it does |
 | ------- | ------------ |
-| `setup` | One-time guided setup: connect your AI tools and turn on automatic tracking. Flags: `--off` (turn tracking back off), `--yes` (no prompts), `--json`. |
-| `track [path]` | Track a folder as a Showtail project (creates `.showtail/`) and pull its already-captured work out of the inbox. Any folder works — it need not be a code repo. Flags: `-p, --project <name>`, `--json`. |
-| `ensure` | Make sure this project is initialized and a session is open (safe to re-run; this is what the hooks call). Flags: `--json`. |
-| `start` | Begin a new work session. Flags: `-l, --label <label>`, `--json`. |
-| `end` | Close the current work session. Flags: `--json`. |
+| `setup` | Manage automatic tracking (it turns on by itself after install). `--off` turns it off; re-run to turn it back on. Flags: `--off`, `--yes`, `--json`. |
+| `track [path]` | Set up one project by hand: name it (`-p, --project <name>`), declare a non-code folder (like a book) as a project, and pull its already-captured work out of the inbox. Projects otherwise initialize automatically. Flags: `-p, --project <name>`, `--json`. |
 
-!!! tip "You rarely need `track` or `start`"
-    Once a tool is connected, Showtail initializes the project and opens a
-    session automatically the first time you work. `track`/`start` are for wiring
-    things up by hand (or to declare a non-code folder — like a book — as a project).
+!!! note "Hidden lifecycle commands"
+    Tracking is automatic, so `ensure` (init + open a session), `start` (begin a
+    session, `-l, --label`), and `end` (close a session) are hidden from `--help`. They
+    still work — the editor extension calls `ensure` on project open, and `start`/`end`
+    give power users manual session control — but you never need them.
 
 ## Capture your work
 

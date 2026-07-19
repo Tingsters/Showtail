@@ -1,36 +1,36 @@
 # Quickstart
 
-The whole flow is **connect once, then work**. After a one-time setup, your
-prompts and edits are captured automatically and you finish by generating a
-report.
+The whole flow is **install, then work**. Installing turns tracking on for you, your
+prompts and edits are captured automatically, and you finish by generating a report.
 
 ```bash
-showtail setup     # one-time: connect your AI tools and turn on automatic tracking
-# ...just work — your prompts and the files your tool edits are captured for you...
-showtail report    # generate the report for your educator
+# 1. Install (see Installation). That's it — tracking is now on.
+# 2. ...just work — your prompts and the files your tool edits are captured for you...
+showtail report    # 3. when you're done: generate the report for your educator
 ```
 
-`showtail setup` is the fastest start: it connects the AI tools it finds and
-turns on automatic tracking for every project. Once a tool is connected,
-**Showtail initializes a project for you the first time you work in it** — the
-`.showtail/` folder is created on the spot, so there is no separate init step to
-remember.
+**There is no setup command to run.** Installing Showtail turns on automatic tracking and
+connects the AI tools it finds — plus it pre-wires the ones it supports, so a tool you
+install *later* is captured too, and you never lose work to a tool it missed. The first
+time you work in a project, **Showtail initializes it for you** — the `.showtail/` folder
+is created on the spot. Each time a tool is auto-connected, Showtail prints a short privacy
+note telling you what it wired up and how to turn it off (`showtail setup --off`).
 
 ## Wiring up one project by hand
 
-Prefer to set up a single project explicitly instead of turning on tracking
-everywhere? Use `track` and `connect`:
+Tracking is on everywhere already, so you normally don't need this. But if you'd rather set
+up a single project explicitly — or name it, or declare a non-code folder (like a book) as a
+project — use `track` and `connect`:
 
 ```bash
-# 1. Set up Showtail in your project. This creates the .showtail/ folder.
+# 1. Set up Showtail in this project and name it. This creates the .showtail/ folder.
 showtail track --project "Week 5 Parser"
 
-# 2. Connect your AI tool so capture is automatic (one time).
+# 2. Connect a specific AI tool by hand (optional — auto-connect already did this).
 showtail connect claude         # or: codex, copilot
 ```
 
-`showtail track` is the **manual** path. If you already ran `showtail setup`,
-tracking is on everywhere and you can skip both steps.
+To turn automatic tracking off entirely, run `showtail setup --off`.
 
 ## While you work
 
@@ -57,10 +57,10 @@ showtail report --author <slug> # just one student's report
 
 ```bash
 showtail verify                 # integrity checks on your trail
-showtail end                    # close the current session
 ```
 
-Commit `.showtail/` with your work so your educator can review it.
+Sessions open and close on their own — there's nothing to end by hand. Commit
+`.showtail/` with your work so your educator can review it.
 
 !!! tip "Not using a tool with hooks?"
     ChatGPT and Gemini can't run commands on your machine, so they are

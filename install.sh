@@ -64,6 +64,16 @@ chmod +x "$target"
 
 echo "Installed to: $target"
 
+# --- Turn tracking on automatically ---------------------------------------
+# Make Showtail "just work" with no setup command: connect the AI tools you have and
+# pre-wire the rest, so a tool you install later never loses work. Once-only and
+# idempotent (a re-install never fights a `setup --off`/`disconnect`). Best-effort —
+# a bootstrap hiccup must never fail the install.
+echo ""
+if ! "$target" setup --first-run 2>/dev/null; then
+  echo "Showtail is installed. Tracking will turn on the first time you use it."
+fi
+
 # --- PATH guidance --------------------------------------------------------
 case ":$PATH:" in
   *":$BIN_DIR:"*) echo "Ready! Run: showtail --help" ;;

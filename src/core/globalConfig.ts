@@ -54,6 +54,14 @@ export interface GlobalConfig {
    * don't resurrect pre-Showtail history). Purely go-forward.
    */
   captureSince?: string;
+  /**
+   * The Showtail version that last wired up tools (pre-seeded their capture hooks).
+   * When the running binary is newer, the auto-connect path re-runs each tool's
+   * `autoConnect` once to refresh its hooks to the current format — so a student who
+   * never re-runs a Showtail command still gets hook updates on a binary upgrade.
+   * The re-wire is an idempotent merge, so bumping this never duplicates hooks.
+   */
+  wiringVersion?: string;
 }
 
 /** Default signal floor for surfacing an inbox session (see {@link GlobalConfig.inboxMinSignal}). */

@@ -7,7 +7,10 @@ or want to build from source.
 ## Option 1: One-line install, no runtime required
 
 These scripts download a standalone `showtail` binary from the latest GitHub
-Release. You do not need Node, Bun, or any other runtime installed.
+Release. You do not need Node, Bun, or any other runtime installed. The installer
+also **turns tracking on for you** — it connects the AI tools it finds and pre-wires
+the ones it supports, so you never run a setup command and never lose work to a tool
+you install later. (Turn it off anytime with `showtail setup --off`.)
 
 === "macOS / Linux"
 
@@ -39,6 +42,11 @@ bun run build
 ```
 
 The binary is written to `dist/showtail`.
+
+!!! note "Bun / from-source installs turn on the same way"
+    The one-line installer turns tracking on as it runs. With Bun or a from-source
+    build there's no installer step, so Showtail turns tracking on **the first time you
+    run any `showtail` command** instead — still no setup command to remember.
 
 ## Option 3: Build from source
 

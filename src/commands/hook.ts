@@ -27,6 +27,7 @@ import { redact } from '../core/redact.ts';
 import { asString, prop } from '../core/parse.ts';
 import { autoInitEnabled } from '../core/globalConfig.ts';
 import { autoConnectNewlyDetected } from '../core/autoConnectSweep.ts';
+import { ensureFirstRunSetup, autoTrackingNotice } from './setup.ts';
 import {
   closeSession,
   currentSession,
@@ -274,17 +275,28 @@ export async function runHook(
     const parsed = parseEvent(adapterFor(tool), payload);
     trace.nativeSessionId = parsed.nativeSessionId;
 
-    // Opportunistically wire up any tool that was installed (or shipped in a
-    // Showtail build) after the user's last `showtail setup`. Auto-connect
-    // otherwise only runs during setup, so such a tool would never connect — its
-    // own hooks can't fire until installed. Runs on session-start of any already
-    // connected tool, once per tool, only after opt-in, and never re-touches one
-    // the user later disconnects. Best-effort: never disrupt the session.
+    // Make Showtail "just work" even when the only thing installed is the Showtail
+    // Claude Code plugin (whose hooks fire before any `showtail setup`): on the first
+    // session start, bootstrap tracking and pre-wire every AI tool; on later starts,
+    // top up any tool installed or newly supported since — so a student never loses
+    // work to a missed tool. Once-only, opt-in-respecting, best-effort: a failure here
+    // must never break the session.
     if (event === 'session-start') {
       try {
-        autoConnectNewlyDetected(cwd);
+        const boot = ensureFirstRunSetup({ cwd });
+        const connected = boot.ran
+          ? boot.connected
+          : autoConnectNewlyDetected(cwd, undefined, { connectAll: true });
+        // Surface the privacy notice through the session-start context (Claude/Codex
+        // read hook stdout as context; Antigravity reads it as a JSON decision, so we
+        // suppress the human note there — see isAntigravityHostTool).
+        if ((boot.ran || connected.length > 0) && !isAntigravityHostTool(tool)) {
+          for (const line of autoTrackingNotice(connected, boot.guidance)) {
+            process.stdout.write(line + '\n');
+          }
+        }
       } catch {
-        /* a sweep failure must never break the hook */
+        /* a bootstrap/sweep failure must never break the hook */
       }
     }
 

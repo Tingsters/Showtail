@@ -158,13 +158,17 @@ describe('cli (end-to-end acceptance sequence)', () => {
       const r = run(dir, ['--help']);
       expect(r.code).toBe(0);
       for (const heading of [
-        'Get started:',
         'Capture your work:',
         'Review your trail:',
         'Connect your tools:',
+        // Tracking is automatic now, so there is no "Get started" step; the manual
+        // setup/track commands live under this optional group instead.
+        'Manage tracking (optional):',
       ]) {
         expect(r.stdout).toContain(heading);
       }
+      // Tracking turns on automatically — no getting-started commands are shown.
+      expect(r.stdout).not.toContain('Get started:');
       // The unified integration verbs replace the old per-tool groups.
       expect(r.stdout).toContain('connect');
       expect(r.stdout).toContain('disconnect');

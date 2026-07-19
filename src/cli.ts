@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-import { Command } from 'commander';
+import { Command, Option } from 'commander';
 import { runInit } from './commands/init.ts';
 import { runEnsure } from './commands/ensure.ts';
 import { runSetup } from './commands/setup.ts';
@@ -29,14 +29,18 @@ import {
 } from './plugins/registry.ts';
 import type { ConnectFlag, ImportRunOptions } from './plugins/types.ts';
 import type { Tool } from './types.ts';
+import { SHOWTAIL_VERSION } from './core/version.ts';
+import { ensureFirstRunSetup, autoTrackingNotice } from './commands/setup.ts';
 
-const VERSION = '0.11.2';
+const VERSION = SHOWTAIL_VERSION;
 
 // Help-group headings (Commander 14 renders commands grouped under these).
-const G_START = 'Get started:';
 const G_CAPTURE = 'Capture your work:';
 const G_REVIEW = 'Review your trail:';
 const G_CONNECT = 'Connect your tools:';
+// Automatic tracking means there's no "get started" step; these are the occasional
+// manual/repair commands, shown last and below the everyday workflow.
+const G_MANAGE = 'Manage tracking (optional):';
 
 /**
  * Wrap a command action so errors print a clean message and set a stable exit
@@ -73,53 +77,49 @@ program
   .showHelpAfterError('(run the command with --help to see valid options)')
   .version(VERSION, '-v, --version');
 
-// --- Get started ----------------------------------------------------------
+// Make Showtail "just work" without a setup command: the first time any normal
+// command runs after install (the safety net for bun / from-source installs the
+// curl/irm installer didn't run), turn automatic tracking on and pre-wire every AI
+// tool (see `ensureFirstRunSetup`). Skipped for:
+//   - `hook` (the tool-driven path; it bootstraps itself on session-start),
+//   - `setup` (it owns the on/off switch and does its own thing),
+//   - `connect` / `disconnect` (they own per-tool wiring; a student turning a tool OFF, or
+//     a `connect codex --no-hooks`, must not have a pre-wire-all fight them first), and
+//   - `capabilities` (a pure state probe the extension/agents read to DECIDE what to
+//     do — it must stay side-effect-free and honestly report "not set up yet").
+// The notice goes to stderr so it never pollutes a command's `--json` stdout. Once-only
+// and best-effort.
+const NO_BOOTSTRAP = new Set(['hook', 'setup', 'connect', 'disconnect', 'capabilities']);
+program.hook('preAction', (_thisCommand, actionCommand) => {
+  if (NO_BOOTSTRAP.has(actionCommand.name())) return;
+  const result = ensureFirstRunSetup();
+  if (result.ran) {
+    for (const line of autoTrackingNotice(result.connected, result.guidance)) {
+      process.stderr.write(line + '\n');
+    }
+    process.stderr.write('\n');
+  }
+});
+
+// --- Hidden lifecycle commands --------------------------------------------
+//
+// Tracking is automatic, so these are no longer part of a student's flow. They stay
+// available (the VS Code extension calls `ensure` on project open; `start`/`end` give
+// power users manual session control) but are hidden from `--help` to cut the
+// getting-started clutter. The `setup` and `track` manual commands live at the end,
+// under the "Manage tracking (optional)" group.
 
 program
-  .command('setup')
-  .description(
-    'One-time guided setup: connect your AI tools and turn on automatic tracking.',
-  )
-  .helpGroup(G_START)
-  .option('--off', 'turn automatic tracking back off')
-  .option('--yes', 'run without prompts')
-  .option('--json', 'output machine-readable JSON')
-  .action(
-    action(async (opts: { off?: boolean; yes?: boolean; json?: boolean }) =>
-      runSetup({ off: opts.off, yes: opts.yes, json: opts.json }),
-    ),
-  );
-
-program
-  .command('track [path]')
-  .description(
-    'Track a folder as a Showtail project (creates .showtail/) and pull its already-captured work out of the inbox. Any folder works — it need not be a code repo.',
-  )
-  .helpGroup(G_START)
-  .option(
-    '-p, --project <name>',
-    "set or update this project's name (shown in report titles)",
-  )
-  .option('--json', 'output machine-readable JSON')
-  .action(
-    action(async (path: string | undefined, opts: { project?: string; json?: boolean }) =>
-      runInit({ cwd: path, project: opts.project, json: opts.json }),
-    ),
-  );
-
-program
-  .command('ensure')
+  .command('ensure', { hidden: true })
   .description(
     'Make sure this project is initialized and a session is open (safe to re-run).',
   )
-  .helpGroup(G_START)
   .option('--json', 'output machine-readable JSON')
   .action(action(async (opts: { json?: boolean }) => runEnsure({ json: opts.json })));
 
 program
-  .command('start')
-  .description('Begin a new work session (run this each time you sit down to work).')
-  .helpGroup(G_START)
+  .command('start', { hidden: true })
+  .description('Begin a new work session (sessions otherwise open automatically).')
   .option('-l, --label <label>', 'a short label for the session')
   .option('--json', 'output machine-readable JSON')
   .action(
@@ -129,9 +129,8 @@ program
   );
 
 program
-  .command('end')
-  .description('Close the current work session.')
-  .helpGroup(G_START)
+  .command('end', { hidden: true })
+  .description('Close the current work session (sessions otherwise close automatically).')
   .option('--json', 'output machine-readable JSON')
   .action(action(async (opts: { json?: boolean }) => runEnd({ json: opts.json })));
 
@@ -520,6 +519,57 @@ importCmd
   .command('undo')
   .description('Undo the most recent import (permanently removes that batch of events).')
   .action(action(async () => runImportUndo()));
+
+// --- Manage tracking (optional) -------------------------------------------
+//
+// Tracking turns on by itself after install, so these are the rare manual controls:
+// turn tracking off, or wire up a single project/name by hand.
+
+program
+  .command('setup')
+  .description(
+    'Manage automatic tracking (it turns on by itself after install). --off turns it off.',
+  )
+  .helpGroup(G_MANAGE)
+  .option('--off', 'turn automatic tracking off')
+  .option('--yes', 'run without prompts')
+  // Hidden: the installers' once-only bootstrap — turn tracking on + pre-wire every
+  // tool (installed or not) so a later install never loses work.
+  .addOption(new Option('--first-run', 'automatic install bootstrap').hideHelp())
+  .option('--json', 'output machine-readable JSON')
+  .action(
+    action(
+      async (opts: {
+        off?: boolean;
+        yes?: boolean;
+        firstRun?: boolean;
+        json?: boolean;
+      }) =>
+        runSetup({
+          off: opts.off,
+          yes: opts.yes,
+          firstRun: opts.firstRun,
+          json: opts.json,
+        }),
+    ),
+  );
+
+program
+  .command('track [path]')
+  .description(
+    'Set up one project by hand: name it, declare a non-code folder as a project, and pull its already-captured work out of the inbox. (Projects otherwise initialize automatically.)',
+  )
+  .helpGroup(G_MANAGE)
+  .option(
+    '-p, --project <name>',
+    "set or update this project's name (shown in report titles)",
+  )
+  .option('--json', 'output machine-readable JSON')
+  .action(
+    action(async (path: string | undefined, opts: { project?: string; json?: boolean }) =>
+      runInit({ cwd: path, project: opts.project, json: opts.json }),
+    ),
+  );
 
 // Internal: invoked by Claude Code / Codex hooks (reads the hook JSON from stdin).
 // Hidden from the main help; advanced users can still discover it.

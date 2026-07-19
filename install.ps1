@@ -34,6 +34,16 @@ Invoke-WebRequest -Uri $url -OutFile $target -UseBasicParsing
 
 Write-Host "Installed to: $target"
 
+# Turn tracking on automatically — make Showtail "just work" with no setup command:
+# connect the AI tools you have and pre-wire the rest, so a tool you install later never
+# loses work. Once-only and idempotent; best-effort so a hiccup never fails the install.
+Write-Host ''
+try {
+  & $target setup --first-run
+} catch {
+  Write-Host 'Showtail is installed. Tracking will turn on the first time you use it.'
+}
+
 # Persist to the user's PATH for future terminals (if not already there).
 $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
 if (($userPath -split ';') -notcontains $binDir) {
