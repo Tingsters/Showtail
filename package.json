@@ -20,7 +20,6 @@
     "format": "bun x prettier --write \"src/**/*.ts\" \"tests/**/*.ts\"",
     "format:check": "bun x prettier --check \"src/**/*.ts\" \"tests/**/*.ts\"",
     "verify:matrix": "bun run scripts/verify-changed.ts",
-    "sync:grammars": "bash scripts/sync-grammars.sh",
     "build": "bun build --compile ./src/cli.ts --outfile dist/showtail",
     "build:all": "bash scripts/build-all.sh"
   },
@@ -34,9 +33,7 @@
   ],
   "dependencies": {
     "commander": "^14.0.0",
-    "tree-sitter-wasms": "0.1.13",
-    "turbo-stream": "^2.4.0",
-    "web-tree-sitter": "0.22.6"
+    "turbo-stream": "^2.4.0"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

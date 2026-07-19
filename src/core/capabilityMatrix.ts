@@ -265,34 +265,6 @@ export const CAPABILITIES: Capability[] = [
     },
   },
   {
-    id: 'entity-diff',
-    label: 'Entity-level diffs',
-    description:
-      'Records which named entities (functions, classes…) each captured file change added, removed, or modified.',
-    note: 'Runs in the shared artifact path using bundled tree-sitter grammars (17 languages), so any tool that snapshots a file gets it; the delta is silent for unsupported languages. Live-certified for Claude Code.',
-    // File capture requires hooks, so the entity delta rides the same surface.
-    requires: hasHooks,
-    surfaceRule: needHooks,
-    overrides: {
-      'claude-code': full(),
-      codex: partial(
-        'Rides the shared artifact path; extraction is proven, but Codex file capture itself is not yet live-certified (see auto file/edit capture).',
-      ),
-      'copilot-cli': partial(
-        'Rides the shared artifact path; Copilot CLI fires no hooks in headless mode, so it can’t be certified here.',
-      ),
-      'antigravity-cli': partial(
-        'Rides the shared artifact path; extraction proven, entity-diff not separately live-certified.',
-      ),
-      'antigravity-ide': partial(
-        'Rides the shared artifact path; live capture not certified (the IDE can’t be driven headlessly here).',
-      ),
-      'copilot-vscode': partial(
-        'The extension snapshots files on save, so entities are extracted then, but non-VS-Code edits are missed.',
-      ),
-    },
-  },
-  {
     id: 'auto-ai-output-capture',
     label: 'Auto AI-reply capture',
     description:

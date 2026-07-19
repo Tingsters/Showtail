@@ -250,67 +250,6 @@ pre.diff {
 .dline { display: block; padding-right: 0.8rem; }
 .dline.add { background: #e6ffec; }
 .dline.del { background: #ffebe9; }
-/* One code change: file header, then a "what changed" entity summary, then the
-   raw diff behind a collapsed "View code" dropdown. */
-.change { margin: 0.5rem 0; }
-.change-head { font-size: 0.85rem; }
-.change-stat { color: #9a9aa6; font-size: 0.78rem; font-weight: 400; margin-left: 0.4rem; }
-.entity-summary {
-  margin: 0.3rem 0 0.2rem;
-  padding: 0.4rem 0.55rem 0.45rem;
-  background: #f6f6f9;
-  border-left: 3px solid #c7cbe0;
-  border-radius: 0.25rem;
-}
-.entity-summary-label {
-  font-size: 0.72rem;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.03em;
-  color: #4a4a52;
-  cursor: help;
-}
-.entity-summary-label .es-sub {
-  font-weight: 400;
-  text-transform: none;
-  letter-spacing: 0;
-  color: #8a8a94;
-}
-.entity-summary .entity-changes { margin: 0.25rem 0 0; }
-.change .code { margin: 0.3rem 0 0; }
-
-/* Entity-level changes: an indented, glyph-prefixed list under a code change
-   (Entire-style "<glyph> <kind> <name> <verb>" rows). */
-.entity-changes {
-  list-style: none;
-  margin: 0.3rem 0 0.15rem;
-  padding: 0 0 0 0.4rem;
-  font-size: 0.78rem;
-  line-height: 1.7;
-}
-.entity-changes li { display: block; color: #5a5a63; }
-.entity-changes code {
-  font-size: 0.85em;
-  background: #ecedf1;
-  padding: 0.05rem 0.3rem;
-}
-.entity-changes .cs-glyph {
-  display: inline-block;
-  width: 0.9em;
-  font-weight: 700;
-  text-align: center;
-}
-.entity-changes .ent-kind { color: #8a8a94; }
-.entity-changes .ent-verb { color: #9a9aa6; font-size: 0.92em; }
-/* Glyph + name accent per change type. */
-.cs-add .cs-glyph,
-.cs-add code { color: #1d6b4c; }
-.cs-change .cs-glyph,
-.cs-change code { color: #9c6a12; }
-.cs-remove .cs-glyph,
-.cs-remove code { color: #9c2b2b; }
-.cs-rename .cs-glyph,
-.cs-rename code { color: #2f5aa0; }
 .dmark {
   display: inline-block;
   width: 1.6rem;
@@ -373,22 +312,6 @@ pre.codeblock code { background: none; padding: 0; font-size: inherit; border-ra
   pre.diff { background: #242429; }
   .dline.add { background: rgba(46, 160, 67, 0.15); }
   .dline.del { background: rgba(248, 81, 73, 0.15); }
-  .entity-summary { background: #202027; border-left-color: #3a3f52; }
-  .entity-summary-label { color: #cfcfd6; }
-  .entity-summary-label .es-sub { color: #8a8a94; }
-  .change-stat { color: #7a7a86; }
-  .entity-changes li { color: #b8b8c2; }
-  .entity-changes code { background: #2a2a30; }
-  .entity-changes .ent-kind { color: #8a8a94; }
-  .entity-changes .ent-verb { color: #7a7a86; }
-  .cs-add .cs-glyph,
-  .cs-add code { color: #56c98a; }
-  .cs-change .cs-glyph,
-  .cs-change code { color: #e0b257; }
-  .cs-remove .cs-glyph,
-  .cs-remove code { color: #f2756f; }
-  .cs-rename .cs-glyph,
-  .cs-rename code { color: #79a0ff; }
   .dmark { color: #8a8a94; }
   .dline.add .dmark { color: #3fb950; background: rgba(63, 185, 80, 0.3); }
   .dline.del .dmark { color: #f85149; background: rgba(248, 81, 73, 0.3); }

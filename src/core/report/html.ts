@@ -1,7 +1,6 @@
 import REPORT_CSS from '../../../assets/report/report.css' with { type: 'text' };
 import TIMEZONE_JS from '../../../assets/report/timezone.js' with { type: 'text' };
-import type { EntityChanges, ReportData, Turn } from '../../types.ts';
-import { hasEntityChanges } from '../entities.ts';
+import type { ReportData, Turn } from '../../types.ts';
 import { escapeHtml, firstLine } from '../html.ts';
 import { highlightCode } from '../highlight.ts';
 import {
@@ -147,71 +146,24 @@ function renderTimelineItem(item: ReturnType<typeof turnTimeline>[number]): stri
     ].join('\n');
   }
   const code = item.change;
-  const stat = code.diffLines ? `~${code.diffLines} line(s)` : '';
+  const stat = code.diffLines ? ` (~${code.diffLines} line(s))` : '';
   const fileLink =
     `<a class="file-link" href="${escapeHtml(fileHref(code.linkPath ?? code.path))}" ` +
     'target="_blank" rel="noopener" onclick="event.stopPropagation()">' +
     `${escapeHtml(code.path)}</a>`;
-  // File name (+ demoted line count) as the header, then the "what changed" entity
-  // summary at this level (readable without opening anything), then the raw diff behind
-  // a collapsed "View code" dropdown.
-  const head =
-    `<div class="change-head">${fileLink}` +
-    (stat ? ` <span class="change-stat">${escapeHtml(stat)}</span>` : '') +
-    '</div>';
-  const summary = entitySummaryHtml(code.entityChanges);
-  const codeBlock = code.diff
-    ? `<details class="code"><summary>View code</summary>\n${diffHtml(code.diff)}\n</details>`
-    : '';
-  return `<div class="change">${head}${summary}${codeBlock}</div>`;
-}
-
-/**
- * The "what changed" summary block shown above a code change: a clear, labelled
- * heading (with a tooltip explaining its purpose) over the glyph list of entities.
- * Empty when there's no entity data to show.
- */
-function entitySummaryHtml(changes: EntityChanges | undefined): string {
-  const list = entityChangesHtml(changes);
-  if (!list) return '';
-  const tip =
-    'Which functions and classes this edit added, changed, removed, or renamed — ' +
-    'so you can see what changed without reading the code.';
-  return (
-    '<div class="entity-summary">' +
-    `<div class="entity-summary-label" title="${escapeHtml(tip)}">` +
-    'What changed <span class="es-sub">· functions &amp; classes</span></div>' +
-    list +
-    '</div>'
-  );
-}
-
-/**
- * An indented, glyph-prefixed list of the entities a code change touched —
- * mirroring Entire's `<glyph> <kind> <name> <verb>` presentation so a reviewer
- * can scan what functions/classes were added, changed, removed, or renamed.
- */
-function entityChangesHtml(changes: EntityChanges | undefined): string {
-  if (!hasEntityChanges(changes)) return '';
-  const row = (
-    cls: string,
-    glyph: string,
-    kind: string,
-    name: string,
-    verb: string,
-  ): string =>
-    `<li class="${cls}"><span class="cs-glyph">${glyph}</span> ` +
-    `<span class="ent-kind">${escapeHtml(kind)}</span> <code>${escapeHtml(name)}</code> ` +
-    `<span class="ent-verb">${verb}</span></li>`;
-  const rows = [
-    ...changes.added.map((e) => row('cs-add', '+', e.kind, e.name, 'added')),
-    ...changes.changed.map((e) => row('cs-change', '~', e.kind, e.name, 'changed')),
-    ...changes.renamed.map((r) =>
-      row('cs-rename', '~', r.kind, `${r.from} → ${r.to}`, 'renamed'),
-    ),
-    ...changes.removed.map((e) => row('cs-remove', '-', e.kind, e.name, 'removed')),
-  ];
-  return `<ul class="entity-changes">${rows.join('')}</ul>`;
+  if (code.diff) {
+    // A diff was captured — show it in an expandable card. The pieces join with
+    // newlines to match the surrounding card markup exactly.
+    return [
+      '<details class="code">',
+      `<summary>${fileLink}${escapeHtml(stat)}</summary>`,
+      diffHtml(code.diff),
+      '</details>',
+    ].join('\n');
+  }
+  // No inline diff (e.g. a file snapshot with no suggested code, or a Codex shell
+  // edit). Render a plain file row — not an expander that opens to nothing.
+  return `<div class="code code-file">${fileLink}${escapeHtml(stat)}</div>`;
 }
 
 /** Render the interactive exchange cards (escaped; no scripts). */

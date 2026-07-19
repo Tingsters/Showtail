@@ -98,7 +98,6 @@ export async function ensureInitialized(
       git,
       captureAiOutput: true,
       captureCode: true,
-      captureEntities: true,
       redact: { enabled: true, secrets: true, pii: true },
     },
   };

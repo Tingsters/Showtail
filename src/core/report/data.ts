@@ -20,8 +20,6 @@ import { readJournal } from '../journal.ts';
 import { authorSlugs, readAllAuthors } from '../authors.ts';
 import { readAllEventsWithSession, type EventWithSession } from '../events.ts';
 import { readObject } from '../objects.ts';
-import { diffEntitiesDetailed, hasEntityChanges } from '../entities.ts';
-import type { EntityChanges, EntitySig } from '../../types.ts';
 
 /** The tool an event flowed through (defaults to "cli" for older/manual events). */
 export function toolOf(event: Event): Tool {
@@ -71,13 +69,6 @@ export interface ReportScope {
   authorSlug?: string;
   /** Override the descriptive name in the title for this report (beats config.project). */
   title?: string;
-  /**
-   * Pre-read artifacts to use instead of reading from disk here. Lets the caller
-   * enrich them first (e.g. `recoverEntities` fills missing entity data) while
-   * keeping `buildReportData` synchronous. Filtered by `authorSlug` like the
-   * internal read.
-   */
-  artifacts?: Artifact[];
 }
 
 /**
@@ -99,7 +90,7 @@ export function buildReportData(
     (x) => !onlySlug || x.actorSlug === onlySlug,
   );
   const events = withSession.map((x) => x.event);
-  const artifacts = (scope.artifacts ?? readAllArtifacts(paths)).filter(
+  const artifacts = readAllArtifacts(paths).filter(
     (a) => !onlySlug || a.actorSlug === onlySlug,
   );
 
@@ -304,8 +295,6 @@ export function buildTurns(
     if (turn) turn.plans.push(event);
   }
 
-  const entityChangesById = computeEntityDeltas(artifacts);
-
   for (const a of artifacts) {
     const turn =
       (a.turnId ? turnByPrompt.get(a.turnId) : undefined) ??
@@ -314,10 +303,8 @@ export function buildTurns(
     const diff = a.diffHash ? (readObject(paths, a.diffHash) ?? undefined) : undefined;
     // De-dupe one file per turn: a host can produce two artifacts for the same
     // edit — a live snapshot (file hash, no diff) and a transcript-reconciled
-    // import (diff, no hash; e.g. Codex `apply_patch`) — and an agent may edit a
-    // file more than once per turn. Collapse them so the file shows once,
-    // preferring the entry that carries a diff and the latest real entity delta.
-    const incomingEntities = entityChangesById.get(a.id);
+    // import (diff, no hash; e.g. Codex `apply_patch`). Collapse them so the file
+    // shows once, preferring the entry that carries a diff.
     const existing = turn.codeChanges.find((c) => c.path === a.path);
     if (existing) {
       if (!existing.diff && diff) {
@@ -326,10 +313,6 @@ export function buildTurns(
       }
       if (!existing.tool && a.tool) existing.tool = a.tool as Tool;
       if (!existing.linkPath && a.linkPath) existing.linkPath = a.linkPath;
-      // Adopt a later snapshot's entity delta: the first artifact for a path is
-      // often its creation (no prior state → no delta), while a subsequent edit
-      // in the same turn is what actually changed functions/classes.
-      if (hasEntityChanges(incomingEntities)) existing.entityChanges = incomingEntities;
       continue;
     }
     turn.codeChanges.push({
@@ -337,34 +320,12 @@ export function buildTurns(
       linkPath: a.linkPath,
       diff,
       diffLines: a.diffLines,
-      entityChanges: incomingEntities,
       tool: a.tool as Tool | undefined,
       timestamp: a.timestamp,
     });
   }
 
   return turns;
-}
-
-/**
- * Compute each artifact's entity-level delta versus the previous snapshot of the
- * same file. Walking every author's snapshots for a path in timestamp order means
- * a delta reflects the file's real history — even across teammates editing it —
- * and the first snapshot of a path (no prior state) yields no delta. Keyed by
- * artifact id so `buildTurns` can attach it without re-sorting.
- */
-function computeEntityDeltas(
-  artifacts: Artifact[],
-): Map<string, EntityChanges | undefined> {
-  const byTime = [...artifacts].sort((a, b) => a.timestamp.localeCompare(b.timestamp));
-  const prevByPath = new Map<string, EntitySig[] | undefined>();
-  const out = new Map<string, EntityChanges | undefined>();
-  for (const a of byTime) {
-    const prev = prevByPath.get(a.path);
-    out.set(a.id, diffEntitiesDetailed(prev, a.entities));
-    prevByPath.set(a.path, a.entities);
-  }
-  return out;
 }
 
 /** One rendered item inside a turn, tagged for the renderer. */

@@ -1,5 +1,4 @@
-import type { EntityChanges, ReportData, Turn } from '../../types.ts';
-import { hasEntityChanges } from '../entities.ts';
+import type { ReportData, Turn } from '../../types.ts';
 import { PLAN_APPROVED_TAG, PLAN_REVISED_TAG } from '../plans.ts';
 import {
   modelLabel,
@@ -10,24 +9,6 @@ import {
   turnTimeline,
 } from './data.ts';
 import { staticUtc, timeToken } from './time.ts';
-
-/**
- * An indented sub-list of the entities a code change touched, one per line, framed
- * `<kind> <name> — <verb>` (kind-led, like Entire). Markdown uses uniform `-`
- * bullets rather than literal `+`/`~`/`-` glyphs, which would collide with list
- * syntax; the colored glyphs live in the HTML renderer. Empty when nothing changed.
- */
-function entityChangesBlock(changes: EntityChanges | undefined): string[] {
-  if (!hasEntityChanges(changes)) return [];
-  const row = (kind: string, name: string, verb: string): string =>
-    `  - ${kind} \`${name}\` — ${verb}`;
-  return [
-    ...changes.added.map((e) => row(e.kind, e.name, 'added')),
-    ...changes.changed.map((e) => row(e.kind, e.name, 'changed')),
-    ...changes.renamed.map((r) => row(r.kind, `${r.from} → ${r.to}`, 'renamed')),
-    ...changes.removed.map((e) => row(e.kind, e.name, 'removed')),
-  ];
-}
 
 /** A unique token swapped for the interactive turns HTML after Markdown→HTML. */
 export const TURNS_PLACEHOLDER = 'SHOWTAIL_TURNS_PLACEHOLDER';
@@ -253,22 +234,12 @@ function turnMarkdown(lines: string[], turn: Turn, author?: string): void {
       const code = item.change;
       const stat = code.diffLines ? ` (~${code.diffLines} line(s))` : '';
       const link = `[\`${code.path}\`](${fileHref(code.linkPath ?? code.path)})`;
-      // "What changed" (functions & classes) as a labelled summary above the code,
-      // so a reader sees it without reading the diff.
-      const entityBlock = entityChangesBlock(code.entityChanges);
-      if (entityBlock.length) {
-        lines.push(`_What changed — ${link}${stat} (functions & classes):_`, '');
-        lines.push(...entityBlock, '');
-      } else {
-        lines.push(
-          code.diff
-            ? `_Suggested code — ${link}${stat}:_`
-            : `_Changed file — ${link}${stat}._`,
-          '',
-        );
-      }
       if (code.diff) {
+        lines.push(`_Suggested code — ${link}${stat}:_`, '');
         lines.push('```diff', code.diff, '```', '');
+      } else {
+        // No diff captured — name the changed file without promising code below it.
+        lines.push(`_Changed file — ${link}${stat}._`, '');
       }
     }
   }

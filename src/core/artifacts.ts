@@ -1,7 +1,6 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import type { Artifact, JournalEntry, Tool } from '../types.ts';
-import { extractEntities, supportsEntities } from './entities.ts';
 import { maybeCurrentCommit } from './git.ts';
 import { sha256OfFile } from './hash.ts';
 import { makeId } from './ids.ts';
@@ -19,10 +18,6 @@ import { authorSlugs } from './authors.ts';
 
 /** Cap a single captured diff so one huge edit can't bloat the store. */
 const MAX_DIFF_BYTES = 64 * 1024;
-
-/** Skip entity extraction on very large files — a generated/vendored blob isn't
- * worth parsing and could stall capture. */
-const MAX_ENTITY_BYTES = 2 * 1024 * 1024;
 
 /**
  * The display path to record for an edited file. A file edited inside a git
@@ -86,7 +81,6 @@ export function artifactFromEntry(entry: JournalEntry): Artifact {
   if (entry.turn) artifact.turnId = entry.turn;
   if (entry.diffHash) artifact.diffHash = entry.diffHash;
   if (entry.diffLines !== undefined) artifact.diffLines = entry.diffLines;
-  if (entry.entities) artifact.entities = entry.entities;
   return artifact;
 }
 
@@ -108,40 +102,6 @@ export function readAllArtifacts(paths: ShowtailPaths): Artifact[] {
     }
   }
   return out;
-}
-
-/**
- * Fill in entity data for artifacts that lack it, by re-reading the file from disk.
- * Entity extraction can silently produce nothing at capture time (e.g. it fails inside
- * a host tool's hook sandbox); this recovers it at report/trace time, where extraction
- * is reliable, so a reviewer still sees which functions/classes changed.
- *
- * Best-effort and exact: only an artifact whose file still exists at its recorded path
- * *and* still hashes to the recorded `sha256` is filled — i.e. we only attach entities to
- * a snapshot whose content we can prove is unchanged. Mutates the passed `Artifact`
- * objects in memory (never writes `.showtail/`, so a committed trail stays untouched) and
- * returns the same array. Artifacts with entities already, no hash, unsupported languages,
- * missing/changed files, or oversized content are left as-is.
- */
-export async function recoverEntities(
-  paths: ShowtailPaths,
-  artifacts: Artifact[],
-): Promise<Artifact[]> {
-  for (const a of artifacts) {
-    if (a.entities || !a.sha256 || !supportsEntities(a.path)) continue;
-    const abs = resolve(paths.root, a.linkPath ?? a.path);
-    if (!existsSync(abs)) continue;
-    try {
-      if ((await sha256OfFile(abs)) !== a.sha256) continue; // file changed since this snapshot
-      const content = readFileSync(abs, 'utf8');
-      if (Buffer.byteLength(content) > MAX_ENTITY_BYTES) continue;
-      const entities = await extractEntities(content, a.path);
-      if (entities) a.entities = entities;
-    } catch {
-      // Leave this artifact's entities unset on any read/parse failure.
-    }
-  }
-  return artifacts;
 }
 
 /**
@@ -210,22 +170,6 @@ export async function addArtifact(
     entry.diffHash = writeObject(paths, cleaned);
     entry.diffLines = countDiffLines(cleaned);
     if (hits > 0) entry.redacted = hits;
-  }
-
-  // Record which named entities (functions, classes…) the file now contains, so
-  // the report can show *what* changed, not just that the file did. Metadata
-  // only — no source is stored — and fully best-effort: a parse failure or an
-  // unsupported language just leaves `entities` unset.
-  if (config.settings.captureEntities !== false && supportsEntities(absPath)) {
-    try {
-      const content = readFileSync(absPath, 'utf8');
-      if (Buffer.byteLength(content) <= MAX_ENTITY_BYTES) {
-        const entities = await extractEntities(content, repoPath);
-        if (entities) entry.entities = entities;
-      }
-    } catch {
-      // Never let entity capture break the snapshot.
-    }
   }
 
   appendJournal(author, entry);
