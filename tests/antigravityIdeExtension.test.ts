@@ -1,4 +1,4 @@
-import { writeFileSync } from 'node:fs';
+import { chmodSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, test } from 'bun:test';
 import {
@@ -60,6 +60,28 @@ describe('antigravity-ide extension install (env-overridable, no real IDE)', () 
       expect(res.installed).toBe(false);
       expect(res.cli).toBe(cli);
       expect(res.reason).toBe('vsix-not-bundled');
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('installs hands-off when both the IDE CLI and the bundled VSIX are present', () => {
+    const dir = makeTempDir();
+    try {
+      const record = join(dir, 'args.txt');
+      const cli = join(dir, 'antigravity-ide.sh');
+      const vsix = join(dir, 'showtail.vsix');
+      writeFileSync(cli, `#!/bin/sh\nprintf '%s\\n' "$@" > "${record}"\nexit 0\n`);
+      chmodSync(cli, 0o755);
+      writeFileSync(vsix, 'fake');
+      process.env.SHOWTAIL_ANTIGRAVITY_CLI = cli;
+      process.env.SHOWTAIL_VSIX = vsix;
+
+      const res = installAntigravityIdeExtension();
+      expect(res.installed).toBe(true); // §3 vsix availability makes it hands-off
+      const args = readFileSync(record, 'utf8');
+      expect(args).toContain('--install-extension');
+      expect(args).toContain(vsix);
     } finally {
       cleanup(dir);
     }

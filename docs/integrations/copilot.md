@@ -4,7 +4,12 @@ Showtail can also capture **GitHub Copilot** work into the same `.showtail/`
 trail. That means a student can move between Claude Code and Copilot while the
 educator sees one coherent story.
 
-Install the VS Code extension:
+**You normally don't have to do anything.** When you install Showtail and it finds VS Code,
+it installs the Showtail VS Code extension for you (hands-off) — so Copilot capture just
+works. Turn it off anytime with `showtail setup --off` or `showtail disconnect copilot`.
+
+If you ever need to install the extension by hand (e.g. VS Code's `code` command isn't
+available for the auto-install to use):
 
 ```bash
 code --install-extension Tingsters.showtail

@@ -52,3 +52,12 @@ process.env.SHOWTAIL_ROOT_CEILING ??= tmpdir();
 // dir so tests never touch the real file. Spawned CLIs inherit it via spawnEnv();
 // per-test overrides (antigravityIde.test) still win. Honor an external value.
 process.env.GEMINI_HOME ??= join(tmpdir(), 'showtail-test-gemini');
+
+// Neutralize VS Code detection for the whole test run. The copilot plugin's
+// `findVsCodeCli()` probes absolute app-bundle paths (e.g. /Applications/Visual Studio
+// Code.app) that escape PATH/HOME isolation — so on a dev machine with VS Code installed
+// it would make copilot "detected" in tests that assume an empty PATH means nothing is
+// present, and could let an in-process `autoConnect` run a REAL `code --install-extension`.
+// Point the override at a nonexistent path so `findVsCodeCli()` returns null unless a test
+// opts in by setting `SHOWTAIL_VSCODE_CLI` to its own stub. Honor an external value.
+process.env.SHOWTAIL_VSCODE_CLI ??= join(tmpdir(), 'showtail-no-vscode-cli');

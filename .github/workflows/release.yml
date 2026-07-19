@@ -37,6 +37,11 @@ jobs:
           bun install
           bun run package
           cp showtail-*.vsix ../../dist/
+          # Also publish under a STABLE name so the installer can fetch a fixed URL
+          # (…/releases/latest/download/showtail.vsix) and drop it beside the binary —
+          # this is what makes the VS Code / Antigravity IDE extension auto-install
+          # hands-off (bundledVsixPath() finds it). See install.sh / bundledVsixPath().
+          cp "$(ls -t showtail-*.vsix | head -1)" ../../dist/showtail.vsix
 
       - name: Publish release
         uses: softprops/action-gh-release@v2
@@ -47,4 +52,5 @@ jobs:
             dist/showtail-darwin-arm64
             dist/showtail-windows-x64.exe
             dist/showtail-*.vsix
+            dist/showtail.vsix
           generate_release_notes: true

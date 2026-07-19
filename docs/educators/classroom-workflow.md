@@ -24,6 +24,21 @@
 The goal is not to catch anyone. The goal is to make the process visible and
 give students a structured way to demonstrate genuine understanding.
 
+## Which tools are covered
+
+Installing Showtail turns on capture automatically for these, hands-off (it installs the
+VS Code / Antigravity extension for you when it finds those editors):
+
+- **Claude Code**, **OpenAI Codex**, **Gemini CLI**, **GitHub Copilot CLI**
+- **GitHub Copilot in VS Code** (via the auto-installed Showtail extension)
+- **Antigravity** (CLI and IDE)
+
+**Not yet covered** (they need their own integration — capture won't happen automatically):
+**Cursor**, **Windsurf**, **JetBrains** IDEs, **Zed**, and similar. **ChatGPT** and **Gemini**
+on the web are *import-based* — there are no hooks to install, so a student brings a shared
+conversation in after the fact (see the integration guides). If your class uses one of the
+uncovered tools, let us know.
+
 ## Keeping capture working
 
 - **If an AI tool update ever breaks capture**, the fix ships in a newer Showtail. Have

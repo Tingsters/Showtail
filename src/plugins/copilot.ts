@@ -11,7 +11,7 @@
 import { runCopilotInstall, runCopilotUninstall } from '../commands/copilot.ts';
 import { runImportCopilot } from '../commands/importCopilot.ts';
 import { copilotState, resolveCopilotTarget } from '../core/copilot.ts';
-import { commandOnPath } from '../core/detect.ts';
+import { findVsCodeCli, installVsCodeExtension } from '../core/vscodeExtension.ts';
 import type { EnvironmentPlugin } from './types.ts';
 
 const MARKETPLACE_ID = 'Tingsters.showtail';
@@ -38,10 +38,24 @@ export const copilotPlugin: EnvironmentPlugin = {
     ],
     applicableFlags: ['extension', 'force'],
 
-    detect: () => commandOnPath('code') || commandOnPath('code-insiders'),
+    // Detect VS Code even when the `code` CLI isn't on PATH (findVsCodeCli also checks
+    // the app-bundle install paths), so auto-install reaches a normal VS Code install.
+    detect: () => findVsCodeCli() !== null,
 
-    // Copilot is project-scoped and the extension auto-installs its instructions
-    // on first open, so `setup` connects nothing globally — only shows guidance.
+    // Cannot be pre-wired before install: capture rides on the VS Code extension, which is
+    // installed via VS Code's own CLI and so needs VS Code already present. Connected
+    // (extension installed) the moment VS Code is detected — never pre-seeded.
+    prewireSafe: false,
+
+    // Install the Showtail VS Code extension hands-off when VS Code is present. The
+    // extension then self-installs the per-project `.github/` instructions on first open,
+    // so there's nothing for the student to run. Capture is via the extension, not hooks.
+    autoConnect() {
+      installVsCodeExtension();
+      return { hooks: false };
+    },
+
+    // Fallback guidance if VS Code is present but its CLI can't be located to auto-install.
     setupGuidance: [
       'VS Code detected. For GitHub Copilot capture, install the extension:',
       `  code --install-extension ${MARKETPLACE_ID}`,

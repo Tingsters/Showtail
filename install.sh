@@ -64,6 +64,22 @@ chmod +x "$target"
 
 echo "Installed to: $target"
 
+# --- Fetch the VS Code / Antigravity extension (VSIX) ---------------------
+# Drop `showtail.vsix` beside the binary so Showtail can install its editor extension
+# hands-off (bundledVsixPath() looks here). Best-effort: a failed fetch never fails the
+# install — the extension step then falls back to the Marketplace or to guidance.
+if [ "$VERSION" = "latest" ]; then
+  vsix_url="https://github.com/${REPO}/releases/latest/download/showtail.vsix"
+else
+  vsix_url="https://github.com/${REPO}/releases/download/${VERSION}/showtail.vsix"
+fi
+vsix_target="${BIN_DIR}/showtail.vsix"
+if command -v curl >/dev/null 2>&1; then
+  curl -fSL "$vsix_url" -o "$vsix_target" 2>/dev/null || rm -f "$vsix_target"
+elif command -v wget >/dev/null 2>&1; then
+  wget -qO "$vsix_target" "$vsix_url" 2>/dev/null || rm -f "$vsix_target"
+fi
+
 # --- Turn tracking on automatically ---------------------------------------
 # Make Showtail "just work" with no setup command: connect the AI tools you have and
 # pre-wire the rest, so a tool you install later never loses work. Once-only and

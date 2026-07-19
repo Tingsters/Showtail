@@ -133,12 +133,15 @@ describe('plugin connect capabilities', () => {
     }
   });
 
-  test('autoConnect is declared for hook-based tools and absent for Copilot', () => {
-    // Calling autoConnect writes user-scope (home) files, which is covered by the
-    // spawned setup.test.ts; here we only assert the contract is shaped right.
+  test('autoConnect is declared for every auto-connectable tool (incl. Copilot/VS Code)', () => {
+    // Calling autoConnect writes user-scope (home) files / installs an extension, which is
+    // covered by setup.test.ts and the extension tests; here we only assert the contract.
     expect(typeof getPluginById('claude-code')!.connect!.autoConnect).toBe('function');
     expect(typeof getPluginById('codex')!.connect!.autoConnect).toBe('function');
     expect(typeof getPluginById('gemini-cli')!.connect!.autoConnect).toBe('function');
-    expect(getPluginById('github-copilot')!.connect!.autoConnect).toBeUndefined();
+    // Copilot/VS Code now auto-connects too — it installs the Showtail VS Code extension
+    // (capture rides on the extension), so it is NOT pre-seedable before install.
+    expect(typeof getPluginById('github-copilot')!.connect!.autoConnect).toBe('function');
+    expect(getPluginById('github-copilot')!.connect!.prewireSafe).toBe(false);
   });
 });

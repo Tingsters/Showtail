@@ -34,6 +34,21 @@ Invoke-WebRequest -Uri $url -OutFile $target -UseBasicParsing
 
 Write-Host "Installed to: $target"
 
+# Fetch the VS Code / Antigravity extension (VSIX) beside the binary so Showtail can
+# install its editor extension hands-off (bundledVsixPath() looks here). Best-effort — a
+# failed fetch never fails the install (the extension step falls back to guidance).
+if ($version -eq 'latest') {
+  $vsixUrl = "https://github.com/$repo/releases/latest/download/showtail.vsix"
+} else {
+  $vsixUrl = "https://github.com/$repo/releases/download/$version/showtail.vsix"
+}
+$vsixTarget = Join-Path $binDir 'showtail.vsix'
+try {
+  Invoke-WebRequest -Uri $vsixUrl -OutFile $vsixTarget -UseBasicParsing
+} catch {
+  if (Test-Path $vsixTarget) { Remove-Item $vsixTarget -Force }
+}
+
 # Turn tracking on automatically — make Showtail "just work" with no setup command:
 # connect the AI tools you have and pre-wire the rest, so a tool you install later never
 # loses work. Once-only and idempotent; best-effort so a hiccup never fails the install.
