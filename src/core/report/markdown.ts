@@ -253,15 +253,23 @@ function turnMarkdown(lines: string[], turn: Turn, author?: string): void {
       const code = item.change;
       const stat = code.diffLines ? ` (~${code.diffLines} line(s))` : '';
       const link = `[\`${code.path}\`](${fileHref(code.linkPath ?? code.path)})`;
-      if (code.diff) {
-        lines.push(`_Suggested code — ${link}${stat}:_`, '');
-        lines.push('```diff', code.diff, '```', '');
-      } else {
-        // No diff captured — name the changed file without promising code below it.
-        lines.push(`_Changed file — ${link}${stat}._`, '');
-      }
+      // "What changed" (functions & classes) as a labelled summary above the code,
+      // so a reader sees it without reading the diff.
       const entityBlock = entityChangesBlock(code.entityChanges);
-      if (entityBlock.length) lines.push(...entityBlock, '');
+      if (entityBlock.length) {
+        lines.push(`_What changed — ${link}${stat} (functions & classes):_`, '');
+        lines.push(...entityBlock, '');
+      } else {
+        lines.push(
+          code.diff
+            ? `_Suggested code — ${link}${stat}:_`
+            : `_Changed file — ${link}${stat}._`,
+          '',
+        );
+      }
+      if (code.diff) {
+        lines.push('```diff', code.diff, '```', '');
+      }
     }
   }
 }

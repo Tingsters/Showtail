@@ -111,6 +111,40 @@ export function readAllArtifacts(paths: ShowtailPaths): Artifact[] {
 }
 
 /**
+ * Fill in entity data for artifacts that lack it, by re-reading the file from disk.
+ * Entity extraction can silently produce nothing at capture time (e.g. it fails inside
+ * a host tool's hook sandbox); this recovers it at report/trace time, where extraction
+ * is reliable, so a reviewer still sees which functions/classes changed.
+ *
+ * Best-effort and exact: only an artifact whose file still exists at its recorded path
+ * *and* still hashes to the recorded `sha256` is filled — i.e. we only attach entities to
+ * a snapshot whose content we can prove is unchanged. Mutates the passed `Artifact`
+ * objects in memory (never writes `.showtail/`, so a committed trail stays untouched) and
+ * returns the same array. Artifacts with entities already, no hash, unsupported languages,
+ * missing/changed files, or oversized content are left as-is.
+ */
+export async function recoverEntities(
+  paths: ShowtailPaths,
+  artifacts: Artifact[],
+): Promise<Artifact[]> {
+  for (const a of artifacts) {
+    if (a.entities || !a.sha256 || !supportsEntities(a.path)) continue;
+    const abs = resolve(paths.root, a.linkPath ?? a.path);
+    if (!existsSync(abs)) continue;
+    try {
+      if ((await sha256OfFile(abs)) !== a.sha256) continue; // file changed since this snapshot
+      const content = readFileSync(abs, 'utf8');
+      if (Buffer.byteLength(content) > MAX_ENTITY_BYTES) continue;
+      const entities = await extractEntities(content, a.path);
+      if (entities) a.entities = entities;
+    } catch {
+      // Leave this artifact's entities unset on any read/parse failure.
+    }
+  }
+  return artifacts;
+}
+
+/**
  * Record a snapshot (hash + metadata, and optionally the AI-suggested diff) of a
  * file into one author's trail. Artifacts build a hash history over time, but
  * recording the *same* content as the latest snapshot is a no-op (deduped) — so

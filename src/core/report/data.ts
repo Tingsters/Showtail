@@ -71,6 +71,13 @@ export interface ReportScope {
   authorSlug?: string;
   /** Override the descriptive name in the title for this report (beats config.project). */
   title?: string;
+  /**
+   * Pre-read artifacts to use instead of reading from disk here. Lets the caller
+   * enrich them first (e.g. `recoverEntities` fills missing entity data) while
+   * keeping `buildReportData` synchronous. Filtered by `authorSlug` like the
+   * internal read.
+   */
+  artifacts?: Artifact[];
 }
 
 /**
@@ -92,7 +99,7 @@ export function buildReportData(
     (x) => !onlySlug || x.actorSlug === onlySlug,
   );
   const events = withSession.map((x) => x.event);
-  const artifacts = readAllArtifacts(paths).filter(
+  const artifacts = (scope.artifacts ?? readAllArtifacts(paths)).filter(
     (a) => !onlySlug || a.actorSlug === onlySlug,
   );
 

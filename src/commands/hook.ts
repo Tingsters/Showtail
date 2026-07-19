@@ -6,6 +6,7 @@ import {
   importEditArtifact,
   importedArtifactSourceIds,
 } from '../core/artifacts.ts';
+import { drainEntityDiagnostics } from '../core/entities.ts';
 import { changedFiles, maybeCurrentCommit } from '../core/git.ts';
 import { sha256OfFile } from '../core/hash.ts';
 import { readObject } from '../core/objects.ts';
@@ -697,6 +698,11 @@ async function handlePostEdit(
   if (adapterFor(tool)?.reconcileOnPostEdit) {
     await reconcileFromAdapter(author, payload, tool, config, trace);
   }
+
+  // Record per-file entity-extraction outcomes (count on success, error message on
+  // failure) so a silently-empty entity capture is diagnosable from `hooks.jsonl`.
+  const entityDiag = drainEntityDiagnostics();
+  if (entityDiag.length > 0) trace.entities = entityDiag;
 }
 
 /**

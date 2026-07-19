@@ -1,5 +1,6 @@
 import { join } from 'node:path';
 import { buildReportData, renderHtml, renderMarkdown } from '../core/report.ts';
+import { readAllArtifacts, recoverEntities } from '../core/artifacts.ts';
 import { authorSlugs } from '../core/authors.ts';
 import { emitJson } from '../core/output.ts';
 import { requirePaths, writeJson } from '../core/storage.ts';
@@ -74,8 +75,17 @@ export async function runReport(options: ReportOptions): Promise<void> {
   const written: WrittenReport[] = [];
   let teamData: ReportData | undefined;
 
+  // Recover entity data (which functions/classes changed) for snapshots whose file is
+  // still on disk unchanged — so the report shows it even when live capture missed it.
+  // In-memory only; nothing under `.showtail/` is modified.
+  const artifacts = await recoverEntities(paths, readAllArtifacts(paths));
+
   for (const target of targets) {
-    const data = buildReportData(paths, { ...target.scope, title: options.title });
+    const data = buildReportData(paths, {
+      ...target.scope,
+      title: options.title,
+      artifacts,
+    });
     if (target.key === 'team') teamData = data;
     written.push(writeOneReport(paths.reportsDir, target.key, stamp, data, options));
   }

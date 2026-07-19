@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { runInit } from '../src/commands/init.ts';
-import { addArtifact } from '../src/core/artifacts.ts';
+import { addArtifact, recoverEntities } from '../src/core/artifacts.ts';
 import { logEvent } from '../src/core/events.ts';
 import {
   diffEntitiesDetailed,
@@ -16,6 +16,7 @@ import { buildReportData } from '../src/core/report/data.ts';
 import { renderHtml } from '../src/core/report/html.ts';
 import { renderMarkdown } from '../src/core/report/markdown.ts';
 import { pathsForRoot } from '../src/core/storage.ts';
+import type { Artifact } from '../src/types.ts';
 import { authorFor, cleanup, makeTempDir } from './helpers.ts';
 
 describe('extractEntities', () => {
@@ -185,6 +186,35 @@ describe('diffEntitiesDetailed', () => {
   });
 });
 
+describe('recoverEntities', () => {
+  test('fills entities for an on-disk file matching its snapshot hash; skips others', async () => {
+    const dir = makeTempDir();
+    try {
+      await runInit({ cwd: dir });
+      const paths = pathsForRoot(dir);
+      const author = authorFor(paths);
+      writeFileSync(join(dir, 'r.ts'), 'export function foo(){ return 1 }\n');
+      const { artifact } = await addArtifact(author, { filePath: 'r.ts' });
+
+      // Simulate a capture that missed entities (its live extraction silently failed).
+      const missing: Artifact = { ...artifact, entities: undefined };
+      // Same but the file has since changed (hash won't match) → must NOT be filled.
+      const changed: Artifact = {
+        ...artifact,
+        entities: undefined,
+        sha256: 'a'.repeat(64),
+      };
+
+      await recoverEntities(paths, [missing, changed]);
+
+      expect(missing.entities?.map((e) => e.name)).toContain('foo');
+      expect(changed.entities).toBeUndefined();
+    } finally {
+      cleanup(dir);
+    }
+  });
+});
+
 describe('entityLabel', () => {
   test('adds call parens only for callable kinds', () => {
     expect(entityLabel({ name: 'foo', kind: 'function' })).toBe('foo()');
@@ -274,10 +304,18 @@ describe('report surfaces entity changes', () => {
       expect(html).toContain('<code>foo</code>'); // kind-led, no parens
       expect(html).toContain('bar → initialize');
       expect(html).toContain('renamed');
+      // The summary is a labelled block wrapping the entity list.
+      expect(html).toContain('class="entity-summary"');
+      expect(html).toContain('What changed');
+      const iSummary = html.indexOf('class="entity-summary"');
+      const iList = html.indexOf('class="entity-changes"');
+      expect(iSummary).toBeGreaterThanOrEqual(0);
+      expect(iList).toBeGreaterThan(iSummary); // list sits inside the labelled summary
 
       const md = renderMarkdown(data);
       expect(md).toContain('function `foo` — changed');
       expect(md).toContain('`bar → initialize` — renamed');
+      expect(md).toContain('What changed'); // label above the diff
     } finally {
       cleanup(dir);
     }

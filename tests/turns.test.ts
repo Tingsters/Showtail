@@ -72,8 +72,8 @@ describe('turns', () => {
 
       const html = renderHtml(buildReportData(paths));
       expect(html).toContain('util.ts');
-      // Rendered as a plain row, not an expander that opens to nothing.
-      expect(html).toContain('class="code code-file"');
+      // Rendered as a plain file header, not an expander that opens to nothing.
+      expect(html).toContain('class="change-head"');
       expect(html).not.toContain('<details class="code">');
     } finally {
       cleanup(dir);

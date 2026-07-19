@@ -45,6 +45,12 @@ export interface HookTrace {
   /** post-edit: how many files were snapshotted. */
   edits?: number;
   /**
+   * post-edit: per-file entity-extraction outcomes for supported files —
+   * `{ path, count }` on success, `{ path, error }` on failure. Recorded here
+   * (not on discarded stderr) so a silently-empty entity capture is diagnosable.
+   */
+  entities?: Array<{ path: string; count?: number; error?: string }>;
+  /**
    * post-edit: files recovered via the git backstop when structured parsing of
    * a Codex raw-shell edit found nothing (included in `edits`). >0 flags that
    * the fallback fired.

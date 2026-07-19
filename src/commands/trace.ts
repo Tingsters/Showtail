@@ -1,5 +1,5 @@
 import type { Artifact, EntityChanges, Event } from '../types.ts';
-import { readAllArtifacts } from '../core/artifacts.ts';
+import { readAllArtifacts, recoverEntities } from '../core/artifacts.ts';
 import { diffEntitiesDetailed, hasEntityChanges } from '../core/entities.ts';
 import { readAllEvents } from '../core/events.ts';
 import { requirePaths, toRepoRelative } from '../core/storage.ts';
@@ -55,6 +55,9 @@ function collectTrace(cwd: string | undefined, file: string): TraceResult {
 /** Show the known provenance trail for a single file. */
 export async function runTrace(file: string, options: TraceOptions): Promise<void> {
   const result = collectTrace(options.cwd, file);
+  // Recover entity data (which functions/classes changed) for snapshots whose file is
+  // still on disk unchanged, so the delta shows even when live capture missed it.
+  await recoverEntities(requirePaths(options.cwd), result.artifacts);
 
   if (options.format === 'json') {
     emitJson(result);

@@ -147,28 +147,43 @@ function renderTimelineItem(item: ReturnType<typeof turnTimeline>[number]): stri
     ].join('\n');
   }
   const code = item.change;
-  const stat = code.diffLines ? ` (~${code.diffLines} line(s))` : '';
-  const entities = entityChangesHtml(code.entityChanges);
+  const stat = code.diffLines ? `~${code.diffLines} line(s)` : '';
   const fileLink =
     `<a class="file-link" href="${escapeHtml(fileHref(code.linkPath ?? code.path))}" ` +
     'target="_blank" rel="noopener" onclick="event.stopPropagation()">' +
     `${escapeHtml(code.path)}</a>`;
-  if (code.diff) {
-    // A diff was captured — show it in an expandable card. The pieces join with
-    // newlines to match the surrounding card markup exactly.
-    return [
-      '<details class="code">',
-      `<summary>${fileLink}${escapeHtml(stat)}</summary>`,
-      entities,
-      diffHtml(code.diff),
-      '</details>',
-    ]
-      .filter(Boolean)
-      .join('\n');
-  }
-  // No inline diff (e.g. a file snapshot with no suggested code, or a Codex shell
-  // edit). Render a plain file row — not an expander that opens to nothing.
-  return `<div class="code code-file">${fileLink}${escapeHtml(stat)}${entities}</div>`;
+  // File name (+ demoted line count) as the header, then the "what changed" entity
+  // summary at this level (readable without opening anything), then the raw diff behind
+  // a collapsed "View code" dropdown.
+  const head =
+    `<div class="change-head">${fileLink}` +
+    (stat ? ` <span class="change-stat">${escapeHtml(stat)}</span>` : '') +
+    '</div>';
+  const summary = entitySummaryHtml(code.entityChanges);
+  const codeBlock = code.diff
+    ? `<details class="code"><summary>View code</summary>\n${diffHtml(code.diff)}\n</details>`
+    : '';
+  return `<div class="change">${head}${summary}${codeBlock}</div>`;
+}
+
+/**
+ * The "what changed" summary block shown above a code change: a clear, labelled
+ * heading (with a tooltip explaining its purpose) over the glyph list of entities.
+ * Empty when there's no entity data to show.
+ */
+function entitySummaryHtml(changes: EntityChanges | undefined): string {
+  const list = entityChangesHtml(changes);
+  if (!list) return '';
+  const tip =
+    'Which functions and classes this edit added, changed, removed, or renamed — ' +
+    'so you can see what changed without reading the code.';
+  return (
+    '<div class="entity-summary">' +
+    `<div class="entity-summary-label" title="${escapeHtml(tip)}">` +
+    'What changed <span class="es-sub">· functions &amp; classes</span></div>' +
+    list +
+    '</div>'
+  );
 }
 
 /**
