@@ -100,6 +100,13 @@ export const codexPlugin: EnvironmentPlugin = {
 
     detect: () => commandOnPath('codex') || homeDirExists('.codex'),
 
+    // Not pre-wired before install: `codex doctor` accepts a Showtail-seeded config
+    // (it doesn't break), but Codex gates hooks behind *persisted hook trust*
+    // (`--dangerously-bypass-hook-trust`) and hook firing could not be confirmed for a
+    // pre-seeded config. Codex is connected instead once it's actually detected — the
+    // same flow that works for an installed Codex today.
+    prewireSafe: false,
+
     autoConnect(cwd) {
       const target = resolveCodexTarget('user', cwd);
       writeCodexInstructions(target, {});

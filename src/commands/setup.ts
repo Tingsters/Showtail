@@ -1,4 +1,8 @@
-import { readGlobalConfig, writeGlobalConfig } from '../core/globalConfig.ts';
+import {
+  autoInitEnabled,
+  readGlobalConfig,
+  writeGlobalConfig,
+} from '../core/globalConfig.ts';
 import { emitJson } from '../core/output.ts';
 import { connectPlugins } from '../plugins/registry.ts';
 import {
@@ -13,9 +17,9 @@ export interface SetupOptions {
   off?: boolean;
   /**
    * The automatic install/first-run bootstrap (invoked by the installers): turn
-   * tracking on and pre-wire EVERY tool, once only. Widens the connect from the
-   * interactive command's detected-only set so a student never loses work to a tool
-   * they install later. See {@link ensureFirstRunSetup}.
+   * tracking on, connect installed tools, and pre-seed the tools confirmed safe to wire
+   * before install (`prewireSafe`) so a student never loses work to one they install
+   * later. Once only. See {@link ensureFirstRunSetup}.
    */
   firstRun?: boolean;
   json?: boolean;
@@ -59,8 +63,9 @@ export interface FirstRunResult {
 
 /**
  * The one-time, no-command bootstrap that makes Showtail "just work" on install:
- * turn automatic tracking on and pre-seed capture hooks for every AI tool — installed
- * or not — so a tool the student adds later never loses work. Idempotent and once-only:
+ * turn automatic tracking on, connect installed tools, and pre-seed the capture hooks
+ * for the tools confirmed safe to wire before install (`prewireSafe`) so one the student
+ * adds later never loses work. Idempotent and once-only:
  * a no-op if setup has ever completed, which also means it never re-enables tracking a
  * student turned off with `showtail setup --off` (that path stamps `setupCompletedAt`
  * too). Wrapped so it can never disrupt a command or a host session.
@@ -79,10 +84,11 @@ export function ensureFirstRunSetup(options: { cwd?: string } = {}): FirstRunRes
     if (cfg.autoInit !== undefined || cfg.setupCompletedAt) return noop;
 
     markAutoTrackingOn();
-    // Pre-wire every auto-connect-capable tool (never miss one), installed or not.
+    // Connect installed tools + pre-seed the ones confirmed safe to wire before install
+    // (see `prewireSafe`); the rest are caught by the sweep once they're detected.
     const connected = autoConnectNewlyDetected(options.cwd, undefined, {
       connectAll: true,
-    });
+    }).connected;
     // Tools that can't be auto-connected but ARE present (Copilot's VS Code extension)
     // contribute guidance so they're not silently absent.
     const guidance: string[] = [];
@@ -154,10 +160,28 @@ export async function runSetup(options: SetupOptions = {}): Promise<void> {
   // already decided, so re-running an installer never fights a `--off`/`disconnect`.
   if (options.firstRun) {
     const result = ensureFirstRunSetup({ cwd: options.cwd });
+    // If already set up (e.g. an installer re-run on UPGRADE), still run the sweep so a
+    // newer Showtail re-wires already-connected tools to the current hook format — this
+    // is how an integration fix reaches an existing user's on-disk hooks without relying
+    // on the tool's own (possibly broken) hooks to fire. Best-effort.
+    let refreshed: string[] = [];
+    let lateConnected = result.connected;
+    if (!result.ran && autoInitEnabled()) {
+      try {
+        const sweep = autoConnectNewlyDetected(options.cwd, undefined, {
+          connectAll: true,
+        });
+        refreshed = sweep.refreshed;
+        lateConnected = sweep.connected;
+      } catch {
+        /* refresh is best-effort */
+      }
+    }
     if (options.json) {
       emitJson({
         ran: result.ran,
-        connected: result.connected,
+        connected: result.ran ? result.connected : lateConnected,
+        refreshed,
         autoInit: readGlobalConfig().autoInit ?? false,
       });
       return;
@@ -166,8 +190,17 @@ export async function runSetup(options: SetupOptions = {}): Promise<void> {
       for (const line of autoTrackingNotice(result.connected, result.guidance)) {
         console.log(line);
       }
+    } else if (refreshed.length > 0 || lateConnected.length > 0) {
+      if (lateConnected.length > 0) {
+        for (const line of autoTrackingNotice(lateConnected)) console.log(line);
+      }
+      if (refreshed.length > 0) {
+        console.log(
+          `Updated Showtail's capture integration for: ${refreshed.join(', ')}.`,
+        );
+      }
     } else {
-      console.log('Showtail automatic tracking is already set up — nothing to do.');
+      console.log('Showtail automatic tracking is already set up and current.');
     }
     return;
   }

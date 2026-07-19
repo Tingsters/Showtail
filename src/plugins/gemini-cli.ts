@@ -59,6 +59,11 @@ export const geminiCliPlugin: EnvironmentPlugin = {
 
     detect: () => commandOnPath('gemini') || homeDirExists('.gemini'),
 
+    // Not pre-wired before install: Gemini CLI does read a Showtail-seeded
+    // settings.json, but firing pre-seeded hooks could not be empirically confirmed
+    // here, so we don't claim the pre-install guarantee. Connected once detected.
+    prewireSafe: false,
+
     autoConnect(cwd) {
       const target = resolveGeminiCliTarget('user', cwd);
       writeGeminiCliInstructions(target, {});

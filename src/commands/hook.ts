@@ -284,9 +284,12 @@ export async function runHook(
     if (event === 'session-start') {
       try {
         const boot = ensureFirstRunSetup({ cwd });
+        // When already set up, still run the sweep: it connects a newly-detected tool
+        // AND refreshes hooks to the current version (a fix in a newer Showtail reaches
+        // already-installed hooks this way, even if only some tool hooks still fire).
         const connected = boot.ran
           ? boot.connected
-          : autoConnectNewlyDetected(cwd, undefined, { connectAll: true });
+          : autoConnectNewlyDetected(cwd, undefined, { connectAll: true }).connected;
         // Surface the privacy notice through the session-start context (Claude/Codex
         // read hook stdout as context; Antigravity reads it as a JSON decision, so we
         // suppress the human note there — see isAntigravityHostTool).

@@ -31,6 +31,8 @@ import type { ConnectFlag, ImportRunOptions } from './plugins/types.ts';
 import type { Tool } from './types.ts';
 import { SHOWTAIL_VERSION } from './core/version.ts';
 import { ensureFirstRunSetup, autoTrackingNotice } from './commands/setup.ts';
+import { autoConnectNewlyDetected } from './core/autoConnectSweep.ts';
+import { autoInitEnabled } from './core/globalConfig.ts';
 
 const VERSION = SHOWTAIL_VERSION;
 
@@ -92,12 +94,35 @@ program
 const NO_BOOTSTRAP = new Set(['hook', 'setup', 'connect', 'disconnect', 'capabilities']);
 program.hook('preAction', (_thisCommand, actionCommand) => {
   if (NO_BOOTSTRAP.has(actionCommand.name())) return;
-  const result = ensureFirstRunSetup();
-  if (result.ran) {
-    for (const line of autoTrackingNotice(result.connected, result.guidance)) {
+  const boot = ensureFirstRunSetup();
+  if (boot.ran) {
+    for (const line of autoTrackingNotice(boot.connected, boot.guidance)) {
       process.stderr.write(line + '\n');
     }
     process.stderr.write('\n');
+    return;
+  }
+  // Already set up: carry the version refresh (and connect any newly-detected tool) from
+  // a channel that survives a tool update breaking its own hooks — so a fix shipped in a
+  // newer Showtail reaches already-installed hooks the next time ANY showtail command
+  // runs (the AI skill's `showtail status`, a `showtail report`, …). Cheap: the sweep
+  // fast-paths when the wiring is already current. Best-effort — never break a command.
+  if (!autoInitEnabled()) return;
+  try {
+    const { connected, refreshed } = autoConnectNewlyDetected(undefined, undefined, {
+      connectAll: true,
+    });
+    if (connected.length > 0) {
+      for (const line of autoTrackingNotice(connected)) process.stderr.write(line + '\n');
+      process.stderr.write('\n');
+    }
+    if (refreshed.length > 0) {
+      process.stderr.write(
+        `Showtail updated its capture integration for: ${refreshed.join(', ')}.\n\n`,
+      );
+    }
+  } catch {
+    /* a refresh/connect failure must never break the command */
   }
 });
 

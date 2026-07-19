@@ -86,6 +86,12 @@ export const antigravityIdePlugin: EnvironmentPlugin = {
 
     detect: () => homeDirExists('.antigravity-ide') || homeDirExists('.gemini'),
 
+    // Cannot be pre-wired before install: capture rides on a VS Code extension that is
+    // installed by shelling out to the IDE's own launcher, which must already exist.
+    // There is no config file to pre-seed, so this is only connected once the IDE is
+    // actually detected (its autoConnect no-ops when the IDE is absent).
+    prewireSafe: false,
+
     autoConnect(cwd) {
       const target = resolveAntigravityIdeTarget('user', cwd);
       writeAntigravityIdeInstructions(target, {});

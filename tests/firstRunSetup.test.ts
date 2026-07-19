@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { cleanup, makeTempDir, runCli, spawnEnv } from './helpers.ts';
 
@@ -131,6 +131,49 @@ describe('first-run bootstrap ("just works" on install)', () => {
       expect(r.code).toBe(0);
       expect(r.stderr).not.toContain('Showtail is on');
       expect(existsSync(join(ghome, 'config.json'))).toBe(false);
+    } finally {
+      cleanup(dir);
+      cleanup(home);
+    }
+  });
+
+  test('an integration fix in a newer Showtail reaches already-installed hooks WITHOUT any tool hook firing', () => {
+    const dir = makeTempDir();
+    const home = makeTempDir();
+    const ghome = join(makeTempDir(), '.showtail-cli');
+    try {
+      const env = bootstrapEnv(home, ghome);
+      // Set up: pre-wires Claude (prewireSafe) and stamps the current wiringVersion.
+      runCli(dir, ['setup', '--first-run', '--json'], { env });
+      expect(existsSync(join(home, '.claude', 'settings.json'))).toBe(true);
+
+      // Simulate: student already set up on an OLD Showtail (stale wiringVersion), then a
+      // tool update broke the hooks and a NEWER Showtail with the fix is now running.
+      const cfg = globalConfig(ghome);
+      cfg.wiringVersion = '0.0.0';
+      writeFileSync(join(ghome, 'config.json'), JSON.stringify(cfg));
+      // Wipe Showtail's hooks from the on-disk config to prove the refresh re-applies
+      // them (the tool's own hooks are NOT relied on to fire the fix).
+      writeFileSync(join(home, '.claude', 'settings.json'), '{"other":"kept"}');
+
+      // (a) A plain CLI command (like the AI skill's `showtail status`, or `report`) —
+      //     NOT a tool hook — must carry the fix to the on-disk hooks.
+      const r = runCli(dir, ['matrix', '--json'], { env });
+      expect(r.code).toBe(0);
+      expect(globalConfig(ghome).wiringVersion).not.toBe('0.0.0'); // re-stamped to current
+      const rewritten = readFileSync(join(home, '.claude', 'settings.json'), 'utf8');
+      expect(rewritten).toContain('showtail hook'); // Showtail's hooks re-applied
+      expect(rewritten).toContain('kept'); // merge is non-destructive
+      expect(r.stderr).toContain('updated its capture integration');
+
+      // (b) The installer path (re-running on upgrade) also refreshes stale wiring.
+      const cfg2 = globalConfig(ghome);
+      cfg2.wiringVersion = '0.0.0';
+      writeFileSync(join(ghome, 'config.json'), JSON.stringify(cfg2));
+      const up = runCli(dir, ['setup', '--first-run', '--json'], { env });
+      expect(up.code).toBe(0);
+      expect(JSON.parse(up.stdout).refreshed).toContain('claude');
+      expect(globalConfig(ghome).wiringVersion).not.toBe('0.0.0');
     } finally {
       cleanup(dir);
       cleanup(home);

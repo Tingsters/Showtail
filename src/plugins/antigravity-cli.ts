@@ -106,6 +106,10 @@ export const antigravityCliPlugin: EnvironmentPlugin = {
 
     detect: () => commandOnPath('agy') || homeDirExists('.gemini'),
 
+    // Not pre-wired before install: pre-seed firing is unverified for the Antigravity
+    // CLI, so it's connected once detected rather than written ahead of install.
+    prewireSafe: false,
+
     autoConnect(cwd) {
       const target = resolveAntigravityCliTarget('user', cwd);
       writeAntigravityCliInstructions(target, {});

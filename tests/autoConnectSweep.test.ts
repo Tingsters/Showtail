@@ -12,6 +12,7 @@ function fakePlugin(opts: {
   connected: boolean;
   hooks?: boolean;
   hasAutoConnect?: boolean;
+  prewireSafe?: boolean;
 }): { plugin: ConnectPlugin; calls: () => number } {
   let calls = 0;
   const plugin = {
@@ -22,6 +23,7 @@ function fakePlugin(opts: {
     connect: {
       detect: () => opts.detected,
       status: () => ({ connected: opts.connected }),
+      prewireSafe: opts.prewireSafe ?? false,
       autoConnect:
         opts.hasAutoConnect === false
           ? undefined
@@ -58,7 +60,7 @@ describe('autoConnectNewlyDetected sweep', () => {
     // No enableAutoInit → autoInit is off.
     const f = fakePlugin({ cliName: 'copilot-cli', detected: true, connected: false });
     const result = autoConnectNewlyDetected('/repo', [f.plugin]);
-    expect(result).toEqual([]);
+    expect(result.connected).toEqual([]);
     expect(f.calls()).toBe(0);
   });
 
@@ -67,13 +69,15 @@ describe('autoConnectNewlyDetected sweep', () => {
     const f = fakePlugin({ cliName: 'copilot-cli', detected: true, connected: false });
 
     const result = autoConnectNewlyDetected('/repo', [f.plugin]);
-    expect(result).toEqual([{ tool: 'copilot-cli', label: 'copilot-cli', hooks: true }]);
+    expect(result.connected).toEqual([
+      { tool: 'copilot-cli', label: 'copilot-cli', hooks: true },
+    ]);
     expect(f.calls()).toBe(1);
     expect(handledTools(home)).toContain('copilot-cli');
 
     // Second sweep is a no-op — already handled.
     const again = autoConnectNewlyDetected('/repo', [f.plugin]);
-    expect(again).toEqual([]);
+    expect(again.connected).toEqual([]);
     expect(f.calls()).toBe(1);
   });
 
@@ -82,7 +86,7 @@ describe('autoConnectNewlyDetected sweep', () => {
     const f = fakePlugin({ cliName: 'claude', detected: true, connected: true });
 
     const result = autoConnectNewlyDetected('/repo', [f.plugin]);
-    expect(result).toEqual([]); // already connected → nothing new
+    expect(result.connected).toEqual([]); // already connected → nothing new
     expect(f.calls()).toBe(0); // never rewrites an already-connected tool
     expect(handledTools(home)).toContain('claude'); // but recorded as handled
   });
@@ -95,7 +99,7 @@ describe('autoConnectNewlyDetected sweep', () => {
       connected: false,
     });
 
-    expect(autoConnectNewlyDetected('/repo', [absent.plugin])).toEqual([]);
+    expect(autoConnectNewlyDetected('/repo', [absent.plugin]).connected).toEqual([]);
     expect(handledTools(home)).not.toContain('copilot-cli');
 
     // Now it's installed → the next sweep connects it.
@@ -105,7 +109,7 @@ describe('autoConnectNewlyDetected sweep', () => {
       connected: false,
     });
     const result = autoConnectNewlyDetected('/repo', [present.plugin]);
-    expect(result.map((r) => r.tool)).toEqual(['copilot-cli']);
+    expect(result.connected.map((r) => r.tool)).toEqual(['copilot-cli']);
     expect(present.calls()).toBe(1);
   });
 
@@ -128,29 +132,55 @@ describe('autoConnectNewlyDetected sweep', () => {
       connected: false,
     });
     const result = autoConnectNewlyDetected('/repo', [afterDisconnect.plugin]);
-    expect(result).toEqual([]);
+    expect(result.connected).toEqual([]);
     expect(afterDisconnect.calls()).toBe(0);
   });
 
-  test('connectAll pre-wires an UNinstalled tool so a later install never loses work', () => {
+  test('connectAll pre-wires an UNinstalled tool ONLY when prewireSafe', () => {
     enableAutoInit(home);
-    const absent = fakePlugin({ cliName: 'codex', detected: false, connected: false });
-
-    // Detected-only mode leaves it alone (baseline)...
-    expect(autoConnectNewlyDetected('/repo', [absent.plugin])).toEqual([]);
-    expect(absent.calls()).toBe(0);
-
-    // ...but connectAll wires it up even though it isn't installed.
-    const wired = fakePlugin({ cliName: 'codex', detected: false, connected: false });
-    const result = autoConnectNewlyDetected('/repo', [wired.plugin], {
-      connectAll: true,
+    const safe = fakePlugin({
+      cliName: 'claude',
+      detected: false,
+      connected: false,
+      prewireSafe: true,
     });
-    expect(result.map((r) => r.tool)).toEqual(['codex']);
-    expect(wired.calls()).toBe(1);
-    expect(handledTools(home)).toContain('codex');
+    const result = autoConnectNewlyDetected('/repo', [safe.plugin], { connectAll: true });
+    expect(result.connected.map((r) => r.tool)).toEqual(['claude']);
+    expect(safe.calls()).toBe(1);
+    expect(handledTools(home)).toContain('claude');
   });
 
-  test('a Showtail version bump refreshes an already-wired tool once', () => {
+  test('connectAll does NOT pre-wire an UNinstalled, non-prewireSafe tool — it waits for detection', () => {
+    enableAutoInit(home);
+    const unsafe = fakePlugin({
+      cliName: 'codex',
+      detected: false,
+      connected: false,
+      prewireSafe: false,
+    });
+    // Undetected + not prewireSafe → not touched, not marked handled.
+    const first = autoConnectNewlyDetected('/repo', [unsafe.plugin], {
+      connectAll: true,
+    });
+    expect(first.connected).toEqual([]);
+    expect(unsafe.calls()).toBe(0);
+    expect(handledTools(home)).not.toContain('codex');
+
+    // Once it's actually installed, the sweep connects it (post-install, no pre-seed).
+    const installed = fakePlugin({
+      cliName: 'codex',
+      detected: true,
+      connected: false,
+      prewireSafe: false,
+    });
+    const second = autoConnectNewlyDetected('/repo', [installed.plugin], {
+      connectAll: true,
+    });
+    expect(second.connected.map((r) => r.tool)).toEqual(['codex']);
+    expect(installed.calls()).toBe(1);
+  });
+
+  test('a Showtail version bump refreshes an already-wired tool once, and reports it', () => {
     enableAutoInit(home);
     const f = fakePlugin({ cliName: 'claude', detected: true, connected: false });
 
@@ -163,13 +193,15 @@ describe('autoConnectNewlyDetected sweep', () => {
     cfg.wiringVersion = '0.0.0';
     writeFileSync(cfgPath, JSON.stringify(cfg));
 
-    // The next sweep re-runs autoConnect once to refresh the hook format...
-    autoConnectNewlyDetected('/repo', [f.plugin]);
+    // The next sweep re-runs autoConnect once to refresh the hook format, and reports it.
+    const refreshedRun = autoConnectNewlyDetected('/repo', [f.plugin]);
     expect(f.calls()).toBe(2);
+    expect(refreshedRun.refreshed).toEqual(['claude']);
 
     // ...and once the wiring is current again, further sweeps are no-ops.
-    autoConnectNewlyDetected('/repo', [f.plugin]);
+    const stable = autoConnectNewlyDetected('/repo', [f.plugin]);
     expect(f.calls()).toBe(2);
+    expect(stable.refreshed).toEqual([]);
   });
 
   test('records the wiring version so the refresh check is stable', () => {
@@ -190,7 +222,7 @@ describe('autoConnectNewlyDetected sweep', () => {
       hasAutoConnect: false,
     });
     const result = autoConnectNewlyDetected('/repo', [manual.plugin]);
-    expect(result).toEqual([]);
+    expect(result.connected).toEqual([]);
     // Not auto-connectable → never even recorded as handled.
     expect(handledTools(home)).not.toContain('antigravity-ide');
   });

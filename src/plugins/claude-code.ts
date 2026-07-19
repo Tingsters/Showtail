@@ -67,6 +67,12 @@ export const claudeCodePlugin: EnvironmentPlugin = {
 
     detect: () => commandOnPath('claude') || homeDirExists('.claude'),
 
+    // Claude Code reads ~/.claude/settings.json fresh at every startup regardless of
+    // who wrote it or when, so hooks pre-seeded before `claude` is installed fire on
+    // its first run. Empirically confirmed (pointing `claude -p` at a Showtail-seeded
+    // config dir captured the prompt into a fresh ledger). Safe to pre-wire.
+    prewireSafe: true,
+
     autoConnect(cwd) {
       const target = resolveTarget('user', cwd);
       writeSkill(target);

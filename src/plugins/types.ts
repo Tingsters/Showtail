@@ -88,6 +88,23 @@ export interface ConnectCapability {
    * auto-connected at setup (e.g. Copilot, which is project-scoped).
    */
   autoConnect?(cwd?: string): { hooks: boolean } | null;
+  /**
+   * Whether it is safe AND effective to write this tool's capture config *before*
+   * the tool itself is installed — i.e. the tool, once installed, honors a config
+   * dir Showtail created for it (fires the pre-seeded hooks) and isn't broken by it.
+   * Only set `true` for tools EMPIRICALLY CONFIRMED to do so; the automatic
+   * "never miss" pre-wire (see `autoConnectNewlyDetected`'s `connectAll`) writes a
+   * tool's config ahead of install ONLY when this is `true`. Every other tool is
+   * left for the sweep to connect once it's actually detected (post-install), which
+   * makes no assumption about pre-existing-config behavior. Default (unset) = false.
+   *
+   * Confirmed values (see PR validation): Claude Code = true (reads
+   * `~/.claude/settings.json` fresh at startup and fires the pre-seeded hooks).
+   * Codex/Gemini CLI/Copilot CLI/Antigravity = false (unverified firing, hook-trust,
+   * or — for the Antigravity IDE — capture is a VS Code extension that can only be
+   * installed once the IDE exists, so there is nothing to pre-seed).
+   */
+  prewireSafe?: boolean;
   /** Lines printed by `setup` when this tool is detected but not auto-connected. */
   setupGuidance?: string[];
   /** Install (or refresh) the integration. Prints its own user-facing output. */
