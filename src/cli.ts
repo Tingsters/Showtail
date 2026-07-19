@@ -30,7 +30,7 @@ import {
 import type { ConnectFlag, ImportRunOptions } from './plugins/types.ts';
 import type { Tool } from './types.ts';
 
-const VERSION = '0.11.1';
+const VERSION = '0.11.2';
 
 // Help-group headings (Commander 14 renders commands grouped under these).
 const G_START = 'Get started:';
