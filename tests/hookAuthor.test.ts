@@ -1,8 +1,13 @@
 import { describe, expect, test } from 'bun:test';
-import { mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { runInit } from '../src/commands/init.ts';
-import { authorSlugs, resolveActiveAuthorForHook } from '../src/core/authors.ts';
+import {
+  authorSlugs,
+  readAuthor,
+  resolveActiveAuthorForHook,
+} from '../src/core/authors.ts';
+import { readMachineIdentity, slugifyEmail } from '../src/core/identity.ts';
 import {
   CONFIG_VERSION,
   pathsForRoot,
@@ -32,20 +37,27 @@ describe('hook author resolution (cheap, never prompts)', () => {
     }
   });
 
-  test('no-ops (no folder, no prompt) when identity cannot be settled silently', async () => {
+  test('falls back to a provisional (computer-derived) author when no identity resolves, then auto-upgrades', async () => {
     const dir = makeTempDir();
     const home = makeTempDir(); // a fresh machine cache location (empty)
-    const prevEmail = process.env.SHOWTAIL_IDENTITY_EMAIL;
-    const prevHome = process.env.SHOWTAIL_IDENTITY_HOME;
-    const prevG = process.env.GIT_CONFIG_GLOBAL;
-    const prevS = process.env.GIT_CONFIG_SYSTEM;
+    const saved = {
+      SHOWTAIL_IDENTITY_EMAIL: process.env.SHOWTAIL_IDENTITY_EMAIL,
+      SHOWTAIL_IDENTITY_HOME: process.env.SHOWTAIL_IDENTITY_HOME,
+      GIT_CONFIG_GLOBAL: process.env.GIT_CONFIG_GLOBAL,
+      GIT_CONFIG_SYSTEM: process.env.GIT_CONFIG_SYSTEM,
+      GIT_AUTHOR_EMAIL: process.env.GIT_AUTHOR_EMAIL,
+      GIT_COMMITTER_EMAIL: process.env.GIT_COMMITTER_EMAIL,
+      EMAIL: process.env.EMAIL,
+    };
+    // No real identity from any source: no env override, no git config, no author env.
     delete process.env.SHOWTAIL_IDENTITY_EMAIL;
+    delete process.env.GIT_AUTHOR_EMAIL;
+    delete process.env.GIT_COMMITTER_EMAIL;
+    delete process.env.EMAIL;
     process.env.SHOWTAIL_IDENTITY_HOME = home;
     process.env.GIT_CONFIG_GLOBAL = join(dir, 'no-such-gitconfig');
     process.env.GIT_CONFIG_SYSTEM = join(dir, 'no-such-gitconfig');
     try {
-      // Build a project shell WITHOUT runInit (which would establish identity via
-      // gh/git/prompt) so identity is genuinely unresolvable here.
       const paths = pathsForRoot(dir);
       mkdirSync(paths.authorsDir, { recursive: true });
       mkdirSync(paths.objectsDir, { recursive: true });
@@ -56,17 +68,30 @@ describe('hook author resolution (cheap, never prompts)', () => {
       });
       writeState(paths, { currentSessionId: null });
 
-      const author = await resolveActiveAuthorForHook(paths, { cwd: dir });
-      expect(author).toBeUndefined();
-      expect(readState(paths).currentAuthorSlug).toBeUndefined();
+      // No identity → a provisional author is created (work is never dropped), marked
+      // provisional in both author.json and the machine cache.
+      const prov = await resolveActiveAuthorForHook(paths, { cwd: dir });
+      expect(prov).toBeDefined();
+      const provSlug = readState(paths).currentAuthorSlug!;
+      expect(provSlug).toBeTruthy();
+      expect(readAuthor(prov!)?.provisional).toBe(true);
+      expect(readMachineIdentity()?.provisional).toBe(true);
+
+      // A real identity now appears (e.g. the student set git, exposed here via env) →
+      // the next resolve upgrades: real author active, provisional folder removed, cache real.
+      process.env.GIT_AUTHOR_EMAIL = 'real@school.edu';
+      const real = await resolveActiveAuthorForHook(paths, { cwd: dir });
+      const realSlug = slugifyEmail('real@school.edu');
+      expect(readState(paths).currentAuthorSlug).toBe(realSlug);
+      expect(real?.slug).toBe(realSlug);
+      expect(readMachineIdentity()?.provisional).toBeUndefined();
+      expect(authorSlugs(paths)).toContain(realSlug);
+      expect(existsSync(prov!.dir)).toBe(false); // placeholder folder gone
     } finally {
-      process.env.SHOWTAIL_IDENTITY_EMAIL = prevEmail;
-      if (prevHome === undefined) delete process.env.SHOWTAIL_IDENTITY_HOME;
-      else process.env.SHOWTAIL_IDENTITY_HOME = prevHome;
-      if (prevG === undefined) delete process.env.GIT_CONFIG_GLOBAL;
-      else process.env.GIT_CONFIG_GLOBAL = prevG;
-      if (prevS === undefined) delete process.env.GIT_CONFIG_SYSTEM;
-      else process.env.GIT_CONFIG_SYSTEM = prevS;
+      for (const [k, v] of Object.entries(saved)) {
+        if (v === undefined) delete process.env[k];
+        else process.env[k] = v;
+      }
       cleanup(home);
       cleanup(dir);
     }

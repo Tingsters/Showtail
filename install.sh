@@ -90,14 +90,35 @@ if ! "$target" setup --first-run 2>/dev/null; then
   echo "Showtail is installed. Tracking will turn on the first time you use it."
 fi
 
-# --- PATH guidance --------------------------------------------------------
+# --- Ensure `showtail` is on PATH -----------------------------------------
+# Capture works by the AI tools invoking the bare `showtail` command (hooks + the editor
+# extensions), so it MUST be on PATH or nothing is captured. Add the bin dir to the shell
+# profile automatically (idempotent), mirroring what install.ps1 does on Windows. This is
+# what makes capture actually hands-off. Best-effort — never fail the install.
 case ":$PATH:" in
-  *":$BIN_DIR:"*) echo "Ready! Run: showtail --help" ;;
+  *":$BIN_DIR:"*)
+    echo "Ready! Run: showtail --help"
+    ;;
   *)
-    echo ""
-    echo "Add this to your shell profile (~/.bashrc, ~/.zshrc) to use 'showtail' everywhere:"
-    echo "  export PATH=\"$BIN_DIR:\$PATH\""
-    echo ""
-    echo "Or run it directly: $target --help"
+    export_line="export PATH=\"$BIN_DIR:\$PATH\""
+    case "$(basename "${SHELL:-sh}")" in
+      zsh) profile="$HOME/.zshrc" ;;
+      bash) profile="$HOME/.bashrc" ;;
+      *) profile="$HOME/.profile" ;;
+    esac
+    updated=0
+    if [ -f "$profile" ] && grep -qF "$BIN_DIR" "$profile" 2>/dev/null; then
+      updated=1 # already references the bin dir — nothing to add
+    elif printf '\n# Added by Showtail installer\n%s\n' "$export_line" >> "$profile" 2>/dev/null; then
+      updated=1
+    fi
+    export PATH="$BIN_DIR:$PATH" # usable in THIS shell immediately
+    if [ "$updated" = 1 ]; then
+      echo "Added $BIN_DIR to your PATH ($profile)."
+      echo "Open a new terminal (or 'source $profile') so your AI tools can find showtail."
+    else
+      echo "Add this to your shell profile so 'showtail' is always found:"
+      echo "  $export_line"
+    fi
     ;;
 esac

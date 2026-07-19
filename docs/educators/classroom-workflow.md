@@ -39,16 +39,40 @@ on the web are *import-based* — there are no hooks to install, so a student br
 conversation in after the fact (see the integration guides). If your class uses one of the
 uncovered tools, let us know.
 
+**A few tools need one small, one-time step the first time the student uses them** (Showtail
+can't do these for them — they're the tool's own gates):
+
+- **OpenAI Codex** — approves ("trusts") Showtail's hooks the first time `codex` runs.
+- **Gemini CLI** — the student signs in to Gemini and trusts the working directory (their
+  normal Gemini setup).
+- **Antigravity IDE** — reload/reopen the IDE once so the just-installed extension activates.
+
+After that one step, capture is automatic. **No student ever needs to run a Showtail command
+to start** — capture and identity are handled for them (see below).
+
+## Identity — students don't need to set up git first
+
+Attribution is automatic and never blocks capture:
+
+- If a student has git or GitHub set up (as they will to collaborate), their work is
+  captured under their **real identity** from the start.
+- If they have neither yet, Showtail captures under a **temporary computer-derived name**
+  (e.g. `alice@alices-macbook.local`) so **nothing is ever lost**, and it lives in a normal
+  committable folder — so it's included in whatever you collect (git, zip, upload).
+- The moment a real identity appears — which happens automatically when they set
+  `git config user.email` to commit/collaborate — Showtail **re-attributes the earlier work
+  to their real identity** and drops the placeholder. Teammates only ever see real, per-student
+  folders (they merge conflict-free).
+
 ## Keeping capture working
 
 - **If an AI tool update ever breaks capture**, the fix ships in a newer Showtail. Have
   students re-run the install command to upgrade — Showtail re-applies its integration to
   the updated tool on upgrade (and again the next time any `showtail` command runs), so the
   fix lands without students touching anything tool-specific.
-- **One edge to know about:** if a student installs Showtail, then later installs a *single*
-  AI tool and only ever uses that one, capture can lag until Showtail sees it (any second
-  tool's use, an upgrade, or a `showtail report` triggers it). Installing the AI tool before
-  Showtail avoids this entirely — hence the tip in step 1.
+- **`showtail` must be on PATH** for the AI tools to invoke it. The installer sets this up
+  automatically (it adds the bin dir to the shell profile); students may need to open a new
+  terminal once for it to take effect.
 
 ## See also
 

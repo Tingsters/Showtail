@@ -44,10 +44,14 @@ install later is captured too. You never run a getting-started command — just 
 | `status` | Your current session and connected tools at a glance. Flags: `--json`. |
 | `sessions` | List your work sessions. Flags: `--all` (every contributor's), `--json`. |
 | `capabilities` | Report this folder's tracking state and what to do next (for AI agents). Flags: `--json`. |
-| `matrix` (alias `integrations`) | Show the integration capability matrix. Flags: `--json`. (Maintainer-only: `--write-readme`, `--verify-live`.) |
 | `report` | Generate a shareable report. Flags: `--format <html\|md\|json>` (default `html`), `--open`, `--author <slug>`, `--team`, `--title <text>`, `--json`. |
 | `verify` | Run integrity checks on your trail (config, journal, artifact hashes, report). |
 | `trace <file>` | Show every snapshot and related event for a file. Flags: `--format <text\|json>` (default `text`). |
+
+!!! note "Maintainer command"
+    `showtail matrix` prints the integration capability matrix (`--json`, and the
+    maintainer-only `--write-readme` / `--verify-live`). It's informational and hidden from
+    `--help`, but still runnable.
 
 ## Manage the inbox
 

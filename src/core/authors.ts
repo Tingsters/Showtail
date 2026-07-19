@@ -21,7 +21,9 @@ import {
   readMachineIdentity,
   resolveIdentity,
   slugifyEmail,
+  syntheticIdentity,
   writeMachineIdentity,
+  type CachedIdentity,
   type Identity,
 } from './identity.ts';
 
@@ -34,6 +36,13 @@ export interface Author {
   githubLogin?: string;
   /** ISO-8601 timestamp the author folder was first created. */
   createdAt: string;
+  /**
+   * True while this is a computer-derived placeholder ({@link syntheticIdentity}) held
+   * only until a real identity (gh/git/env) appears — at which point the work is
+   * re-attributed to the real author and this folder is removed. A real author never
+   * carries this flag.
+   */
+  provisional?: boolean;
 }
 
 /** Read one author's `author.json`, or null if it isn't there. */
@@ -81,6 +90,7 @@ export function ensureAuthor(
   paths: ShowtailPaths,
   identity: Identity,
   machineId?: string,
+  opts?: { provisional?: boolean },
 ): AuthorPaths {
   const slug = slugifyEmail(identity.email);
   const ap = authorPaths(paths, slug, machineId);
@@ -92,6 +102,7 @@ export function ensureAuthor(
       name: identity.name,
       githubLogin: identity.githubLogin,
       createdAt: new Date().toISOString(),
+      ...(opts?.provisional ? { provisional: true } : {}),
     });
   }
   // Session shards are created on first write (per-machine). No empty file is
@@ -176,29 +187,55 @@ export async function resolveActiveAuthorForHook(
   paths: ShowtailPaths,
   opts: { cwd: string },
 ): Promise<AuthorPaths | undefined> {
-  // 1. Already established for this project.
-  const slug = readState(paths).currentAuthorSlug;
-  if (slug) return authorPaths(paths, slug, ensureMachineId());
+  const machineId = ensureMachineId();
+  const currentSlug = readState(paths).currentAuthorSlug;
+  const currentAuthor = currentSlug
+    ? authorPaths(paths, currentSlug, machineId)
+    : undefined;
+  const currentIsProvisional = currentAuthor
+    ? (readAuthor(currentAuthor)?.provisional ?? false)
+    : false;
 
-  // 2. This machine knows the student from another repo — adopt it, no prompt.
+  // Fast path: an established, REAL (non-provisional) author for this project.
+  if (currentAuthor && !currentIsProvisional) return currentAuthor;
+
+  // Unestablished or provisional → look for a real identity: the machine cache (if
+  // real), then a cheap silent probe (git config + env; no gh, no prompt).
   const cached = readMachineIdentity();
-  if (cached) {
-    const ap = ensureAuthor(paths, cached, cached.machineId);
-    updateState(paths, { currentAuthorSlug: cached.slug });
-    return ap;
+  let real: Identity | undefined = cached && !cached.provisional ? cached : undefined;
+  if (!real) {
+    real =
+      (await resolveIdentity({ cwd: opts.cwd, allowPrompt: false, allowGh: false })) ??
+      undefined;
   }
 
-  // 3. Last resort: a silent git-config read (no gh, no prompt). Seed the cache.
-  const identity = await resolveIdentity({
-    cwd: opts.cwd,
-    allowPrompt: false,
-    allowGh: false,
-  });
-  if (!identity) return undefined;
-  return cacheAndEnsure(paths, identity);
+  if (real) {
+    const realAuthor = cacheAndEnsure(paths, real);
+    // A real identity just appeared over a provisional placeholder → move the
+    // placeholder's work to the real author and drop it. Best-effort; the hook never
+    // blocks, and the work is safe in the ledger either way.
+    if (
+      currentAuthor &&
+      currentIsProvisional &&
+      slugifyEmail(real.email) !== currentSlug
+    ) {
+      try {
+        const { upgradeProvisionalAuthor } = await import('./provisionalUpgrade.ts');
+        await upgradeProvisionalAuthor(paths, currentAuthor, realAuthor, machineId, real);
+      } catch {
+        /* placeholder lingers until next time; nothing lost */
+      }
+    }
+    return realAuthor;
+  }
+
+  // No real identity anywhere → a computer-derived placeholder so work is still captured
+  // and reported (never dropped). Upgraded automatically once a real identity appears.
+  if (currentAuthor && currentIsProvisional) return currentAuthor;
+  return createProvisionalAuthor(paths, machineId, cached);
 }
 
-/** Write the machine cache, create the author folder, and mark it active. */
+/** Write the machine cache (as REAL), create the author folder, and mark it active. */
 function cacheAndEnsure(paths: ShowtailPaths, identity: Identity): AuthorPaths {
   const machineId = ensureMachineId();
   const slug = slugifyEmail(identity.email);
@@ -206,4 +243,58 @@ function cacheAndEnsure(paths: ShowtailPaths, identity: Identity): AuthorPaths {
   const ap = ensureAuthor(paths, identity, machineId);
   updateState(paths, { currentAuthorSlug: slug });
   return ap;
+}
+
+/**
+ * Create (or adopt) a computer-derived placeholder author ({@link syntheticIdentity}) so
+ * a student's work is captured and reported even before any real identity exists. Cached
+ * with `provisional: true` so the resolver keeps probing and upgrades to the real
+ * identity as soon as one appears. Never prompts.
+ */
+function createProvisionalAuthor(
+  paths: ShowtailPaths,
+  machineId: string,
+  cached: CachedIdentity | null,
+): AuthorPaths {
+  const identity: Identity =
+    cached && cached.provisional
+      ? { email: cached.email, name: cached.name, githubLogin: cached.githubLogin }
+      : syntheticIdentity();
+  const slug = slugifyEmail(identity.email);
+  if (!(cached && cached.provisional)) {
+    writeMachineIdentity({ ...identity, slug, machineId, provisional: true });
+  }
+  const ap = ensureAuthor(paths, identity, machineId, { provisional: true });
+  updateState(paths, { currentAuthorSlug: slug });
+  return ap;
+}
+
+/**
+ * For non-hook commands (`report`/`status`): if the active author is a provisional
+ * placeholder and a real identity is now resolvable (gh allowed, no prompt), upgrade and
+ * re-attribute the work so the turn-in/output is under the student's real identity — even
+ * if they never made a git commit. Best-effort, silent, never throws.
+ */
+export async function upgradeIdentityIfProvisional(
+  paths: ShowtailPaths,
+  opts: { cwd: string; allowGh?: boolean },
+): Promise<void> {
+  try {
+    const currentSlug = readState(paths).currentAuthorSlug;
+    if (!currentSlug) return;
+    const machineId = ensureMachineId();
+    const currentAuthor = authorPaths(paths, currentSlug, machineId);
+    if (!(readAuthor(currentAuthor)?.provisional ?? false)) return;
+    const real = await resolveIdentity({
+      cwd: opts.cwd,
+      allowPrompt: false,
+      allowGh: opts.allowGh ?? true,
+    });
+    if (!real || slugifyEmail(real.email) === currentSlug) return;
+    const realAuthor = cacheAndEnsure(paths, real);
+    const { upgradeProvisionalAuthor } = await import('./provisionalUpgrade.ts');
+    await upgradeProvisionalAuthor(paths, currentAuthor, realAuthor, machineId, real);
+  } catch {
+    /* best-effort */
+  }
 }

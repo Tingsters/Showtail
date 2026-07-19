@@ -44,7 +44,7 @@ export async function runSessions(options: SessionsOptions = {}): Promise<void> 
   }
 
   if (rows.length === 0) {
-    console.log('No sessions yet. Run `showtail start` to begin one.');
+    console.log('No sessions yet — just start working and one opens automatically.');
     return;
   }
 

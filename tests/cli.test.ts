@@ -172,6 +172,9 @@ describe('cli (end-to-end acceptance sequence)', () => {
       // The unified integration verbs replace the old per-tool groups.
       expect(r.stdout).toContain('connect');
       expect(r.stdout).toContain('disconnect');
+      // `matrix` is a maintainer/informational command — hidden from help, still runnable.
+      expect(r.stdout).not.toMatch(/^\s+matrix\b/m);
+      expect(run(dir, ['matrix', '--json']).code).toBe(0);
     } finally {
       cleanup(dir);
     }

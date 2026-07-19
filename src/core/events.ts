@@ -183,7 +183,7 @@ export function resolveOrStartSession(author: AuthorPaths, explicitId?: string):
     const found = sessions.find((s) => s.id === explicitId);
     if (!found) {
       throw new Error(
-        `Session "${explicitId}" was not found. Run \`showtail start\` or omit --session.`,
+        `Session "${explicitId}" was not found. Omit --session to use the current one.`,
       );
     }
     return found;

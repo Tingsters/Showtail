@@ -7,10 +7,12 @@
  * student who set up Showtail in one project is recognized in every other one
  * without re-prompting. The resolution order is: an explicit env override (for
  * automation/CI/tests) → the GitHub CLI (`gh api user`) → the student's git
- * config (`user.email`/`user.name`) → an interactive prompt.
+ * config (`user.email`/`user.name`) → `GIT_AUTHOR_EMAIL`/`EMAIL` env → an interactive
+ * prompt. When none resolve, callers may fall back to {@link syntheticIdentity} (a
+ * computer-derived placeholder) so work is never dropped.
  */
 import { existsSync } from 'node:fs';
-import { homedir } from 'node:os';
+import { homedir, hostname, userInfo } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { createInterface } from 'node:readline';
@@ -24,12 +26,47 @@ export interface Identity {
   githubLogin?: string;
 }
 
+/**
+ * A last-resort identity derived from the computer itself (OS username + hostname),
+ * used when nothing real (gh / git config / env) is available so a student's work is
+ * still captured and attributed instead of dropped. Recognizable and stable per machine;
+ * replaced automatically the moment a real identity appears (see the provisional upgrade
+ * in `resolveActiveAuthorForHook`). `email` is synthetic (`<user>@<host>.local`).
+ */
+export function syntheticIdentity(): Identity {
+  let user = 'student';
+  let host = 'local';
+  try {
+    const u = userInfo().username?.trim();
+    if (u) user = u;
+  } catch {
+    /* keep default */
+  }
+  try {
+    const h = hostname()
+      .trim()
+      .replace(/\.local$/i, '');
+    if (h) host = h;
+  } catch {
+    /* keep default */
+  }
+  const safe = (s: string) => s.toLowerCase().replace(/[^a-z0-9._-]+/g, '-');
+  return { email: `${safe(user)}@${safe(host)}.local`, name: user };
+}
+
 /** The machine-level cache: an identity plus its derived slug and a machine id. */
 export interface CachedIdentity extends Identity {
   /** Folder key derived from the email (see {@link slugifyEmail}). */
   slug: string;
   /** Random per-machine id used to shard the journal (one student, two laptops). */
   machineId: string;
+  /**
+   * True when this is a computer-derived placeholder ({@link syntheticIdentity}) used
+   * because no real identity (gh/git/env) was available yet. The resolver keeps probing
+   * for a real one while this is set, and upgrades (re-attributes the work) as soon as it
+   * finds it. A real identity never carries this flag.
+   */
+  provisional?: boolean;
 }
 
 /**
@@ -138,7 +175,28 @@ export async function resolveIdentity(
     };
   }
 
-  // 3. Ask, pre-filling whatever partial info we gathered above.
+  // 3. Environment — what git itself would use for authorship, and the common `EMAIL`
+  //    var many shells/CI set. A cheap, no-subprocess real-identity source.
+  const authorEmail = (
+    process.env.GIT_AUTHOR_EMAIL ||
+    process.env.GIT_COMMITTER_EMAIL ||
+    process.env.EMAIL ||
+    ''
+  ).trim();
+  if (authorEmail) {
+    const authorName = (
+      process.env.GIT_AUTHOR_NAME ||
+      process.env.GIT_COMMITTER_NAME ||
+      ''
+    ).trim();
+    return {
+      email: authorEmail,
+      name: authorName || g.name || ghName || ghLogin || authorEmail,
+      githubLogin: ghLogin,
+    };
+  }
+
+  // 4. Ask, pre-filling whatever partial info we gathered above.
   if (opts.allowPrompt) {
     return promptIdentity({ name: g.name ?? ghName ?? ghLogin, githubLogin: ghLogin });
   }

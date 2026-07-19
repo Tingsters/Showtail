@@ -177,7 +177,7 @@ export async function runInit(options: InitOptions = {}): Promise<void> {
     // cloned the repo runs `init` to register themselves without re-creating it.
     const author = await establishIdentity(paths, { cwd: root, allowPrompt: true });
     if (author) console.log(`You're tracked as ${author.slug}.`);
-    console.log('Run `showtail start` to begin a work session.');
+    console.log('Just start working with your AI tool — capture happens automatically.');
     return;
   }
 
@@ -227,9 +227,12 @@ export async function runInit(options: InitOptions = {}): Promise<void> {
     );
   } else {
     console.log(
-      "Couldn't determine your identity yet — set git user.email or run `gh auth login`,",
+      'No git/gh identity yet — Showtail will still capture your work under a temporary',
     );
-    console.log('then run `showtail start` to register yourself.');
+    console.log(
+      'name and switch it to your real identity automatically once you set git user.email',
+    );
+    console.log('(which you do to commit/collaborate anyway).');
   }
   console.log('');
   if (config.settings.git) {
@@ -249,5 +252,5 @@ export async function runInit(options: InitOptions = {}): Promise<void> {
       console.log('');
     }
   }
-  console.log('Next: run `showtail start` to begin your first session.');
+  console.log('Next: just start working with your AI tool — capture is automatic.');
 }

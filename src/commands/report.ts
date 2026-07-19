@@ -1,6 +1,6 @@
 import { join } from 'node:path';
 import { buildReportData, renderHtml, renderMarkdown } from '../core/report.ts';
-import { authorSlugs } from '../core/authors.ts';
+import { authorSlugs, upgradeIdentityIfProvisional } from '../core/authors.ts';
 import { emitJson } from '../core/output.ts';
 import { requirePaths, writeJson } from '../core/storage.ts';
 import { fileLink, openInDefaultApp } from '../core/terminal.ts';
@@ -66,6 +66,10 @@ function reportTargets(options: ReportOptions, slugs: string[]): ReportTarget[] 
  */
 export async function runReport(options: ReportOptions): Promise<void> {
   const paths = requirePaths(options.cwd);
+  // Turn-in checkpoint: if capture has been under a computer-derived placeholder, adopt
+  // the student's real identity (gh/git/env) now and re-attribute the work, so the report
+  // is under their real name even if they never made a git commit. Best-effort, silent.
+  await upgradeIdentityIfProvisional(paths, { cwd: options.cwd ?? process.cwd() });
   const slugs = authorSlugs(paths);
   const stamp = fileStamp(new Date().toISOString());
   mkdirSync(paths.reportsDir, { recursive: true });

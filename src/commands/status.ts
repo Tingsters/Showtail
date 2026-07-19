@@ -1,5 +1,5 @@
 import { requirePaths, trailIsNewerThanBinary } from '../core/storage.ts';
-import { activeAuthorPaths } from '../core/authors.ts';
+import { activeAuthorPaths, upgradeIdentityIfProvisional } from '../core/authors.ts';
 import { autoInitEnabled } from '../core/globalConfig.ts';
 import { currentSession } from '../core/sessions.ts';
 import { readSessionEvents } from '../core/events.ts';
@@ -31,6 +31,13 @@ export interface StatusOptions {
  */
 export async function runStatus(options: StatusOptions = {}): Promise<void> {
   const paths = requirePaths(options.cwd);
+  // If capture has been under a computer-derived placeholder, adopt a real identity that
+  // has since appeared (cheap sources only — no gh network call — so `status --json` stays
+  // fast for the skill). Best-effort, silent.
+  await upgradeIdentityIfProvisional(paths, {
+    cwd: options.cwd ?? process.cwd(),
+    allowGh: false,
+  });
   const author = activeAuthorPaths(paths);
   const session = author ? currentSession(author) : null;
   const events = author && session ? readSessionEvents(author, session.id) : [];
@@ -88,7 +95,7 @@ export async function runStatus(options: StatusOptions = {}): Promise<void> {
       console.log('  ' + breakdown.map((b) => `${b.count} ${b.type}`).join(' · '));
     }
   } else {
-    console.log('No open session. Run `showtail start` to begin one.');
+    console.log('No open session yet — just start working and one opens automatically.');
   }
 
   if (inbox > 0) {

@@ -9,6 +9,34 @@ import {
   autoConnectNewlyDetected,
   type SweepConnectResult,
 } from '../core/autoConnectSweep.ts';
+import {
+  ensureMachineId,
+  readMachineIdentity,
+  resolveIdentity,
+  slugifyEmail,
+  writeMachineIdentity,
+} from '../core/identity.ts';
+
+/**
+ * Seed the machine identity from gh/git/env at INSTALL time (the installer has network,
+ * so gh is fine here — unlike the hook path). This means the first hook attributes work
+ * to the student's REAL identity, skipping the provisional-placeholder phase for anyone
+ * with git/gh/EMAIL set. Best-effort; never overwrites an existing cached identity.
+ */
+async function seedRealIdentityAtInstall(cwd: string): Promise<void> {
+  try {
+    if (readMachineIdentity()) return; // already known (real or provisional) — leave it
+    const id = await resolveIdentity({ cwd, allowGh: true, allowPrompt: false });
+    if (!id) return; // no real identity yet; the provisional net will cover first use
+    writeMachineIdentity({
+      ...id,
+      slug: slugifyEmail(id.email),
+      machineId: ensureMachineId(),
+    });
+  } catch {
+    /* best-effort — the provisional fallback + auto-link still cover it */
+  }
+}
 
 export interface SetupOptions {
   /** Run without any prompts (setup is non-interactive regardless; kept for symmetry). */
@@ -159,6 +187,9 @@ export async function runSetup(options: SetupOptions = {}): Promise<void> {
   // bootstrap (so a tool installed later never loses work). A no-op if tracking was
   // already decided, so re-running an installer never fights a `--off`/`disconnect`.
   if (options.firstRun) {
+    // Layer 1: capture the student's real identity now (install has network for gh), so
+    // most students never hit the provisional placeholder.
+    await seedRealIdentityAtInstall(options.cwd ?? process.cwd());
     const result = ensureFirstRunSetup({ cwd: options.cwd });
     // If already set up (e.g. an installer re-run on UPGRADE), still run the sweep so a
     // newer Showtail re-wires already-connected tools to the current hook format — this

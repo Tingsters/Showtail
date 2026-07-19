@@ -303,12 +303,13 @@ program
   );
 
 program
-  .command('matrix')
-  .alias('integrations')
+  // Hidden: an informational/maintainer command (capability matrix + the maintainer-only
+  // --write-readme/--verify-live). No student or agent workflow calls it, so keep it out of
+  // the everyday help. Still fully runnable (`showtail matrix`).
+  .command('matrix', { hidden: true })
   .description(
     'Show which capabilities each AI tool integration supports (the capability matrix).',
   )
-  .helpGroup(G_REVIEW)
   .option('--json', 'output machine-readable JSON')
   .option('--write-readme', "regenerate the docs site's matrix block (maintainers)")
   .option(
