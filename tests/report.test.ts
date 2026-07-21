@@ -55,6 +55,39 @@ describe('report', () => {
     }
   });
 
+  test('Markdown leads with a reader-friendly summary and folds AI chatter into a details block', async () => {
+    const dir = makeTempDir();
+    try {
+      await runInit({ cwd: dir, project: 'Parser Project' });
+      const paths = pathsForRoot(dir);
+      const author = authorFor(paths);
+      startSession(author);
+
+      const { event: prompt } = await logEvent(author, {
+        type: 'prompt',
+        text: 'explain the plan',
+        tool: 'claude-code',
+      });
+      // Standalone narration (no code/decision after it) → the subordinate group.
+      await logEvent(author, {
+        type: 'ai_output',
+        text: 'First I will read the files, then summarize.',
+        tool: 'claude-code',
+        turnId: prompt.id,
+      });
+
+      const md = renderMarkdown(buildReportData(paths));
+      // The summary leads with what a reviewer scans for: tasks (prompts).
+      expect(md).toMatch(/\*\*Summary:\*\* 1 task\(s\)/);
+      // AI chatter is folded into a collapsed <details> (GitHub renders it), with
+      // a count — present, but not fronting the student's work.
+      expect(md).toContain('<details><summary>🤖 1 AI message(s)</summary>');
+      expect(md).toContain('First I will read the files');
+    } finally {
+      cleanup(dir);
+    }
+  });
+
   test('empty project still renders a valid report', async () => {
     const dir = makeTempDir();
     try {

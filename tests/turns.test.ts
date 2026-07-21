@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { runInit } from '../src/commands/init.ts';
 import { addArtifact } from '../src/core/artifacts.ts';
 import { logEvent } from '../src/core/events.ts';
-import { buildReportData, renderHtml } from '../src/core/report.ts';
+import { buildReportData, renderHtml, renderMarkdown } from '../src/core/report.ts';
 import { startSession } from '../src/core/sessions.ts';
 import { pathsForRoot } from '../src/core/storage.ts';
 import { authorFor, cleanup, makeTempDir } from './helpers.ts';
@@ -213,6 +213,173 @@ describe('turns', () => {
       // The only script in the document is the trusted inline timezone helper;
       // rendering user content must never introduce another.
       expect(html.match(/<script\b/g)?.length ?? 0).toBe(1);
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('subordinates standalone AI narration to a collapsed, counted disclosure', async () => {
+    const dir = makeTempDir();
+    try {
+      await runInit({ cwd: dir });
+      const paths = pathsForRoot(dir);
+      const author = authorFor(paths);
+      startSession(author);
+      const { event: prompt } = await logEvent(author, {
+        type: 'prompt',
+        text: 'explain recursion',
+        tool: 'claude-code',
+      });
+      // A pure Q&A turn: an AI reply with no code change or decision after it.
+      await logEvent(author, {
+        type: 'ai_output',
+        text: 'Recursion is when a function calls itself until a base case.',
+        tool: 'claude-code',
+        turnId: prompt.id,
+      });
+
+      const html = renderHtml(buildReportData(paths));
+      // The narration lives in a collapsed group (no `open`), labelled with a count…
+      expect(html).toContain('<details class="ai-process">');
+      expect(html).not.toContain('<details class="ai-process" open>');
+      expect(html).toContain('🤖 1 AI message<'); // singular, no trailing "s"
+      // …with a preview of the message so it's discoverable while collapsed…
+      expect(html).toContain('class="ai-preview"');
+      // …and the full text is still present (available, never dropped).
+      expect(html).toContain('Recursion is when a function calls itself');
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('keeps AI that introduces a change inline, sidelining only process chatter', async () => {
+    const dir = makeTempDir();
+    try {
+      await runInit({ cwd: dir });
+      const paths = pathsForRoot(dir);
+      const author = authorFor(paths);
+      const session = startSession(author);
+      const { event: prompt } = await logEvent(author, {
+        type: 'prompt',
+        text: 'add a hello function',
+        tool: 'claude-code',
+      });
+      // Process chatter first (nothing actionable follows it directly)…
+      await logEvent(author, {
+        type: 'ai_output',
+        text: 'Let me look at the project layout first.',
+        tool: 'claude-code',
+        turnId: prompt.id,
+      });
+      // …then a reply that directly introduces the edit that follows it.
+      await logEvent(author, {
+        type: 'ai_output',
+        text: "I'll add the hello function now.",
+        tool: 'claude-code',
+        turnId: prompt.id,
+      });
+      writeFileSync(join(dir, 'hello.ts'), 'export const hello = () => "hi";');
+      await addArtifact(author, {
+        filePath: 'hello.ts',
+        tool: 'claude-code',
+        turnId: prompt.id,
+        sessionId: session.id,
+        diff: '+ export const hello = () => "hi";',
+      });
+
+      const html = renderHtml(buildReportData(paths));
+      // Anchor on the body element (the class name also appears in the stylesheet).
+      const process = html.indexOf('class="ai-process"');
+      // The introducing reply reads inline, before the collapsed process group…
+      expect(html.indexOf("I'll add the hello function")).toBeLessThan(process);
+      // …and its change follows it, also inline (not buried in the disclosure).
+      expect(html.indexOf('hello.ts')).toBeLessThan(process);
+      // Only the standalone chatter is sidelined — one message, in the group.
+      expect(html).toContain('🤖 1 AI message<');
+      expect(html.indexOf('Let me look at the project layout')).toBeGreaterThan(process);
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('--ai off omits AI text but keeps the prompt, decisions, and changes', async () => {
+    const dir = makeTempDir();
+    try {
+      await runInit({ cwd: dir });
+      const paths = pathsForRoot(dir);
+      const author = authorFor(paths);
+      const session = startSession(author);
+      const { event: prompt } = await logEvent(author, {
+        type: 'prompt',
+        text: 'add a hello function',
+        tool: 'claude-code',
+      });
+      await logEvent(author, {
+        type: 'ai_output',
+        text: 'Here is the hello function you asked for.',
+        tool: 'claude-code',
+        turnId: prompt.id,
+      });
+      await logEvent(author, {
+        type: 'decision',
+        text: 'Use an arrow function',
+        tool: 'claude-code',
+        turnId: prompt.id,
+      });
+      writeFileSync(join(dir, 'hello.ts'), 'export const hello = () => "hi";');
+      await addArtifact(author, {
+        filePath: 'hello.ts',
+        tool: 'claude-code',
+        turnId: prompt.id,
+        sessionId: session.id,
+        diff: '+ export const hello = () => "hi";',
+      });
+
+      const data = buildReportData(paths);
+      const html = renderHtml(data, { ai: 'off' });
+      // AI narration is gone entirely — no reply text, no process disclosure
+      // element (the class still appears once in the inlined stylesheet).
+      expect(html).not.toContain('Here is the hello function');
+      expect(html).not.toContain('class="ai-process"');
+      expect(html).not.toContain('id="st-ai"'); // no toggle when there's no AI layer
+      // The student's own work survives untouched.
+      expect(html).toContain('add a hello function'); // prompt
+      expect(html).toContain('Use an arrow function'); // decision
+      expect(html).toContain('hello.ts'); // change
+
+      // Same contract for the Markdown export.
+      const md = renderMarkdown(data, { ai: 'off' });
+      expect(md).not.toContain('_AI response:_');
+      expect(md).not.toContain('Here is the hello function');
+      expect(md).toContain('Use an arrow function');
+      expect(md).toContain('hello.ts');
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('--ai full expands the process disclosure and pre-checks the toggle', async () => {
+    const dir = makeTempDir();
+    try {
+      await runInit({ cwd: dir });
+      const paths = pathsForRoot(dir);
+      const author = authorFor(paths);
+      startSession(author);
+      const { event: prompt } = await logEvent(author, {
+        type: 'prompt',
+        text: 'explain recursion',
+        tool: 'claude-code',
+      });
+      await logEvent(author, {
+        type: 'ai_output',
+        text: 'Recursion is when a function calls itself.',
+        tool: 'claude-code',
+        turnId: prompt.id,
+      });
+
+      const html = renderHtml(buildReportData(paths), { ai: 'full' });
+      expect(html).toContain('<details class="ai-process" open>');
+      expect(html).toContain('id="st-ai" checked');
     } finally {
       cleanup(dir);
     }

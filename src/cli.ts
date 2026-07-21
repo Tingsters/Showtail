@@ -338,6 +338,11 @@ program
   .option('--author <slug>', 'generate only this contributor’s report')
   .option('--team', 'generate only the combined team report')
   .option('--title <text>', 'name shown in the report title (overrides the project name)')
+  .option(
+    '--ai <mode>',
+    'how much AI narration to show: collapsed (default), full, or off',
+  )
+  .option('--no-ai', 'omit AI narration entirely (same as --ai off)')
   .option('--json', 'output machine-readable JSON (the written paths + summary)')
   .action(
     action(
@@ -347,6 +352,7 @@ program
         author?: string;
         team?: boolean;
         title?: string;
+        ai?: string | boolean;
         json?: boolean;
       }) => runReport(opts),
     ),

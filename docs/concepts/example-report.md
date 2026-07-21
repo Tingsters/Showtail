@@ -8,7 +8,7 @@ Markdown source:
 
 _Generated 2026-06-12T15:14:07Z_
 
-**Summary:** 1 session(s), 5 event(s), 1 artifact record(s).
+**Summary:** 1 task(s), 1 file(s) changed · 1 session(s), 5 event(s), 1 artifact record(s).
 
 ## Tools used
 
@@ -47,6 +47,14 @@ _Suggested code — [`src/parser.ts`](../../src/parser.ts) (~6 line(s)):_
 > files I built along the way. I worked through Claude Code and GitHub Copilot, and this trail
 > records each. The work and understanding represented here are my own.
 ````
+
+The report foregrounds the student's work: the prompt, the decisions they made,
+and the files they built. An AI reply that directly introduces a change (like the
+one above) reads inline as the reason for it; the rest of the AI's step-by-step
+narration is folded into a collapsed **"🤖 N AI messages"** group per exchange, so
+it's there when you want it without burying the work. In the HTML report a **"Show
+AI process"** toggle expands every group at once; `showtail report --ai full`
+(or `--no-ai`) sets that default for the generated file.
 
 On a group project, the combined **team** report adds a **Contributors** section
 listing each student and how much they contributed, and the timeline shows who

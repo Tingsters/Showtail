@@ -1,6 +1,7 @@
 import REPORT_CSS from '../../../assets/report/report.css' with { type: 'text' };
 import TIMEZONE_JS from '../../../assets/report/timezone.js' with { type: 'text' };
-import type { ReportData, Turn } from '../../types.ts';
+import CONTROLS_JS from '../../../assets/report/report-controls.js' with { type: 'text' };
+import type { Event, ReportData, Turn } from '../../types.ts';
 import { escapeHtml, firstLine } from '../html.ts';
 import { highlightCode } from '../highlight.ts';
 import {
@@ -8,11 +9,20 @@ import {
   nameBySlugMap,
   shouldShowAuthor,
   toolLabel,
+  type TurnItem,
   turnModels,
-  turnTimeline,
+  turnView,
 } from './data.ts';
 import { PLAN_APPROVED_TAG, PLAN_REVISED_TAG, splitPlanText } from '../plans.ts';
-import { buildMarkdown, fileHref, planHref, TURNS_PLACEHOLDER } from './markdown.ts';
+import {
+  type AiMode,
+  buildMarkdown,
+  fileHref,
+  planHref,
+  type ReportRenderOptions,
+  resolveAiMode,
+  TURNS_PLACEHOLDER,
+} from './markdown.ts';
 import { markdownToHtml, renderRichText } from './mdToHtml.ts';
 import { TIME_TOKEN, timeTag } from './time.ts';
 
@@ -26,17 +36,26 @@ import { TIME_TOKEN, timeTag } from './time.ts';
  * Everything degrades gracefully without JavaScript: the cards use native HTML
  * disclosure, and timestamps fall back to their static UTC text.
  */
-export function renderHtml(data: ReportData): string {
+export function renderHtml(data: ReportData, opts?: ReportRenderOptions): string {
+  const mode = resolveAiMode(opts);
   const base = `Showtail Report — ${data.displayName}`;
   const title = data.scope ? `${base} — ${data.scope.name}` : base;
-  const body = markdownToHtml(buildMarkdown(data, true))
+  const body = markdownToHtml(buildMarkdown(data, true, opts))
     // Swap the timestamp tokens emitted in HTML mode for real <time> elements
     // FIRST, before splicing in the turn cards. The cards embed <time> directly
     // (they carry no tokens), and their escaped prompt/AI text can itself contain
     // the sentinel — Showtail captures its own sessions — so running this global
     // regex after the splice would match and corrupt that content.
     .replace(TIME_TOKEN, (_m, iso: string) => timeTag(iso))
-    .replace(`<p>${TURNS_PLACEHOLDER}</p>`, turnsHtml(data));
+    .replace(`<p>${TURNS_PLACEHOLDER}</p>`, turnsHtml(data, mode));
+  // A "Show AI process" checkbox lives alongside the timezone picker; it flips
+  // every per-turn AI disclosure open at once (see report-controls.js). Omitted
+  // in `off` mode, where there's no AI layer to reveal. Its checked state seeds
+  // the default the script applies when no saved preference exists.
+  const aiToggle =
+    mode === 'off'
+      ? ''
+      : `<label class="st-aitoggle"><input type="checkbox" id="st-ai"${mode === 'full' ? ' checked' : ''}> Show AI process</label>`;
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -47,10 +66,11 @@ export function renderHtml(data: ReportData): string {
 ${REPORT_CSS}</style>
 </head>
 <body>
-<div class="st-tzbar">Times shown in <select id="st-tz" aria-label="Display timezone"></select></div>
+<div class="st-tzbar"><span class="st-tzlabel">Times shown in <select id="st-tz" aria-label="Display timezone"></select></span>${aiToggle}</div>
 ${body}
 <script>
-${TIMEZONE_JS}</script>
+${TIMEZONE_JS}
+${CONTROLS_JS}</script>
 </body>
 </html>
 `;
@@ -100,7 +120,7 @@ function renderTurnSummary(
 }
 
 /** One interleaved item (AI reply, decision, or code change) inside a turn body. */
-function renderTimelineItem(item: ReturnType<typeof turnTimeline>[number]): string {
+function renderTimelineItem(item: TurnItem): string {
   if (item.kind === 'ai') {
     return `<div class="ai-text">${renderRichText(item.event.text)}</div>`;
   }
@@ -166,14 +186,44 @@ function renderTimelineItem(item: ReturnType<typeof turnTimeline>[number]): stri
   return `<div class="code code-file">${fileLink}${escapeHtml(stat)}</div>`;
 }
 
+/**
+ * The turn's sidelined AI narration, as one collapsed disclosure. The summary
+ * carries the message count and a short preview of the first message, so a reader
+ * knows what's inside — and how much — before deciding to expand. `open` reflects
+ * the report's default AI mode; the header toggle flips every such group at once.
+ */
+function renderAiProcess(events: Event[], open: boolean): string {
+  const preview = escapeHtml(truncate(firstLine(events[0]!.text), 90));
+  const bodies = events
+    .map((e) => `<div class="ai-text">${renderRichText(e.text)}</div>`)
+    .join('\n');
+  return [
+    `<details class="ai-process"${open ? ' open' : ''}>`,
+    `<summary><span class="ai-process-tag">🤖 ${events.length} AI message${events.length === 1 ? '' : 's'}</span>` +
+      (preview ? ` <span class="ai-preview">${preview}</span>` : '') +
+      '</summary>',
+    bodies,
+    '</details>',
+  ].join('\n');
+}
+
+/** Trim to `max` characters on a word boundary, adding an ellipsis when cut. */
+function truncate(text: string, max: number): string {
+  if (text.length <= max) return text;
+  const cut = text.slice(0, max);
+  const sp = cut.lastIndexOf(' ');
+  return (sp > max * 0.6 ? cut.slice(0, sp) : cut).trimEnd() + '…';
+}
+
 /** Render the interactive exchange cards (escaped; no scripts). */
-function turnsHtml(data: ReportData): string {
+function turnsHtml(data: ReportData, mode: AiMode): string {
   if (data.turns.length === 0) return '<p><em>No prompts recorded.</em></p>';
   // On the combined team report, attribute each card to its author.
   const showAuthor = shouldShowAuthor(data);
   const nameBySlug = nameBySlugMap(data.contributors);
   const out: string[] = [];
   for (const turn of data.turns) {
+    const { flow, aiProcess } = turnView(turn);
     out.push('<details class="turn">');
     out.push(renderTurnSummary(turn, showAuthor, nameBySlug));
     out.push('<div class="turn-body">');
@@ -186,10 +236,17 @@ function turnsHtml(data: ReportData): string {
           `<div class="ai-text">${renderRichText(turn.prompt.text)}</div></div>`,
       );
     }
-    // AI replies, decisions, and code changes interleaved in the order they
-    // happened. The card already means "this prompt → its reply", so a reply
-    // needs no label; consecutive replies are separated by plain spacing.
-    for (const item of turnTimeline(turn)) out.push(renderTimelineItem(item));
+    // The work, in order: code changes, decisions, plans, and the AI text that
+    // introduces a change (its "why"). In `off` mode even that introducing text
+    // is dropped, leaving only the student's prompt/decisions and the changes.
+    const shown = mode === 'off' ? flow.filter((i) => i.kind !== 'ai') : flow;
+    for (const item of shown) out.push(renderTimelineItem(item));
+
+    // The AI's remaining narration, subordinated to one collapsed disclosure so
+    // it never fronts the student's work. Omitted in `off` mode.
+    if (mode !== 'off' && aiProcess.length > 0) {
+      out.push(renderAiProcess(aiProcess, mode === 'full'));
+    }
 
     out.push('</div>'); // end .turn-body
 

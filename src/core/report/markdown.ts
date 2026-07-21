@@ -1,17 +1,39 @@
 import type { ReportData, Turn } from '../../types.ts';
 import { PLAN_APPROVED_TAG, PLAN_REVISED_TAG } from '../plans.ts';
 import {
+  filesChanged,
   modelLabel,
   nameBySlugMap,
   shouldShowAuthor,
   toolLabel,
   turnModels,
-  turnTimeline,
+  turnView,
 } from './data.ts';
 import { staticUtc, timeToken } from './time.ts';
 
 /** A unique token swapped for the interactive turns HTML after Markdown→HTML. */
 export const TURNS_PLACEHOLDER = 'SHOWTAIL_TURNS_PLACEHOLDER';
+
+/**
+ * How much of the AI's play-by-play a report shows. The report foregrounds the
+ * student's work and subordinates AI narration; this controls that subordinate
+ * layer without ever touching what was captured:
+ *  - `collapsed` (default) — AI process behind a collapsed disclosure, present.
+ *  - `full` — the same, but expanded by default.
+ *  - `off` — AI text omitted from the rendering entirely (prompts, decisions, and
+ *    changes are untouched).
+ */
+export type AiMode = 'full' | 'collapsed' | 'off';
+
+/** Options shared by both renderers, controlling presentation (not capture). */
+export interface ReportRenderOptions {
+  ai?: AiMode;
+}
+
+/** Resolve the AI-display mode, defaulting to the tidy collapsed view. */
+export function resolveAiMode(opts: ReportRenderOptions | undefined): AiMode {
+  return opts?.ai ?? 'collapsed';
+}
 
 /**
  * A link from a report (written to `.showtail/reports/`) to a repo-relative file.
@@ -45,7 +67,11 @@ function planTitle(text: string): string {
  * line (swapped for interactive HTML cards by {@link renderHtml}); otherwise the
  * exchanges render as readable Markdown for the canonical text export.
  */
-export function buildMarkdown(data: ReportData, turnsPlaceholder = false): string {
+export function buildMarkdown(
+  data: ReportData,
+  turnsPlaceholder = false,
+  opts?: ReportRenderOptions,
+): string {
   // In HTML mode, timestamps are emitted as tokens that {@link renderHtml} swaps
   // for interactive <time> elements; the canonical Markdown export uses static UTC.
   const fmt = turnsPlaceholder ? timeToken : staticUtc;
@@ -55,7 +81,7 @@ export function buildMarkdown(data: ReportData, turnsPlaceholder = false): strin
     ...toolsSection(data, fmt),
     ...modelsSection(data),
     ...plansSection(data),
-    ...turnsSection(data, turnsPlaceholder),
+    ...turnsSection(data, turnsPlaceholder, resolveAiMode(opts)),
     ...authorshipSection(data),
   ].join('\n');
 }
@@ -89,6 +115,11 @@ function metadataSection(data: ReportData, fmt: (iso: string) => string): string
   const base = `Showtail Report — ${data.displayName}`;
   // A per-student report names whose work it is; the team report doesn't.
   const title = data.scope ? `${base} — ${data.scope.name}` : base;
+  // Lead with the shape a reviewer actually scans for — how many prompts (tasks)
+  // the student ran and how many files they built — then the judgment signals
+  // (decisions/plans), with the raw session/event totals kept last as backing.
+  const files = filesChanged(data.turns);
+  const filesPart = files > 0 ? `, ${files} file(s) changed` : '';
   const decisionsPart =
     data.summary.decisions > 0 ? `, ${data.summary.decisions} decision(s)` : '';
   const plansPart = data.summary.plans > 0 ? `, ${data.summary.plans} plan(s)` : '';
@@ -97,9 +128,9 @@ function metadataSection(data: ReportData, fmt: (iso: string) => string): string
     '',
     `_Generated ${fmt(data.generatedAt)}_`,
     '',
-    `**Summary:** ${data.summary.sessions} session(s), ` +
-      `${data.summary.events} event(s), ${data.summary.artifacts} artifact record(s)` +
-      `${decisionsPart}${plansPart}.`,
+    `**Summary:** ${data.turns.length} task(s)${filesPart}${decisionsPart}${plansPart} · ` +
+      `${data.summary.sessions} session(s), ${data.summary.events} event(s), ` +
+      `${data.summary.artifacts} artifact record(s).`,
     '',
   ];
   if (data.redactionCount > 0) {
@@ -172,7 +203,7 @@ function modelsSection(data: ReportData): string[] {
  * Prompts & AI exchanges — the heart of the report. In HTML this becomes
  * collapsible cards; in Markdown it reads top-to-bottom.
  */
-function turnsSection(data: ReportData, turnsPlaceholder: boolean): string[] {
+function turnsSection(data: ReportData, turnsPlaceholder: boolean, ai: AiMode): string[] {
   const lines = ['## Prompts & AI exchanges', ''];
   if (turnsPlaceholder) {
     lines.push(TURNS_PLACEHOLDER, '');
@@ -188,7 +219,7 @@ function turnsSection(data: ReportData, turnsPlaceholder: boolean): string[] {
     const author = showAuthor
       ? (nameBySlug.get(turn.actorSlug) ?? turn.actorSlug)
       : undefined;
-    turnMarkdown(lines, turn, author);
+    turnMarkdown(lines, turn, ai, author);
   }
   return lines;
 }
@@ -198,12 +229,12 @@ function authorshipSection(data: ReportData): string[] {
 }
 
 /** Render a report as student- and educator-friendly Markdown. */
-export function renderMarkdown(data: ReportData): string {
-  return buildMarkdown(data, false);
+export function renderMarkdown(data: ReportData, opts?: ReportRenderOptions): string {
+  return buildMarkdown(data, false, opts);
 }
 
 /** Append one turn as readable Markdown (used for the canonical text export). */
-function turnMarkdown(lines: string[], turn: Turn, author?: string): void {
+function turnMarkdown(lines: string[], turn: Turn, ai: AiMode, author?: string): void {
   const who = author ? ` · **${author}**` : '';
   const models = turnModels(turn)
     .map((m) => ` · \`${modelLabel(m)}\``)
@@ -211,11 +242,14 @@ function turnMarkdown(lines: string[], turn: Turn, author?: string): void {
   const meta = `\`${staticUtc(turn.prompt.timestamp)}\` · \`${toolLabel(turn.tool)}\`${models}${who}`;
   lines.push(`**Prompt** · ${meta}`, '');
   lines.push(turn.prompt.text, '');
-  // AI replies, decisions, and code changes interleaved in the order they happened.
-  for (const item of turnTimeline(turn)) {
+
+  const { flow, aiProcess } = turnView(turn);
+  // The work — code, decisions, plans, and the AI text that introduces a change —
+  // in the order it happened. In `off` mode even that introducing AI text drops.
+  for (const item of flow) {
     if (item.kind === 'ai') {
-      lines.push('_AI response:_', '');
-      lines.push(item.event.text, '');
+      if (ai === 'off') continue;
+      lines.push(aiText(item.event.text));
     } else if (item.kind === 'decision') {
       lines.push('🔀 **Decision** · _you chose from the options the AI offered_', '');
       lines.push(item.event.text, '');
@@ -243,4 +277,24 @@ function turnMarkdown(lines: string[], turn: Turn, author?: string): void {
       }
     }
   }
+
+  // The AI's remaining play-by-play, subordinated to a collapsed disclosure
+  // (GitHub renders <details>) so it's available without dominating the export.
+  // Dropped entirely in `off` mode.
+  if (ai !== 'off' && aiProcess.length > 0) {
+    const n = aiProcess.length;
+    const open = ai === 'full' ? ' open' : '';
+    lines.push(
+      `<details${open}><summary>🤖 ${n} AI message(s)</summary>`,
+      '',
+      ...aiProcess.map((e) => aiText(e.text)),
+      '</details>',
+      '',
+    );
+  }
+}
+
+/** One AI message as a labelled Markdown block, with a trailing blank line. */
+function aiText(text: string): string {
+  return `_AI response:_\n\n${text}\n`;
 }

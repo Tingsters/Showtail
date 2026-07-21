@@ -44,7 +44,7 @@ install later is captured too. You never run a getting-started command — just 
 | `status` | Your current session and connected tools at a glance. Flags: `--json`. |
 | `sessions` | List your work sessions. Flags: `--all` (every contributor's), `--json`. |
 | `capabilities` | Report this folder's tracking state and what to do next (for AI agents). Flags: `--json`. |
-| `report` | Generate a shareable report. Flags: `--format <html\|md\|json>` (default `html`), `--open`, `--author <slug>`, `--team`, `--title <text>`, `--json`. |
+| `report` | Generate a shareable report. Flags: `--format <html\|md\|json>` (default `html`), `--ai <collapsed\|full\|off>` (how much AI narration to show; `--no-ai` = off), `--open`, `--author <slug>`, `--team`, `--title <text>`, `--json`. |
 | `verify` | Run integrity checks on your trail (config, journal, artifact hashes, report). |
 | `trace <file>` | Show every snapshot and related event for a file. Flags: `--format <text\|json>` (default `text`). |
 

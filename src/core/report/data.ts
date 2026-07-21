@@ -365,6 +365,57 @@ export function turnTimeline(turn: Turn): TurnItem[] {
   return dated.map((d) => d.item);
 }
 
+/**
+ * A turn restructured for the reader-first layout. The report's job is to show
+ * the *student's* work — their prompt, the choices they made, and what got built
+ * — with the AI's play-by-play as a supporting layer, not the main text. So we
+ * split a turn's timeline into two:
+ *
+ *  - `flow`   — the work, in the order it happened: code changes, decisions,
+ *    plans, and the AI text that *directly introduces* a change (its "why").
+ *  - `aiProcess` — the remaining AI narration (status updates, transitions),
+ *    subordinated to a single collapsed group so it stays available without
+ *    dominating the page.
+ *
+ * Nothing is dropped — every AI message lands in exactly one of the two. "Directly
+ * introduces" means an AI message immediately followed (in time order) by a code
+ * change or a decision; that message reads as the rationale for what came next, so
+ * it earns its place inline. Everything else is process chatter.
+ */
+export interface TurnView {
+  /** Work items in chronological order; any `ai` item here explains an adjacent change. */
+  flow: TurnItem[];
+  /** Standalone AI narration, subordinated to a collapsed "AI messages" group. */
+  aiProcess: Event[];
+}
+
+export function turnView(turn: Turn): TurnView {
+  const timeline = turnTimeline(turn);
+  const flow: TurnItem[] = [];
+  const aiProcess: Event[] = [];
+  for (let i = 0; i < timeline.length; i++) {
+    const item = timeline[i]!;
+    if (item.kind !== 'ai') {
+      flow.push(item);
+      continue;
+    }
+    const next = timeline[i + 1];
+    if (next && (next.kind === 'code' || next.kind === 'decision')) {
+      flow.push(item); // this reply's "why" is the change that immediately follows
+    } else {
+      aiProcess.push(item.event);
+    }
+  }
+  return { flow, aiProcess };
+}
+
+/** Distinct files touched across every turn (unique paths), for the summary line. */
+export function filesChanged(turns: Turn[]): number {
+  const seen = new Set<string>();
+  for (const t of turns) for (const c of t.codeChanges) seen.add(c.path);
+  return seen.size;
+}
+
 /** Count events per tool, busiest first. */
 function buildToolUsage(events: Event[]): ToolUsage[] {
   const counts = new Map<Tool, number>();

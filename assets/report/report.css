@@ -17,6 +17,11 @@ body {
   border-bottom: 1px solid #e3e3e8;
   font-size: 0.8rem;
   color: #6b6b76;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.4rem 1.25rem;
 }
 .st-tzbar select {
   font: inherit;
@@ -27,6 +32,15 @@ body {
   background: #fff;
   color: #1b1b1f;
 }
+/* "Show AI process" toggle, opposite the timezone picker in the top bar. */
+.st-aitoggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  cursor: pointer;
+  user-select: none;
+}
+.st-aitoggle input { cursor: pointer; margin: 0; }
 h1 { font-size: 1.9rem; margin: 0 0 0.25rem; }
 h2 {
   font-size: 1.25rem;
@@ -230,6 +244,30 @@ blockquote {
   font-size: 0.8rem;
   font-weight: 500;
 }
+/* The AI's sidelined play-by-play: one collapsed disclosure per turn, kept quiet
+   (muted, faint left rule, no accent) so the student's prompt, decisions, and
+   changes read first. Present and one click away — never dropped. */
+.ai-process {
+  margin: 0.5rem 0 0.3rem;
+  padding-left: 0.7rem;
+  border-left: 2px solid #e3e3e8;
+}
+.ai-process > summary {
+  cursor: pointer;
+  list-style: none;
+  font-size: 0.8rem;
+  color: #8a8a94;
+}
+.ai-process > summary::-webkit-details-marker { display: none; }
+.ai-process > summary::before { content: '▸ '; color: #b0b0ba; }
+.ai-process[open] > summary::before { content: '▾ '; }
+.ai-process-tag { font-weight: 600; letter-spacing: 0.01em; }
+/* A glimpse of the first sidelined message, shown only while collapsed. */
+.ai-preview { font-style: italic; color: #a0a0aa; }
+.ai-process[open] .ai-preview { display: none; }
+/* The expanded narration reads a shade quieter than an inline reply. */
+.ai-process .ai-text { color: #55555f; font-size: 0.95em; }
+.ai-process .ai-text:first-of-type { margin-top: 0.4rem; }
 .code { margin: 0.4rem 0; }
 .code > summary { cursor: pointer; font-size: 0.85rem; color: #3a3f6b; }
 /* A code change with no captured diff: a plain file row, no disclosure arrow. */
@@ -342,6 +380,11 @@ pre.codeblock code { background: none; padding: 0; font-size: inherit; border-ra
   .decision-tag { color: #e0b257; }
   .plan { background: #1f1f2b; border-left-color: #7b7fd0; }
   .plan-tag { color: #aab0ff; }
+  .ai-process { border-left-color: #34343a; }
+  .ai-process > summary { color: #9a9aa4; }
+  .ai-process > summary::before { color: #5a5a64; }
+  .ai-preview { color: #85858f; }
+  .ai-process .ai-text { color: #b0b0ba; }
   .plan-badge.approved { background: #1c3a2c; color: #7fd1a6; }
   .plan-badge.revised { background: #2a2a30; color: #a0a0aa; }
   .plan-feedback { color: #d0d0d8; }

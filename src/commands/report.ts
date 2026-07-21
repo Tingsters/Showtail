@@ -1,5 +1,11 @@
 import { join } from 'node:path';
-import { buildReportData, renderHtml, renderMarkdown } from '../core/report.ts';
+import {
+  type AiMode,
+  buildReportData,
+  renderHtml,
+  renderMarkdown,
+  type ReportRenderOptions,
+} from '../core/report.ts';
 import { authorSlugs, upgradeIdentityIfProvisional } from '../core/authors.ts';
 import { emitJson } from '../core/output.ts';
 import { requirePaths, writeJson } from '../core/storage.ts';
@@ -18,8 +24,21 @@ export interface ReportOptions {
   team?: boolean;
   /** Override the descriptive name shown in the title (beats the project name). */
   title?: string;
+  /**
+   * How much of the AI's play-by-play to show: `collapsed` (default, behind a
+   * disclosure), `full` (expanded), or `off` (omitted). Commander sets `false`
+   * for `--no-ai` (which we treat as `off`) and defaults it to `true` otherwise.
+   */
+  ai?: string | boolean;
   /** Emit machine-readable JSON (the written paths + summary) instead of prose. */
   json?: boolean;
+}
+
+/** Normalize the `--ai` flag (and `--no-ai` → false) to a render mode. */
+function aiMode(value: string | boolean | undefined): AiMode {
+  if (value === false || value === 'off' || value === 'none') return 'off';
+  if (value === 'full' || value === 'all') return 'full';
+  return 'collapsed';
 }
 
 /** A filesystem-safe timestamp for report filenames, e.g. 2026-06-12T140300. */
@@ -127,6 +146,7 @@ function writeOneReport(
   const base = `report-${key}-${stamp}`;
   const format = options.format ?? 'html';
   const quiet = options.json === true;
+  const renderOpts: ReportRenderOptions = { ai: aiMode(options.ai) };
 
   if (format === 'json') {
     const out = join(reportsDir, `${base}.json`);
@@ -138,14 +158,14 @@ function writeOneReport(
   // The Markdown is always written: on its own for `--format md`, and as the
   // source the HTML is rendered from otherwise.
   const mdOut = join(reportsDir, `${base}.md`);
-  writeFileSync(mdOut, renderMarkdown(data) + '\n', 'utf8');
+  writeFileSync(mdOut, renderMarkdown(data, renderOpts) + '\n', 'utf8');
 
   if (format === 'md') {
     if (!quiet) console.log(`Wrote report (${key}): ${fileLink(mdOut)}`);
     return { key, format, reportPath: mdOut, markdownPath: null };
   }
   const htmlOut = join(reportsDir, `${base}.html`);
-  writeFileSync(htmlOut, renderHtml(data), 'utf8');
+  writeFileSync(htmlOut, renderHtml(data, renderOpts), 'utf8');
   if (!quiet) console.log(`Wrote report (${key}): ${fileLink(htmlOut)}`);
   return { key, format, reportPath: htmlOut, markdownPath: mdOut };
 }
