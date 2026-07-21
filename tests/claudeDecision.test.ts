@@ -484,6 +484,26 @@ describe('turn timeline (chronological interleaving)', () => {
   });
 
   test('the rendered Markdown report places code/decisions between the replies', () => {
+    // Each reply shares the timestamp of the edit it produced (as real capture
+    // stamps a message's text and its tool call), so both are rationales and read
+    // inline — interleaved with their changes and the decision, in order.
+    const turn: Turn = {
+      prompt: ev('p', '2026-01-01T00:00:00.000Z', 'prompt', 'do it'),
+      aiOutputs: [
+        ev('a1', '2026-01-01T00:00:02.000Z', 'ai_output', 'first reply'),
+        ev('a2', '2026-01-01T00:00:04.000Z', 'ai_output', 'second reply'),
+      ],
+      codeChanges: [
+        { path: 'first.ts', timestamp: '2026-01-01T00:00:02.000Z', diff: '+one' },
+        { path: 'second.ts', timestamp: '2026-01-01T00:00:04.000Z', diff: '+two' },
+      ],
+      decisions: [
+        ev('d', '2026-01-01T00:00:05.000Z', 'decision', '**Claude asked:** which?'),
+      ],
+      plans: [],
+      tool: 'claude-code',
+      actorSlug: 'x',
+    };
     const data: ReportData = {
       project: 'P',
       displayName: 'P',
@@ -494,7 +514,7 @@ describe('turn timeline (chronological interleaving)', () => {
       tools: [{ tool: 'claude-code', events: 3 }],
       models: [],
       toolTimeline: [],
-      turns: [interleavedTurn()],
+      turns: [turn],
       plans: [],
       redactionCount: 0,
       authorship: 'mine',

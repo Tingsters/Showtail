@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { runInit } from '../src/commands/init.ts';
-import { addArtifact } from '../src/core/artifacts.ts';
+import { addArtifact, importEditArtifact } from '../src/core/artifacts.ts';
 import { logEvent } from '../src/core/events.ts';
 import { buildReportData, renderHtml, renderMarkdown } from '../src/core/report.ts';
 import { startSession } from '../src/core/sessions.ts';
@@ -218,7 +218,7 @@ describe('turns', () => {
     }
   });
 
-  test('subordinates standalone AI narration to a collapsed, counted disclosure', async () => {
+  test('shows a substantive standalone answer inline, with nothing collapsed', async () => {
     const dir = makeTempDir();
     try {
       await runInit({ cwd: dir });
@@ -230,73 +230,111 @@ describe('turns', () => {
         text: 'explain recursion',
         tool: 'claude-code',
       });
-      // A pure Q&A turn: an AI reply with no code change or decision after it.
+      // A pure Q&A turn: a real, substantial answer with no edit after it. The old
+      // "adjacent to a change" rule would have hidden this; content judges it signal.
+      const answer =
+        'Recursion is when a function calls itself to solve a smaller version of ' +
+        'the same problem, stopping at a base case. For example, factorial(n) ' +
+        'returns n times factorial(n - 1), and factorial(0) returns 1.';
       await logEvent(author, {
         type: 'ai_output',
-        text: 'Recursion is when a function calls itself until a base case.',
+        text: answer,
         tool: 'claude-code',
         turnId: prompt.id,
       });
 
       const html = renderHtml(buildReportData(paths));
-      // The narration lives in a collapsed group (no `open`), labelled with a count…
-      expect(html).toContain('<details class="ai-process">');
-      expect(html).not.toContain('<details class="ai-process" open>');
-      expect(html).toContain('🤖 1 AI message<'); // singular, no trailing "s"
-      // …with a preview of the message so it's discoverable while collapsed…
-      expect(html).toContain('class="ai-preview"');
-      // …and the full text is still present (available, never dropped).
+      // Shown inline — no collapsed group at all, because there's no chatter to hide.
+      expect(html).not.toContain('class="ai-process"');
       expect(html).toContain('Recursion is when a function calls itself');
     } finally {
       cleanup(dir);
     }
   });
 
-  test('keeps AI that introduces a change inline, sidelining only process chatter', async () => {
+  test('anchors the reply that produced an edit (same timestamp) and collapses chatter', async () => {
     const dir = makeTempDir();
     try {
       await runInit({ cwd: dir });
       const paths = pathsForRoot(dir);
       const author = authorFor(paths);
-      const session = startSession(author);
+      startSession(author);
       const { event: prompt } = await logEvent(author, {
         type: 'prompt',
-        text: 'add a hello function',
+        text: 'add a CSV parser',
         tool: 'claude-code',
       });
-      // Process chatter first (nothing actionable follows it directly)…
+      // Capture stamps a message's text and its edit identically; that shared
+      // timestamp — not adjacency — is what marks this short reply as the rationale.
+      const editTs = '2026-07-01T10:00:02.000Z';
       await logEvent(author, {
         type: 'ai_output',
-        text: 'Let me look at the project layout first.',
+        text: 'Let me look at the repo layout first.', // process: short, made nothing
         tool: 'claude-code',
         turnId: prompt.id,
+        timestamp: '2026-07-01T10:00:01.000Z',
       });
-      // …then a reply that directly introduces the edit that follows it.
       await logEvent(author, {
         type: 'ai_output',
-        text: "I'll add the hello function now.",
+        text: "I'll split each line on commas and trim the fields.", // rationale
         tool: 'claude-code',
         turnId: prompt.id,
+        timestamp: editTs,
       });
-      writeFileSync(join(dir, 'hello.ts'), 'export const hello = () => "hi";');
-      await addArtifact(author, {
-        filePath: 'hello.ts',
+      importEditArtifact(author, {
+        path: 'parser.ts',
+        diff: '+ export const parse = (s) => s.split(",")',
         tool: 'claude-code',
         turnId: prompt.id,
-        sessionId: session.id,
-        diff: '+ export const hello = () => "hi";',
+        timestamp: editTs, // same stamp as the rationale reply
+      });
+      await logEvent(author, {
+        type: 'ai_output',
+        text: 'Done, tests pass. Anything else?', // process: filler after the fact
+        tool: 'claude-code',
+        turnId: prompt.id,
+        timestamp: '2026-07-01T10:00:03.000Z',
       });
 
       const html = renderHtml(buildReportData(paths));
-      // Anchor on the body element (the class name also appears in the stylesheet).
       const process = html.indexOf('class="ai-process"');
-      // The introducing reply reads inline, before the collapsed process group…
-      expect(html.indexOf("I'll add the hello function")).toBeLessThan(process);
-      // …and its change follows it, also inline (not buried in the disclosure).
-      expect(html.indexOf('hello.ts')).toBeLessThan(process);
-      // Only the standalone chatter is sidelined — one message, in the group.
-      expect(html).toContain('🤖 1 AI message<');
-      expect(html.indexOf('Let me look at the project layout')).toBeGreaterThan(process);
+      expect(process).toBeGreaterThan(-1);
+      // The short rationale shows inline *because it made the edit*, not for length…
+      expect(html.indexOf("I'll split each line on commas")).toBeLessThan(process);
+      expect(html.indexOf('parser.ts')).toBeLessThan(process);
+      // …while the two status lines collapse together, counted.
+      expect(html).toContain('🤖 2 AI messages');
+      expect(html.indexOf('Let me look at the repo layout')).toBeGreaterThan(process);
+      expect(html.indexOf('Done, tests pass')).toBeGreaterThan(process);
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('never leaves a turn silent: a terse-only reply is still surfaced inline', async () => {
+    const dir = makeTempDir();
+    try {
+      await runInit({ cwd: dir });
+      const paths = pathsForRoot(dir);
+      const author = authorFor(paths);
+      startSession(author);
+      const { event: prompt } = await logEvent(author, {
+        type: 'prompt',
+        text: 'what data structure should I use?',
+        tool: 'claude-code',
+      });
+      // Short, structureless, produced nothing — but it's the whole answer, so the
+      // never-silent guarantee surfaces it rather than hiding it behind a count.
+      await logEvent(author, {
+        type: 'ai_output',
+        text: 'Use a hash map.',
+        tool: 'claude-code',
+        turnId: prompt.id,
+      });
+
+      const html = renderHtml(buildReportData(paths));
+      expect(html).not.toContain('class="ai-process"'); // nothing collapsed
+      expect(html).toContain('Use a hash map.'); // the answer is visible
     } finally {
       cleanup(dir);
     }
@@ -367,14 +405,32 @@ describe('turns', () => {
       startSession(author);
       const { event: prompt } = await logEvent(author, {
         type: 'prompt',
-        text: 'explain recursion',
+        text: 'add a parser',
         tool: 'claude-code',
+      });
+      // One collapsible status line + one rationale that made an edit, so there's a
+      // process group to expand.
+      const editTs = '2026-07-01T10:00:02.000Z';
+      await logEvent(author, {
+        type: 'ai_output',
+        text: 'Let me check the layout.',
+        tool: 'claude-code',
+        turnId: prompt.id,
+        timestamp: '2026-07-01T10:00:01.000Z',
       });
       await logEvent(author, {
         type: 'ai_output',
-        text: 'Recursion is when a function calls itself.',
+        text: "I'll add the parser.",
         tool: 'claude-code',
         turnId: prompt.id,
+        timestamp: editTs,
+      });
+      importEditArtifact(author, {
+        path: 'parser.ts',
+        diff: '+ export const parse = () => {}',
+        tool: 'claude-code',
+        turnId: prompt.id,
+        timestamp: editTs,
       });
 
       const html = renderHtml(buildReportData(paths), { ai: 'full' });

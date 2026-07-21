@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { writeFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { runInit } from '../src/commands/init.ts';
-import { addArtifact } from '../src/core/artifacts.ts';
+import { addArtifact, importEditArtifact } from '../src/core/artifacts.ts';
 import { logEvent } from '../src/core/events.ts';
 import {
   buildReportData,
@@ -65,24 +65,41 @@ describe('report', () => {
 
       const { event: prompt } = await logEvent(author, {
         type: 'prompt',
-        text: 'explain the plan',
+        text: 'add a CSV parser',
         tool: 'claude-code',
       });
-      // Standalone narration (no code/decision after it) → the subordinate group.
+      // A short status line (folds) alongside a rationale that made an edit (shown).
+      const editTs = '2026-07-01T10:00:02.000Z';
       await logEvent(author, {
         type: 'ai_output',
-        text: 'First I will read the files, then summarize.',
+        text: 'Let me read the files first.',
         tool: 'claude-code',
         turnId: prompt.id,
+        timestamp: '2026-07-01T10:00:01.000Z',
+      });
+      await logEvent(author, {
+        type: 'ai_output',
+        text: "I'll parse rows by splitting on newlines.",
+        tool: 'claude-code',
+        turnId: prompt.id,
+        timestamp: editTs,
+      });
+      importEditArtifact(author, {
+        path: 'parser.ts',
+        diff: '+ export const parse = () => {}',
+        tool: 'claude-code',
+        turnId: prompt.id,
+        timestamp: editTs,
       });
 
       const md = renderMarkdown(buildReportData(paths));
       // The summary leads with what a reviewer scans for: tasks (prompts).
       expect(md).toMatch(/\*\*Summary:\*\* 1 task\(s\)/);
-      // AI chatter is folded into a collapsed <details> (GitHub renders it), with
-      // a count — present, but not fronting the student's work.
+      // The status line folds into a collapsed <details> (GitHub renders it), counted…
       expect(md).toContain('<details><summary>🤖 1 AI message(s)</summary>');
-      expect(md).toContain('First I will read the files');
+      expect(md).toContain('Let me read the files first');
+      // …while the rationale that produced the edit reads inline.
+      expect(md).toContain("I'll parse rows by splitting on newlines");
     } finally {
       cleanup(dir);
     }
