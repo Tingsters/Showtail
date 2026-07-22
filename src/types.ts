@@ -356,6 +356,8 @@ export interface Turn {
   tool: Tool;
   /** Which author this exchange belongs to — used to attribute/color turns. */
   actorSlug: ActorSlug;
+  /** The session (AI conversation) this prompt opened in — used to group by session. */
+  sessionId: string;
 }
 
 /**

@@ -32,15 +32,92 @@ body {
   background: #fff;
   color: #1b1b1f;
 }
-/* "Show AI process" toggle, opposite the timezone picker in the top bar. */
-.st-aitoggle {
-  display: inline-flex;
+/* Exchanges toolbar: a sticky controls bar scoped to the prompts list. Rendered
+   hidden until report-controls.js enables it, so a no-JS reader never sees dead
+   controls (the report still reads top-to-bottom in chronological order). */
+.st-exbar {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 0.35rem;
-  cursor: pointer;
-  user-select: none;
+  gap: 0.5rem 1rem;
+  margin: 0 0 1rem;
+  padding: 0.5rem 0.7rem;
+  background: #f1f1f5;
+  border: 1px solid #e3e3e8;
+  border-radius: 0.5rem;
+  font-size: 0.8rem;
 }
-.st-aitoggle input { cursor: pointer; margin: 0; }
+.st-exbar[hidden] { display: none; }
+.st-exbar-grp { display: inline-flex; align-items: center; gap: 0.5rem; }
+.st-exbar-end { margin-left: auto; }
+.st-seg-label { color: #8a8a94; }
+/* Plain button (Expand all) + segmented buttons share a pill look. */
+.st-btn,
+.st-seg-btn {
+  font: inherit;
+  font-size: 0.8rem;
+  color: #3a3f6b;
+  background: #fff;
+  border: 1px solid #cdd0e0;
+  border-radius: 0.4rem;
+  padding: 0.25rem 0.6rem;
+  cursor: pointer;
+}
+.st-btn:hover,
+.st-seg-btn:hover { background: #eef0fb; }
+.st-btn:focus-visible,
+.st-seg-btn:focus-visible,
+.st-switch input:focus-visible + .st-switch-ui { outline: 2px solid #5b6cf0; outline-offset: 1px; }
+.st-btn-icon { font-size: 0.9em; }
+/* Segmented Time | Session control (adjacent buttons, one active). */
+.st-seg { display: inline-flex; }
+.st-seg-btn { border-radius: 0; margin-left: -1px; }
+.st-seg-btn:first-child { border-radius: 0.4rem 0 0 0.4rem; margin-left: 0; }
+.st-seg-btn:last-child { border-radius: 0 0.4rem 0.4rem 0; }
+.st-seg-btn.is-active { background: #3a3f9b; color: #fff; border-color: #3a3f9b; position: relative; z-index: 1; }
+.st-seg-btn.is-active:hover { background: #333884; }
+.st-caret { font-size: 0.7em; }
+.st-seg-btn:not(.is-active) .st-caret { visibility: hidden; }
+/* AI show/hide switch. */
+.st-switch { display: inline-flex; align-items: center; gap: 0.4rem; cursor: pointer; user-select: none; }
+.st-switch input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+.st-switch-ui {
+  width: 2rem;
+  height: 1.05rem;
+  flex: none;
+  border-radius: 1rem;
+  background: #c4c4cf;
+  position: relative;
+  transition: background 0.15s;
+}
+.st-switch-ui::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: calc(1.05rem - 4px);
+  height: calc(1.05rem - 4px);
+  border-radius: 50%;
+  background: #fff;
+  transition: transform 0.15s;
+}
+.st-switch input:checked + .st-switch-ui { background: #3a3f9b; }
+.st-switch input:checked + .st-switch-ui::after { transform: translateX(0.95rem); }
+.st-switch-label { color: #3a3f6b; font-weight: 600; }
+/* Divider between session groups (inserted by JS in Session sort mode). */
+.st-session-sep {
+  margin: 1.1rem 0 0.5rem;
+  padding-top: 0.5rem;
+  border-top: 1px dashed #d5d5dd;
+  font-size: 0.76rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: #8a8a94;
+}
+.st-session-sep:first-child { border-top: none; padding-top: 0; margin-top: 0.2rem; }
 h1 { font-size: 1.9rem; margin: 0 0 0.25rem; }
 h2 {
   font-size: 1.25rem;
@@ -244,30 +321,59 @@ blockquote {
   font-size: 0.8rem;
   font-weight: 500;
 }
-/* The AI's sidelined play-by-play: one collapsed disclosure per turn, kept quiet
-   (muted, faint left rule, no accent) so the student's prompt, decisions, and
-   changes read first. Present and one click away — never dropped. */
-.ai-process {
-  margin: 0.5rem 0 0.3rem;
-  padding-left: 0.7rem;
-  border-left: 2px solid #e3e3e8;
-}
-.ai-process > summary {
+/* The per-prompt AI layer: one collapsed pill per turn holding every AI message.
+   Deliberately obvious and clickable (accent, hover, chevron) so the reader always
+   sees there's an AI transcript one click away, without it fronting the work. */
+.ai-process { margin: 0.5rem 0 0.3rem; }
+.ai-pill {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
   cursor: pointer;
   list-style: none;
+  padding: 0.35rem 0.65rem;
+  border: 1px solid #d3d5e8;
+  border-radius: 0.5rem;
+  background: #f3f4fb;
+  color: #3a3f6b;
   font-size: 0.8rem;
-  color: #8a8a94;
 }
-.ai-process > summary::-webkit-details-marker { display: none; }
-.ai-process > summary::before { content: '▸ '; color: #b0b0ba; }
-.ai-process[open] > summary::before { content: '▾ '; }
-.ai-process-tag { font-weight: 600; letter-spacing: 0.01em; }
-/* A glimpse of the first sidelined message, shown only while collapsed. */
-.ai-preview { font-style: italic; color: #a0a0aa; }
+.ai-pill::-webkit-details-marker { display: none; }
+.ai-pill:hover { background: #e9ebfa; border-color: #c2c6ec; }
+.ai-process[open] .ai-pill { border-radius: 0.5rem 0.5rem 0 0; }
+.ai-pill-icon { font-size: 0.95em; }
+.ai-pill-verb { font-weight: 600; }
+.ai-pill-verb .v-hide { display: none; }
+.ai-process[open] .ai-pill-verb .v-show { display: none; }
+.ai-process[open] .ai-pill-verb .v-hide { display: inline; }
+.ai-pill-count { font-weight: 600; }
+/* A glimpse of the first message, shown only while collapsed. */
+.ai-preview {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-style: italic;
+  font-weight: 400;
+  color: #8a8a94;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .ai-process[open] .ai-preview { display: none; }
-/* The expanded narration reads a shade quieter than an inline reply. */
-.ai-process .ai-text { color: #55555f; font-size: 0.95em; }
-.ai-process .ai-text:first-of-type { margin-top: 0.4rem; }
+.ai-pill-chevron { margin-left: auto; transition: transform 0.15s; }
+.ai-process[open] .ai-pill-chevron { transform: rotate(180deg); }
+/* The expanded transcript, framed as the pill's body; messages separated faintly. */
+.ai-pill-body {
+  border: 1px solid #d3d5e8;
+  border-top: none;
+  border-radius: 0 0 0.5rem 0.5rem;
+  padding: 0.15rem 0.75rem 0.4rem;
+}
+.ai-pill-body .ai-text { color: #55555f; font-size: 0.96em; }
+.ai-pill-body .ai-text + .ai-text {
+  margin-top: 0.5rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid #ececf1;
+}
 .code { margin: 0.4rem 0; }
 .code > summary { cursor: pointer; font-size: 0.85rem; color: #3a3f6b; }
 /* A code change with no captured diff: a plain file row, no disclosure arrow. */
@@ -380,11 +486,22 @@ pre.codeblock code { background: none; padding: 0; font-size: inherit; border-ra
   .decision-tag { color: #e0b257; }
   .plan { background: #1f1f2b; border-left-color: #7b7fd0; }
   .plan-tag { color: #aab0ff; }
-  .ai-process { border-left-color: #34343a; }
-  .ai-process > summary { color: #9a9aa4; }
-  .ai-process > summary::before { color: #5a5a64; }
+  .st-exbar { background: #1f1f23; border-color: #34343a; }
+  .st-seg-label { color: #9a9aa4; }
+  .st-btn, .st-seg-btn { background: #2a2a30; color: #c6cbf0; border-color: #44444c; }
+  .st-btn:hover, .st-seg-btn:hover { background: #33333b; }
+  .st-seg-btn.is-active { background: #4b52c7; color: #fff; border-color: #4b52c7; }
+  .st-seg-btn.is-active:hover { background: #5a61d6; }
+  .st-switch-ui { background: #44444c; }
+  .st-switch input:checked + .st-switch-ui { background: #6b70d6; }
+  .st-switch-label { color: #c6cbf0; }
+  .st-session-sep { border-top-color: #3a3a42; color: #9a9aa4; }
+  .ai-pill { background: #23232c; border-color: #3a3f52; color: #c6cbf0; }
+  .ai-pill:hover { background: #2a2a36; border-color: #4a4f6e; }
   .ai-preview { color: #85858f; }
-  .ai-process .ai-text { color: #b0b0ba; }
+  .ai-pill-body { border-color: #3a3f52; }
+  .ai-pill-body .ai-text { color: #b0b0ba; }
+  .ai-pill-body .ai-text + .ai-text { border-top-color: #34343a; }
   .plan-badge.approved { background: #1c3a2c; color: #7fd1a6; }
   .plan-badge.revised { background: #2a2a30; color: #a0a0aa; }
   .plan-feedback { color: #d0d0d8; }

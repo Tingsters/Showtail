@@ -48,14 +48,6 @@ export function renderHtml(data: ReportData, opts?: ReportRenderOptions): string
     // regex after the splice would match and corrupt that content.
     .replace(TIME_TOKEN, (_m, iso: string) => timeTag(iso))
     .replace(`<p>${TURNS_PLACEHOLDER}</p>`, turnsHtml(data, mode));
-  // A "Show AI process" checkbox lives alongside the timezone picker; it flips
-  // every per-turn AI disclosure open at once (see report-controls.js). Omitted
-  // in `off` mode, where there's no AI layer to reveal. Its checked state seeds
-  // the default the script applies when no saved preference exists.
-  const aiToggle =
-    mode === 'off'
-      ? ''
-      : `<label class="st-aitoggle"><input type="checkbox" id="st-ai"${mode === 'full' ? ' checked' : ''}> Show AI process</label>`;
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -66,7 +58,7 @@ export function renderHtml(data: ReportData, opts?: ReportRenderOptions): string
 ${REPORT_CSS}</style>
 </head>
 <body>
-<div class="st-tzbar"><span class="st-tzlabel">Times shown in <select id="st-tz" aria-label="Display timezone"></select></span>${aiToggle}</div>
+<div class="st-tzbar"><span class="st-tzlabel">Times shown in <select id="st-tz" aria-label="Display timezone"></select></span></div>
 ${body}
 <script>
 ${TIMEZONE_JS}
@@ -194,15 +186,24 @@ function renderTimelineItem(item: TurnItem): string {
  */
 function renderAiProcess(events: Event[], open: boolean): string {
   const preview = escapeHtml(truncate(firstLine(events[0]!.text), 90));
+  const n = events.length;
+  const count = `${n} AI message${n === 1 ? '' : 's'}`;
   const bodies = events
     .map((e) => `<div class="ai-text">${renderRichText(e.text)}</div>`)
     .join('\n');
+  // A clearly-clickable pill: robot icon, a Show/Hide verb (swapped by CSS on
+  // [open]), the count, a collapsed-only preview, and a chevron that rotates open.
   return [
     `<details class="ai-process"${open ? ' open' : ''}>`,
-    `<summary><span class="ai-process-tag">🤖 ${events.length} AI message${events.length === 1 ? '' : 's'}</span>` +
+    '<summary class="ai-pill">' +
+      '<span class="ai-pill-icon" aria-hidden="true">🤖</span>' +
+      '<span class="ai-pill-verb"><span class="v-show">Show</span>' +
+      '<span class="v-hide">Hide</span></span> ' +
+      `<span class="ai-pill-count">${count}</span>` +
       (preview ? ` <span class="ai-preview">${preview}</span>` : '') +
+      '<span class="ai-pill-chevron" aria-hidden="true">⌄</span>' +
       '</summary>',
-    bodies,
+    `<div class="ai-pill-body">\n${bodies}\n</div>`,
     '</details>',
   ].join('\n');
 }
@@ -215,16 +216,58 @@ function truncate(text: string, max: number): string {
   return (sp > max * 0.6 ? cut.slice(0, sp) : cut).trimEnd() + '…';
 }
 
+/**
+ * The sticky controls bar above the exchanges. Rendered `hidden`; report-controls.js
+ * reveals it on load, so a no-JS reader never sees non-functional controls (the
+ * report stays fully readable, turns expand natively, order stays chronological).
+ * Three controls: expand/collapse-all, the AI show/hide switch (omitted in `off`
+ * mode), and the Time|Session sort toggle with a direction caret.
+ */
+function renderToolbar(mode: AiMode): string {
+  const aiSwitch =
+    mode === 'off'
+      ? ''
+      : '<div class="st-exbar-grp"><label class="st-switch" title="Show or hide every AI message">' +
+        `<input type="checkbox" id="st-ai"${mode === 'full' ? ' checked' : ''}>` +
+        '<span class="st-switch-ui"></span>' +
+        '<span class="st-switch-label">AI messages</span></label></div>';
+  return [
+    '<div class="st-exbar" hidden>',
+    '<div class="st-exbar-grp">',
+    '<button type="button" class="st-btn" id="st-expand" aria-pressed="false">' +
+      '<span class="st-btn-icon">⤢</span> <span class="st-btn-label">Expand all</span></button>',
+    '</div>',
+    aiSwitch,
+    '<div class="st-exbar-grp st-exbar-end">',
+    '<span class="st-seg-label">Sort</span>',
+    '<div class="st-seg" id="st-sort" role="group" aria-label="Sort exchanges">',
+    '<button type="button" class="st-seg-btn is-active" data-mode="time" data-dir="asc">' +
+      'Time <span class="st-caret">▲</span></button>',
+    '<button type="button" class="st-seg-btn" data-mode="session" data-dir="asc">' +
+      'Session <span class="st-caret">▲</span></button>',
+    '</div>',
+    '</div>',
+    '</div>',
+  ]
+    .filter(Boolean)
+    .join('\n');
+}
+
 /** Render the interactive exchange cards (escaped; no scripts). */
 function turnsHtml(data: ReportData, mode: AiMode): string {
   if (data.turns.length === 0) return '<p><em>No prompts recorded.</em></p>';
   // On the combined team report, attribute each card to its author.
   const showAuthor = shouldShowAuthor(data);
   const nameBySlug = nameBySlugMap(data.contributors);
-  const out: string[] = [];
+  const out: string[] = [renderToolbar(mode), '<div id="st-exchanges">'];
   for (const turn of data.turns) {
     const { flow, aiProcess } = turnView(turn);
-    out.push('<details class="turn">');
+    // data-* drive the toolbar's sort (by prompt time, or grouped by session).
+    out.push(
+      `<details class="turn" data-ts="${escapeHtml(turn.prompt.timestamp)}" ` +
+        `data-session="${escapeHtml(turn.sessionId)}" ` +
+        `data-tool="${escapeHtml(turn.tool)}">`,
+    );
     out.push(renderTurnSummary(turn, showAuthor, nameBySlug));
     out.push('<div class="turn-body">');
 
@@ -260,6 +303,7 @@ function turnsHtml(data: ReportData, mode: AiMode): string {
 
     out.push('</details>');
   }
+  out.push('</div>'); // #st-exchanges
   return out.join('\n');
 }
 

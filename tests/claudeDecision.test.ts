@@ -454,6 +454,7 @@ describe('turn timeline (chronological interleaving)', () => {
     plans: [],
     tool: 'claude-code',
     actorSlug: 'x',
+    sessionId: 'sess',
   });
 
   test('merges replies, code, and decisions in timestamp order', () => {
@@ -479,14 +480,15 @@ describe('turn timeline (chronological interleaving)', () => {
       plans: [],
       tool: 'claude-code',
       actorSlug: 'x',
+      sessionId: 'sess',
     };
     expect(turnTimeline(turn).map((i) => i.kind)).toEqual(['ai', 'code', 'decision']);
   });
 
-  test('the rendered Markdown report places code/decisions between the replies', () => {
-    // Each reply shares the timestamp of the edit it produced (as real capture
-    // stamps a message's text and its tool call), so both are rationales and read
-    // inline — interleaved with their changes and the decision, in order.
+  test('renders code and decisions inline in order, with AI replies in the collapsed group', () => {
+    // Uniform rule: the student's work (code, decisions) reads inline in timestamp
+    // order; every AI reply is subordinated to the one collapsed group, regardless
+    // of where it fell in time.
     const turn: Turn = {
       prompt: ev('p', '2026-01-01T00:00:00.000Z', 'prompt', 'do it'),
       aiOutputs: [
@@ -503,6 +505,7 @@ describe('turn timeline (chronological interleaving)', () => {
       plans: [],
       tool: 'claude-code',
       actorSlug: 'x',
+      sessionId: 'sess',
     };
     const data: ReportData = {
       project: 'P',
@@ -521,11 +524,13 @@ describe('turn timeline (chronological interleaving)', () => {
     };
     const md = renderMarkdown(data);
     const at = (s: string) => md.indexOf(s);
-    // first reply → first.ts → second reply → second.ts → decision
-    expect(at('first reply')).toBeLessThan(at('first.ts'));
-    expect(at('first.ts')).toBeLessThan(at('second reply'));
-    expect(at('second reply')).toBeLessThan(at('second.ts'));
+    // Work reads inline in order: first.ts → second.ts → decision.
+    expect(at('first.ts')).toBeLessThan(at('second.ts'));
     expect(at('second.ts')).toBeLessThan(at('🔀 **Decision**'));
+    // Both AI replies are folded into the one collapsed group after the work.
+    expect(md).toContain('<details><summary>🤖 2 AI message(s)</summary>');
+    expect(at('🔀 **Decision**')).toBeLessThan(at('first reply'));
+    expect(at('first reply')).toBeLessThan(at('second reply'));
   });
 
   test('a worktree code change links from linkPath but shows the clean path', () => {
@@ -555,6 +560,7 @@ describe('turn timeline (chronological interleaving)', () => {
           plans: [],
           tool: 'claude-code',
           actorSlug: 'x',
+          sessionId: 'sess',
         },
       ],
       plans: [],

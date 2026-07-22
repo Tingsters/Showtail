@@ -26,10 +26,6 @@ Tool timeline (each arrow is a switch):
 
 Help me structure a CSV parser.
 
-_AI response:_
-
-Start by splitting the file on newlines, then parse each row into fields.
-
 _Suggested code — [`src/parser.ts`](../../src/parser.ts) (~6 line(s)):_
 
 ```diff
@@ -41,6 +37,14 @@ _Suggested code — [`src/parser.ts`](../../src/parser.ts) (~6 line(s)):_
 +}
 ```
 
+<details><summary>🤖 1 AI message(s)</summary>
+
+_AI response:_
+
+Start by splitting the file on newlines, then parse each row into fields.
+
+</details>
+
 ## Authorship statement
 
 > I recorded this trail while working on "Demo Project". It shows the prompts I used and the
@@ -49,12 +53,17 @@ _Suggested code — [`src/parser.ts`](../../src/parser.ts) (~6 line(s)):_
 ````
 
 The report foregrounds the student's work: the prompt, the decisions they made,
-and the files they built. An AI reply that directly introduces a change (like the
-one above) reads inline as the reason for it; the rest of the AI's step-by-step
-narration is folded into a collapsed **"🤖 N AI messages"** group per exchange, so
-it's there when you want it without burying the work. In the HTML report a **"Show
-AI process"** toggle expands every group at once; `showtail report --ai full`
-(or `--no-ai`) sets that default for the generated file.
+and the files they built read inline. **All** of the AI's prose — uniformly, on
+every tool — folds into one collapsed **"🤖 N AI messages"** group per exchange, so
+it's there when you want it without burying the work.
+
+In the HTML report a small **toolbar** sits under this heading with three controls:
+**Expand / Collapse all** (skim the prompt spine vs. read every exchange), an **AI
+messages** switch (reveal every group at once), and a **Sort: Time | Session**
+toggle — *Time* reads the exchanges in one chronological stream, *Session* groups
+each AI conversation together (useful when several ran in parallel); clicking the
+active mode again reverses the order. On the command line, `showtail report --ai
+full` (or `--no-ai`) sets the AI default for the generated file.
 
 On a group project, the combined **team** report adds a **Contributors** section
 listing each student and how much they contributed, and the timeline shows who

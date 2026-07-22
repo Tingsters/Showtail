@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { writeFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { runInit } from '../src/commands/init.ts';
-import { addArtifact, importEditArtifact } from '../src/core/artifacts.ts';
+import { addArtifact } from '../src/core/artifacts.ts';
 import { logEvent } from '../src/core/events.ts';
 import {
   buildReportData,
@@ -55,51 +55,50 @@ describe('report', () => {
     }
   });
 
-  test('Markdown leads with a reader-friendly summary and folds AI chatter into a details block', async () => {
+  test('Markdown leads with a reader-friendly summary and folds all AI into a details block', async () => {
     const dir = makeTempDir();
     try {
       await runInit({ cwd: dir, project: 'Parser Project' });
       const paths = pathsForRoot(dir);
       const author = authorFor(paths);
-      startSession(author);
+      const session = startSession(author);
 
       const { event: prompt } = await logEvent(author, {
         type: 'prompt',
         text: 'add a CSV parser',
         tool: 'claude-code',
       });
-      // A short status line (folds) alongside a rationale that made an edit (shown).
-      const editTs = '2026-07-01T10:00:02.000Z';
+      // Two AI replies; both fold into one collapsed group. The edit reads inline.
       await logEvent(author, {
         type: 'ai_output',
         text: 'Let me read the files first.',
         tool: 'claude-code',
         turnId: prompt.id,
-        timestamp: '2026-07-01T10:00:01.000Z',
       });
       await logEvent(author, {
         type: 'ai_output',
         text: "I'll parse rows by splitting on newlines.",
         tool: 'claude-code',
         turnId: prompt.id,
-        timestamp: editTs,
       });
-      importEditArtifact(author, {
-        path: 'parser.ts',
-        diff: '+ export const parse = () => {}',
+      writeFileSync(join(dir, 'parser.ts'), 'export const parse = () => {};');
+      await addArtifact(author, {
+        filePath: 'parser.ts',
         tool: 'claude-code',
         turnId: prompt.id,
-        timestamp: editTs,
+        sessionId: session.id,
+        diff: '+ export const parse = () => {}',
       });
 
       const md = renderMarkdown(buildReportData(paths));
       // The summary leads with what a reviewer scans for: tasks (prompts).
       expect(md).toMatch(/\*\*Summary:\*\* 1 task\(s\)/);
-      // The status line folds into a collapsed <details> (GitHub renders it), counted…
-      expect(md).toContain('<details><summary>🤖 1 AI message(s)</summary>');
+      // Every AI message folds into one collapsed <details> (GitHub renders it), counted.
+      expect(md).toContain('<details><summary>🤖 2 AI message(s)</summary>');
       expect(md).toContain('Let me read the files first');
-      // …while the rationale that produced the edit reads inline.
       expect(md).toContain("I'll parse rows by splitting on newlines");
+      // The edit reads inline (the student's work), not inside the AI group.
+      expect(md.indexOf('parser.ts')).toBeLessThan(md.indexOf('🤖 2 AI message(s)'));
     } finally {
       cleanup(dir);
     }

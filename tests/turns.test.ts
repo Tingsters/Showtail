@@ -197,7 +197,7 @@ describe('turns', () => {
       });
 
       const html = renderHtml(buildReportData(paths));
-      expect(html).toContain('<details class="turn">');
+      expect(html).toContain('<details class="turn"');
       expect(html).toContain('class="badge badge--claude-code"');
       // Each changed line is a single .dline block with a +/- gutter (.dmark).
       expect(html).toContain('class="dline del"');
@@ -218,41 +218,65 @@ describe('turns', () => {
     }
   });
 
-  test('shows a substantive standalone answer inline, with nothing collapsed', async () => {
+  test('collapses every AI message into one per-prompt group; only the work is inline', async () => {
     const dir = makeTempDir();
     try {
       await runInit({ cwd: dir });
       const paths = pathsForRoot(dir);
       const author = authorFor(paths);
-      startSession(author);
+      const session = startSession(author);
       const { event: prompt } = await logEvent(author, {
         type: 'prompt',
-        text: 'explain recursion',
+        text: 'add a hello function',
         tool: 'claude-code',
       });
-      // A pure Q&A turn: a real, substantial answer with no edit after it. The old
-      // "adjacent to a change" rule would have hidden this; content judges it signal.
-      const answer =
-        'Recursion is when a function calls itself to solve a smaller version of ' +
-        'the same problem, stopping at a base case. For example, factorial(n) ' +
-        'returns n times factorial(n - 1), and factorial(0) returns 1.';
+      // Two AI replies — a long one and a short one. Uniformly, both collapse; the
+      // classifier makes no content judgement, so the rule is predictable.
       await logEvent(author, {
         type: 'ai_output',
-        text: answer,
+        text: 'First, let me explain the approach in some detail so the reasoning is clear.',
         tool: 'claude-code',
         turnId: prompt.id,
       });
+      await logEvent(author, {
+        type: 'ai_output',
+        text: 'Done, all set.',
+        tool: 'claude-code',
+        turnId: prompt.id,
+      });
+      await logEvent(author, {
+        type: 'decision',
+        text: 'Use an arrow function',
+        tool: 'claude-code',
+        turnId: prompt.id,
+      });
+      writeFileSync(join(dir, 'hello.ts'), 'export const hello = () => "hi";');
+      await addArtifact(author, {
+        filePath: 'hello.ts',
+        tool: 'claude-code',
+        turnId: prompt.id,
+        sessionId: session.id,
+        diff: '+ export const hello = () => "hi";',
+      });
 
       const html = renderHtml(buildReportData(paths));
-      // Shown inline — no collapsed group at all, because there's no chatter to hide.
-      expect(html).not.toContain('class="ai-process"');
-      expect(html).toContain('Recursion is when a function calls itself');
+      const pill = html.indexOf('class="ai-process"');
+      expect(pill).toBeGreaterThan(-1);
+      // Both AI messages — long and short alike — fold into the one counted group…
+      expect(html).toContain('2 AI messages'); // the pill's count
+      expect(html).not.toContain('<details class="ai-process" open>'); // collapsed by default
+      // …the student's work reads inline, before the pill…
+      expect(html.indexOf('hello.ts')).toBeLessThan(pill);
+      expect(html.indexOf('Use an arrow function')).toBeLessThan(pill);
+      // …and no AI prose is inline — it appears only inside the collapsed group.
+      expect(html.indexOf('First, let me explain')).toBeGreaterThan(pill);
+      expect(html.indexOf('Done, all set.')).toBeGreaterThan(pill);
     } finally {
       cleanup(dir);
     }
   });
 
-  test('anchors the reply that produced an edit (same timestamp) and collapses chatter', async () => {
+  test('renders the exchanges toolbar and wrapper with the three controls', async () => {
     const dir = makeTempDir();
     try {
       await runInit({ cwd: dir });
@@ -261,80 +285,29 @@ describe('turns', () => {
       startSession(author);
       const { event: prompt } = await logEvent(author, {
         type: 'prompt',
-        text: 'add a CSV parser',
+        text: 'add a hello function',
         tool: 'claude-code',
-      });
-      // Capture stamps a message's text and its edit identically; that shared
-      // timestamp — not adjacency — is what marks this short reply as the rationale.
-      const editTs = '2026-07-01T10:00:02.000Z';
-      await logEvent(author, {
-        type: 'ai_output',
-        text: 'Let me look at the repo layout first.', // process: short, made nothing
-        tool: 'claude-code',
-        turnId: prompt.id,
-        timestamp: '2026-07-01T10:00:01.000Z',
       });
       await logEvent(author, {
         type: 'ai_output',
-        text: "I'll split each line on commas and trim the fields.", // rationale
-        tool: 'claude-code',
-        turnId: prompt.id,
-        timestamp: editTs,
-      });
-      importEditArtifact(author, {
-        path: 'parser.ts',
-        diff: '+ export const parse = (s) => s.split(",")',
-        tool: 'claude-code',
-        turnId: prompt.id,
-        timestamp: editTs, // same stamp as the rationale reply
-      });
-      await logEvent(author, {
-        type: 'ai_output',
-        text: 'Done, tests pass. Anything else?', // process: filler after the fact
-        tool: 'claude-code',
-        turnId: prompt.id,
-        timestamp: '2026-07-01T10:00:03.000Z',
-      });
-
-      const html = renderHtml(buildReportData(paths));
-      const process = html.indexOf('class="ai-process"');
-      expect(process).toBeGreaterThan(-1);
-      // The short rationale shows inline *because it made the edit*, not for length…
-      expect(html.indexOf("I'll split each line on commas")).toBeLessThan(process);
-      expect(html.indexOf('parser.ts')).toBeLessThan(process);
-      // …while the two status lines collapse together, counted.
-      expect(html).toContain('🤖 2 AI messages');
-      expect(html.indexOf('Let me look at the repo layout')).toBeGreaterThan(process);
-      expect(html.indexOf('Done, tests pass')).toBeGreaterThan(process);
-    } finally {
-      cleanup(dir);
-    }
-  });
-
-  test('never leaves a turn silent: a terse-only reply is still surfaced inline', async () => {
-    const dir = makeTempDir();
-    try {
-      await runInit({ cwd: dir });
-      const paths = pathsForRoot(dir);
-      const author = authorFor(paths);
-      startSession(author);
-      const { event: prompt } = await logEvent(author, {
-        type: 'prompt',
-        text: 'what data structure should I use?',
-        tool: 'claude-code',
-      });
-      // Short, structureless, produced nothing — but it's the whole answer, so the
-      // never-silent guarantee surfaces it rather than hiding it behind a count.
-      await logEvent(author, {
-        type: 'ai_output',
-        text: 'Use a hash map.',
+        text: 'Sure.',
         tool: 'claude-code',
         turnId: prompt.id,
       });
 
       const html = renderHtml(buildReportData(paths));
-      expect(html).not.toContain('class="ai-process"'); // nothing collapsed
-      expect(html).toContain('Use a hash map.'); // the answer is visible
+      // Wrapper + sticky bar, rendered hidden until JS enables it (progressive enhancement).
+      expect(html).toContain('id="st-exchanges"');
+      expect(html).toContain('<div class="st-exbar" hidden>');
+      // The three controls: expand/collapse-all, the AI switch, and Time|Session sort.
+      expect(html).toContain('id="st-expand"');
+      expect(html).toContain('id="st-ai"');
+      expect(html).toContain('id="st-sort"');
+      expect(html).toContain('data-mode="time"');
+      expect(html).toContain('data-mode="session"');
+      // Turns carry the data the sort/group reads.
+      expect(html).toMatch(/<details class="turn" data-ts="/);
+      expect(html).toContain('data-session="');
     } finally {
       cleanup(dir);
     }

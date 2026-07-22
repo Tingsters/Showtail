@@ -224,7 +224,7 @@ export function buildTurns(
     .filter((x) => x.event.type === 'prompt')
     .sort((a, b) => a.event.timestamp.localeCompare(b.event.timestamp));
 
-  const turns: Turn[] = prompts.map(({ event }) => ({
+  const turns: Turn[] = prompts.map(({ event, sessionId }) => ({
     prompt: event,
     aiOutputs: [],
     codeChanges: [],
@@ -232,6 +232,7 @@ export function buildTurns(
     plans: [],
     tool: toolOf(event),
     actorSlug: event.actorSlug,
+    sessionId,
   }));
   const turnByPrompt = new Map<string, Turn>();
   prompts.forEach((p, i) => turnByPrompt.set(p.event.id, turns[i]!));
@@ -366,82 +367,34 @@ export function turnTimeline(turn: Turn): TurnItem[] {
 }
 
 /**
- * A turn restructured for the reader-first layout. The report's job is to show
- * the *student's* work — their prompt, the choices they made, and what got built
- * — with the AI's play-by-play as a supporting layer, not the main text. So we
- * split a turn's timeline into two:
+ * A turn restructured for the reader-first layout. The report shows the *student's*
+ * work — their prompt, the choices they made, and what got built — inline, and
+ * treats the AI's prose as one uniform, collapsed, toggleable layer.
  *
- *  - `flow`   — the work, in the order it happened: code changes, decisions,
- *    plans, and the AI messages that carry real signal (see below).
- *  - `aiProcess` — the remaining AI narration (short status/transition lines),
- *    subordinated to a single collapsed group so it stays available without
- *    dominating the page.
+ *  - `flow`   — the work, in chronological order: code changes, decisions, plans.
+ *  - `aiProcess` — **every** AI message of the turn, in order, subordinated to a
+ *    single collapsed group.
  *
- * Nothing is dropped — every AI message lands in exactly one of the two. We judge
- * each AI message by its own content, not by what sits next to it. It shows inline
- * when any hold:
- *  1. It produced output — a code change or decision shares its exact timestamp.
- *     Capture splits one assistant message's text and its tool calls into records
- *     stamped identically, so a timestamp match means this text is the "why" for
- *     that edit (robust even for a terse rationale that made a change).
- *  2. It's substantive — long enough, or it presents concrete content (a fenced
- *     code block or a list). See {@link isSubstantive}.
- *  3. Never-silent guarantee — if a turn would otherwise show no AI at all, its
- *     first reply is surfaced, so a pure Q&A turn shows the actual answer rather
- *     than only a collapsed count.
- * Everything else — short, structureless, tied to no output — is the profile of
- * process chatter, and collapses.
+ * We deliberately do *not* try to guess which AI messages "matter": there is no
+ * signal for that which is consistent across tools (Claude emits many messages per
+ * turn; imported tools differ or capture only prompts), and content heuristics
+ * (length/structure) match almost everything, so they hide nothing and read as
+ * arbitrary. Routing all AI prose to one toggleable layer is uniform and
+ * predictable on every tool — and nothing is dropped.
  */
 export interface TurnView {
-  /** Work items in chronological order; the `ai` items here carry real signal. */
+  /** The student's work, in chronological order (no AI prose). */
   flow: TurnItem[];
-  /** Short AI narration, subordinated to a collapsed "AI messages" group. */
+  /** Every AI message of the turn, subordinated to the collapsed "AI messages" group. */
   aiProcess: Event[];
 }
 
-/**
- * Below this length, an AI message that presents no concrete content and produced
- * no edit reads as a status/transition line ("let me look…", "done — tests pass"),
- * not an explanation. One tunable knob; {@link turnView} errs toward showing —
- * wrongly surfacing a line is cheaper than hiding real reasoning.
- */
-const MIN_SUBSTANTIVE_CHARS = 160;
-
-/** A fenced code block, or a bulleted/numbered list — the AI presenting something concrete. */
-function hasStructuredContent(text: string): boolean {
-  if (/```[\s\S]*?```/.test(text)) return true; // a fenced code block
-  return /^[ \t]*([-*]\s|\d+[.)]\s)/m.test(text); // a list item on its own line
-}
-
-/** Whether an AI message carries real content (explanation/answer) vs a short status line. */
-function isSubstantive(text: string): boolean {
-  return text.trim().length >= MIN_SUBSTANTIVE_CHARS || hasStructuredContent(text);
-}
-
 export function turnView(turn: Turn): TurnView {
-  const timeline = turnTimeline(turn);
-  // Timestamps of this turn's concrete outputs; an AI message sharing one is the
-  // assistant message that carried that edit/decision — i.e. its rationale.
-  const outputStamps = new Set<string>();
-  for (const c of turn.codeChanges) outputStamps.add(c.timestamp);
-  for (const d of turn.decisions) outputStamps.add(d.timestamp);
-
-  const aiEvents: Event[] = [];
-  for (const item of timeline) if (item.kind === 'ai') aiEvents.push(item.event);
-
-  const show = new Set<Event>();
-  for (const e of aiEvents) {
-    if (outputStamps.has(e.timestamp) || isSubstantive(e.text)) show.add(e);
-  }
-  // Never-silent guarantee: a turn with replies always surfaces at least its first.
-  if (show.size === 0 && aiEvents.length > 0) show.add(aiEvents[0]!);
-
   const flow: TurnItem[] = [];
   const aiProcess: Event[] = [];
-  for (const item of timeline) {
-    if (item.kind !== 'ai') flow.push(item);
-    else if (show.has(item.event)) flow.push(item);
-    else aiProcess.push(item.event);
+  for (const item of turnTimeline(turn)) {
+    if (item.kind === 'ai') aiProcess.push(item.event);
+    else flow.push(item);
   }
   return { flow, aiProcess };
 }
