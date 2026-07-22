@@ -1,38 +1,60 @@
-# Working in this repo (parallel agents)
+# Working in this repo (Claude-driven, trunk-based)
 
-`main` is a shared pointer, never a workspace. Parallel agents work in separate
-git worktrees and publish to one local `main` with `git update-ref` (compare-and-
-swap, so concurrent agents don't clobber each other). `update-ref` moves the
-branch *pointer* only — it does **not** update the files of any worktree that has
-`main` checked out. Work on `main` and another agent's publish freezes your files
-while HEAD jumps ahead; `git status` then shows a "phantom" reverse diff of code
-that's already committed. (Git refuses `git push` to a checked-out branch for this
-very reason — `update-ref` is the bypass, safe only because nobody sits on `main`.)
+This repo is served by a **bare hub** at `~/Nextcloud/Showtail.git`. `main` lives
+only in the hub and is **never checked out anywhere**, so it can never be frozen —
+the "phantom diff" failure mode is *structurally* impossible, not just discouraged.
+The hub mirrors to GitHub (`origin`).
 
-Three rules keep this airtight:
+Nobody hand-edits code: every change is made by an agent, in a worktree, and lands
+straight on `main` — **there are no pull requests**. You are always in either a
+per-task worktree (Claude Code creates one automatically) or the **desk** worktree
+(the interactive launch pad, permanently on the throwaway `desk` branch).
 
-**1 — Never check out `main`; work on your own branch.** Every worktree, including
-the repo root, stays on a task branch. First thing:
+## Rules
 
-    git branch --show-current     # prints "main"? get off it:
-    git switch -c <task-branch>    # (refused due to a phantom diff? do rule 3 first)
+**1 — Never check out `main`.** Work on your task branch (your worktree's branch)
+or `desk`. Inspect the trunk without checking it out: `git log main`,
+`git show main:<path>`.
 
-Inspect main without checking it out: `git log main`, `git show main:<path>`.
+**2 — Land straight to `main` when your work is done and tests pass. No PR.**
 
-**2 — Publish by CAS-advancing the pointer; never force it.** To land your branch:
-
+    git rebase main                 # replay your work onto the current trunk
+    bun test                        # must pass — see "known failure" below
     base=$(git rev-parse main)
-    git rebase "$base"            # replay your work onto current main
-    # run the relevant tests
-    git update-ref refs/heads/main "$(git rev-parse HEAD)" "$base"
+    git update-ref refs/heads/main "$(git rev-parse HEAD)" "$base"   # advance trunk
+    git push origin main            # mirror to GitHub
 
-If `update-ref` fails, `main` moved under you — re-read `base`, rebase, retry.
-Never `git branch -f main`, `git reset` main, or `git push --force`.
+If `update-ref` fails, `main` moved under you (another agent landed first) —
+re-run `git rebase main` and retry. `update-ref` is safe here (unlike an ordinary
+repo, where it's a footgun) **precisely because `main` is never checked out**: the
+bare hub owns it and no worktree sits on it, so advancing it can't freeze anyone's
+files.
 
-**3 — A phantom diff is not your work; never commit it.** If a worktree's status
-shows a reverse diff of code already in `git log main` (files you know exist shown
-as "deleted"), its pointer just moved. Resync, don't commit:
+**3 — Resolve your own conflicts.** If the rebase conflicts, fix it in your
+worktree and finish the land — never leave a half-integrated branch or a conflict
+for a human. Keep tasks scoped so parallel agents rarely touch the same files.
 
-    git reset --hard main         # leaves untracked files (e.g. .claude/) alone
+**Never**: open a PR, `git push --force`, `git checkout main`, or edit the bare hub
+directly.
 
-Publishing to GitHub, when wanted: `git push origin main` (works from any branch).
+## Known test failure (pre-existing, ignore)
+`codex install / uninstall > install --no-hooks writes only AGENTS.md, no
+hooks/config` fails independently of your change (it fails on a pristine `main`).
+Don't let it block a land; don't "fix" it as part of an unrelated task.
+
+## Layout
+- **Hub** (bare, source of truth): `~/Nextcloud/Showtail.git` — holds `main` + the
+  object store. Never checked out. Mirrors to `origin` (GitHub).
+- **Desk** (interactive launch pad): `~/Nextcloud/Showtail`, branch `desk`. Where a
+  human opens a terminal and starts Claude. Auto-synced to `main`; never on `main`.
+- **Task worktrees**: `.../.claude/worktrees/<task>` — Claude Code-managed, one per
+  task, auto-removed when done.
+- **GitHub mirror**: `origin` → https://github.com/Tingsters/Showtail.git.
+
+## Why it's built this way
+A single long-running agent used to publish to a local `main` via `update-ref`
+while a checkout sat *on* `main` and was never resynced — so `main` advanced under
+frozen files and produced a large phantom reverse-diff. The bare hub removes the
+precondition entirely: with `main` un-checkout-able, the same `update-ref` publish
+is safe, parallel agents land without merge ceremony, and there is nothing for a
+human to babysit.
