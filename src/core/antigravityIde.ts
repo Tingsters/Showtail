@@ -37,8 +37,12 @@ export type InstallScope = 'user' | 'project';
 // The IDE reads hooks.json only at language-server startup (no file watcher), so
 // connecting requires an IDE restart to take effect.
 
-/** Our named bundle key inside the IDE's `~/.gemini/config/hooks.json`. */
-export const ANTIGRAVITY_IDE_HOOK_NAMESPACE = 'showtail';
+/**
+ * Our named bundle key inside the IDE's `~/.gemini/config/hooks.json`. Distinct
+ * from the Antigravity CLI's `showtail-cli` key in the SAME shared file, so the
+ * two tools' bundles coexist and neither's disconnect deletes the other's.
+ */
+export const ANTIGRAVITY_IDE_HOOK_NAMESPACE = 'showtail-ide';
 
 /**
  * The canonical Antigravity IDE hook events, written under our named bundle.
@@ -120,6 +124,17 @@ export interface AntigravityIdeTarget {
   hooksFile: string;
   /** Dedicated, uniquely-named rules/instructions file (never GEMINI.md/AGENTS.md). */
   contextFile: string;
+}
+
+/**
+ * Is Google's Antigravity IDE installed on this host? Keys on the IDE's OWN
+ * product directory `<geminiHome>/antigravity-ide` (where it stores per-conversation
+ * brains) — NOT the shared `~/.gemini` root, which the Antigravity *CLI* also
+ * creates. Detecting on the shared root made the IDE falsely register as installed
+ * after a CLI-only connect, so a second `showtail setup` would spuriously connect it.
+ */
+export function antigravityIdeInstalledOnHost(): boolean {
+  return existsSync(join(geminiHome(), 'antigravity-ide'));
 }
 
 /**

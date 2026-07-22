@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   AGY_BODY,
+  ANTIGRAVITY_BLOCK_NAME,
   antigravityCliHooksInstalledAt,
   antigravityCliInstructionsState,
   installAntigravityCliHooks,
@@ -29,11 +30,11 @@ describe('antigravity-cli install / uninstall', () => {
       expect(readFileSync(target.contextFile, 'utf8')).toContain('showtail:start');
       expect(antigravityCliHooksInstalledAt(target.hooksFile)).toBe(true);
 
-      // agy's real schema: a `showtail` named block with `enabled` + its real events.
+      // agy's real schema: a `showtail-cli` named block with `enabled` + its real events.
       const settings = JSON.parse(readFileSync(target.hooksFile, 'utf8'));
-      expect(settings.showtail.enabled).toBe(true);
+      expect(settings[ANTIGRAVITY_BLOCK_NAME].enabled).toBe(true);
       for (const event of ['SessionStart', 'PreInvocation', 'PostToolUse', 'Stop']) {
-        expect(Array.isArray(settings.showtail[event])).toBe(true);
+        expect(Array.isArray(settings[ANTIGRAVITY_BLOCK_NAME][event])).toBe(true);
       }
 
       await runAntigravityCliUninstall({ cwd: dir });
@@ -57,9 +58,11 @@ describe('antigravity-cli install / uninstall', () => {
       expect(context.match(/showtail:start/g)?.length).toBe(1);
 
       const settings = JSON.parse(readFileSync(target.hooksFile, 'utf8'));
-      // One `showtail` block, one PostToolUse handler — no duplication.
-      expect(Object.keys(settings).filter((k) => k === 'showtail')).toHaveLength(1);
-      expect(settings.showtail.PostToolUse).toHaveLength(1);
+      // One `showtail-cli` block, one PostToolUse handler — no duplication.
+      expect(
+        Object.keys(settings).filter((k) => k === ANTIGRAVITY_BLOCK_NAME),
+      ).toHaveLength(1);
+      expect(settings[ANTIGRAVITY_BLOCK_NAME].PostToolUse).toHaveLength(1);
     } finally {
       cleanup(dir);
     }
@@ -126,11 +129,11 @@ describe('antigravity-cli install / uninstall', () => {
       installAntigravityCliHooks(target);
       let blocks = JSON.parse(readFileSync(target.hooksFile, 'utf8'));
       expect(blocks['my-safety-gate']).toBeDefined(); // ours sits alongside theirs
-      expect(blocks.showtail).toBeDefined();
+      expect(blocks[ANTIGRAVITY_BLOCK_NAME]).toBeDefined();
 
       uninstallAntigravityCliHooks(target);
       blocks = JSON.parse(readFileSync(target.hooksFile, 'utf8'));
-      expect(blocks.showtail).toBeUndefined(); // only ours removed
+      expect(blocks[ANTIGRAVITY_BLOCK_NAME]).toBeUndefined(); // only ours removed
       expect(blocks['my-safety-gate']).toBeDefined();
     } finally {
       cleanup(dir);

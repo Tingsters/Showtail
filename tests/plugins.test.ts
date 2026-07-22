@@ -14,7 +14,6 @@ import { resolveTarget } from '../src/core/skill.ts';
 import { resolveCopilotTarget } from '../src/core/copilot.ts';
 import { resolveCopilotCliTarget } from '../src/core/copilotCli.ts';
 import { resolveCodexTarget } from '../src/core/codex.ts';
-import { resolveGeminiCliTarget } from '../src/core/geminiCli.ts';
 import { resolveAntigravityCliTarget } from '../src/core/antigravityCli.ts';
 import { resolveAntigravityIdeTarget } from '../src/core/antigravityIde.ts';
 import { cleanup, makeTempDir } from './helpers.ts';
@@ -32,7 +31,6 @@ const CONNECT_PROJECT_FILE: Record<string, (dir: string) => string> = {
   'github-copilot': (dir) => resolveCopilotTarget(dir).pathInstructionsFile,
   'copilot-cli': (dir) => resolveCopilotCliTarget('project', dir).instructionsFile,
   codex: (dir) => resolveCodexTarget('project', dir).agentsFile,
-  'gemini-cli': (dir) => resolveGeminiCliTarget('project', dir).contextFile,
   'antigravity-cli': (dir) => resolveAntigravityCliTarget('project', dir).contextFile,
   'antigravity-ide': (dir) => resolveAntigravityIdeTarget('project', dir).contextFile,
 };
@@ -48,7 +46,7 @@ describe('plugin registry', () => {
   });
 
   test('getPluginById resolves by canonical tool id', () => {
-    expect(getPluginById('gemini-cli')?.cliName).toBe('gemini-cli');
+    expect(getPluginById('antigravity-cli')?.cliName).toBe('antigravity-cli');
     expect(getPluginById('claude-code')?.cliName).toBe('claude');
     expect(getPluginById('not-a-tool')).toBeUndefined();
   });
@@ -62,24 +60,29 @@ describe('plugin registry', () => {
     expect(claude.import).toBeDefined();
   });
 
-  test('connect tools include the expected set plus the new gemini-cli', () => {
+  test('connect tools include the expected set', () => {
     const names = connectPlugins().map((p) => p.cliName);
     expect(names).toEqual(
-      expect.arrayContaining(['claude', 'copilot', 'codex', 'gemini-cli']),
+      expect.arrayContaining(['claude', 'copilot', 'codex', 'antigravity-cli']),
     );
+    // The deprecated Gemini CLI plugin is gone.
+    expect(names).not.toContain('gemini-cli');
   });
 
   test('connectPluginOrThrow resolves known tools and rejects unknown ones', () => {
     expect(connectPluginOrThrow('claude').id).toBe('claude-code');
-    expect(connectPluginOrThrow('gemini-cli').id).toBe('gemini-cli');
+    expect(connectPluginOrThrow('antigravity-cli').id).toBe('antigravity-cli');
     // The Gemini web app is import-only — not connectable.
     expect(() => connectPluginOrThrow('gemini')).toThrow(/Unknown tool/);
+    // The deprecated Gemini CLI is no longer a connectable tool.
+    expect(() => connectPluginOrThrow('gemini-cli')).toThrow(/Choose one of/);
     expect(() => connectPluginOrThrow('nope')).toThrow(/Choose one of/);
   });
 
-  test("import 'gemini' is the web app, distinct from the gemini-cli connect tool", () => {
+  test("import 'gemini' is the web app (google-gemini)", () => {
     expect(getPlugin('gemini')?.id).toBe('google-gemini');
-    expect(getPlugin('gemini-cli')?.id).toBe('gemini-cli');
+    // The deprecated Gemini CLI plugin has been removed.
+    expect(getPlugin('gemini-cli')).toBeUndefined();
   });
 
   test('labelForTool resolves every plugin id, with a CLI fallback', () => {
@@ -138,7 +141,9 @@ describe('plugin connect capabilities', () => {
     // covered by setup.test.ts and the extension tests; here we only assert the contract.
     expect(typeof getPluginById('claude-code')!.connect!.autoConnect).toBe('function');
     expect(typeof getPluginById('codex')!.connect!.autoConnect).toBe('function');
-    expect(typeof getPluginById('gemini-cli')!.connect!.autoConnect).toBe('function');
+    expect(typeof getPluginById('antigravity-cli')!.connect!.autoConnect).toBe(
+      'function',
+    );
     // Copilot/VS Code now auto-connects too — it installs the Showtail VS Code extension
     // (capture rides on the extension), so it is NOT pre-seedable before install.
     expect(typeof getPluginById('github-copilot')!.connect!.autoConnect).toBe('function');

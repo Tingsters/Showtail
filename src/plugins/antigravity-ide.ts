@@ -16,6 +16,7 @@ import {
 import { runImportAntigravityIde } from '../commands/importAntigravityIde.ts';
 import {
   antigravityIdeAutoCaptureActive,
+  antigravityIdeInstalledOnHost,
   antigravityIdeInstructionsState,
   resolveAntigravityIdeTarget,
   writeAntigravityIdeInstructions,
@@ -84,7 +85,7 @@ export const antigravityIdePlugin: EnvironmentPlugin = {
     ],
     applicableFlags: ['user', 'project', 'force'],
 
-    detect: () => homeDirExists('.antigravity-ide') || homeDirExists('.gemini'),
+    detect: () => antigravityIdeInstalledOnHost() || homeDirExists('.antigravity-ide'),
 
     // Cannot be pre-wired before install: capture rides on a VS Code extension that is
     // installed by shelling out to the IDE's own launcher, which must already exist.
