@@ -7,7 +7,7 @@ import {
   shouldShowAuthor,
   toolLabel,
   turnModels,
-  turnView,
+  turnSegments,
 } from './data.ts';
 import { staticUtc, timeToken } from './time.ts';
 
@@ -243,14 +243,24 @@ function turnMarkdown(lines: string[], turn: Turn, ai: AiMode, author?: string):
   lines.push(`**Prompt** · ${meta}`, '');
   lines.push(turn.prompt.text, '');
 
-  const { flow, aiProcess } = turnView(turn);
-  // The work — code, decisions, plans, and the AI text that introduces a change —
-  // in the order it happened. In `off` mode even that introducing AI text drops.
-  for (const item of flow) {
-    if (item.kind === 'ai') {
+  // One chronological stream: work items inline; each run of AI messages as one
+  // collapsed <details> in place (GitHub renders it). `--ai off` drops the AI runs.
+  for (const seg of turnSegments(turn)) {
+    if (seg.kind === 'ai') {
       if (ai === 'off') continue;
-      lines.push(aiText(item.event.text));
-    } else if (item.kind === 'decision') {
+      const n = seg.events.length;
+      const open = ai === 'full' ? ' open' : '';
+      lines.push(
+        `<details${open}><summary>🤖 ${n} AI message(s)</summary>`,
+        '',
+        ...seg.events.map((e) => aiText(e.text)),
+        '</details>',
+        '',
+      );
+      continue;
+    }
+    const item = seg.item;
+    if (item.kind === 'decision') {
       lines.push('🔀 **Decision** · _you chose from the options the AI offered_', '');
       lines.push(item.event.text, '');
     } else if (item.kind === 'plan') {
@@ -264,7 +274,7 @@ function turnMarkdown(lines: string[], turn: Turn, ai: AiMode, author?: string):
       if (item.event.planPath) {
         lines.push(`_[view plan file](${planHref(item.event.planPath)})_`, '');
       }
-    } else {
+    } else if (item.kind === 'code') {
       const code = item.change;
       const stat = code.diffLines ? ` (~${code.diffLines} line(s))` : '';
       const link = `[\`${code.path}\`](${fileHref(code.linkPath ?? code.path)})`;
@@ -276,21 +286,6 @@ function turnMarkdown(lines: string[], turn: Turn, ai: AiMode, author?: string):
         lines.push(`_Changed file — ${link}${stat}._`, '');
       }
     }
-  }
-
-  // The AI's remaining play-by-play, subordinated to a collapsed disclosure
-  // (GitHub renders <details>) so it's available without dominating the export.
-  // Dropped entirely in `off` mode.
-  if (ai !== 'off' && aiProcess.length > 0) {
-    const n = aiProcess.length;
-    const open = ai === 'full' ? ' open' : '';
-    lines.push(
-      `<details${open}><summary>🤖 ${n} AI message(s)</summary>`,
-      '',
-      ...aiProcess.map((e) => aiText(e.text)),
-      '</details>',
-      '',
-    );
   }
 }
 

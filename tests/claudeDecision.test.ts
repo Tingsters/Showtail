@@ -485,10 +485,10 @@ describe('turn timeline (chronological interleaving)', () => {
     expect(turnTimeline(turn).map((i) => i.kind)).toEqual(['ai', 'code', 'decision']);
   });
 
-  test('renders code and decisions inline in order, with AI replies in the collapsed group', () => {
-    // Uniform rule: the student's work (code, decisions) reads inline in timestamp
-    // order; every AI reply is subordinated to the one collapsed group, regardless
-    // of where it fell in time.
+  test('renders the turn as one chronological stream with AI collapsed in place', () => {
+    // Each AI reply shares the timestamp of the edit it produced, so the turn reads
+    // in order: reply → its edit → reply → its edit → decision. AI is collapsed into
+    // in-place pills (not bucketed at the end), preserving "what happened and where".
     const turn: Turn = {
       prompt: ev('p', '2026-01-01T00:00:00.000Z', 'prompt', 'do it'),
       aiOutputs: [
@@ -524,13 +524,17 @@ describe('turn timeline (chronological interleaving)', () => {
     };
     const md = renderMarkdown(data);
     const at = (s: string) => md.indexOf(s);
-    // Work reads inline in order: first.ts → second.ts → decision.
-    expect(at('first.ts')).toBeLessThan(at('second.ts'));
+    // Full chronological order: first reply → first.ts → second reply → second.ts → decision.
+    expect(at('first reply')).toBeLessThan(at('first.ts'));
+    expect(at('first.ts')).toBeLessThan(at('second reply'));
+    expect(at('second reply')).toBeLessThan(at('second.ts'));
     expect(at('second.ts')).toBeLessThan(at('🔀 **Decision**'));
-    // Both AI replies are folded into the one collapsed group after the work.
-    expect(md).toContain('<details><summary>🤖 2 AI message(s)</summary>');
-    expect(at('🔀 **Decision**')).toBeLessThan(at('first reply'));
-    expect(at('first reply')).toBeLessThan(at('second reply'));
+    // The AI replies are collapsed into in-place pills (one run each), not one bucket.
+    expect(
+      (md.match(/<details><summary>🤖 1 AI message\(s\)<\/summary>/g) || []).length,
+    ).toBe(2);
+    // The decision renders exactly once (no duplication into an AI section).
+    expect((md.match(/🔀 \*\*Decision\*\*/g) || []).length).toBe(1);
   });
 
   test('a worktree code change links from linkPath but shows the clean path', () => {

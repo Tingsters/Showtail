@@ -372,36 +372,43 @@ export function turnTimeline(turn: Turn): TurnItem[] {
 }
 
 /**
- * A turn restructured for the reader-first layout. The report shows the *student's*
- * work — their prompt, the choices they made, and what got built — inline, and
- * treats the AI's prose as one uniform, collapsed, toggleable layer.
+ * A turn split into ordered segments for the reader-first layout. The turn stays a
+ * single chronological stream: the student's work (code changes, decisions, plans)
+ * renders inline in position, and each *run of consecutive AI messages* becomes one
+ * collapsed pill **at the spot it occurred** — not bucketed at the end.
  *
- *  - `flow`   — the work, in chronological order: code changes, decisions, plans.
- *  - `aiProcess` — **every** AI message of the turn, in order, subordinated to a
- *    single collapsed group.
+ * This keeps chronology intact: expanding the pills (the page toggle / `--ai full`)
+ * reconstructs the full "what happened and where" narrative — AI reasoning
+ * interleaved with the edits/decisions/plans, in order — with every item shown
+ * exactly once (work inline, AI in its pill), so nothing is duplicated.
  *
- * We deliberately do *not* try to guess which AI messages "matter": there is no
- * signal for that which is consistent across tools (Claude emits many messages per
- * turn; imported tools differ or capture only prompts), and content heuristics
- * (length/structure) match almost everything, so they hide nothing and read as
- * arbitrary. Routing all AI prose to one toggleable layer is uniform and
- * predictable on every tool — and nothing is dropped.
+ * We deliberately do *not* guess which AI messages "matter": no such signal is
+ * consistent across tools, and content heuristics match almost everything. Every AI
+ * message is kept, just collapsed by default.
  */
-export interface TurnView {
-  /** The student's work, in chronological order (no AI prose). */
-  flow: TurnItem[];
-  /** Every AI message of the turn, subordinated to the collapsed "AI messages" group. */
-  aiProcess: Event[];
-}
+export type TurnSegment =
+  | { kind: 'work'; item: TurnItem } // a code | decision | plan item, rendered inline
+  | { kind: 'ai'; events: Event[] }; // a run of consecutive AI messages → one pill
 
-export function turnView(turn: Turn): TurnView {
-  const flow: TurnItem[] = [];
-  const aiProcess: Event[] = [];
+export function turnSegments(turn: Turn): TurnSegment[] {
+  const segments: TurnSegment[] = [];
+  let run: Event[] = [];
+  const flushAi = () => {
+    if (run.length > 0) {
+      segments.push({ kind: 'ai', events: run });
+      run = [];
+    }
+  };
   for (const item of turnTimeline(turn)) {
-    if (item.kind === 'ai') aiProcess.push(item.event);
-    else flow.push(item);
+    if (item.kind === 'ai') {
+      run.push(item.event);
+    } else {
+      flushAi(); // the AI so far explains what came before this work item
+      segments.push({ kind: 'work', item });
+    }
   }
-  return { flow, aiProcess };
+  flushAi();
+  return segments;
 }
 
 /** Distinct files touched across every turn (unique paths), for the summary line. */

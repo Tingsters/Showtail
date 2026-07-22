@@ -11,7 +11,7 @@ import {
   toolLabel,
   type TurnItem,
   turnModels,
-  turnView,
+  turnSegments,
 } from './data.ts';
 import { PLAN_APPROVED_TAG, PLAN_REVISED_TAG, splitPlanText } from '../plans.ts';
 import {
@@ -261,7 +261,7 @@ function turnsHtml(data: ReportData, mode: AiMode): string {
   const nameBySlug = nameBySlugMap(data.contributors);
   const out: string[] = [renderToolbar(mode), '<div id="st-exchanges">'];
   for (const turn of data.turns) {
-    const { flow, aiProcess } = turnView(turn);
+    const segments = turnSegments(turn);
     // data-* drive the toolbar's sort (by prompt time, or grouped by session).
     out.push(
       `<details class="turn" data-ts="${escapeHtml(turn.prompt.timestamp)}" ` +
@@ -279,16 +279,12 @@ function turnsHtml(data: ReportData, mode: AiMode): string {
           `<div class="ai-text">${renderRichText(turn.prompt.text)}</div></div>`,
       );
     }
-    // The work, in order: code changes, decisions, plans, and the AI text that
-    // introduces a change (its "why"). In `off` mode even that introducing text
-    // is dropped, leaving only the student's prompt/decisions and the changes.
-    const shown = mode === 'off' ? flow.filter((i) => i.kind !== 'ai') : flow;
-    for (const item of shown) out.push(renderTimelineItem(item));
-
-    // The AI's remaining narration, subordinated to one collapsed disclosure so
-    // it never fronts the student's work. Omitted in `off` mode.
-    if (mode !== 'off' && aiProcess.length > 0) {
-      out.push(renderAiProcess(aiProcess, mode === 'full'));
+    // One chronological stream: work items inline, each run of AI messages as a
+    // collapsed pill in the position it occurred. `--ai off` drops the AI pills,
+    // leaving only the student's work (prompt/decisions/plans/changes) in order.
+    for (const seg of segments) {
+      if (seg.kind === 'work') out.push(renderTimelineItem(seg.item));
+      else if (mode !== 'off') out.push(renderAiProcess(seg.events, mode === 'full'));
     }
 
     out.push('</div>'); // end .turn-body

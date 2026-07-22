@@ -218,59 +218,61 @@ describe('turns', () => {
     }
   });
 
-  test('collapses every AI message into one per-prompt group; only the work is inline', async () => {
+  test('AI collapses into in-place pills, preserving chronology around the work (no duplication)', async () => {
     const dir = makeTempDir();
     try {
       await runInit({ cwd: dir });
       const paths = pathsForRoot(dir);
       const author = authorFor(paths);
-      const session = startSession(author);
+      startSession(author);
+      // Explicit timestamps so the order is deterministic: reasoning, edit, reasoning,
+      // decision — an AI run on either side of the edit.
       const { event: prompt } = await logEvent(author, {
         type: 'prompt',
         text: 'add a hello function',
         tool: 'claude-code',
-      });
-      // Two AI replies — a long one and a short one. Uniformly, both collapse; the
-      // classifier makes no content judgement, so the rule is predictable.
-      await logEvent(author, {
-        type: 'ai_output',
-        text: 'First, let me explain the approach in some detail so the reasoning is clear.',
-        tool: 'claude-code',
-        turnId: prompt.id,
+        timestamp: '2026-07-01T10:00:00.000Z',
       });
       await logEvent(author, {
         type: 'ai_output',
-        text: 'Done, all set.',
+        text: 'REASONING-BEFORE the edit.',
         tool: 'claude-code',
         turnId: prompt.id,
+        timestamp: '2026-07-01T10:00:01.000Z',
+      });
+      importEditArtifact(author, {
+        path: 'hello.ts',
+        diff: '+ export const hello = () => "hi"',
+        tool: 'claude-code',
+        turnId: prompt.id,
+        timestamp: '2026-07-01T10:00:02.000Z',
+      });
+      await logEvent(author, {
+        type: 'ai_output',
+        text: 'REASONING-AFTER the edit.',
+        tool: 'claude-code',
+        turnId: prompt.id,
+        timestamp: '2026-07-01T10:00:03.000Z',
       });
       await logEvent(author, {
         type: 'decision',
         text: 'Use an arrow function',
         tool: 'claude-code',
         turnId: prompt.id,
-      });
-      writeFileSync(join(dir, 'hello.ts'), 'export const hello = () => "hi";');
-      await addArtifact(author, {
-        filePath: 'hello.ts',
-        tool: 'claude-code',
-        turnId: prompt.id,
-        sessionId: session.id,
-        diff: '+ export const hello = () => "hi";',
+        timestamp: '2026-07-01T10:00:04.000Z',
       });
 
       const html = renderHtml(buildReportData(paths));
-      const pill = html.indexOf('class="ai-process"');
-      expect(pill).toBeGreaterThan(-1);
-      // Both AI messages — long and short alike — fold into the one counted group…
-      expect(html).toContain('2 AI messages'); // the pill's count
-      expect(html).not.toContain('<details class="ai-process" open>'); // collapsed by default
-      // …the student's work reads inline, before the pill…
-      expect(html.indexOf('hello.ts')).toBeLessThan(pill);
-      expect(html.indexOf('Use an arrow function')).toBeLessThan(pill);
-      // …and no AI prose is inline — it appears only inside the collapsed group.
-      expect(html.indexOf('First, let me explain')).toBeGreaterThan(pill);
-      expect(html.indexOf('Done, all set.')).toBeGreaterThan(pill);
+      // Two in-place AI pills — one before the edit, one after — not one bucket at the end.
+      expect((html.match(/class="ai-process"/g) || []).length).toBe(2);
+      const at = (s: string) => html.indexOf(s);
+      // Chronological: reasoning → edit → reasoning → decision, each in its place.
+      expect(at('REASONING-BEFORE')).toBeGreaterThan(-1);
+      expect(at('REASONING-BEFORE')).toBeLessThan(at('hello.ts'));
+      expect(at('hello.ts')).toBeLessThan(at('REASONING-AFTER'));
+      expect(at('REASONING-AFTER')).toBeLessThan(at('Use an arrow function'));
+      // The decision renders exactly once — never duplicated into an AI section.
+      expect((html.match(/Use an arrow function/g) || []).length).toBe(1);
     } finally {
       cleanup(dir);
     }
