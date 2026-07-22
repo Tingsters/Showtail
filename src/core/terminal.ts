@@ -6,11 +6,10 @@
 import { spawn } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 
-/** How to surface a file path in the terminal, cheapest-clickable first. */
+/** How to surface a file path in the terminal. */
 export type LinkMode =
-  | 'plain' // not a TTY (piped/redirected/captured): bare label, no escapes.
-  | 'osc8' // terminal supports OSC 8 hyperlinks: a real clickable hyperlink.
-  | 'url'; // TTY without OSC 8 (Terminal.app, xterm): a bare file:// URL.
+  | 'plain' // no OSC 8 support (piped, or an emulator like Terminal.app/xterm): bare label.
+  | 'osc8'; // terminal supports OSC 8 hyperlinks: a real clickable hyperlink.
 
 /**
  * Detect whether this terminal renders OSC 8 hyperlinks. There's no query for
@@ -33,24 +32,23 @@ export function supportsOsc8(env: NodeJS.ProcessEnv = process.env): boolean {
   return false;
 }
 
-/** Pick the link mode for the current stdout: plain if piped, else osc8/url. */
+/** Pick the link mode for the current stdout: osc8 only where supported, else plain. */
 function detectLinkMode(): LinkMode {
   if (!(process.stdout.isTTY ?? false)) return 'plain';
-  return supportsOsc8() ? 'osc8' : 'url';
+  return supportsOsc8() ? 'osc8' : 'plain';
 }
 
 /**
- * Render a local file path as the most clickable thing the terminal can show:
+ * Render a local file path for the terminal:
  *
  * - `osc8` — an OSC 8 hyperlink wrapping `label` (Windows Terminal, iTerm2, VS
  *   Code, kitty, GNOME Terminal, WezTerm, Ghostty, …). Renders clickable and opens
  *   the file.
- * - `url` — a bare `file://` URL, for TTYs without OSC 8 support (macOS
- *   Terminal.app, xterm). These emulators auto-linkify a `file://` URL and open it
- *   on ⌘/Ctrl-click; where that fails it's still a copy-pasteable URL — better than
- *   the inert path an OSC 8 sequence would leave once stripped.
- * - `plain` — the bare label, when stdout is not an interactive TTY
- *   (piped/redirected/captured), so escape codes never leak into files or logs.
+ * - `plain` — the bare label, when the terminal has no OSC 8 support (macOS
+ *   Terminal.app, xterm) or stdout is not an interactive TTY (piped/redirected). No
+ *   escape codes leak into files or logs, and nothing renders inert. Terminal.app
+ *   has no clickable-link mechanism at all, so opening there is handled by the
+ *   post-report open menu ({@link promptOpenReport}) rather than this string.
  */
 export function fileLink(
   absPath: string,
@@ -59,7 +57,6 @@ export function fileLink(
 ): string {
   if (mode === 'plain') return label;
   const url = pathToFileURL(absPath).href; // file:///C:/Users/… — handles Windows + URL-encoding.
-  if (mode === 'url') return url;
   const OSC = '\x1b]8;;';
   const BEL = '\x07'; // The most broadly compatible OSC 8 terminator.
   return `${OSC}${url}${BEL}${label}${OSC}${BEL}`;

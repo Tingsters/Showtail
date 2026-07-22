@@ -6,10 +6,17 @@ import {
   renderMarkdown,
   type ReportRenderOptions,
 } from '../core/report.ts';
-import { authorSlugs, upgradeIdentityIfProvisional } from '../core/authors.ts';
+import {
+  authorSlugs,
+  readAuthor,
+  upgradeIdentityIfProvisional,
+} from '../core/authors.ts';
 import { emitJson } from '../core/output.ts';
-import { requirePaths, writeJson } from '../core/storage.ts';
+import { authorPaths, requirePaths, writeJson } from '../core/storage.ts';
 import { fileLink, openInDefaultApp } from '../core/terminal.ts';
+import { readAutoOpenReport, setAutoOpenReport } from '../core/globalConfig.ts';
+import { type OpenableReport, promptOpenReport } from '../core/prompt.ts';
+import { basename } from 'node:path';
 import { writeFileSync, mkdirSync } from 'node:fs';
 import type { ReportData } from '../types.ts';
 
@@ -32,6 +39,8 @@ export interface ReportOptions {
   ai?: string | boolean;
   /** Emit machine-readable JSON (the written paths + summary) instead of prose. */
   json?: boolean;
+  /** Force the open menu this run, ignoring a remembered choice (from `--ask`). */
+  ask?: boolean;
 }
 
 /** Normalize the `--ai` flag (and `--no-ai` → false) to a render mode. */
@@ -46,33 +55,58 @@ function fileStamp(iso: string): string {
   return iso.replace(/:/g, '').replace(/\..+$/, '');
 }
 
-/** One report to generate: a filename key plus the scope passed to the builder. */
+/** One report to generate: a filename key, a human label, and the builder scope. */
 interface ReportTarget {
   key: string;
+  label: string;
   scope: { authorSlug?: string };
 }
 
 /** A written report's primary file plus its Markdown source (if any). */
 interface WrittenReport {
   key: string;
+  label: string;
   format: string;
   reportPath: string;
   markdownPath: string | null;
 }
 
-/** Decide which reports to write: a single author, the team, or team + everyone. */
-function reportTargets(options: ReportOptions, slugs: string[]): ReportTarget[] {
+/** A contributor target keyed by slug, labelled with their display name. */
+function authorTarget(
+  paths: ReturnType<typeof requirePaths>,
+  slug: string,
+): ReportTarget {
+  const label = readAuthor(authorPaths(paths, slug))?.name ?? slug;
+  return { key: slug, label, scope: { authorSlug: slug } };
+}
+
+/**
+ * Decide which reports to write. `--author`/`--team` are explicit. By default:
+ * with two or more contributors, the combined team report first, then one each;
+ * with a single contributor there is no "team" — just their report; with none,
+ * a single default report.
+ */
+export function reportTargets(
+  paths: ReturnType<typeof requirePaths>,
+  options: ReportOptions,
+  slugs: string[],
+): ReportTarget[] {
   if (options.author) {
-    return [{ key: options.author, scope: { authorSlug: options.author } }];
+    return [authorTarget(paths, options.author)];
   }
   if (options.team) {
-    return [{ key: 'team', scope: {} }];
+    return [{ key: 'team', label: 'team', scope: {} }];
   }
-  // Default: the combined team report first, then one per contributor.
-  return [
-    { key: 'team', scope: {} },
-    ...slugs.map((s) => ({ key: s, scope: { authorSlug: s } })),
-  ];
+  if (slugs.length >= 2) {
+    return [
+      { key: 'team', label: 'team', scope: {} },
+      ...slugs.map((s) => authorTarget(paths, s)),
+    ];
+  }
+  if (slugs.length === 1) {
+    return [authorTarget(paths, slugs[0]!)];
+  }
+  return [{ key: 'team', label: 'team', scope: {} }];
 }
 
 /**
@@ -93,14 +127,14 @@ export async function runReport(options: ReportOptions): Promise<void> {
   const stamp = fileStamp(new Date().toISOString());
   mkdirSync(paths.reportsDir, { recursive: true });
 
-  const targets = reportTargets(options, slugs);
+  const targets = reportTargets(paths, options, slugs);
   const written: WrittenReport[] = [];
   let teamData: ReportData | undefined;
 
   for (const target of targets) {
     const data = buildReportData(paths, { ...target.scope, title: options.title });
     if (target.key === 'team') teamData = data;
-    written.push(writeOneReport(paths.reportsDir, target.key, stamp, data, options));
+    written.push(writeOneReport(paths.reportsDir, target, stamp, data, options));
   }
 
   const primary = written[0];
@@ -118,8 +152,6 @@ export async function runReport(options: ReportOptions): Promise<void> {
     return;
   }
 
-  if (primary) maybeOpen(primary.reportPath, options);
-
   if (summarySource) {
     console.log('');
     console.log(
@@ -132,27 +164,32 @@ export async function runReport(options: ReportOptions): Promise<void> {
         '.',
     );
   }
-  console.log('Open a file above to review the full trail.');
+
+  if (primary) await offerToOpen(written, primary, options);
 }
 
 /** Write one report in the requested format; return its written paths. */
 function writeOneReport(
   reportsDir: string,
-  key: string,
+  target: ReportTarget,
   stamp: string,
   data: ReportData,
   options: ReportOptions,
 ): WrittenReport {
+  const { key, label } = target;
   const base = `report-${key}-${stamp}`;
   const format = options.format ?? 'html';
   const quiet = options.json === true;
   const renderOpts: ReportRenderOptions = { ai: aiMode(options.ai) };
+  // The printed link uses the basename as its text: a clickable hyperlink where the
+  // terminal supports one, and a short, tidy filename where it doesn't.
+  const link = (out: string) => fileLink(out, basename(out));
 
   if (format === 'json') {
     const out = join(reportsDir, `${base}.json`);
     writeJson(out, data);
-    if (!quiet) console.log(`Wrote JSON report (${key}): ${fileLink(out)}`);
-    return { key, format, reportPath: out, markdownPath: null };
+    if (!quiet) console.log(`Wrote JSON report (${key}): ${link(out)}`);
+    return { key, label, format, reportPath: out, markdownPath: null };
   }
 
   // The Markdown is always written: on its own for `--format md`, and as the
@@ -161,13 +198,13 @@ function writeOneReport(
   writeFileSync(mdOut, renderMarkdown(data, renderOpts) + '\n', 'utf8');
 
   if (format === 'md') {
-    if (!quiet) console.log(`Wrote report (${key}): ${fileLink(mdOut)}`);
-    return { key, format, reportPath: mdOut, markdownPath: null };
+    if (!quiet) console.log(`Wrote report (${key}): ${link(mdOut)}`);
+    return { key, label, format, reportPath: mdOut, markdownPath: null };
   }
   const htmlOut = join(reportsDir, `${base}.html`);
   writeFileSync(htmlOut, renderHtml(data, renderOpts), 'utf8');
-  if (!quiet) console.log(`Wrote report (${key}): ${fileLink(htmlOut)}`);
-  return { key, format, reportPath: htmlOut, markdownPath: mdOut };
+  if (!quiet) console.log(`Wrote report (${key}): ${link(htmlOut)}`);
+  return { key, label, format, reportPath: htmlOut, markdownPath: mdOut };
 }
 
 /** Fallback summary source when no team report was generated (e.g. `--author`). */
@@ -180,9 +217,53 @@ async function firstData(
   return buildReportData(paths, first.scope);
 }
 
-/** With `--open`, launch the report in the OS default app (best-effort). */
-function maybeOpen(path: string, options: ReportOptions): void {
-  if (!options.open) return;
-  console.log('Opening report…');
-  openInDefaultApp(path);
+/**
+ * Decide what to do about opening the report, without side effects (testable):
+ * honour `--open`/`--no-open`/`--json` first, never touch a non-interactive run,
+ * then apply the remembered preference, falling back to prompting.
+ */
+export function resolveOpenAction(
+  opts: { open?: boolean; json?: boolean; ask?: boolean },
+  pref: 'always' | 'never' | 'ask',
+  interactive: boolean,
+): 'open' | 'skip' | 'ask' {
+  if (opts.open === true) return 'open'; // --open: open the primary report once
+  if (opts.open === false) return 'skip'; // --no-open
+  if (opts.json) return 'skip';
+  if (!interactive) return 'skip'; // piped/CI/agent: never auto-open, never prompt
+  if (opts.ask) return 'ask'; // --ask: show the menu even if a choice is remembered
+  if (pref === 'always') return 'open';
+  if (pref === 'never') return 'skip';
+  return 'ask';
+}
+
+/**
+ * After writing, open the report per the resolved action: launch it directly, or
+ * show the once/always/never menu and act on (and remember) the choice.
+ */
+async function offerToOpen(
+  written: WrittenReport[],
+  primary: WrittenReport,
+  options: ReportOptions,
+): Promise<void> {
+  const interactive = (process.stdin.isTTY ?? false) && (process.stdout.isTTY ?? false);
+  const action = resolveOpenAction(options, readAutoOpenReport(), interactive);
+  if (action === 'skip') return;
+  if (action === 'open') {
+    openInDefaultApp(primary.reportPath);
+    return;
+  }
+  const openable: OpenableReport[] = written.map((w) => ({
+    label: w.label,
+    path: w.reportPath,
+  }));
+  const choice = await promptOpenReport(openable, {
+    label: primary.label,
+    path: primary.reportPath,
+  });
+  if (choice.kind === 'open') openInDefaultApp(choice.path);
+  else if (choice.kind === 'always') {
+    setAutoOpenReport('always');
+    openInDefaultApp(primary.reportPath);
+  } else if (choice.kind === 'never') setAutoOpenReport('never');
 }

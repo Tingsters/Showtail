@@ -62,6 +62,12 @@ export interface GlobalConfig {
    * The re-wire is an idempotent merge, so bumping this never duplicates hooks.
    */
   wiringVersion?: string;
+  /**
+   * Whether `showtail report` opens the generated report afterwards: `always`,
+   * `never`, or `ask` (the default — the post-report open menu prompts once per
+   * run). Set when the user picks "always"/"never" in that menu.
+   */
+  autoOpenReport?: 'always' | 'never' | 'ask';
 }
 
 /** Default signal floor for surfacing an inbox session (see {@link GlobalConfig.inboxMinSignal}). */
@@ -145,6 +151,19 @@ export function removeScratchPath(path: string): string[] {
   const next = (cfg.scratchPaths ?? []).filter((p) => p !== resolved);
   writeGlobalConfig({ ...cfg, scratchPaths: next });
   return next;
+}
+
+// --- report open preference -----------------------------------------------
+
+/** How `showtail report` should open the report: the remembered choice, or `ask`. */
+export function readAutoOpenReport(): 'always' | 'never' | 'ask' {
+  return readGlobalConfig().autoOpenReport ?? 'ask';
+}
+
+/** Remember the report open choice (`always`/`never`) picked in the open menu. */
+export function setAutoOpenReport(value: 'always' | 'never'): void {
+  const cfg = readGlobalConfig();
+  writeGlobalConfig({ ...cfg, autoOpenReport: value });
 }
 
 // --- watch-forward watermark ----------------------------------------------
