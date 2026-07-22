@@ -342,11 +342,15 @@ export function parseClaudeTranscript(content: string, root: string): ClaudeTran
     const sid = asString(prop(obj, 'sessionId'));
     if (sid !== undefined && !sessionId) sessionId = sid;
 
-    // Drop noise that isn't the student's direct work.
+    // Drop noise that isn't the student's direct work. `isCompactSummary` is the
+    // context-compaction recap Claude injects as a user turn — a redundant summary
+    // of turns already captured, never a real prompt (robust flag; the text-level
+    // fallback in isSyntheticPrompt covers the live-hook/legacy paths).
     if (
       prop(obj, 'isSidechain') === true ||
       prop(obj, 'isMeta') === true ||
-      prop(obj, 'isApiErrorMessage') === true
+      prop(obj, 'isApiErrorMessage') === true ||
+      prop(obj, 'isCompactSummary') === true
     ) {
       continue;
     }

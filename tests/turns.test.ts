@@ -317,6 +317,34 @@ describe('turns', () => {
     }
   });
 
+  test('a legacy context-compaction summary prompt opens no turn (report-time heal)', async () => {
+    const dir = makeTempDir();
+    try {
+      await runInit({ cwd: dir });
+      const paths = pathsForRoot(dir);
+      const author = authorFor(paths);
+      startSession(author);
+      const { event: real } = await logEvent(author, {
+        type: 'prompt',
+        text: 'build a parser',
+        tool: 'claude-code',
+      });
+      // A compaction recap recorded as a prompt by an older build — text only, no flag.
+      await logEvent(author, {
+        type: 'prompt',
+        text: 'This session is being continued from a previous conversation that ran out of context.\n\nSummary: lots of prior work…',
+        tool: 'claude-code',
+      });
+
+      const data = buildReportData(paths);
+      expect(data.turns).toHaveLength(1);
+      expect(data.turns[0]!.prompt.id).toBe(real.id);
+      expect(renderMarkdown(data)).not.toContain('This session is being continued');
+    } finally {
+      cleanup(dir);
+    }
+  });
+
   test('renders the exchanges toolbar and wrapper with the three controls', async () => {
     const dir = makeTempDir();
     try {

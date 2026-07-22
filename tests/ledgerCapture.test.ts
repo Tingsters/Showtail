@@ -165,6 +165,41 @@ describe('ledger capture: nothing is dropped', () => {
     }
   });
 
+  test('a context-compaction summary user-prompt hook is not recorded as a prompt', () => {
+    const scratch = makeTempDir();
+    const home = makeTempDir();
+    try {
+      enableAutoInit(home);
+      const env = envWithHome(home);
+
+      expect(
+        runCli(scratch, ['hook', 'user-prompt'], {
+          input: userPrompt(scratch, 'build a real thing'),
+          env,
+        }).code,
+      ).toBe(0);
+      // The compaction recap fires UserPromptSubmit but must not be captured — the
+      // live-hook payload has no isCompactSummary flag, so the stable preamble matches.
+      expect(
+        runCli(scratch, ['hook', 'user-prompt'], {
+          input: userPrompt(
+            scratch,
+            'This session is being continued from a previous conversation that ran out of context.\n\nSummary: …',
+          ),
+          env,
+        }).code,
+      ).toBe(0);
+
+      const data = inbox(scratch, env);
+      expect(data.sessions.length).toBe(1);
+      expect(data.sessions[0].prompts).toBe(1); // only the genuine prompt
+      expect(data.sessions[0].firstPrompt).toContain('real thing');
+    } finally {
+      cleanup(scratch);
+      cleanup(home);
+    }
+  });
+
   test('cwd-fallback: a prompt in an eligible folder is placed, not left in the inbox', () => {
     const dir = makeTempDir();
     const home = makeTempDir();

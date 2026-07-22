@@ -179,6 +179,47 @@ describe('parseClaudeTranscript', () => {
     }
   });
 
+  test('drops the context-compaction summary (isCompactSummary), keeps real prompts', () => {
+    const dir = makeTempDir();
+    try {
+      const transcript =
+        [
+          JSON.stringify({
+            type: 'user',
+            uuid: 'c1',
+            isCompactSummary: true,
+            isVisibleInTranscriptOnly: true,
+            timestamp: '2026-06-10T10:00:00.000Z',
+            cwd: dir,
+            // Note: text is NOT tag-wrapped — only the structural flag identifies it.
+            message: {
+              role: 'user',
+              content:
+                'This session is being continued from a previous conversation that ran out of context.\n\nSummary: …',
+            },
+          }),
+          JSON.stringify({
+            type: 'user',
+            uuid: 'c2',
+            promptSource: 'typed',
+            timestamp: '2026-06-10T10:01:00.000Z',
+            cwd: dir,
+            message: { role: 'user', content: 'now add tests' },
+          }),
+        ].join('\n') + '\n';
+
+      const { messages } = parseClaudeTranscript(transcript, dir);
+      const users = messages.filter((m) => m.role === 'user');
+      expect(users.length).toBe(1);
+      expect(users[0]!.text).toBe('now add tests');
+      expect(messages.map((m) => m.text).join('\n')).not.toContain(
+        'This session is being continued',
+      );
+    } finally {
+      cleanup(dir);
+    }
+  });
+
   test('keeps queued and suggestion_accepted prompts; drops system and sdk', () => {
     const dir = makeTempDir();
     try {
