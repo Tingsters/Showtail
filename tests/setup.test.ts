@@ -14,6 +14,10 @@ function isolatedEnv(home: string, ghome: string): NodeJS.ProcessEnv {
     HOME: home,
     USERPROFILE: home,
     SHOWTAIL_HOME: ghome,
+    // Pin the Antigravity/Gemini home too: IDE/CLI detection keys on geminiHome(),
+    // so without this the spawned setup could inherit a real ~/.gemini and connect
+    // tools the stubbed PATH was meant to hide.
+    GEMINI_HOME: join(home, '.gemini'),
     PATH: '',
     Path: '',
   };

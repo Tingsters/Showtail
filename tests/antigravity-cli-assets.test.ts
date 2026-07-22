@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   AGY_BODY,
+  ANTIGRAVITY_BLOCK_NAME,
   ANTIGRAVITY_CLI_HOOK_EVENTS,
   antigravityCliHooksJson,
 } from '../src/core/antigravityCli.ts';
@@ -23,13 +24,15 @@ describe('antigravity-cli assets stay in sync with the single source of truth', 
   test('hook config uses agy’s real schema, events, and edit-tool matcher', () => {
     const parsed = JSON.parse(antigravityCliHooksJson());
     // agy reads a NAMED block with an `enabled` flag, not a `{ hooks: {...} }` wrapper.
-    expect(Object.keys(parsed)).toEqual(['showtail']);
-    expect(parsed.showtail.enabled).toBe(true);
+    expect(Object.keys(parsed)).toEqual([ANTIGRAVITY_BLOCK_NAME]);
+    expect(parsed[ANTIGRAVITY_BLOCK_NAME].enabled).toBe(true);
     // agy's real lifecycle events (NO UserPromptSubmit).
     expect(Object.keys(ANTIGRAVITY_CLI_HOOK_EVENTS).sort()).toEqual(
       ['PostToolUse', 'PreInvocation', 'SessionStart', 'Stop'].sort(),
     );
-    expect(parsed.showtail.PostToolUse[0].matcher).toContain('write_to_file');
+    expect(parsed[ANTIGRAVITY_BLOCK_NAME].PostToolUse[0].matcher).toContain(
+      'write_to_file',
+    );
 
     // Every Showtail command must be a BARE `showtail …` (no quotes/paths, since
     // agy execs the first token via cmd.exe) and carry the tool tag.

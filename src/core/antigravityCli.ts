@@ -25,7 +25,12 @@ export type InstallScope = 'user' | 'project';
 //   * global:    `~/.gemini/config/hooks.json`  (next to `mcp_config.json`)
 // The schema is NOT Claude's `{ hooks: { <Event>: [...] } }`. It is a map of
 // NAMED config blocks, each with an `enabled` flag and event-name keys:
-//   { "showtail": { "enabled": true, "<Event>": [ { matcher?, hooks:[{type,command}] } ] } }
+//   { "showtail-cli": { "enabled": true, "<Event>": [ { matcher?, hooks:[{type,command}] } ] } }
+// The block name is arbitrary (agy runs every enabled bundle), so the CLI and
+// IDE deliberately use DISTINCT keys — `showtail-cli` here, `showtail-ide` in
+// antigravityIde.ts — sharing this same file. That way `disconnect antigravity-ide`
+// removes only its own bundle and never deletes the CLI's (they used to collide
+// on a shared `showtail` key, so disconnecting one silently killed the other).
 // Its lifecycle events differ too — there is NO `UserPromptSubmit`. We use:
 //   * SessionStart  → session-start
 //   * PreInvocation → user-prompt (fires before inference; carries the prompt)
@@ -36,8 +41,8 @@ export type InstallScope = 'user' | 'project';
 // agy's PostToolUse payload is `{ toolCall:{name,args:{TargetFile,CodeContent,…}},
 // transcriptPath, conversationId, workspacePaths }` (parsed in the plugin adapter).
 
-/** Top-level config-block name we own in agy's hooks.json. */
-export const ANTIGRAVITY_BLOCK_NAME = 'showtail';
+/** Top-level config-block name we own in agy's hooks.json (distinct from the IDE's `showtail-ide`). */
+export const ANTIGRAVITY_BLOCK_NAME = 'showtail-cli';
 
 export const ANTIGRAVITY_CLI_HOOK_EVENTS: HookEvents = {
   SessionStart: [

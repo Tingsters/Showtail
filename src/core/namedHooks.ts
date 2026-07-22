@@ -8,8 +8,9 @@
  * This differs from the `{ hooks: { <Event>: [...] } }` map shape used by Claude
  * Code / Codex / the Antigravity *CLI* (see {@link hookMerge.ts}). The IDE keys
  * each hook bundle by a top-level *name* with an `enabled` flag, so a single file
- * can carry several independent named bundles. We own exactly one — `showtail` —
- * and never touch the others.
+ * can carry several independent named bundles. The Antigravity IDE owns
+ * `showtail-ide` and the Antigravity CLI owns `showtail-cli` (both may share this
+ * file); each merges/unmerges only its own key and never touches the others.
  *
  * Every command we install contains {@link HOOK_MARKER}, so our bundle is
  * recognized by its commands even if the name were reused.

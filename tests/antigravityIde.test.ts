@@ -7,10 +7,18 @@ import {
   ANTIGRAVITY_IDE_HOOK_NAMESPACE,
   antigravityIdeAutoCaptureActive,
   antigravityIdeHooksInstalledAt,
+  antigravityIdeInstalledOnHost,
   antigravityIdeInstructionsState,
   installAntigravityIdeHooks,
   resolveAntigravityIdeTarget,
+  uninstallAntigravityIdeHooks,
 } from '../src/core/antigravityIde.ts';
+import { antigravityIdePlugin } from '../src/plugins/antigravity-ide.ts';
+import {
+  ANTIGRAVITY_BLOCK_NAME,
+  installAntigravityCliHooks,
+  uninstallAntigravityCliHooks,
+} from '../src/core/antigravityCli.ts';
 import { mergeNamedHooks } from '../src/core/namedHooks.ts';
 import { writeJson } from '../src/core/storage.ts';
 import {
@@ -119,6 +127,41 @@ describe('antigravity-ide install / uninstall', () => {
     }
   });
 
+  test('CLI and IDE bundles coexist in the shared hooks.json; disconnecting one preserves the other', () => {
+    // In reality (GEMINI_HOME unset) both tools resolve the SAME global file
+    // ~/.gemini/config/hooks.json. Point a CLI target at the IDE's shared file so
+    // both bundles land in one hooks.json, then verify each disconnect removes ONLY
+    // its own key. Regression for the old bug where both owned `showtail`, so
+    // `disconnect antigravity-ide` silently deleted the CLI's capture hooks.
+    const ideTarget = resolveAntigravityIdeTarget('user');
+    const sharedHooks = ideTarget.hooksFile;
+    const cliTarget = {
+      scope: 'user' as const,
+      hooksFile: sharedHooks,
+      contextFile: join(geminiHomeDir, 'antigravity-cli', 'AGY.showtail.md'),
+    };
+
+    installAntigravityCliHooks(cliTarget);
+    installAntigravityIdeHooks(ideTarget);
+    let cfg = JSON.parse(readFileSync(sharedHooks, 'utf8'));
+    expect(cfg[ANTIGRAVITY_BLOCK_NAME]).toBeDefined(); // showtail-cli
+    expect(cfg[ANTIGRAVITY_IDE_HOOK_NAMESPACE]).toBeDefined(); // showtail-ide
+    expect(ANTIGRAVITY_BLOCK_NAME).not.toBe(ANTIGRAVITY_IDE_HOOK_NAMESPACE);
+
+    // Disconnect the IDE — the CLI's bundle must survive.
+    uninstallAntigravityIdeHooks(ideTarget);
+    cfg = JSON.parse(readFileSync(sharedHooks, 'utf8'));
+    expect(cfg[ANTIGRAVITY_IDE_HOOK_NAMESPACE]).toBeUndefined();
+    expect(cfg[ANTIGRAVITY_BLOCK_NAME]).toBeDefined();
+
+    // And the reverse: disconnect the CLI — the IDE's bundle must survive.
+    installAntigravityIdeHooks(ideTarget);
+    uninstallAntigravityCliHooks(cliTarget);
+    cfg = JSON.parse(readFileSync(sharedHooks, 'utf8'));
+    expect(cfg[ANTIGRAVITY_BLOCK_NAME]).toBeUndefined();
+    expect(cfg[ANTIGRAVITY_IDE_HOOK_NAMESPACE]).toBeDefined();
+  });
+
   test('does not collide with GEMINI.md or AGENTS.md', async () => {
     const dir = makeTempDir();
     try {
@@ -170,5 +213,23 @@ describe('antigravity-ide install / uninstall', () => {
   test('the instructions body is non-empty and mentions the tool', () => {
     expect(AGY_IDE_BODY.length).toBeGreaterThan(0);
     expect(AGY_IDE_BODY).toContain('Antigravity IDE');
+  });
+});
+
+describe('antigravity-ide detection keys on the IDE-specific dir, not shared ~/.gemini', () => {
+  test('a CLI-only ~/.gemini (root + config + antigravity-cli) does NOT detect the IDE', () => {
+    // Simulate what `connect antigravity-cli` leaves behind: it creates ~/.gemini,
+    // ~/.gemini/config/hooks.json, and ~/.gemini/antigravity-cli/ — but never
+    // ~/.gemini/antigravity-ide/. This used to falsely detect the IDE (bug).
+    mkdirSync(join(geminiHomeDir, 'config'), { recursive: true });
+    mkdirSync(join(geminiHomeDir, 'antigravity-cli'), { recursive: true });
+    expect(antigravityIdeInstalledOnHost()).toBe(false);
+  });
+
+  test('the IDE product dir makes it detect', () => {
+    mkdirSync(join(geminiHomeDir, 'antigravity-ide'), { recursive: true });
+    expect(antigravityIdeInstalledOnHost()).toBe(true);
+    // and the plugin surfaces that (host signal short-circuits the OR)
+    expect(antigravityIdePlugin.connect!.detect()).toBe(true);
   });
 });
