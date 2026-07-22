@@ -17,10 +17,11 @@ describe('fileLink', () => {
     expect(out).toMatch(/\x1b\]8;;file:\/\/[^\x07]+\x07report\.html\x1b\]8;;\x07/);
   });
 
-  test('emits a bare, escape-free file:// URL in url mode (Terminal.app, xterm)', () => {
-    const out = fileLink('/abs/report.html', 'report.html', 'url');
-    expect(out).toBe('file:///abs/report.html');
-    expect(out).not.toContain('\x1b'); // no OSC 8 sequence to be stripped/left inert
+  test('falls back to the plain label in plain mode (Terminal.app, xterm, non-TTY)', () => {
+    // No OSC 8 sequence to be stripped/left inert; opening is handled by the menu.
+    const out = fileLink('/abs/report.html', 'report.html', 'plain');
+    expect(out).toBe('report.html');
+    expect(out).not.toContain('\x1b');
   });
 
   test('defaults the label to the path itself', () => {

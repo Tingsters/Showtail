@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased
+
+### What changed
+
+- **`showtail report` now offers to open the report on every platform.** The printed
+  path was a clickable hyperlink only in terminals that support OSC 8 (Windows
+  Terminal, iTerm2, VS Code); macOS Terminal.app has no such support, so the link was
+  inert there. Instead of depending on the terminal, `report` now shows a one-keypress
+  menu after writing — **(o)nce / (a)lways / (n)ever** (Esc or Ctrl-C to skip) — and
+  opens the report in your default browser. *Always*/*never* is remembered per-user in
+  `~/.showtail-cli/config.json`; `--open` opens without asking, `--no-open` suppresses
+  it, and `--ask` re-shows the menu to change a remembered choice. When several reports
+  were written the menu lists them so you can pick which to open.
+- **A combined "team" report is only written when there are multiple contributors.**
+  A solo project previously got a redundant `report-team-*` alongside its single
+  contributor report; now it just gets the one.
+
 ## 0.12.0 — Readable reports: student-first layout + exchanges toolbar
 
 ### What changed

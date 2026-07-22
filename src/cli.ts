@@ -334,7 +334,9 @@ program
   )
   .helpGroup(G_REVIEW)
   .option('--format <format>', 'output format: html (default), md, or json', 'html')
-  .option('--open', 'open the generated report in your default app')
+  .option('--open', 'open the generated report without asking')
+  .option('--no-open', 'do not open the report or show the open menu')
+  .option('--ask', 'always show the open menu (ignores a remembered always/never choice)')
   .option('--author <slug>', 'generate only this contributor’s report')
   .option('--team', 'generate only the combined team report')
   .option('--title <text>', 'name shown in the report title (overrides the project name)')
@@ -349,6 +351,7 @@ program
       async (opts: {
         format?: string;
         open?: boolean;
+        ask?: boolean;
         author?: string;
         team?: boolean;
         title?: string;
