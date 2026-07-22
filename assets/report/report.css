@@ -1,6 +1,15 @@
-:root { color-scheme: light dark; }
+:root {
+  color-scheme: light dark;
+}
 body {
-  font-family: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  font-family:
+    system-ui,
+    -apple-system,
+    'Segoe UI',
+    Roboto,
+    Helvetica,
+    Arial,
+    sans-serif;
   line-height: 1.6;
   color: #1b1b1f;
   background: #fbfbfd;
@@ -50,10 +59,20 @@ body {
   border-radius: 0.5rem;
   font-size: 0.8rem;
 }
-.st-exbar[hidden] { display: none; }
-.st-exbar-grp { display: inline-flex; align-items: center; gap: 0.5rem; }
-.st-exbar-end { margin-left: auto; }
-.st-seg-label { color: #8a8a94; }
+.st-exbar[hidden] {
+  display: none;
+}
+.st-exbar-grp {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.st-exbar-end {
+  margin-left: auto;
+}
+.st-seg-label {
+  color: #8a8a94;
+}
 /* Plain button (Expand all) + segmented buttons share a pill look. */
 .st-btn,
 .st-seg-btn {
@@ -67,23 +86,63 @@ body {
   cursor: pointer;
 }
 .st-btn:hover,
-.st-seg-btn:hover { background: #eef0fb; }
+.st-seg-btn:hover {
+  background: #eef0fb;
+}
 .st-btn:focus-visible,
 .st-seg-btn:focus-visible,
-.st-switch input:focus-visible + .st-switch-ui { outline: 2px solid #5b6cf0; outline-offset: 1px; }
-.st-btn-icon { font-size: 0.9em; }
+.st-switch input:focus-visible + .st-switch-ui {
+  outline: 2px solid #5b6cf0;
+  outline-offset: 1px;
+}
+.st-btn-icon {
+  font-size: 0.9em;
+}
 /* Segmented Time | Session control (adjacent buttons, one active). */
-.st-seg { display: inline-flex; }
-.st-seg-btn { border-radius: 0; margin-left: -1px; }
-.st-seg-btn:first-child { border-radius: 0.4rem 0 0 0.4rem; margin-left: 0; }
-.st-seg-btn:last-child { border-radius: 0 0.4rem 0.4rem 0; }
-.st-seg-btn.is-active { background: #3a3f9b; color: #fff; border-color: #3a3f9b; position: relative; z-index: 1; }
-.st-seg-btn.is-active:hover { background: #333884; }
-.st-caret { font-size: 0.7em; }
-.st-seg-btn:not(.is-active) .st-caret { visibility: hidden; }
+.st-seg {
+  display: inline-flex;
+}
+.st-seg-btn {
+  border-radius: 0;
+  margin-left: -1px;
+}
+.st-seg-btn:first-child {
+  border-radius: 0.4rem 0 0 0.4rem;
+  margin-left: 0;
+}
+.st-seg-btn:last-child {
+  border-radius: 0 0.4rem 0.4rem 0;
+}
+.st-seg-btn.is-active {
+  background: #3a3f9b;
+  color: #fff;
+  border-color: #3a3f9b;
+  position: relative;
+  z-index: 1;
+}
+.st-seg-btn.is-active:hover {
+  background: #333884;
+}
+.st-caret {
+  font-size: 0.7em;
+}
+.st-seg-btn:not(.is-active) .st-caret {
+  visibility: hidden;
+}
 /* AI show/hide switch. */
-.st-switch { display: inline-flex; align-items: center; gap: 0.4rem; cursor: pointer; user-select: none; }
-.st-switch input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+.st-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  cursor: pointer;
+  user-select: none;
+}
+.st-switch input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+}
 .st-switch-ui {
   width: 2rem;
   height: 1.05rem;
@@ -94,7 +153,7 @@ body {
   transition: background 0.15s;
 }
 .st-switch-ui::after {
-  content: "";
+  content: '';
   position: absolute;
   top: 2px;
   left: 2px;
@@ -104,9 +163,16 @@ body {
   background: #fff;
   transition: transform 0.15s;
 }
-.st-switch input:checked + .st-switch-ui { background: #3a3f9b; }
-.st-switch input:checked + .st-switch-ui::after { transform: translateX(0.95rem); }
-.st-switch-label { color: #3a3f6b; font-weight: 600; }
+.st-switch input:checked + .st-switch-ui {
+  background: #3a3f9b;
+}
+.st-switch input:checked + .st-switch-ui::after {
+  transform: translateX(0.95rem);
+}
+.st-switch-label {
+  color: #3a3f6b;
+  font-weight: 600;
+}
 /* Divider between session groups (inserted by JS in Session sort mode). */
 .st-session-sep {
   margin: 1.1rem 0 0.5rem;
@@ -117,25 +183,42 @@ body {
   letter-spacing: 0.02em;
   color: #8a8a94;
 }
-.st-session-sep:first-child { border-top: none; padding-top: 0; margin-top: 0.2rem; }
-h1 { font-size: 1.9rem; margin: 0 0 0.25rem; }
+.st-session-sep:first-child {
+  border-top: none;
+  padding-top: 0;
+  margin-top: 0.2rem;
+}
+h1 {
+  font-size: 1.9rem;
+  margin: 0 0 0.25rem;
+}
 h2 {
   font-size: 1.25rem;
   margin: 2.25rem 0 0.75rem;
   padding-bottom: 0.3rem;
   border-bottom: 1px solid #e3e3e8;
 }
-ul { padding-left: 1.25rem; }
-li { margin: 0.35rem 0; }
-p { margin: 0.6rem 0; }
+ul {
+  padding-left: 1.25rem;
+}
+li {
+  margin: 0.35rem 0;
+}
+p {
+  margin: 0.6rem 0;
+}
 code {
-  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
   font-size: 0.85em;
   background: #ecedf1;
   padding: 0.1rem 0.35rem;
   border-radius: 0.25rem;
 }
-em { color: #6b6b76; font-style: normal; font-size: 0.9em; }
+em {
+  color: #6b6b76;
+  font-style: normal;
+  font-size: 0.9em;
+}
 blockquote {
   margin: 0.75rem 0;
   padding: 0.75rem 1rem;
@@ -162,10 +245,20 @@ blockquote {
   align-items: flex-start;
   gap: 0.5rem;
 }
-.turn > summary::-webkit-details-marker { display: none; }
-.turn > summary::before { content: "▸"; color: #9a9aa6; }
-.turn[open] > summary::before { content: "▾"; }
-.turn .prompt-text { font-weight: 600; flex: 1 1 16rem; }
+.turn > summary::-webkit-details-marker {
+  display: none;
+}
+.turn > summary::before {
+  content: '▸';
+  color: #9a9aa6;
+}
+.turn[open] > summary::before {
+  content: '▾';
+}
+.turn .prompt-text {
+  font-weight: 600;
+  flex: 1 1 16rem;
+}
 .badge {
   font-size: 0.72rem;
   font-weight: 600;
@@ -175,12 +268,30 @@ blockquote {
   color: #3a3f6b;
 }
 /* Per-tool pastel colors so switches between AI tools stand out at a glance. */
-.badge--claude-code    { background: #ffe6d5; color: #9c4221; }
-.badge--google-gemini  { background: #d8e6fb; color: #1f4f9c; }
-.badge--chatgpt        { background: #d4f0e2; color: #1d6b4c; }
-.badge--codex          { background: #e7defb; color: #5b3a9c; }
-.badge--github-copilot { background: #e2e5ec; color: #3a4253; }
-.badge--cli            { background: #ebe8e2; color: #5a554b; }
+.badge--claude-code {
+  background: #ffe6d5;
+  color: #9c4221;
+}
+.badge--google-gemini {
+  background: #d8e6fb;
+  color: #1f4f9c;
+}
+.badge--chatgpt {
+  background: #d4f0e2;
+  color: #1d6b4c;
+}
+.badge--codex {
+  background: #e7defb;
+  color: #5b3a9c;
+}
+.badge--github-copilot {
+  background: #e2e5ec;
+  color: #3a4253;
+}
+.badge--cli {
+  background: #ebe8e2;
+  color: #5a554b;
+}
 /* Model badge: a secondary tier between the filled tool badge and the muted
    date/stat — a hollow outlined pill, so it reads as "which model" without
    competing with the colored tool pill. Border eats into the padding so its
@@ -192,7 +303,10 @@ blockquote {
   font-weight: 500;
   padding: calc(0.08rem - 1px) calc(0.45rem - 1px);
 }
-.turn .time { font-size: 0.78rem; color: #8a8a94; }
+.turn .time {
+  font-size: 0.78rem;
+  color: #8a8a94;
+}
 /* Right-hand meta column: badge + time on top, the edit-count tucked directly
    beneath them and right-aligned. Stacking it here means it shares the vertical
    space a wrapped prompt already takes, so it only adds height when the prompt
@@ -205,18 +319,53 @@ blockquote {
   flex: 0 0 auto;
   margin-left: auto;
 }
-.turn .meta-top { display: flex; align-items: baseline; gap: 0.5rem; }
-.turn .stat { font-size: 0.78rem; color: #8a8a94; text-align: right; }
-.turn-body { padding: 0 0.9rem 0.8rem; }
-.turn-body h4 { margin: 0.8rem 0 0.3rem; font-size: 0.85rem; color: #6b6b76; }
-.ai-text { margin: 0.2rem 0 0.6rem; }
-.ai-text p { margin: 0.4rem 0; }
-.ai-text ul, .ai-text ol { margin: 0.4rem 0; padding-left: 1.4rem; }
-.ai-text li { margin: 0.15rem 0; }
-.ai-text .md-h { font-weight: 600; margin: 0.7rem 0 0.3rem; }
-.ai-text strong { font-weight: 600; }
-.ai-text em { font-style: italic; color: inherit; font-size: inherit; }
-.ai-text a { color: #3a3f9b; }
+.turn .meta-top {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+.turn .stat {
+  font-size: 0.78rem;
+  color: #8a8a94;
+  text-align: right;
+}
+.turn-body {
+  padding: 0 0.9rem 0.8rem;
+}
+.turn-body h4 {
+  margin: 0.8rem 0 0.3rem;
+  font-size: 0.85rem;
+  color: #6b6b76;
+}
+.ai-text {
+  margin: 0.2rem 0 0.6rem;
+}
+.ai-text p {
+  margin: 0.4rem 0;
+}
+.ai-text ul,
+.ai-text ol {
+  margin: 0.4rem 0;
+  padding-left: 1.4rem;
+}
+.ai-text li {
+  margin: 0.15rem 0;
+}
+.ai-text .md-h {
+  font-weight: 600;
+  margin: 0.7rem 0 0.3rem;
+}
+.ai-text strong {
+  font-weight: 600;
+}
+.ai-text em {
+  font-style: italic;
+  color: inherit;
+  font-size: inherit;
+}
+.ai-text a {
+  color: #3a3f9b;
+}
 .ai-text blockquote {
   margin: 0.5rem 0;
   padding: 0.3rem 0.8rem;
@@ -234,17 +383,39 @@ blockquote {
   font-size: 0.85em;
   letter-spacing: 0.02em;
 }
-.ai-text blockquote.callout p { margin: 0.2rem 0; }
-.ai-text blockquote.callout-note { border-left-color: #3a6df0; }
-.ai-text blockquote.callout-note .callout-label { color: #3a6df0; }
-.ai-text blockquote.callout-tip { border-left-color: #1a9d52; }
-.ai-text blockquote.callout-tip .callout-label { color: #1a9d52; }
-.ai-text blockquote.callout-important { border-left-color: #8250df; }
-.ai-text blockquote.callout-important .callout-label { color: #8250df; }
-.ai-text blockquote.callout-warning { border-left-color: #d4a72c; }
-.ai-text blockquote.callout-warning .callout-label { color: #b07d12; }
-.ai-text blockquote.callout-caution { border-left-color: #d1242f; }
-.ai-text blockquote.callout-caution .callout-label { color: #d1242f; }
+.ai-text blockquote.callout p {
+  margin: 0.2rem 0;
+}
+.ai-text blockquote.callout-note {
+  border-left-color: #3a6df0;
+}
+.ai-text blockquote.callout-note .callout-label {
+  color: #3a6df0;
+}
+.ai-text blockquote.callout-tip {
+  border-left-color: #1a9d52;
+}
+.ai-text blockquote.callout-tip .callout-label {
+  color: #1a9d52;
+}
+.ai-text blockquote.callout-important {
+  border-left-color: #8250df;
+}
+.ai-text blockquote.callout-important .callout-label {
+  color: #8250df;
+}
+.ai-text blockquote.callout-warning {
+  border-left-color: #d4a72c;
+}
+.ai-text blockquote.callout-warning .callout-label {
+  color: #b07d12;
+}
+.ai-text blockquote.callout-caution {
+  border-left-color: #d1242f;
+}
+.ai-text blockquote.callout-caution .callout-label {
+  color: #d1242f;
+}
 .turn-close {
   display: block;
   width: 100%;
@@ -259,7 +430,10 @@ blockquote {
   border-top: 1px solid #e3e3e8;
   cursor: pointer;
 }
-.turn-close:hover { background: #e8eaf4; color: #2f3566; }
+.turn-close:hover {
+  background: #e8eaf4;
+  color: #2f3566;
+}
 .prompt-block {
   margin: 0.3rem 0 0.6rem;
   padding: 0.2rem 0 0.2rem 0.7rem;
@@ -271,7 +445,9 @@ blockquote {
   letter-spacing: 0.04em;
   color: #8a8a94;
 }
-.prompt-block .ai-text { margin: 0.1rem 0 0; }
+.prompt-block .ai-text {
+  margin: 0.1rem 0 0;
+}
 /* A decision the student made when the AI paused to ask — a warm accent so it
    reads as distinct from a prompt (blue) or an AI reply (plain). */
 .decision {
@@ -280,8 +456,12 @@ blockquote {
   border-left: 3px solid #d99a2b;
   background: #fbf4e6;
 }
-.decision-tag { color: #a06a12; }
-.decision .ai-text { margin: 0.1rem 0 0; }
+.decision-tag {
+  color: #a06a12;
+}
+.decision .ai-text {
+  margin: 0.1rem 0 0;
+}
 /* A plan the AI proposed in plan mode — collapsible, with an indigo accent and an
    approval badge so a reviewer sees which plans were adopted before expanding. */
 .plan {
@@ -290,11 +470,23 @@ blockquote {
   border-left: 3px solid #6b6fc7;
   background: #f1f1fb;
 }
-.plan > summary { cursor: pointer; list-style: none; }
-.plan > summary::-webkit-details-marker { display: none; }
-.plan > summary::before { content: '▸ '; color: #6b6fc7; }
-.plan[open] > summary::before { content: '▾ '; }
-.plan-tag { color: #4a4f9b; }
+.plan > summary {
+  cursor: pointer;
+  list-style: none;
+}
+.plan > summary::-webkit-details-marker {
+  display: none;
+}
+.plan > summary::before {
+  content: '▸ ';
+  color: #6b6fc7;
+}
+.plan[open] > summary::before {
+  content: '▾ ';
+}
+.plan-tag {
+  color: #4a4f9b;
+}
 .plan-badge {
   font-size: 0.68rem;
   font-weight: 600;
@@ -302,8 +494,14 @@ blockquote {
   border-radius: 0.7rem;
   margin-left: 0.3rem;
 }
-.plan-badge.approved { background: #d4f0e2; color: #1d6b4c; }
-.plan-badge.revised { background: #ececf1; color: #6b6b76; }
+.plan-badge.approved {
+  background: #d4f0e2;
+  color: #1d6b4c;
+}
+.plan-badge.revised {
+  background: #ececf1;
+  color: #6b6b76;
+}
 /* The "what to change" feedback, shown on its own line on the collapsed summary
    (upright + higher contrast so a full sentence is easy to read). */
 .plan-feedback {
@@ -313,7 +511,9 @@ blockquote {
   line-height: 1.6;
   color: #3a3a42;
 }
-.plan .ai-text { margin: 0.3rem 0 0; }
+.plan .ai-text {
+  margin: 0.3rem 0 0;
+}
 /* The "view plan file" link on a plan's summary — lighter than the role tag so it
    reads as a secondary action, not the plan title. */
 .plan-file-link {
@@ -321,65 +521,114 @@ blockquote {
   font-size: 0.8rem;
   font-weight: 500;
 }
-/* The per-prompt AI layer: one collapsed pill per turn holding every AI message.
-   Deliberately obvious and clickable (accent, hover, chevron) so the reader always
-   sees there's an AI transcript one click away, without it fronting the work. */
-.ai-process { margin: 0.5rem 0 0.3rem; }
+/* The per-prompt AI layer: each run of AI messages collapses to a slim, quiet inline
+   marker — about the visual weight of a code row — so many of them, interleaved with
+   edits, read as one tidy list instead of a stack of boxes. Uniform in every turn:
+   discoverability comes from the icon + label + chevron + hover (and the toolbar's
+   AI switch), not a heavy box — the AI is the subordinate layer. */
+.ai-process {
+  margin: 0.2rem 0;
+}
 .ai-pill {
   display: flex;
   align-items: center;
-  gap: 0.4rem;
+  gap: 0.35rem;
   cursor: pointer;
   list-style: none;
-  padding: 0.35rem 0.65rem;
-  border: 1px solid #d3d5e8;
-  border-radius: 0.5rem;
-  background: #f3f4fb;
-  color: #3a3f6b;
-  font-size: 0.8rem;
+  padding: 0.12rem 0.3rem;
+  border-radius: 0.3rem;
+  color: #6b6f8c;
+  font-size: 0.78rem;
 }
-.ai-pill::-webkit-details-marker { display: none; }
-.ai-pill:hover { background: #e9ebfa; border-color: #c2c6ec; }
-.ai-process[open] .ai-pill { border-radius: 0.5rem 0.5rem 0 0; }
-.ai-pill-icon { font-size: 0.95em; }
-.ai-pill-verb { font-weight: 600; }
-.ai-pill-verb .v-hide { display: none; }
-.ai-process[open] .ai-pill-verb .v-show { display: none; }
-.ai-process[open] .ai-pill-verb .v-hide { display: inline; }
-.ai-pill-count { font-weight: 600; }
+.ai-pill::-webkit-details-marker {
+  display: none;
+}
+.ai-pill:hover {
+  background: #eef0f8;
+  color: #3a3f6b;
+}
+.ai-pill-icon {
+  font-size: 0.9em;
+}
+.ai-pill-verb {
+  font-weight: 600;
+  color: #5b5f86;
+}
+.ai-pill:hover .ai-pill-verb {
+  color: #3a3f9b;
+}
+.ai-pill-verb .v-hide {
+  display: none;
+}
+.ai-process[open] .ai-pill-verb .v-show {
+  display: none;
+}
+.ai-process[open] .ai-pill-verb .v-hide {
+  display: inline;
+}
+.ai-pill-count {
+  font-weight: 600;
+}
 /* A glimpse of the first message, shown only while collapsed. */
 .ai-preview {
   flex: 1 1 auto;
   min-width: 0;
   font-style: italic;
   font-weight: 400;
-  color: #8a8a94;
+  color: #9a9aa4;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.ai-process[open] .ai-preview { display: none; }
-.ai-pill-chevron { margin-left: auto; transition: transform 0.15s; }
-.ai-process[open] .ai-pill-chevron { transform: rotate(180deg); }
-/* The expanded transcript, framed as the pill's body; messages separated faintly. */
-.ai-pill-body {
-  border: 1px solid #d3d5e8;
-  border-top: none;
-  border-radius: 0 0 0.5rem 0.5rem;
-  padding: 0.15rem 0.75rem 0.4rem;
+.ai-process[open] .ai-preview {
+  display: none;
 }
-.ai-pill-body .ai-text { color: #55555f; font-size: 0.96em; }
+.ai-pill-chevron {
+  margin-left: auto;
+  font-size: 0.85em;
+  color: #a0a0aa;
+  transition: transform 0.15s;
+}
+.ai-process[open] .ai-pill-chevron {
+  transform: rotate(180deg);
+}
+/* The expanded transcript: a light left rule + indent (not a card), so a fully
+   expanded turn with many runs stays calm; messages separated faintly. */
+.ai-pill-body {
+  margin: 0.1rem 0 0.35rem 0.55rem;
+  padding-left: 0.7rem;
+  border-left: 2px solid #e3e3e8;
+}
+.ai-pill-body .ai-text {
+  color: #55555f;
+  font-size: 0.95em;
+}
 .ai-pill-body .ai-text + .ai-text {
   margin-top: 0.5rem;
   padding-top: 0.5rem;
   border-top: 1px solid #ececf1;
 }
-.code { margin: 0.4rem 0; }
-.code > summary { cursor: pointer; font-size: 0.85rem; color: #3a3f6b; }
+.code {
+  margin: 0.4rem 0;
+}
+.code > summary {
+  cursor: pointer;
+  font-size: 0.85rem;
+  color: #3a3f6b;
+}
 /* A code change with no captured diff: a plain file row, no disclosure arrow. */
-.code-file { font-size: 0.85rem; color: #3a3f6b; }
-.file-link { color: #3a3f6b; text-decoration: none; font-weight: 600; }
-.file-link:hover { text-decoration: underline; }
+.code-file {
+  font-size: 0.85rem;
+  color: #3a3f6b;
+}
+.file-link {
+  color: #3a3f6b;
+  text-decoration: none;
+  font-weight: 600;
+}
+.file-link:hover {
+  text-decoration: underline;
+}
 pre.diff {
   margin: 0.4rem 0 0;
   padding: 0.6rem 0;
@@ -387,13 +636,20 @@ pre.diff {
   border-radius: 0.35rem;
   overflow-x: auto;
   white-space: pre;
-  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
   font-size: 0.8rem;
   line-height: 1.5;
 }
-.dline { display: block; padding-right: 0.8rem; }
-.dline.add { background: #e6ffec; }
-.dline.del { background: #ffebe9; }
+.dline {
+  display: block;
+  padding-right: 0.8rem;
+}
+.dline.add {
+  background: #e6ffec;
+}
+.dline.del {
+  background: #ffebe9;
+}
 .dmark {
   display: inline-block;
   width: 1.6rem;
@@ -401,14 +657,31 @@ pre.diff {
   color: #8a8a94;
   user-select: none;
 }
-.dline.add .dmark { color: #1a7f37; background: #ccffd8; }
-.dline.del .dmark { color: #cf222e; background: #ffd7d5; }
+.dline.add .dmark {
+  color: #1a7f37;
+  background: #ccffd8;
+}
+.dline.del .dmark {
+  color: #cf222e;
+  background: #ffd7d5;
+}
 /* Shared syntax theme (GitHub Primer) for diffs and code blocks. */
-.tok-kw { color: #cf222e; }
-.tok-str { color: #0a3069; }
-.tok-com { color: #6e7781; font-style: italic; }
-.tok-num { color: #0550ae; }
-.tok-fn { color: #8250df; }
+.tok-kw {
+  color: #cf222e;
+}
+.tok-str {
+  color: #0a3069;
+}
+.tok-com {
+  color: #6e7781;
+  font-style: italic;
+}
+.tok-num {
+  color: #0550ae;
+}
+.tok-fn {
+  color: #8250df;
+}
 /* Code boxes inside an AI response / prompt (a code box with a code font). */
 pre.codeblock {
   margin: 0.4rem 0 0.6rem;
@@ -418,16 +691,21 @@ pre.codeblock {
   border-radius: 0.35rem;
   overflow-x: auto;
   white-space: pre;
-  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
   font-size: 0.8rem;
   line-height: 1.45;
 }
-pre.codeblock code { background: none; padding: 0; font-size: inherit; border-radius: 0; }
+pre.codeblock code {
+  background: none;
+  padding: 0;
+  font-size: inherit;
+  border-radius: 0;
+}
 .code-lang {
   display: inline-block;
   margin: 0.4rem 0 0;
   padding: 0.1rem 0.5rem;
-  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
   font-size: 0.7rem;
   color: #6b6b76;
   background: #ececf1;
@@ -435,74 +713,261 @@ pre.codeblock code { background: none; padding: 0; font-size: inherit; border-ra
   border-bottom: none;
   border-radius: 0.35rem 0.35rem 0 0;
 }
-.code-lang + pre.codeblock { margin-top: 0; border-top-left-radius: 0; }
+.code-lang + pre.codeblock {
+  margin-top: 0;
+  border-top-left-radius: 0;
+}
 @media (prefers-color-scheme: dark) {
-  body { color: #e4e4ea; background: #18181b; }
-  .st-tzbar { background: #1f1f23; border-bottom-color: #34343a; color: #a0a0aa; }
-  .st-tzbar select { background: #2a2a30; color: #e4e4ea; border-color: #44444c; }
-  h2 { border-bottom-color: #34343a; }
-  code { background: #2a2a30; }
-  em { color: #a0a0aa; }
-  blockquote { background: #242429; border-left-color: #4a4a52; color: #cfcfd6; }
-  .turn { background: #1f1f23; border-color: #34343a; }
-  .badge { background: #2c2f45; color: #c6cbf0; }
-  .badge--claude-code    { background: #4a2c1c; color: #ffc6a3; }
-  .badge--google-gemini  { background: #1d3252; color: #a6c8f5; }
-  .badge--chatgpt        { background: #1b3d2f; color: #9ce3c1; }
-  .badge--codex          { background: #322a4d; color: #cdb6f5; }
-  .badge--github-copilot { background: #2d313c; color: #c2c9d8; }
-  .badge--cli            { background: #33312b; color: #cfc9bb; }
-  .badge--model          { background: transparent; border: 1px solid #3a3f52; color: #b9bde0; }
-  pre.diff { background: #242429; }
-  .dline.add { background: rgba(46, 160, 67, 0.15); }
-  .dline.del { background: rgba(248, 81, 73, 0.15); }
-  .dmark { color: #8a8a94; }
-  .dline.add .dmark { color: #3fb950; background: rgba(63, 185, 80, 0.3); }
-  .dline.del .dmark { color: #f85149; background: rgba(248, 81, 73, 0.3); }
-  .tok-kw { color: #ff7b72; }
-  .tok-str { color: #a5d6ff; }
-  .tok-com { color: #8b949e; }
-  .tok-num { color: #79c0ff; }
-  .tok-fn { color: #d2a8ff; }
-  pre.codeblock { background: #242429; border-color: #34343a; }
-  .code-lang { background: #2a2a30; border-color: #34343a; color: #a0a0aa; }
-  .ai-text a { color: #aab0ff; }
-  .file-link { color: #aab0ff; }
-  .ai-text blockquote { border-left-color: #4a4a52; color: #b8b8c2; }
-  .ai-text blockquote.callout { background: #20202a; }
-  .ai-text blockquote.callout-note .callout-label { color: #79a0ff; }
-  .ai-text blockquote.callout-note { border-left-color: #4f7cf5; }
-  .ai-text blockquote.callout-tip .callout-label { color: #56c98a; }
-  .ai-text blockquote.callout-tip { border-left-color: #2ba35f; }
-  .ai-text blockquote.callout-important .callout-label { color: #b692f0; }
-  .ai-text blockquote.callout-important { border-left-color: #9a6cf0; }
-  .ai-text blockquote.callout-warning .callout-label { color: #e0b257; }
-  .ai-text blockquote.callout-warning { border-left-color: #d4a72c; }
-  .ai-text blockquote.callout-caution .callout-label { color: #f2756f; }
-  .ai-text blockquote.callout-caution { border-left-color: #e0555c; }
-  .turn-close { color: #b8b8c2; background: #242429; border-top-color: #34343a; }
-  .turn-close:hover { background: #2c2c33; color: #e4e4ea; }
-  .decision { background: #2b2519; border-left-color: #b9842a; }
-  .decision-tag { color: #e0b257; }
-  .plan { background: #1f1f2b; border-left-color: #7b7fd0; }
-  .plan-tag { color: #aab0ff; }
-  .st-exbar { background: #1f1f23; border-color: #34343a; }
-  .st-seg-label { color: #9a9aa4; }
-  .st-btn, .st-seg-btn { background: #2a2a30; color: #c6cbf0; border-color: #44444c; }
-  .st-btn:hover, .st-seg-btn:hover { background: #33333b; }
-  .st-seg-btn.is-active { background: #4b52c7; color: #fff; border-color: #4b52c7; }
-  .st-seg-btn.is-active:hover { background: #5a61d6; }
-  .st-switch-ui { background: #44444c; }
-  .st-switch input:checked + .st-switch-ui { background: #6b70d6; }
-  .st-switch-label { color: #c6cbf0; }
-  .st-session-sep { border-top-color: #3a3a42; color: #9a9aa4; }
-  .ai-pill { background: #23232c; border-color: #3a3f52; color: #c6cbf0; }
-  .ai-pill:hover { background: #2a2a36; border-color: #4a4f6e; }
-  .ai-preview { color: #85858f; }
-  .ai-pill-body { border-color: #3a3f52; }
-  .ai-pill-body .ai-text { color: #b0b0ba; }
-  .ai-pill-body .ai-text + .ai-text { border-top-color: #34343a; }
-  .plan-badge.approved { background: #1c3a2c; color: #7fd1a6; }
-  .plan-badge.revised { background: #2a2a30; color: #a0a0aa; }
-  .plan-feedback { color: #d0d0d8; }
+  body {
+    color: #e4e4ea;
+    background: #18181b;
+  }
+  .st-tzbar {
+    background: #1f1f23;
+    border-bottom-color: #34343a;
+    color: #a0a0aa;
+  }
+  .st-tzbar select {
+    background: #2a2a30;
+    color: #e4e4ea;
+    border-color: #44444c;
+  }
+  h2 {
+    border-bottom-color: #34343a;
+  }
+  code {
+    background: #2a2a30;
+  }
+  em {
+    color: #a0a0aa;
+  }
+  blockquote {
+    background: #242429;
+    border-left-color: #4a4a52;
+    color: #cfcfd6;
+  }
+  .turn {
+    background: #1f1f23;
+    border-color: #34343a;
+  }
+  .badge {
+    background: #2c2f45;
+    color: #c6cbf0;
+  }
+  .badge--claude-code {
+    background: #4a2c1c;
+    color: #ffc6a3;
+  }
+  .badge--google-gemini {
+    background: #1d3252;
+    color: #a6c8f5;
+  }
+  .badge--chatgpt {
+    background: #1b3d2f;
+    color: #9ce3c1;
+  }
+  .badge--codex {
+    background: #322a4d;
+    color: #cdb6f5;
+  }
+  .badge--github-copilot {
+    background: #2d313c;
+    color: #c2c9d8;
+  }
+  .badge--cli {
+    background: #33312b;
+    color: #cfc9bb;
+  }
+  .badge--model {
+    background: transparent;
+    border: 1px solid #3a3f52;
+    color: #b9bde0;
+  }
+  pre.diff {
+    background: #242429;
+  }
+  .dline.add {
+    background: rgba(46, 160, 67, 0.15);
+  }
+  .dline.del {
+    background: rgba(248, 81, 73, 0.15);
+  }
+  .dmark {
+    color: #8a8a94;
+  }
+  .dline.add .dmark {
+    color: #3fb950;
+    background: rgba(63, 185, 80, 0.3);
+  }
+  .dline.del .dmark {
+    color: #f85149;
+    background: rgba(248, 81, 73, 0.3);
+  }
+  .tok-kw {
+    color: #ff7b72;
+  }
+  .tok-str {
+    color: #a5d6ff;
+  }
+  .tok-com {
+    color: #8b949e;
+  }
+  .tok-num {
+    color: #79c0ff;
+  }
+  .tok-fn {
+    color: #d2a8ff;
+  }
+  pre.codeblock {
+    background: #242429;
+    border-color: #34343a;
+  }
+  .code-lang {
+    background: #2a2a30;
+    border-color: #34343a;
+    color: #a0a0aa;
+  }
+  .ai-text a {
+    color: #aab0ff;
+  }
+  .file-link {
+    color: #aab0ff;
+  }
+  .ai-text blockquote {
+    border-left-color: #4a4a52;
+    color: #b8b8c2;
+  }
+  .ai-text blockquote.callout {
+    background: #20202a;
+  }
+  .ai-text blockquote.callout-note .callout-label {
+    color: #79a0ff;
+  }
+  .ai-text blockquote.callout-note {
+    border-left-color: #4f7cf5;
+  }
+  .ai-text blockquote.callout-tip .callout-label {
+    color: #56c98a;
+  }
+  .ai-text blockquote.callout-tip {
+    border-left-color: #2ba35f;
+  }
+  .ai-text blockquote.callout-important .callout-label {
+    color: #b692f0;
+  }
+  .ai-text blockquote.callout-important {
+    border-left-color: #9a6cf0;
+  }
+  .ai-text blockquote.callout-warning .callout-label {
+    color: #e0b257;
+  }
+  .ai-text blockquote.callout-warning {
+    border-left-color: #d4a72c;
+  }
+  .ai-text blockquote.callout-caution .callout-label {
+    color: #f2756f;
+  }
+  .ai-text blockquote.callout-caution {
+    border-left-color: #e0555c;
+  }
+  .turn-close {
+    color: #b8b8c2;
+    background: #242429;
+    border-top-color: #34343a;
+  }
+  .turn-close:hover {
+    background: #2c2c33;
+    color: #e4e4ea;
+  }
+  .decision {
+    background: #2b2519;
+    border-left-color: #b9842a;
+  }
+  .decision-tag {
+    color: #e0b257;
+  }
+  .plan {
+    background: #1f1f2b;
+    border-left-color: #7b7fd0;
+  }
+  .plan-tag {
+    color: #aab0ff;
+  }
+  .st-exbar {
+    background: #1f1f23;
+    border-color: #34343a;
+  }
+  .st-seg-label {
+    color: #9a9aa4;
+  }
+  .st-btn,
+  .st-seg-btn {
+    background: #2a2a30;
+    color: #c6cbf0;
+    border-color: #44444c;
+  }
+  .st-btn:hover,
+  .st-seg-btn:hover {
+    background: #33333b;
+  }
+  .st-seg-btn.is-active {
+    background: #4b52c7;
+    color: #fff;
+    border-color: #4b52c7;
+  }
+  .st-seg-btn.is-active:hover {
+    background: #5a61d6;
+  }
+  .st-switch-ui {
+    background: #44444c;
+  }
+  .st-switch input:checked + .st-switch-ui {
+    background: #6b70d6;
+  }
+  .st-switch-label {
+    color: #c6cbf0;
+  }
+  .st-session-sep {
+    border-top-color: #3a3a42;
+    color: #9a9aa4;
+  }
+  .ai-pill {
+    color: #9a9fc0;
+  }
+  .ai-pill:hover {
+    background: #26262f;
+    color: #c6cbf0;
+  }
+  .ai-pill-verb {
+    color: #a2a7cc;
+  }
+  .ai-pill:hover .ai-pill-verb {
+    color: #c6cbf0;
+  }
+  .ai-preview {
+    color: #85858f;
+  }
+  .ai-pill-chevron {
+    color: #6a6a74;
+  }
+  .ai-pill-body {
+    border-left-color: #34343a;
+  }
+  .ai-pill-body .ai-text {
+    color: #b0b0ba;
+  }
+  .ai-pill-body .ai-text + .ai-text {
+    border-top-color: #34343a;
+  }
+  .plan-badge.approved {
+    background: #1c3a2c;
+    color: #7fd1a6;
+  }
+  .plan-badge.revised {
+    background: #2a2a30;
+    color: #a0a0aa;
+  }
+  .plan-feedback {
+    color: #d0d0d8;
+  }
 }
