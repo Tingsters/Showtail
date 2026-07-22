@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.12.0 — Readable reports: student-first layout + exchanges toolbar
+
+### What changed
+
+- **The report foregrounds the student's work.** Each exchange shows the prompt,
+  decisions, plans, and code/diffs inline; **all** of the AI's prose is collapsed
+  into per-run **"🤖 N messages"** pills placed **in chronological position** within
+  the turn. Expanding them (or the page toggle) reconstructs the full "what happened
+  and where" narrative — AI reasoning interleaved with the edits/decisions, in order,
+  with nothing duplicated. The rule is uniform across every tool (no content
+  guessing), so it behaves the same for Claude, Codex, Gemini, and imports.
+- **A sticky exchanges toolbar** sits under the "Prompts & AI exchanges" heading:
+  **Expand / Collapse all**, an **AI messages** show/hide switch (persisted), and a
+  **Sort: Time | Session** control — *Time* is one chronological stream; *Session*
+  groups each AI conversation together (for parallel/interleaved workflows), and
+  re-clicking the active mode reverses order. Progressive-enhanced: with JS off the
+  report still reads top-to-bottom.
+- **`showtail report --ai <collapsed|full|off>`** (`--no-ai`) sets the AI-visibility
+  default for a generated file; the summary line now leads with tasks + files changed.
+- **Injected harness content is no longer captured as prompts.** Background-subagent
+  `<task-notification>` results, `<system-reminder>` context, and Claude Code's
+  context-compaction summary (`isCompactSummary`) were being recorded as giant
+  "prompts"; they're now filtered at capture and healed in existing trails at report
+  time (no migration).
+
 ## 0.11.1 — `showtail move`
 
 - **`showtail move`** relocates a captured session from one project folder to
