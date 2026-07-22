@@ -23,6 +23,11 @@ or `desk`. Inspect the trunk without checking it out: `git log main`,
     base=$(git rev-parse main)
     git update-ref refs/heads/main "$(git rev-parse HEAD)" "$base"   # advance trunk
     git push origin main            # mirror to GitHub
+    git -C ~/Nextcloud/Showtail merge --ff-only main 2>/dev/null || true   # keep the desk's files current
+
+The last line fast-forwards the **desk** so its checkout never holds stale files
+(a stale checkout is the tripwire this whole workflow exists to avoid). It's a
+no-op if the desk is absent/busy.
 
 If `update-ref` fails, `main` moved under you (another agent landed first) —
 re-run `git rebase main` and retry. `update-ref` is safe here (unlike an ordinary
@@ -46,7 +51,10 @@ Don't let it block a land; don't "fix" it as part of an unrelated task.
 - **Hub** (bare, source of truth): `~/Nextcloud/Showtail.git` — holds `main` + the
   object store. Never checked out. Mirrors to `origin` (GitHub).
 - **Desk** (interactive launch pad): `~/Nextcloud/Showtail`, branch `desk`. Where a
-  human opens a terminal and starts Claude. Auto-synced to `main`; never on `main`.
+  human opens a terminal and starts Claude. Never on `main`, but kept continuously
+  fast-forwarded to it, so it never shows stale files: the land step above ff's it
+  after every land, and a `SessionStart` hook (in the desk's `.claude/settings.local.json`)
+  ff's it to GitHub's `main` each time Claude launches there.
 - **Task worktrees**: `.../.claude/worktrees/<task>` — Claude Code-managed, one per
   task, auto-removed when done.
 - **GitHub mirror**: `origin` → https://github.com/Tingsters/Showtail.git.
