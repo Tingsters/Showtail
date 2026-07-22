@@ -20,6 +20,7 @@ import { readJournal } from '../journal.ts';
 import { authorSlugs, readAllAuthors } from '../authors.ts';
 import { readAllEventsWithSession, type EventWithSession } from '../events.ts';
 import { readObject } from '../objects.ts';
+import { isSyntheticPrompt } from '../syntheticPrompt.ts';
 
 /** The tool an event flowed through (defaults to "cli" for older/manual events). */
 export function toolOf(event: Event): Tool {
@@ -220,8 +221,12 @@ export function buildTurns(
   artifacts: Artifact[],
   paths: ShowtailPaths,
 ): Turn[] {
+  // Only genuine student prompts open turns. Older trails captured harness-injected
+  // user-role envelopes (`<task-notification>` subagent results, `<system-reminder>`)
+  // as prompt events; skip them here so they don't render as giant "prompt" blocks.
+  // Their trailing AI/edits fall back (below) to the previous real prompt's turn.
   const prompts = withSession
-    .filter((x) => x.event.type === 'prompt')
+    .filter((x) => x.event.type === 'prompt' && !isSyntheticPrompt(x.event.text))
     .sort((a, b) => a.event.timestamp.localeCompare(b.event.timestamp));
 
   const turns: Turn[] = prompts.map(({ event, sessionId }) => ({

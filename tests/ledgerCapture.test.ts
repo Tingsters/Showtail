@@ -130,6 +130,41 @@ describe('ledger capture: nothing is dropped', () => {
     }
   });
 
+  test('a <task-notification> user-prompt hook is not recorded as a prompt', () => {
+    const scratch = makeTempDir();
+    const home = makeTempDir();
+    try {
+      enableAutoInit(home);
+      const env = envWithHome(home);
+
+      expect(
+        runCli(scratch, ['hook', 'user-prompt'], {
+          input: userPrompt(scratch, 'build a real thing'),
+          env,
+        }).code,
+      ).toBe(0);
+      // A background-subagent result injected as a user turn — the hook must not
+      // record it as a prompt.
+      expect(
+        runCli(scratch, ['hook', 'user-prompt'], {
+          input: userPrompt(
+            scratch,
+            '<task-notification>\n<task-id>x</task-id>\nAgent finished.',
+          ),
+          env,
+        }).code,
+      ).toBe(0);
+
+      const data = inbox(scratch, env);
+      expect(data.sessions.length).toBe(1);
+      expect(data.sessions[0].prompts).toBe(1); // only the genuine prompt
+      expect(data.sessions[0].firstPrompt).toContain('real thing');
+    } finally {
+      cleanup(scratch);
+      cleanup(home);
+    }
+  });
+
   test('cwd-fallback: a prompt in an eligible folder is placed, not left in the inbox', () => {
     const dir = makeTempDir();
     const home = makeTempDir();

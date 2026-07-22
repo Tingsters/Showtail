@@ -24,6 +24,7 @@ import {
   type HookPayload,
 } from '../core/hookInput.ts';
 import { redact } from '../core/redact.ts';
+import { isSyntheticPrompt } from '../core/syntheticPrompt.ts';
 import { asString, prop } from '../core/parse.ts';
 import { autoInitEnabled } from '../core/globalConfig.ts';
 import { autoConnectNewlyDetected } from '../core/autoConnectSweep.ts';
@@ -183,7 +184,9 @@ async function captureToLedger(
   cwd: string,
 ): Promise<void> {
   if (event === 'user-prompt') {
-    if (!parsed.prompt) return;
+    // Skip harness-injected user-role envelopes (`<task-notification>` subagent
+    // results, `<system-reminder>` context) — never the student's own prompt.
+    if (!parsed.prompt || isSyntheticPrompt(parsed.prompt)) return;
     const rec = appendLedgerRecord(session.id, {
       kind: 'prompt',
       tool: session.tool,
@@ -552,7 +555,10 @@ async function handleUserPrompt(
   // carries it — useful for spotting source-driven capture gaps after the fact.
   const promptSource = asString(prop(payload, 'promptSource'));
   if (promptSource) trace.promptSource = promptSource;
-  if (!text) return;
+  // Harness-injected user-role envelopes (`<task-notification>` subagent results,
+  // `<system-reminder>` context, slash-command chrome) aren't the student's input —
+  // never record them as prompts. See {@link isSyntheticPrompt}.
+  if (!text || isSyntheticPrompt(text)) return;
   // Log the prompt into the session that owns this tool's session id (creating
   // it if the session-start hook never fired); without an id, the current
   // session is used (unchanged behavior).

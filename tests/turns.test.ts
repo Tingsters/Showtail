@@ -276,6 +276,47 @@ describe('turns', () => {
     }
   });
 
+  test('a <task-notification> prompt opens no turn; the AI after it attaches to the prior prompt', async () => {
+    const dir = makeTempDir();
+    try {
+      await runInit({ cwd: dir });
+      const paths = pathsForRoot(dir);
+      const author = authorFor(paths);
+      startSession(author);
+      const { event: real } = await logEvent(author, {
+        type: 'prompt',
+        text: 'add a hello function',
+        tool: 'claude-code',
+      });
+      // A background-subagent result, injected as a user turn — older trails captured
+      // these as prompts. It must not become its own (giant) turn.
+      const { event: synthetic } = await logEvent(author, {
+        type: 'prompt',
+        text: '<task-notification>\n<task-id>x</task-id>\nAgent finished with a long report.',
+        tool: 'claude-code',
+      });
+      await logEvent(author, {
+        type: 'ai_output',
+        text: 'Continuing after the background task.',
+        tool: 'claude-code',
+        turnId: synthetic.id,
+      });
+
+      const data = buildReportData(paths);
+      // Only the real prompt opens a turn.
+      expect(data.turns).toHaveLength(1);
+      expect(data.turns[0]!.prompt.id).toBe(real.id);
+      // The reply that followed the notification attaches to the real prompt's turn.
+      expect(data.turns[0]!.aiOutputs.map((e) => e.text)).toContain(
+        'Continuing after the background task.',
+      );
+      // The notification never renders as a prompt.
+      expect(renderMarkdown(data)).not.toContain('<task-id>');
+    } finally {
+      cleanup(dir);
+    }
+  });
+
   test('renders the exchanges toolbar and wrapper with the three controls', async () => {
     const dir = makeTempDir();
     try {

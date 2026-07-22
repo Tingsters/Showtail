@@ -24,6 +24,7 @@ import {
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { importedSourceIds, logEvent } from './events.ts';
+import { isSyntheticPrompt } from './syntheticPrompt.ts';
 import { asArray, asString, isObject, prop } from './parse.ts';
 import { toRepoRelative, type AuthorPaths } from './storage.ts';
 import {
@@ -128,10 +129,6 @@ const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit']);
  * `suggestion_accepted` prompts and orphaned their replies.
  */
 const NON_USER_PROMPT_SOURCES = new Set(['system', 'sdk']);
-
-/** User-content wrappers that are tooling chrome, not something the student typed. */
-const WRAPPER_RE =
-  /^<(local-command-caveat|command-name|command-message|command-args|command-stdout|command-stderr|user-prompt-submit-hook|session-start-hook)/;
 
 /** Don't record edits to Showtail/Claude bookkeeping files. Mirrors hook.ts. */
 function isInternalPath(p: string): boolean {
@@ -399,7 +396,7 @@ function handleUser(obj: unknown): ClaudeMessage | null {
   if (typeof source === 'string' && NON_USER_PROMPT_SOURCES.has(source)) return null;
 
   const text = content.trim();
-  if (!text || WRAPPER_RE.test(text)) return null;
+  if (!text || isSyntheticPrompt(text)) return null;
 
   return {
     role: 'user',

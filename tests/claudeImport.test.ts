@@ -139,6 +139,46 @@ describe('parseClaudeTranscript', () => {
     }
   });
 
+  test('drops harness-injected user envelopes (task-notification, system-reminder)', () => {
+    const dir = makeTempDir();
+    try {
+      const line = (uuid: string, content: string) =>
+        JSON.stringify({
+          type: 'user',
+          uuid,
+          promptSource: 'typed',
+          timestamp: '2026-06-10T10:00:00.000Z',
+          cwd: dir,
+          message: { role: 'user', content },
+        });
+      const transcript =
+        [
+          // A background-subagent result, injected as a user turn (often many KB).
+          line(
+            'n1',
+            '<task-notification>\n<task-id>abc</task-id>\nAgent finished. Long result…',
+          ),
+          // Injected context, also a user-role message.
+          line(
+            'n2',
+            '<system-reminder>Background context, not user input.</system-reminder>',
+          ),
+          // A genuine prompt that merely *mentions* the tag later — must be kept.
+          line('n3', 'Why did the <task-notification> block show up as a prompt before?'),
+        ].join('\n') + '\n';
+
+      const { messages } = parseClaudeTranscript(transcript, dir);
+      const users = messages.filter((m) => m.role === 'user');
+      expect(users.length).toBe(1); // only the real question survives
+      expect(users[0]!.text).toContain('Why did the');
+      const all = messages.map((m) => m.text).join('\n');
+      expect(all).not.toContain('<task-id>');
+      expect(all).not.toContain('Background context');
+    } finally {
+      cleanup(dir);
+    }
+  });
+
   test('keeps queued and suggestion_accepted prompts; drops system and sdk', () => {
     const dir = makeTempDir();
     try {
