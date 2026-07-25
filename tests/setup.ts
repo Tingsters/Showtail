@@ -27,11 +27,28 @@ const RUN_ROOT_PREFIX = 'showtail-testrun-';
 const RUN_ROOT = join(tmpdir(), `${RUN_ROOT_PREFIX}${process.pid}`);
 
 /**
- * Drop this run's private root, plus any left behind by a run that is no longer
- * alive. The exit hook alone isn't enough — a suite killed by a signal, or a
- * timeout, never runs it — so roots would otherwise accumulate one per aborted
- * run. Matching is on our own `showtail-testrun-<pid>` names and gated on the pid
- * being dead, so a *concurrent* run's root is never touched. Best-effort throughout.
+ * The two pid-owned shapes this sweep may delete, and nothing else:
+ *   - `showtail-testrun-<pid>`          — a run root (above)
+ *   - `showtail-test-<pid>-XXXXXX`      — a per-test dir from `makeTempDir()`
+ *
+ * They overlap textually — `showtail-test-` is a prefix of `showtail-testrun-` —
+ * so each family spells out its *whole* shape here instead of a `startsWith()`,
+ * which the looser prefix would let swallow the other. Both are anchored and
+ * require the pid to be digits, which also excludes fixed names in the same
+ * namespace that no pid owns and that this sweep must never touch
+ * (`showtail-test-identity` from helpers.ts, `showtail-no-vscode-cli`, …), plus
+ * anything that isn't ours at all.
+ */
+const SWEEPABLE_NAME = /^(?:showtail-testrun-(\d+)|showtail-test-(\d+)-.+)$/;
+
+/**
+ * Drop this run's private root, plus any root *or* per-test dir left behind by a
+ * run that is no longer alive. The exit hook alone isn't enough — a suite killed
+ * by a signal, or a timeout, never runs it, and in practice `process.on('exit')`
+ * does not fire under `bun test` at all — so these would otherwise accumulate one
+ * root and dozens of temp dirs per aborted run (they did: thousands of them).
+ * Matching is on our own pid-stamped names and gated on the pid being *dead*, so
+ * a concurrent run's dirs are never touched. Best-effort throughout.
  */
 function sweepRunRoots(): void {
   const drop = (dir: string) => {
@@ -44,8 +61,10 @@ function sweepRunRoots(): void {
   drop(RUN_ROOT);
   try {
     for (const name of readdirSync(tmpdir())) {
-      if (!name.startsWith(RUN_ROOT_PREFIX)) continue;
-      const pid = Number(name.slice(RUN_ROOT_PREFIX.length));
+      const match = SWEEPABLE_NAME.exec(name);
+      const pid = Number(match?.[1] ?? match?.[2]);
+      // NaN when the name isn't one of ours; `=== process.pid` leaves our own
+      // in-flight temp dirs to the tests' explicit `cleanup()`.
       if (!Number.isInteger(pid) || pid <= 0 || pid === process.pid) continue;
       try {
         process.kill(pid, 0); // Alive — another suite is using it. Leave it alone.

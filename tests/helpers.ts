@@ -73,9 +73,20 @@ export function enableAutoInit(home: string, setupCompletedAt?: string): void {
   writeFileSync(join(home, 'config.json'), JSON.stringify(config) + '\n', 'utf8');
 }
 
-/** Create a throwaway temp directory and return its path. */
+/**
+ * Create a throwaway temp directory and return its path.
+ *
+ * The owning pid is baked into the name (`showtail-test-<pid>-XXXXXX`) purely so
+ * the startup sweep in tests/setup.ts can reap the ones this run leaks. The
+ * `cleanup(dir)` call in each test's `finally` is still the primary mechanism,
+ * but a suite killed by a signal or a timeout never reaches it — and with an
+ * anonymous name those orphans are indistinguishable from a *concurrent* run's
+ * live dirs, so nothing could ever safely delete them and they just accumulated
+ * (thousands, on a machine that runs the suite all day). With the pid in the
+ * name a later run can tell "owner is dead" from "owner is still working".
+ */
 export function makeTempDir(): string {
-  return mkdtempSync(join(tmpdir(), 'showtail-test-'));
+  return mkdtempSync(join(tmpdir(), `showtail-test-${process.pid}-`));
 }
 
 /**
