@@ -65,8 +65,13 @@ function segmentsInShard(shardDir: string): string[] {
     .map((f) => join(shardDir, f));
 }
 
-/** Every journal segment file (across all machine shards), oldest first. */
-function journalSegments(author: AuthorPaths): string[] {
+/**
+ * Every journal segment file for one author (across all machine shards), oldest
+ * first — the files that must only ever grow. Exported so `verify` can hold the
+ * segments up against an outside record of them (git history) without
+ * re-deriving the layout.
+ */
+export function journalSegmentPaths(author: AuthorPaths): string[] {
   const out: string[] = [];
   // Sorted by shard then segment number — deterministic across reads. Cross-shard
   // ordering is otherwise irrelevant: readers re-sort events by timestamp.
@@ -261,7 +266,7 @@ export function isEventEntry(entry: JournalEntry): boolean {
 /** Read every journal entry for one author across all segments, in write order. */
 export function readJournal(author: AuthorPaths): JournalEntry[] {
   const out: JournalEntry[] = [];
-  for (const seg of journalSegments(author)) {
+  for (const seg of journalSegmentPaths(author)) {
     for (const raw of readJsonl<Record<string, unknown>>(seg)) {
       out.push(normalizeEntry(raw));
     }
@@ -317,6 +322,13 @@ export function mapJournal(
  * Every touched shard is re-chained ({@link rechainEntries}) across all of its
  * segments, so a legitimate removal leaves an intact chain instead of looking
  * like tampering. Re-chaining spans segments because the chain does.
+ *
+ * A caller must also *declare* the rewrite by recording a marker (as
+ * `removeEventsByBatch` does). An intact chain hides the rewrite from the chain
+ * check, but not from git: the journal is append-only, so `verify` reads removed
+ * lines in its history as a rewrite and reports every one nothing declares.
+ * The same goes for {@link mapJournal}, which `showtail redact` pairs with its
+ * own marker.
  */
 export function rewriteJournal(
   author: AuthorPaths,

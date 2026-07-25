@@ -34,7 +34,9 @@ outputs:
     value: ${{ steps.verify.outputs.ok }}
   checks-json:
     description: >-
-      The raw `showtail verify --json` result: {"ok":bool,"checks":[{"name","ok","details"}]}.
+      The raw `showtail verify --json` result:
+      {"ok":bool,"checks":[{"name","ok","details","skipped"?}]}. A check carrying
+      `skipped` reported ok but examined nothing (e.g. "shallow-clone").
     value: ${{ steps.verify.outputs.checks-json }}
 
 runs:
@@ -107,6 +109,17 @@ runs:
           exit 1
         }
 
+        # `actions/checkout` defaults to fetch-depth: 1 — a shallow clone with
+        # essentially no history. One of `verify`'s checks holds the journal
+        # (append-only by construction) against its own git history, and a
+        # shallow checkout leaves it nothing to read: it reports "not verified"
+        # rather than passing, which is right, but an educator should not have to
+        # dig that out of a check's details. Say it at the top of the summary.
+        shallow=false
+        if [ "$(git rev-parse --is-shallow-repository 2>/dev/null || echo unknown)" = "true" ]; then
+          shallow=true
+        fi
+
         status=0
         showtail verify --json >"$json" 2>"$errlog" || status=$?
 
@@ -155,6 +168,13 @@ runs:
           echo
           echo "Project: \`$INPUT_PATH\` — Showtail \`$(showtail --version 2>/dev/null || echo unknown)\`"
           echo
+          if [ "$shallow" = "true" ]; then
+            echo "> **Shallow checkout — the journal's git history was NOT checked.** The"
+            echo "> trail's strongest guarantee is that its journal only ever grows, which"
+            echo "> is verified against git history; a depth-1 checkout has none. Add"
+            echo "> \`with: { fetch-depth: 0 }\` to your \`actions/checkout\` step."
+            echo
+          fi
           if command -v jq >/dev/null 2>&1; then
             total=$(jq -r '.checks | length' "$json")
             failed=$(jq -r '[.checks[] | select(.ok | not)] | length' "$json")
@@ -191,6 +211,10 @@ runs:
             echo '```'
           fi
         } >> "$summary"
+
+        if [ "$shallow" = "true" ]; then
+          echo "::warning::Showtail: shallow checkout — the journal's git history was not checked. Set fetch-depth: 0 on actions/checkout."
+        fi
 
         if [ "$ok" = "true" ]; then
           echo "Showtail: the trail verified — all checks passed."

@@ -347,6 +347,7 @@ function recordMarker(paths: ShowtailPaths, pass: RedactPass): string | undefine
     (slug ? authorPaths(paths, slug, ensureMachineId()) : null);
   if (!author) return undefined;
   const redaction: RedactionRecord = {
+    reason: 'redact',
     mode: pass.mode,
     entries: pass.entries,
     values: pass.values,

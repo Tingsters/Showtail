@@ -1,7 +1,14 @@
-import { existsSync } from 'node:fs';
+import { existsSync, realpathSync } from 'node:fs';
+import { relative, resolve, sep } from 'node:path';
 import { checkArtifactHashes } from '../core/artifacts.ts';
 import { authorSlugs } from '../core/authors.ts';
 import { eventFromEntry } from '../core/events.ts';
+import {
+  fileHistoryNumstat,
+  gitToplevel,
+  isShallowClone,
+  uncommittedNumstat,
+} from '../core/git.ts';
 import { buildReportData, renderMarkdown } from '../core/report.ts';
 import { validateEvent } from '../core/schema.ts';
 import { checkObjects, objectExists } from '../core/objects.ts';
@@ -12,7 +19,12 @@ import {
   trailIsNewerThanBinary,
   type ShowtailPaths,
 } from '../core/storage.ts';
-import { checkChain, readJournalShards, type JournalShard } from '../core/journal.ts';
+import {
+  checkChain,
+  journalSegmentPaths,
+  readJournalShards,
+  type JournalShard,
+} from '../core/journal.ts';
 import type { JournalEntry } from '../types.ts';
 
 export interface VerifyOptions {
@@ -25,6 +37,18 @@ interface CheckResult {
   name: string;
   ok: boolean;
   details: string[];
+  /**
+   * Set when the check could not actually examine anything, to a short stable
+   * slug naming why (`no-git`, `shallow-clone`, `not-committed`, …).
+   *
+   * Such a check reports `ok: true` — it found nothing wrong, and a student
+   * working without git must not be told their trail failed. But "nothing to
+   * check" is not "checked and fine", and the human-facing `details` say so in
+   * words that `--json` consumers are explicitly told not to parse. Without a
+   * field like this, anyone building on `verify --json` sees a green check that
+   * verified nothing and cannot tell the difference. Branch on this, not on text.
+   */
+  skipped?: string;
 }
 
 /**
@@ -69,6 +93,239 @@ function readJournals(paths: ShowtailPaths): AuthorJournal[] {
     }
   }
   return out;
+}
+
+// --- The git anchor -------------------------------------------------------
+
+/** `realpathSync`, falling back to the input when it cannot be resolved. */
+function realPath(target: string): string {
+  try {
+    return realpathSync(target);
+  } catch {
+    return target;
+  }
+}
+
+/**
+ * Absolute path → repo-root-relative with posix separators (git's spelling).
+ * Both sides are resolved through symlinks first: `git rev-parse --show-toplevel`
+ * always reports the physical path, and on macOS the trail's own path routinely
+ * is not one (`/var/folders/…` → `/private/var/folders/…`). Comparing the two
+ * spellings unresolved would make every such trail look like it sits outside its
+ * own repository.
+ */
+function repoRelative(repoRoot: string, target: string): string {
+  return relative(realPath(repoRoot), realPath(target)).split(sep).join('/');
+}
+
+/**
+ * Whether a repo-relative path is a journal file. Used to narrow a diff taken
+ * over the whole `.showtail/` tree down to the journal: only the journal is
+ * append-only. `sessions/`, `state.json` and the rest are rewritten in normal
+ * use, and counting their line removals would fail every honest trail.
+ */
+function isJournalPath(path: string): boolean {
+  return /(^|\/)authors\/[^/]+\/journal\//.test(path);
+}
+
+/** One rewrite of already-recorded journal lines, as git saw it. */
+interface JournalRewrite {
+  /** Short commit SHA, or a phrase for a rewrite that isn't committed yet. */
+  where: string;
+  /** When it was committed (git's committer date), or "uncommitted". */
+  when: string;
+  removed: number;
+  added: number;
+  /** Repo-relative journal paths the rewrite touched. */
+  paths: string[];
+}
+
+/** One-line description of a marker the trail uses to declare a rewrite. */
+function describeMarker(entry: JournalEntry): string {
+  const r = entry.redaction;
+  if (r?.reason === 'import-undo') {
+    return `import undo at ${entry.ts} (${r.entries} entr${r.entries === 1 ? 'y' : 'ies'} removed)`;
+  }
+  return (
+    `redaction pass at ${entry.ts} (${r?.mode ?? 'unknown'}: ` +
+    `${r?.entries ?? 0} entr${r?.entries === 1 ? 'y' : 'ies'} rewritten)`
+  );
+}
+
+/**
+ * Check the journal against git — the only anchor Showtail has *outside* the
+ * folder it is trying to vouch for.
+ *
+ * The chain check above can only prove the journal is internally consistent,
+ * and anything that can write the folder can produce a consistent journal: edit
+ * a line, re-chain everything after it, and the chain is intact again. What that
+ * rewrite cannot do is escape git. A journal segment is append-only by
+ * construction, so across its whole history every commit that touches it should
+ * add lines and remove none. A re-chain rewrites every line after the edit —
+ * git counts those as removals, and the rewrite is loud.
+ *
+ * Everything here degrades to information, never a failure, when there is no
+ * anchor to read: no git, not a repo, trail not committed. Showtail is designed
+ * to work without git and must keep doing so. The one thing it must not do is
+ * report "verified" when it checked nothing — a shallow clone has no history to
+ * read, and says exactly that instead of passing quietly.
+ */
+async function checkJournalHistory(
+  paths: ShowtailPaths,
+  journals: AuthorJournal[],
+): Promise<CheckResult> {
+  const check: CheckResult = {
+    name: 'journal history is append-only (git)',
+    ok: true,
+    details: [],
+  };
+
+  const toplevel = await gitToplevel(paths.root);
+  if (toplevel === undefined) {
+    check.details.push(
+      'Not a git repository (or git is not installed), so there is no record outside ' +
+        '`.showtail/` to hold the journal against — nothing to check here, and not a ' +
+        'problem. Note what that costs: the checks above prove the trail is internally ' +
+        'consistent, not that it was never rewritten. Committing `.showtail/` as you ' +
+        'work, and pushing it, is what gives it an anchor.',
+    );
+    check.skipped = 'no-git';
+    return check;
+  }
+  const repoRoot = resolve(toplevel);
+
+  const segments = journals.flatMap((journal) =>
+    journalSegmentPaths(authorPaths(paths, journal.slug)),
+  );
+  if (segments.length === 0) {
+    check.details.push('No journal segments yet — nothing to check.');
+    check.skipped = 'no-journal';
+    return check;
+  }
+
+  const base = repoRelative(repoRoot, paths.base);
+  if (base.startsWith('..')) {
+    check.details.push(
+      `The trail lives outside the git repository at ${repoRoot}, so its history is ` +
+        'not recorded there — nothing to check.',
+    );
+    check.skipped = 'trail-outside-repo';
+    return check;
+  }
+
+  if (await isShallowClone(repoRoot)) {
+    check.details.push(
+      'NOT VERIFIED: this is a shallow clone, so almost none of the repository’s ' +
+        'history is present and a rewritten journal would leave no trace in what is. ' +
+        'This check was skipped rather than passed. Check out the full history — in ' +
+        'GitHub Actions, `fetch-depth: 0` on actions/checkout — and verify again.',
+    );
+    check.skipped = 'shallow-clone';
+    return check;
+  }
+
+  // One query over the whole `.showtail/` tree, filtered to journal paths: a
+  // segment file that was *deleted* is then still seen, which asking about the
+  // files that exist today never would.
+  const revisions = await fileHistoryNumstat(repoRoot, base, isJournalPath);
+  if (revisions.length === 0) {
+    check.details.push(
+      `The journal is not committed to git yet (${segments.length} segment file(s) on ` +
+        'disk), so there is no history to check it against. Commit `.showtail/` — a ' +
+        'file that only ever grows, whose every revision is in git, is what makes a ' +
+        'later rewrite visible from outside the folder.',
+    );
+    check.skipped = 'not-committed';
+    return check;
+  }
+  const pending = await uncommittedNumstat(repoRoot, base, isJournalPath);
+
+  if (revisions.some((rev) => rev.binary) || pending.binary) {
+    check.details.push(
+      'NOT VERIFIED: git treats the journal as a binary file (a `.gitattributes` rule, ' +
+        'most likely), so it reports no line counts and an added line cannot be told ' +
+        'from a removed one. This check was skipped rather than passed. Let the journal ' +
+        'be diffed as text and verify again.',
+    );
+    check.skipped = 'journal-not-text';
+    return check;
+  }
+
+  const rewrites: JournalRewrite[] = revisions
+    .filter((rev) => rev.deleted > 0)
+    .map((rev) => ({
+      where: rev.commit.slice(0, 10),
+      when: rev.date,
+      removed: rev.deleted,
+      added: rev.added,
+      paths: rev.paths,
+    }));
+  if (pending.deleted > 0) {
+    // Caught before it is ever committed — the same rewrite, one step earlier.
+    rewrites.push({
+      where: 'uncommitted',
+      when: 'in the working tree right now',
+      removed: pending.deleted,
+      added: pending.added,
+      paths: pending.paths,
+    });
+  }
+
+  const addedLines = revisions.reduce((n, rev) => n + rev.added, 0);
+  if (rewrites.length === 0) {
+    check.details.push(
+      `Append-only across ${revisions.length} commit(s): ${addedLines} journal line(s) ` +
+        'added, none removed or changed.',
+    );
+    return check;
+  }
+
+  // Reconcile against what the trail says it did to itself. `showtail redact`
+  // and `showtail import undo` legitimately rewrite lines, and each records a
+  // dated marker; one marker accounts for one rewrite, oldest first, so the
+  // rewrites left over are the ones nothing declares.
+  const declared = journals
+    .flatMap((journal) => journal.entries.filter((e) => e.kind === 'redaction'))
+    .sort((a, b) => a.ts.localeCompare(b.ts));
+
+  check.details.push(
+    `git history shows ${rewrites.length} rewrite(s) of already-recorded journal ` +
+      'lines (the journal only ever grows, so a revision that removes or changes ' +
+      'lines rewrote history):',
+  );
+  const unexplained: JournalRewrite[] = [];
+  let next = 0;
+  for (const rewrite of rewrites) {
+    const marker = declared[next];
+    if (marker) next += 1;
+    else unexplained.push(rewrite);
+    check.details.push(
+      `  ${rewrite.where}  ${rewrite.when} — ${rewrite.removed} line(s) removed, ` +
+        `${rewrite.added} added (${rewrite.paths.join(', ')})` +
+        (marker ? ` — declared: ${describeMarker(marker)}` : ' — UNEXPLAINED'),
+    );
+  }
+
+  if (unexplained.length === 0) {
+    check.details.push(
+      `Each is accounted for by a rewrite the trail declares (${declared.length} ` +
+        'marker(s)) — history was rewritten on purpose, and said so.',
+    );
+    return check;
+  }
+
+  check.ok = false;
+  check.details.push(
+    `${unexplained.length} of ${rewrites.length} rewrite(s) unexplained: the trail ` +
+      `declares ${declared.length} deliberate rewrite(s) (\`showtail redact\`, ` +
+      '`showtail import undo`), which does not account for them.',
+  );
+  check.details.push(
+    'This says the recorded history was rewritten, not that anyone cheated. A ' +
+      'hand-edit, a merge resolved by editing the journal, or a tool that reformatted ' +
+      'the file all look like this. The commits above are where to ask.',
+  );
+  return check;
 }
 
 /**
@@ -175,6 +432,7 @@ export async function verifyProject(paths: ShowtailPaths): Promise<VerifyResult>
   let chained = 0;
   let unchained = 0;
   const passes: JournalEntry[] = [];
+  const undos: JournalEntry[] = [];
   for (const journal of journals) {
     if (journal.error !== undefined) continue; // Already reported by check 2.
     for (const shard of journal.shards) {
@@ -182,7 +440,9 @@ export async function verifyProject(paths: ShowtailPaths): Promise<VerifyResult>
       chained += shard.entries.length - legacy;
       unchained += legacy;
       for (const entry of shard.entries) {
-        if (entry.kind === 'redaction') passes.push(entry);
+        if (entry.kind !== 'redaction') continue;
+        if (entry.redaction?.reason === 'import-undo') undos.push(entry);
+        else passes.push(entry);
       }
       for (const b of breaks) {
         chainCheck.ok = false;
@@ -232,9 +492,30 @@ export async function verifyProject(paths: ShowtailPaths): Promise<VerifyResult>
       );
     }
   }
+  if (undos.length > 0) {
+    // The other declared rewrite: `showtail import undo` drops a batch and
+    // re-chains, so like a redaction pass it leaves no break and has to say so.
+    chainCheck.details.push(
+      `${undos.length} recorded import undo${undos.length === 1 ? '' : 's'} ` +
+        '(`showtail import undo` removed an imported batch and re-linked the chain):',
+    );
+    for (const entry of undos) {
+      const r = entry.redaction;
+      chainCheck.details.push(
+        `  ${entry.ts} — ${r?.entries ?? 0} entr${r?.entries === 1 ? 'y' : 'ies'} removed` +
+          `${r?.batch ? ` (batch ${r.batch})` : ''}.`,
+      );
+    }
+  }
   checks.push(chainCheck);
 
-  // 4. Stored content still hashes to the address it is filed under. The object
+  // 4. The journal's history in git is append-only. Placed right after the chain
+  //    so the two read together: the chain proves the journal is *internally*
+  //    consistent, and this proves nobody quietly made it so. Informational
+  //    whenever there is no git history to read (see checkJournalHistory).
+  checks.push(await checkJournalHistory(paths, journals));
+
+  // 5. Stored content still hashes to the address it is filed under. The object
   //    store holds the prompt and AI-response *text*, so this is what catches an
   //    invented prompt — something the artifact check structurally cannot see.
   const objectCheck: CheckResult = {
@@ -290,7 +571,7 @@ export async function verifyProject(paths: ShowtailPaths): Promise<VerifyResult>
   }
   checks.push(objectCheck);
 
-  // 5. File snapshots vs. the working tree. A file that differs from its last
+  // 6. File snapshots vs. the working tree. A file that differs from its last
   //    snapshot is NOT a failure — it is what "kept working on it" looks like,
   //    and failing there would punish exactly the behavior the tool encourages.
   //    Only an unreadable trail fails here; a vanished file is a warning.
@@ -337,7 +618,7 @@ export async function verifyProject(paths: ShowtailPaths): Promise<VerifyResult>
   }
   checks.push(snapshotCheck);
 
-  // 6. Portability: no journal entry carries an absolute path. Paths must be
+  // 7. Portability: no journal entry carries an absolute path. Paths must be
   //    repo-relative so a trail is portable across machines — and a projection
   //    from the ledger (whose records hold absolute paths) must re-relativize.
   const pathCheck: CheckResult = {
@@ -372,7 +653,7 @@ export async function verifyProject(paths: ShowtailPaths): Promise<VerifyResult>
   }
   checks.push(pathCheck);
 
-  // 7. A report can be generated. This one deliberately re-reads the trail: it
+  // 8. A report can be generated. This one deliberately re-reads the trail: it
   //    exercises the real report path end to end, which is the whole point.
   const reportCheck: CheckResult = {
     name: 'a report can be generated',

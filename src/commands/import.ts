@@ -268,4 +268,11 @@ export async function runImportUndo(options: { cwd?: string } = {}): Promise<voi
   }
   const removed = removeEventsByBatch(author, batchId);
   console.log(`Undid the last import — removed ${removed} event(s).`);
+  // Removing entries rewrites the journal, which `verify` would otherwise have
+  // to treat as an undeclared rewrite. Say that a note was left, so the student
+  // isn't surprised to see one.
+  console.log(
+    'A dated note of this removal was added to your journal, so `showtail verify` ' +
+      'can tell it apart from a trail that was quietly rewritten.',
+  );
 }

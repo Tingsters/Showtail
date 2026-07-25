@@ -109,6 +109,12 @@ when any fails. It's the form to use in CI:
       "name": "file snapshots are accounted for",
       "ok": true,
       "details": ["edited  src/main.py", "1 file(s) edited since their last snapshot — expected if you kept working."]
+    },
+    {
+      "name": "journal history is append-only (git)",
+      "ok": true,
+      "skipped": "shallow-clone",
+      "details": ["NOT VERIFIED: this is a shallow clone, …"]
     }
   ]
 }
@@ -117,8 +123,24 @@ when any fails. It's the form to use in CI:
 - `ok` — true only when every check passed.
 - `checks[]` — one entry per check, in the order the human output prints them,
   each with a stable `name`, its own `ok`, and human-readable `details` lines.
+- `skipped` — present only when a check could not examine anything, set to a
+  short stable slug saying why: `no-git`, `no-journal`, `trail-outside-repo`,
+  `shallow-clone`, `not-committed`, `journal-not-text`. Such a check still
+  reports `ok: true` (it found nothing wrong, and a student working without git
+  must not be told their trail failed) — but **"nothing to check" is not
+  "checked and fine"**. Branch on `name`, `ok` and `skipped`; treat `details` as
+  human text that may be reworded and never parse it.
 
 `details` text may be reworded between releases; branch on `ok` and `name`.
+
+One check, `journal history is append-only (git)`, reads the project's git
+history: the journal only ever grows, so a commit that *removes* journal lines
+is a rewrite, and it fails unless a `showtail redact` / `showtail import undo`
+marker in the trail declares it. It never fails for the absence of git — no
+repo, or a trail not committed, is reported as information. A **shallow** clone
+is reported as *not verified* rather than passed, so run it against a full
+checkout (`fetch-depth: 0`); see
+[Verify submissions in CI](../educators/verify-in-ci.md).
 
 ## Exit codes
 

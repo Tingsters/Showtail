@@ -190,6 +190,7 @@ describe('showtail redact --pattern', () => {
       expect(recorded.length).toBe(1);
       expect(recorded[0]!.id).toBe(pass.markerId!);
       expect(recorded[0]!.redaction).toEqual({
+        reason: 'redact',
         mode: 'pattern',
         entries: 1,
         values: 1,

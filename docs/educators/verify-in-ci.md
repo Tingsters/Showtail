@@ -24,12 +24,25 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # full history — see below
       - uses: Tingsters/Showtail@v1
 ```
 
 That's the whole thing. The action installs the `showtail` binary, runs
 `showtail verify --json` at the repo root, writes a pass/fail summary to the job
 summary, and fails the job if the trail does not verify.
+
+!!! important "`fetch-depth: 0` is not optional here"
+
+    `actions/checkout` defaults to a **depth-1 shallow clone** — the latest
+    commit and no history. The strongest check Showtail runs holds the journal
+    (which only ever grows) against its own git history, and with no history
+    there is nothing to hold it against: a student could rewrite the journal and
+    the check would have no way to see it. Showtail reports that as *not
+    verified* rather than passing it quietly, and the action repeats the warning
+    at the top of the job summary — but the fix is one line, and without it you
+    lose the check that catches a deliberately re-chained trail.
 
 !!! warning "Not usable until the next release"
 
@@ -49,6 +62,12 @@ freeze it for a term.
     The trail is only checkable if it is in the repo. Step 4 of the
     [classroom workflow](classroom-workflow.md) covers this — reports are
     regenerable and git-ignored, but `.showtail/` itself must be committed.
+
+    Committing it **as they work**, rather than once at the end, is what makes
+    the history check worth anything: each push pins the journal as it stood,
+    and a later rewrite has to remove lines the remote already saw. A trail
+    committed in a single lump at submission time still verifies internally, but
+    there is nothing outside it to compare against.
 
 ## Inputs
 
@@ -101,25 +120,38 @@ can grade from the Checks tab without opening the logs:
 
 Project: `.` — Showtail `<version>`
 
-**FAIL — the trail did not verify.** 1 of 7 checks failed:
+**FAIL — the trail did not verify.** 1 of 8 checks failed:
 
-- journal chain is unbroken
+- journal history is append-only (git)
 
 ### Checks
 
 - **PASS** config.json is present and valid
 - **PASS** journal entries are valid
-- **FAIL** journal chain is unbroken
-  - ada-at-example-com/9f3c… entry 12 (evt_lqz3k8_a1b2): the entry before it
-    does not match this entry's recorded link — the journal was edited after it
-    was written.
+- **PASS** journal chain is unbroken
+  - chain intact; 24 chained journal entries verified.
+- **FAIL** journal history is append-only (git)
+  - git history shows 1 rewrite(s) of already-recorded journal lines (the
+    journal only ever grows, so a revision that removes or changes lines
+    rewrote history):
+  - 4f2c1ab9e0  2026-05-14T18:22:07+01:00 — 11 line(s) removed, 11 added
+    (.showtail/authors/ada-at-example-com/journal/9f3c/0001.log) — UNEXPLAINED
+  - 1 of 1 rewrite(s) unexplained: the trail declares 0 deliberate rewrite(s)
+    (`showtail redact`, `showtail import undo`), which does not account for them.
 - **PASS** stored content matches its address
   …
 ```
 
 **What a failure means:** the recorded trail was **changed after it was
-written** — an edited journal line, or stored prompt text that no longer hashes
-to its address.
+written** — an edited journal line, stored prompt text that no longer hashes to
+its address, or (as above) journal lines that git says were rewritten after they
+were committed. Note that the last one is reported even when everything inside
+`.showtail/` is self-consistent: re-linking the hash chain after an edit is easy,
+and rewriting the repository's own history is not.
+
+**Ask before you conclude.** "History was rewritten" is a fact, not a verdict. A
+hand-resolved merge conflict in the journal, or a tool that reformatted the file,
+looks the same as doctoring it. The summary names the commit — start there.
 
 **What it does not mean:** it is *not* a plagiarism verdict, and it is *not*
 triggered by a student continuing to work. Editing a source file after its last

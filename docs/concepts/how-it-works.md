@@ -78,33 +78,59 @@ before it: change one line, delete one, or splice one in, and the *next* line's
 segments are already sharded — that's what keeps two students' (or your own two
 laptops') trails merging through git without conflicts.
 
-`showtail verify` checks both, and reports a break as a failure.
+**Git history, as an anchor from outside the folder.** The two mechanisms above
+live entirely inside `.showtail/`, and anything that can write that folder can
+make them agree with each other: edit a line, re-link the chain after it, and
+the chain is intact again. So `verify` also checks something the student's
+folder does not own. A journal segment is **append-only** — every write adds a
+line and changes none — so across its whole history in git, every commit that
+touches it should add lines and remove none. `git log --numstat` says exactly
+that, and a re-chain (which rewrites every line after the edit) shows up as a
+pile of removals. The same check reads the working tree, so a rewrite is caught
+before it is even committed.
 
-**What the chain does and does not catch.** It is unkeyed, and every byte of it
-lives in the student's own folder — so it detects an *unwitting* edit, not a
-determined one. Concretely, measured against a real trail:
+`showtail verify` checks all three, and reports a break as a failure.
+
+**What is caught, and what is not.** The chain is unkeyed and local, so on its
+own it detects an *unwitting* edit, not a determined one. Git is what changes
+that — but only for a trail that is actually committed. Concretely, measured
+against a real trail:
 
 | | Detected? |
 |---|---|
 | Edit a stored prompt's text in `objects/` | ✅ address no longer matches |
 | Edit a journal line and leave `prev` alone | ✅ chain break, `verify` exits 3 |
-| Truncate entries off the end of a shard | ❌ the remaining chain is still valid |
-| Append a fabricated entry with a recomputed `prev` | ❌ passes cleanly |
-| Edit any entry, then re-chain everything after it | ❌ passes cleanly |
+| Truncate entries off the end of a shard | ✅ once committed — git shows removed lines |
+| Edit any entry, then re-chain everything after it | ✅ once committed — every rewritten line is a removal |
+| Append a fabricated entry to the end | ❌ an append is what an honest capture looks like |
+| Any of the above, in a trail never committed to git | ❌ nothing outside the folder to compare against |
 
-The last three need only a short script, and Showtail is open source — the
-re-chaining helper ships in `src/core/journal.ts`. So this is tamper-**evidence**
-against casual editing, not an integrity guarantee against someone who reads the
-code. It raises fabricating a process from "edit a line" to "write a script,
-knowingly" — worth having, and worth not overstating.
+`showtail redact` and `showtail import undo` legitimately rewrite journal lines,
+and each records a dated marker in the journal saying so. `verify` reconciles the
+rewrites git reports against those markers, and fails only on rewrites nothing
+declares — reporting each with its commit SHA and date.
 
-Closing the gap needs an anchor outside the folder. The practical one today is
-git: commit `.showtail/` and push it as you work, and the remote's history is a
-record the student cannot silently rewrite — verifying that on every push is
-what running Showtail in CI is for. Signed provenance records, on the
-[roadmap](../roadmap.md), are the stronger answer.
-And of course anyone can delete the whole trail and start over — no local file
-format prevents that.
+**Where the boundary is.** Being straight about this matters more than sounding
+strong:
+
+- **A forged append is still an append.** Nothing here distinguishes a real
+  prompt from one that was invented and appended with a correctly computed
+  `prev`. Committing as you work narrows the window — a prompt appended today
+  cannot claim to be from last week's commit — but it does not close it.
+- **No commits, no anchor.** A student who never commits `.showtail/`, or who
+  commits it once at submission time, gets nothing from this check. `verify`
+  says so rather than passing quietly, and so does the
+  [GitHub Action](../educators/verify-in-ci.md) on a shallow checkout.
+- **Local git history can itself be rewritten.** `git rebase`/`--amend` can
+  reshape a local repo's past. The real anchor is the copy on the **remote**:
+  history that has been pushed cannot be changed without a force-push, which is
+  visible.
+- **Anyone can delete the whole trail and start over.** No local file format
+  prevents that — though in a committed repo, deleting it is itself in the log.
+
+So: tamper-**evidence** that now extends past the folder it describes, not an
+integrity guarantee. Signed provenance records, on the [roadmap](../roadmap.md),
+are the stronger answer.
 
 ### What is *not* tampering
 

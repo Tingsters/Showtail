@@ -63,6 +63,13 @@ PASS  journal chain is unbroken
 The marker never stores a removed value — nor the `--pattern` you used, since a
 pattern is often the secret itself.
 
+`showtail import undo` records the same kind of marker (`reason: import-undo`),
+for the same reason: it drops a batch of entries and re-links the chain, which
+is also a rewrite. In a git repository these markers do more than disclose —
+`verify` reconciles them against the rewrites git history shows, and reports any
+rewrite no marker accounts for. See
+[Why the trail is hard to fake](how-it-works.md#why-the-trail-is-hard-to-fake).
+
 !!! warning "What the marker is and is not"
     It is an honest disclosure that history was rewritten, not cryptographic
     proof of *which* rewrites happened. The chain check only proves the journal

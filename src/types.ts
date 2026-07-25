@@ -169,22 +169,35 @@ export interface RedactConfig {
 }
 
 /**
- * The audit record an after-the-fact `showtail redact` pass leaves in the
- * journal. Write-time redaction needs no record (nothing was ever stored), but a
- * later pass *rewrites history*: it re-addresses stored objects and re-links the
- * hash chain, which by construction leaves no break for `verify` to notice. This
- * marker is what keeps that from being silent — a dated, counted statement that
- * the trail was scrubbed, which `showtail verify` surfaces next to the chain
- * result.
+ * The audit record a *declared rewrite of the journal* leaves behind. Two
+ * supported operations rewrite lines that were already written — `showtail
+ * redact` (re-addresses stored objects, repoints and re-chains the entries) and
+ * `showtail import undo` (drops a batch and re-chains) — and both, by
+ * construction, leave no break for the chain check to notice.
+ *
+ * This marker is what keeps that from being silent: a dated, counted statement
+ * that history was rewritten on purpose. `showtail verify` surfaces it next to
+ * the chain result, and — the reason every rewriting operation must record one —
+ * uses it to reconcile the rewrites git history shows. An undeclared rewrite is
+ * reported; a declared one is explained.
  *
  * It deliberately holds no removed value, and no `--pattern` source either: a
  * student scrubbing `hunter2` would otherwise leak it right back by recording
  * the pattern they used.
  */
 export interface RedactionRecord {
-  /** `rescan` re-ran the configured rules; `pattern` scrubbed one given regex. */
-  mode: 'rescan' | 'pattern';
-  /** How many journal entries were rewritten. */
+  /**
+   * Which operation rewrote the journal. Absent on markers written before
+   * `import undo` recorded one, which were all redaction passes — read a missing
+   * value as `redact`.
+   */
+  reason?: 'redact' | 'import-undo';
+  /**
+   * For a `redact` pass: `rescan` re-ran the configured rules, `pattern`
+   * scrubbed one given regex. Absent for other reasons.
+   */
+  mode?: 'rescan' | 'pattern';
+  /** How many journal entries were rewritten (for `import-undo`: removed). */
   entries: number;
   /** How many sensitive values were removed in total. */
   values: number;
@@ -192,6 +205,8 @@ export interface RedactionRecord {
   labels: string[];
   /** How many stored objects were rewritten to a new address. */
   objects?: number;
+  /** For `import-undo`: the import batch that was removed. */
+  batch?: string;
 }
 
 /** The project-level configuration written at `init` time. */

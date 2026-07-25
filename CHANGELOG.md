@@ -26,6 +26,21 @@
   moved or deleted is a warning, and failure is reserved for the trail itself being
   modified. Trails written before chaining report their entries as *unchained*
   (informational), never as tampering.
+- **`showtail verify` now anchors the journal to git history — the check that catches
+  a re-chained trail.** The hash chain can only prove the journal is *internally*
+  consistent, and anything that can write `.showtail/` can produce a consistent
+  journal: edit an entry, re-link everything after it, and the chain check passes. A
+  journal segment is append-only, so the new check (`journal history is append-only
+  (git)`) walks its whole history with `git log --numstat`: every commit should add
+  lines and remove none, and a re-chain or a truncation shows up as removals. The
+  working tree is checked too, so a rewrite is caught before it is committed. Each
+  rewrite is reported with its commit SHA and date, and reconciled against the markers
+  `showtail redact` and `showtail import undo` leave — only undeclared rewrites fail.
+  The wording says history was rewritten, not that anyone cheated. **No git, not a
+  repo, or a trail not committed** stays informational and never fails — but a
+  **shallow clone** is reported as *not verified* rather than passed, since it has no
+  history to read. `showtail import undo` now records a marker of its own, so a
+  supported undo isn't mistaken for an undeclared rewrite.
 - **`showtail verify --json`** prints the structured result (`{ ok, checks: [{ name,
   ok, details }] }`) for CI, keeping the existing exit code `3` on failure.
 - **A GitHub Action (`Tingsters/Showtail@v1`)** verifies a submission's trail on every

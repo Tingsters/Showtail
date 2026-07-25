@@ -282,9 +282,46 @@ export function latestBatchId(author: AuthorPaths): string | undefined {
 /**
  * Remove every journal entry tagged with `batchId` from this author's trail and
  * return how many were removed. (Objects left for a future GC.)
+ *
+ * Removing lines rewrites the journal, and {@link rewriteJournal} re-chains what
+ * is left — so the result is a journal that looks untouched, which is precisely
+ * why the removal has to say so. A dated marker is appended (the same kind
+ * `showtail redact` records, with `reason: 'import-undo'`) so that `verify`,
+ * which holds the journal against git history, can reconcile the removed lines
+ * against a declared reason instead of reporting them as an unexplained
+ * rewrite. Without it, undoing an import — a supported, innocent operation —
+ * would look exactly like doctoring the record.
  */
 export function removeEventsByBatch(author: AuthorPaths, batchId: string): number {
-  return rewriteJournal(author, (e) => e.batch !== batchId);
+  const removed = rewriteJournal(author, (e) => e.batch !== batchId);
+  if (removed > 0) recordUndoMarker(author, batchId, removed);
+  return removed;
+}
+
+/**
+ * Append the `import-undo` rewrite marker. Written *after* the rewrite so its
+ * `prev` links to the re-chained tail. Best-effort: a read-only author view (no
+ * machineId, so nothing can be appended) must not turn an undo into an error —
+ * the rewrite is then simply undeclared, which `verify` reports.
+ */
+function recordUndoMarker(author: AuthorPaths, batchId: string, removed: number): void {
+  if (!author.machineId) return;
+  const marker: JournalEntry = {
+    v: JOURNAL_ENTRY_VERSION,
+    kind: 'redaction',
+    id: makeId('red'),
+    ts: new Date().toISOString(),
+    type: 'redaction',
+    actorSlug: author.slug,
+    redaction: {
+      reason: 'import-undo',
+      entries: removed,
+      values: 0,
+      labels: [],
+      batch: batchId,
+    },
+  };
+  appendJournal(author, marker);
 }
 
 /** One event paired with the id of the session and the author it belongs to. */
