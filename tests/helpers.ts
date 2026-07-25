@@ -1,5 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import {
+  chmodSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -87,6 +88,70 @@ export function enableAutoInit(home: string, setupCompletedAt?: string): void {
  */
 export function makeTempDir(): string {
   return mkdtempSync(join(tmpdir(), `showtail-test-${process.pid}-`));
+}
+
+/**
+ * The on-disk shape of a {@link stubCli} script for one platform: the filename
+ * extension a launcher will actually execute there, the script text, and the mode
+ * to chmod it to (null where chmod is meaningless).
+ *
+ * Split out from `stubCli` so the Windows branch can be asserted from a POSIX
+ * machine — the batch text is the half of this helper CI can't exercise until the
+ * windows leg runs, so at least its *shape* is pinned by a test everywhere.
+ */
+export function stubCliScript(
+  recordPath: string,
+  platform: NodeJS.Platform = process.platform,
+): { ext: string; body: string; mode: number | null } {
+  if (platform === 'win32') {
+    // CreateProcess can't launch a `#!/bin/sh` file and chmod is a no-op on
+    // Windows, so the stub has to be a batch file — which is also what a real VS
+    // Code / Antigravity install ships there (`code.cmd`, `antigravity-ide.cmd`),
+    // so this exercises the same spawn shape production hits.
+    //
+    // `%*` is NOT used: it hands back the raw, still-quoted command tail, whereas
+    // the sh branch emits one *dequoted* argument per line. The shift loop with
+    // `%~1` reproduces that exactly, so `toContain(...)` assertions read the same
+    // on both platforms. Batch `echo` writes CRLF rather than LF; that only ever
+    // adds a trailing `\r` per line, which no assertion spans.
+    const body = [
+      '@echo off',
+      'setlocal',
+      `set "REC=${recordPath}"`,
+      'type nul>"%REC%"', // an empty record still beats ENOENT when argv is empty
+      ':showtail_stub_arg',
+      'if "%~1"=="" goto showtail_stub_done',
+      '>>"%REC%" echo(%~1', // redirect first: keeps a trailing digit out of the fd
+      'shift',
+      'goto showtail_stub_arg',
+      ':showtail_stub_done',
+      'endlocal',
+      'exit /b 0',
+      '',
+    ].join('\r\n'); // cmd.exe is only reliably LF-tolerant by accident; be explicit
+    return { ext: '.cmd', body, mode: null };
+  }
+  return {
+    ext: '.sh',
+    body: `#!/bin/sh\nprintf '%s\\n' "$@" > "${recordPath}"\nexit 0\n`,
+    mode: 0o755,
+  };
+}
+
+/**
+ * Write an executable stub CLI named `<name><ext>` into `dir` that records its
+ * argv — one dequoted argument per line — to `recordPath` and exits 0, and return
+ * its path. Used to stand in for `code` / `antigravity-ide` in the extension-install
+ * tests, which set `SHOWTAIL_VSCODE_CLI` / `SHOWTAIL_ANTIGRAVITY_CLI` to the
+ * returned path. The extension is platform-chosen (see {@link stubCliScript}), so
+ * callers must use the returned path rather than composing one.
+ */
+export function stubCli(dir: string, recordPath: string, name = 'code-stub'): string {
+  const { ext, body, mode } = stubCliScript(recordPath);
+  const p = join(dir, name + ext);
+  writeFileSync(p, body);
+  if (mode !== null) chmodSync(p, mode);
+  return p;
 }
 
 /**
