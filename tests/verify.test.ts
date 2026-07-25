@@ -22,7 +22,7 @@ import {
   type ShowtailPaths,
 } from '../src/core/storage.ts';
 import { readJournal, rechainEntries } from '../src/core/journal.ts';
-import { repoRelative, verifyProject } from '../src/commands/verify.ts';
+import { verifyProject } from '../src/commands/verify.ts';
 import type { JournalEntry } from '../src/types.ts';
 import { authorFor, cleanup, makeTempDir, runCli } from './helpers.ts';
 
@@ -687,7 +687,8 @@ describe('verify: git history as the outside anchor', () => {
       const result = await verifyProject(paths);
       const history = historyCheck(result);
       expect(history.ok).toBe(true);
-      expect(history.details.join('\n')).toContain('Not a git repository');
+      expect(history.details.join('\n')).toContain('not in a git repository');
+      expect(history.skipped).toBe('no-git');
       expect(result.ok).toBe(true);
     } finally {
       cleanup(dir);
@@ -711,72 +712,6 @@ describe('verify: git history as the outside anchor', () => {
       expect(history.details.join('\n')).toContain('not committed to git yet');
       expect(history.ok).toBe(true);
       expect(result.ok).toBe(true);
-    } finally {
-      cleanup(dir);
-    }
-  });
-});
-
-describe('repoRelative (the path comparison the git anchor rests on)', () => {
-  // This is the function the Windows CI leg caught: it decided a trail sitting
-  // plainly inside its repository lived outside it, which silently skipped the
-  // whole append-only check. Pin the properties directly — the failure was a path
-  // spelling mismatch, and the integration tests could only say "skipped".
-
-  test('a nested path resolves to a posix-separated relative path', () => {
-    const dir = makeTempDir();
-    try {
-      const base = join(dir, '.showtail');
-      mkdirSync(base, { recursive: true });
-      // Real dirs, so realpath resolves both sides (the macOS
-      // /var → /private/var case, and 8.3 expansion on Windows).
-      expect(repoRelative(dir, base)).toBe('.showtail');
-      const deep = join(base, 'authors', 'ada', 'journal');
-      mkdirSync(deep, { recursive: true });
-      expect(repoRelative(dir, deep)).toBe('.showtail/authors/ada/journal');
-    } finally {
-      cleanup(dir);
-    }
-  });
-
-  test('a path that is genuinely outside returns null', () => {
-    const a = makeTempDir();
-    const b = makeTempDir();
-    try {
-      expect(repoRelative(a, b)).toBeNull();
-    } finally {
-      cleanup(a);
-      cleanup(b);
-    }
-  });
-
-  test('resolution is symmetric: one unresolvable side must not climb out', () => {
-    // The actual Windows bug. `realpathSync` succeeded for the repo root (git
-    // reports the expanded spelling) and fell back to the raw input for the
-    // trail, so an expanded root was compared against an unexpanded child and
-    // `relative()` escaped with `..`. A not-yet-created child is the portable way
-    // to force exactly that one-sided failure: realpath throws for it on every
-    // platform, so both sides must fall back together.
-    const dir = makeTempDir();
-    try {
-      const notYet = join(dir, '.showtail');
-      expect(existsSync(notYet)).toBe(false);
-      const rel = repoRelative(dir, notYet);
-      expect(rel).toBe('.showtail');
-      expect(rel).not.toContain('..');
-    } finally {
-      cleanup(dir);
-    }
-  });
-
-  test('the relative path keeps its original case (it becomes a git pathspec)', () => {
-    // It is handed to `git log -- <path>`; a case-folded pathspec matches
-    // nothing in a repo whose real paths are mixed-case.
-    const dir = makeTempDir();
-    try {
-      const mixed = join(dir, '.showtail', 'authors', 'Ada-At-Example-Com');
-      mkdirSync(mixed, { recursive: true });
-      expect(repoRelative(dir, mixed)).toBe('.showtail/authors/Ada-At-Example-Com');
     } finally {
       cleanup(dir);
     }

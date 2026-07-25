@@ -1,10 +1,11 @@
-import { existsSync, realpathSync } from 'node:fs';
-import { relative, resolve, sep } from 'node:path';
+import { existsSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { checkArtifactHashes } from '../core/artifacts.ts';
 import { authorSlugs } from '../core/authors.ts';
 import { eventFromEntry } from '../core/events.ts';
 import {
   fileHistoryNumstat,
+  gitPrefix,
   gitToplevel,
   isShallowClone,
   uncommittedNumstat,
@@ -14,7 +15,6 @@ import { validateEvent } from '../core/schema.ts';
 import { checkObjects, objectExists } from '../core/objects.ts';
 import {
   authorPaths,
-  isPathUnder,
   readConfig,
   requirePaths,
   trailIsNewerThanBinary,
@@ -98,53 +98,6 @@ function readJournals(paths: ShowtailPaths): AuthorJournal[] {
 
 // --- The git anchor -------------------------------------------------------
 
-/** `realpathSync`, or null when the path cannot be resolved. */
-function realPathOrNull(target: string): string | null {
-  try {
-    return realpathSync(target);
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Absolute path → repo-root-relative with posix separators (git's spelling), or
- * null when `target` is genuinely not inside `repoRoot`.
- *
- * Both sides need the *same* spelling before they can be compared, and there are
- * two independent ways they differ:
- *
- *  - **Symlinks.** `git rev-parse --show-toplevel` always reports the physical
- *    path, and on macOS a temp trail's path routinely is not one
- *    (`/var/folders/…` → `/private/var/folders/…`).
- *  - **Case, on Windows.** Git may hand back a different drive-letter or
- *    component case than Node produces, which is why the rest of the codebase
- *    compares paths through `pathKey`/{@link isPathUnder} rather than raw equality.
- *
- * Both operands are therefore resolved *together, or not at all*: resolving one
- * side while falling back to the raw input on the other is what produced the
- * original Windows bug. GitHub's Windows runner puts the 8.3 short form in
- * `TEMP` (`C:\Users\RUNNER~1\…`); realpath expands that to `runneradmin`, so a
- * one-sided fallback compared an expanded root against an unexpanded trail and
- * `relative()` climbed out with `..` — reporting a trail that sat plainly inside
- * its repository as living outside it, which silently skipped the whole check.
- */
-export function repoRelative(repoRoot: string, target: string): string | null {
-  const rootReal = realPathOrNull(repoRoot);
-  const targetReal = realPathOrNull(target);
-  // Resolve both or neither, so the two sides always share one spelling.
-  const [root, leaf] =
-    rootReal !== null && targetReal !== null
-      ? [rootReal, targetReal]
-      : [repoRoot, target];
-  // Case-fold for the *decision* only (`isPathUnder`/`pathKey` do so on win32).
-  // The returned path must keep its original case: it is handed to
-  // `git log -- <path>`, and a lowercased pathspec matches nothing on a repo
-  // whose real paths are mixed-case.
-  if (!isPathUnder(leaf, root)) return null;
-  return relative(root, leaf).split(sep).join('/');
-}
-
 /**
  * Whether a repo-relative path is a journal file. Used to narrow a diff taken
  * over the whole `.showtail/` tree down to the journal: only the journal is
@@ -207,14 +160,18 @@ async function checkJournalHistory(
     details: [],
   };
 
-  const toplevel = await gitToplevel(paths.root);
-  if (toplevel === undefined) {
+  // Anchor everything on the trail directory itself and let git compute its own
+  // relative path. Deriving that string by comparing git's spelling of a path
+  // against Node's is what broke this check on Windows — see `gitPrefix`.
+  const toplevel = await gitToplevel(paths.base);
+  const base = await gitPrefix(paths.base);
+  if (toplevel === undefined || base === undefined) {
     check.details.push(
-      'Not a git repository (or git is not installed), so there is no record outside ' +
-        '`.showtail/` to hold the journal against — nothing to check here, and not a ' +
-        'problem. Note what that costs: the checks above prove the trail is internally ' +
-        'consistent, not that it was never rewritten. Committing `.showtail/` as you ' +
-        'work, and pushing it, is what gives it an anchor.',
+      'The trail is not in a git repository (or git is not installed), so there is no ' +
+        'record outside `.showtail/` to hold the journal against — nothing to check ' +
+        'here, and not a problem. Note what that costs: the checks above prove the ' +
+        'trail is internally consistent, not that it was never rewritten. Committing ' +
+        '`.showtail/` as you work, and pushing it, is what gives it an anchor.',
     );
     check.skipped = 'no-git';
     return check;
@@ -227,16 +184,6 @@ async function checkJournalHistory(
   if (segments.length === 0) {
     check.details.push('No journal segments yet — nothing to check.');
     check.skipped = 'no-journal';
-    return check;
-  }
-
-  const base = repoRelative(repoRoot, paths.base);
-  if (base === null) {
-    check.details.push(
-      `The trail at ${paths.base} lives outside the git repository at ${repoRoot}, so ` +
-        'its history is not recorded there — nothing to check.',
-    );
-    check.skipped = 'trail-outside-repo';
     return check;
   }
 

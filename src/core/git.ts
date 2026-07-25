@@ -50,6 +50,26 @@ export async function gitToplevel(cwd: string): Promise<string | undefined> {
 }
 
 /**
+ * `cwd`'s path relative to its repository root, in git's own spelling (posix
+ * separators, no trailing slash; `''` when `cwd` *is* the root). `undefined` when
+ * `cwd` is not in a repo or git is unavailable.
+ *
+ * Prefer this over deriving the same string from two absolute paths. Comparing
+ * Node's spelling of a path against git's is a losing game on Windows: git
+ * reports the long form of a directory (`C:\Users\runneradmin\…`) while `TEMP`
+ * on a GitHub runner hands out the 8.3 short form (`C:\Users\RUNNER~1\…`), and
+ * `realpathSync` does *not* expand short names, so both sides can resolve
+ * "successfully" and still disagree. `relative()` then climbs out with `..` and
+ * the caller concludes the directory sits outside its own repository. Asking git
+ * removes the comparison altogether.
+ */
+export async function gitPrefix(cwd: string): Promise<string | undefined> {
+  const out = await runGit(['rev-parse', '--show-prefix'], cwd);
+  if (out === undefined) return undefined;
+  return out.replace(/\/+$/, '');
+}
+
+/**
  * Repo-root-relative paths (posix separators) of files currently added or
  * modified in the working tree at `cwd` — staged or unstaged — excluding
  * deletions and rename-aways. Empty when git is unavailable, `cwd` isn't a repo,
