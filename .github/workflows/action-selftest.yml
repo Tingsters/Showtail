@@ -1,0 +1,106 @@
+name: Action self-test
+
+# Exercise `action.yml` on GitHub's own runner, which nothing else does. The
+# unit/integration suite covers `showtail verify`; it cannot cover the composite
+# action's moving parts — `${{ inputs.* }}` interpolation, `$GITHUB_ACTION_PATH`,
+# output wiring between steps, `$GITHUB_PATH` propagation, or the step summary.
+# Those were only ever emulated locally before this workflow existed.
+#
+# The action is referenced as `./` on purpose: this must test the action as
+# checked out, not whatever `@v0` currently points at, so a break is caught before
+# it is tagged.
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "action.yml"
+      - "install.sh"
+      - ".github/workflows/action-selftest.yml"
+
+jobs:
+  selftest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The action's own git-history check needs real history — the same
+          # `fetch-depth: 0` the educator docs insist on.
+          fetch-depth: 0
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - run: bun install --frozen-lockfile
+
+      # A submission to grade: a small project with a committed trail, built with
+      # this checkout's CLI rather than a released binary, so the fixture matches
+      # the code under test.
+      - name: Build a committed fixture trail
+        env:
+          SHOWTAIL_DISABLE_FIRST_RUN: "1"
+          SHOWTAIL_IDENTITY_EMAIL: student@example.com
+          SHOWTAIL_IDENTITY_NAME: Test Student
+        run: |
+          set -euo pipefail
+          mkdir -p fixture
+          cd fixture
+          printf 'def solve(items, cap):\n    return 0\n' > solver.py
+          bun run ../src/cli.ts track .
+          bun run ../src/cli.ts log -t prompt -x 'help me start a knapsack solver'
+          bun run ../src/cli.ts artifact solver.py
+          bun run ../src/cli.ts log -t prompt -x 'now add memoization'
+          cd ..
+          git config user.email student@example.com
+          git config user.name 'Test Student'
+          git add -A fixture
+          git commit -q -m 'fixture: coursework with its trail'
+
+      - name: A valid trail passes
+        id: valid
+        uses: ./
+        with:
+          path: fixture
+
+      - name: Assert it reported ok
+        run: |
+          set -euo pipefail
+          echo 'ok=${{ steps.valid.outputs.ok }}'
+          test '${{ steps.valid.outputs.ok }}' = 'true'
+          # The outputs must be usable, not merely present.
+          echo '${{ steps.valid.outputs.checks-json }}' | jq -e '.ok == true' > /dev/null
+          echo '${{ steps.valid.outputs.checks-json }}' \
+            | jq -e '[.checks[] | select(.name == "journal history is append-only (git)")] | length == 1' > /dev/null
+
+      # Now the case that matters: a trail edited after the fact. Leaving `prev`
+      # alone breaks the hash chain, which is the cheapest tamper to produce and
+      # enough to prove the action surfaces a failure.
+      - name: Tamper with the committed trail
+        run: |
+          set -euo pipefail
+          log="$(find fixture/.showtail/authors -name '*.log' | head -1)"
+          test -n "$log"
+          sed -i '1s/help me start a knapsack solver/I wrote the solver myself/' "$log"
+          git add -A fixture
+          git commit -q -m 'tweak'
+
+      # `fail-on-invalid: false` so the step reports without failing the job —
+      # this also covers that input, which is otherwise untested on a runner.
+      - name: A tampered trail is reported, not passed
+        id: tampered
+        uses: ./
+        with:
+          path: fixture
+          fail-on-invalid: "false"
+
+      - name: Assert it reported not-ok
+        run: |
+          set -euo pipefail
+          echo 'ok=${{ steps.tampered.outputs.ok }}'
+          test '${{ steps.tampered.outputs.ok }}' = 'false'
+          echo '${{ steps.tampered.outputs.checks-json }}' | jq -e '.ok == false' > /dev/null
+          # Name the check that caught it, so a pass here can't come from some
+          # unrelated failure.
+          echo '${{ steps.tampered.outputs.checks-json }}' \
+            | jq -e '[.checks[] | select(.ok == false) | .name] | index("journal chain is unbroken") != null' > /dev/null
