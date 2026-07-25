@@ -14,6 +14,7 @@ import { validateEvent } from '../core/schema.ts';
 import { checkObjects, objectExists } from '../core/objects.ts';
 import {
   authorPaths,
+  isPathUnder,
   readConfig,
   requirePaths,
   trailIsNewerThanBinary,
@@ -97,25 +98,51 @@ function readJournals(paths: ShowtailPaths): AuthorJournal[] {
 
 // --- The git anchor -------------------------------------------------------
 
-/** `realpathSync`, falling back to the input when it cannot be resolved. */
-function realPath(target: string): string {
+/** `realpathSync`, or null when the path cannot be resolved. */
+function realPathOrNull(target: string): string | null {
   try {
     return realpathSync(target);
   } catch {
-    return target;
+    return null;
   }
 }
 
 /**
- * Absolute path → repo-root-relative with posix separators (git's spelling).
- * Both sides are resolved through symlinks first: `git rev-parse --show-toplevel`
- * always reports the physical path, and on macOS the trail's own path routinely
- * is not one (`/var/folders/…` → `/private/var/folders/…`). Comparing the two
- * spellings unresolved would make every such trail look like it sits outside its
- * own repository.
+ * Absolute path → repo-root-relative with posix separators (git's spelling), or
+ * null when `target` is genuinely not inside `repoRoot`.
+ *
+ * Both sides need the *same* spelling before they can be compared, and there are
+ * two independent ways they differ:
+ *
+ *  - **Symlinks.** `git rev-parse --show-toplevel` always reports the physical
+ *    path, and on macOS a temp trail's path routinely is not one
+ *    (`/var/folders/…` → `/private/var/folders/…`).
+ *  - **Case, on Windows.** Git may hand back a different drive-letter or
+ *    component case than Node produces, which is why the rest of the codebase
+ *    compares paths through `pathKey`/{@link isPathUnder} rather than raw equality.
+ *
+ * Both operands are therefore resolved *together, or not at all*: resolving one
+ * side while falling back to the raw input on the other is what produced the
+ * original Windows bug. GitHub's Windows runner puts the 8.3 short form in
+ * `TEMP` (`C:\Users\RUNNER~1\…`); realpath expands that to `runneradmin`, so a
+ * one-sided fallback compared an expanded root against an unexpanded trail and
+ * `relative()` climbed out with `..` — reporting a trail that sat plainly inside
+ * its repository as living outside it, which silently skipped the whole check.
  */
-function repoRelative(repoRoot: string, target: string): string {
-  return relative(realPath(repoRoot), realPath(target)).split(sep).join('/');
+export function repoRelative(repoRoot: string, target: string): string | null {
+  const rootReal = realPathOrNull(repoRoot);
+  const targetReal = realPathOrNull(target);
+  // Resolve both or neither, so the two sides always share one spelling.
+  const [root, leaf] =
+    rootReal !== null && targetReal !== null
+      ? [rootReal, targetReal]
+      : [repoRoot, target];
+  // Case-fold for the *decision* only (`isPathUnder`/`pathKey` do so on win32).
+  // The returned path must keep its original case: it is handed to
+  // `git log -- <path>`, and a lowercased pathspec matches nothing on a repo
+  // whose real paths are mixed-case.
+  if (!isPathUnder(leaf, root)) return null;
+  return relative(root, leaf).split(sep).join('/');
 }
 
 /**
@@ -204,10 +231,10 @@ async function checkJournalHistory(
   }
 
   const base = repoRelative(repoRoot, paths.base);
-  if (base.startsWith('..')) {
+  if (base === null) {
     check.details.push(
-      `The trail lives outside the git repository at ${repoRoot}, so its history is ` +
-        'not recorded there — nothing to check.',
+      `The trail at ${paths.base} lives outside the git repository at ${repoRoot}, so ` +
+        'its history is not recorded there — nothing to check.',
     );
     check.skipped = 'trail-outside-repo';
     return check;
