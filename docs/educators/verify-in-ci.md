@@ -31,6 +31,15 @@ That's the whole thing. The action installs the `showtail` binary, runs
 `showtail verify --json` at the repo root, writes a pass/fail summary to the job
 summary, and fails the job if the trail does not verify.
 
+!!! warning "Not usable until the next release"
+
+    This action needs `showtail verify --json`, which landed after v0.12.0 — the
+    current latest release does not have it, and the action fails with
+    `unknown option '--json'` against it. The `v1` tag it references does not
+    exist yet either (releases are tagged `v0.x`). Both are resolved by cutting
+    the next release and pointing a `v1` tag at it; until then this page
+    describes what will work, not what does.
+
 `@v1` follows the v1 major tag, so bug fixes reach your classes without you
 editing anything; pin a release tag or a commit SHA instead if you'd rather
 freeze it for a term.

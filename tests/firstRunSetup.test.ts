@@ -146,6 +146,36 @@ describe('first-run bootstrap ("just works" on install)', () => {
     }
   });
 
+  test('the disable hatch also suppresses `setup --first-run`, writing nothing to HOME', () => {
+    // The hatch is checked inside ensureFirstRunSetup, but `setup --first-run` — the
+    // command install.sh actually runs — used to seed a machine identity *before*
+    // calling it, so an environment that had explicitly opted out still got written to.
+    // That matters wherever install.sh runs somewhere disposable: a CI runner (the
+    // GitHub Action hit this), a Docker layer, a classroom image.
+    const dir = makeTempDir();
+    const home = makeTempDir();
+    const ghome = join(makeTempDir(), '.showtail-cli');
+    try {
+      // A per-test identity home, so it starts EMPTY. The suite-wide pin in setup.ts is
+      // already populated by other tests, and `seedRealIdentityAtInstall` returns early
+      // when an identity is cached — against that, this test would pass either way.
+      const idHome = join(home, 'identity');
+      const env = {
+        ...bootstrapEnv(home, ghome),
+        SHOWTAIL_IDENTITY_HOME: idHome,
+        SHOWTAIL_DISABLE_FIRST_RUN: '1',
+      };
+      const r = runCli(dir, ['setup', '--first-run'], { env });
+      expect(r.code).toBe(0);
+      expect(existsSync(join(ghome, 'config.json'))).toBe(false);
+      // The seeding step must not have run: no identity cache written.
+      expect(existsSync(join(idHome, 'identity.json'))).toBe(false);
+    } finally {
+      cleanup(dir);
+      cleanup(home);
+    }
+  });
+
   test('an integration fix in a newer Showtail reaches already-installed hooks WITHOUT any tool hook firing', () => {
     const dir = makeTempDir();
     const home = makeTempDir();

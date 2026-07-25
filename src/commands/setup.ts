@@ -187,6 +187,19 @@ export async function runSetup(options: SetupOptions = {}): Promise<void> {
   // bootstrap (so a tool installed later never loses work). A no-op if tracking was
   // already decided, so re-running an installer never fights a `--off`/`disconnect`.
   if (options.firstRun) {
+    // Honor the opt-out BEFORE seeding anything. `ensureFirstRunSetup` checks
+    // SHOWTAIL_DISABLE_FIRST_RUN itself, but it is called below — so seeding here first
+    // wrote a machine identity into the home of an environment that had explicitly asked
+    // Showtail to keep its hands off. That matters wherever `install.sh` runs somewhere
+    // disposable and unowned: a CI runner (the GitHub Action hit exactly this), a Docker
+    // layer, a classroom image being baked. The variable has to mean what its name says.
+    if (process.env.SHOWTAIL_DISABLE_FIRST_RUN) {
+      // Stay quiet on the human path (the installer prints its own summary), but keep
+      // the `--json` contract: a consumer must never get empty stdout.
+      if (options.json) emitJson({ firstRun: false, disabled: true });
+      return;
+    }
+
     // Layer 1: capture the student's real identity now (install has network for gh), so
     // most students never hit the provisional placeholder.
     await seedRealIdentityAtInstall(options.cwd ?? process.cwd());

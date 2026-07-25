@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Before tagging this release
+
+- **Point a `v1` tag at it.** `docs/educators/verify-in-ci.md` tells educators to use
+  `Tingsters/Showtail@v1`, and no `v1` tag exists (releases are tagged `v0.x`). The
+  GitHub Action is also inert until a release contains `verify --json` — v0.12.0 does
+  not, and fails with `unknown option '--json'`. Remove the "Not usable until the next
+  release" warning on that page once both are true.
+
 ### What changed
 
 - **`showtail verify` now verifies that the trail is *unmodified*.** Two new checks:
