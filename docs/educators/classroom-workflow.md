@@ -24,6 +24,10 @@
 The goal is not to catch anyone. The goal is to make the process visible and
 give students a structured way to demonstrate genuine understanding.
 
+**Grading a whole class?** Put the [Showtail GitHub Action](verify-in-ci.md) in
+your assignment template repo and step 6 happens by itself: every submission's
+trail is verified on push, with a pass/fail summary in the Checks tab.
+
 ## Which tools are covered
 
 Installing Showtail turns on capture automatically for these, hands-off (it installs the
@@ -76,6 +80,7 @@ Attribution is automatic and never blocks capture:
 
 ## See also
 
+- [Verify submissions in CI](verify-in-ci.md) — the GitHub Action for assignment repos.
 - [Working as a team](teams.md) — how group projects merge through git.
 - [Example report](../concepts/example-report.md) — what you'll be reading.
 - [CLI reference](../reference/cli.md) — `report`, `verify`, and `trace` in full.

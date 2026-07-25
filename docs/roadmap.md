@@ -19,6 +19,7 @@ Showtail's MVP is a local CLI with a small core that can grow over time:
   [Working as a team](educators/teams.md).
 - Completed: **Automatic secret/PII redaction** that scrubs captured text before
   it is stored. See [Privacy &amp; redaction](concepts/privacy.md).
-- Planned: **GitHub Action** to verify a submission's trail automatically in CI.
+- Completed: **GitHub Action** to verify a submission's trail automatically in CI
+  on every push. See [Verify submissions in CI](educators/verify-in-ci.md).
 - Planned: **Signed provenance records** for stronger guarantees.
 - Planned: **Educator dashboard** to review many students' trails at a glance.

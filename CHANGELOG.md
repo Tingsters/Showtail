@@ -20,6 +20,12 @@
   (informational), never as tampering.
 - **`showtail verify --json`** prints the structured result (`{ ok, checks: [{ name,
   ok, details }] }`) for CI, keeping the existing exit code `3` on failure.
+- **A GitHub Action (`Tingsters/Showtail@v1`)** verifies a submission's trail on every
+  push. An educator adds two lines to an assignment template repo and each student's
+  trail is checked automatically, with a pass/fail summary in the Checks tab. Inputs:
+  `path`, `version`, `fail-on-invalid`; outputs: `ok`, `checks-json`. It installs into
+  `RUNNER_TEMP` and disables the first-run bootstrap, so it never wires capture hooks
+  into the runner. See [Verify submissions in CI](docs/educators/verify-in-ci.md).
 
 - **`showtail report` now offers to open the report on every platform.** The printed
   path was a clickable hyperlink only in terminals that support OSC 8 (Windows

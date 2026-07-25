@@ -1,0 +1,210 @@
+name: "Showtail verify"
+description: >-
+  Verify a student's Showtail trail in CI: install the showtail binary and run
+  `showtail verify --json`, with a human-readable summary in the job summary.
+author: Tingsters
+
+branding:
+  icon: check-circle
+  color: purple
+
+inputs:
+  path:
+    description: >-
+      Directory of the submission to verify — the folder that contains the
+      committed `.showtail/`. Relative to the workspace.
+    required: false
+    default: "."
+  version:
+    description: >-
+      Which Showtail to install: "latest", or a release tag such as "v0.12.0".
+      Pin a tag for a stable grading gate.
+    required: false
+    default: "latest"
+  fail-on-invalid:
+    description: >-
+      Fail the step when the trail does not verify. Set to "false" to report the
+      result (output + job summary) without failing the workflow.
+    required: false
+    default: "true"
+
+outputs:
+  ok:
+    description: '"true" when every check passed, otherwise "false".'
+    value: ${{ steps.verify.outputs.ok }}
+  checks-json:
+    description: >-
+      The raw `showtail verify --json` result: {"ok":bool,"checks":[{"name","ok","details"}]}.
+    value: ${{ steps.verify.outputs.checks-json }}
+
+runs:
+  using: composite
+  steps:
+    - name: Install Showtail
+      shell: bash
+      env:
+        INPUT_VERSION: ${{ inputs.version }}
+      run: |
+        set -euo pipefail
+
+        tmp="${RUNNER_TEMP:-${TMPDIR:-/tmp}}"
+        bin_dir="$tmp/showtail-bin"
+        mkdir -p "$bin_dir"
+
+        # Verification must not mutate the runner. Two escape hatches do that here:
+        #   * SHOWTAIL_DISABLE_FIRST_RUN=1 suppresses the first-run bootstrap, which
+        #     would otherwise turn tracking on and write capture-hook config into the
+        #     runner's ~/.claude, ~/.codex, ... (see ensureFirstRunSetup in src).
+        #   * SHOWTAIL_HOME / SHOWTAIL_IDENTITY_HOME move the machine-level state
+        #     (global config, ledger, cached identity) into RUNNER_TEMP, so the
+        #     installer's best-effort identity seeding lands in scratch space.
+        export SHOWTAIL_DISABLE_FIRST_RUN=1
+        export SHOWTAIL_HOME="$tmp/showtail-state/home"
+        export SHOWTAIL_IDENTITY_HOME="$tmp/showtail-state/identity"
+
+        # PATH first: install.sh only edits the shell profile when its target dir is
+        # missing from PATH, so exporting it here keeps the runner's HOME untouched.
+        export PATH="$bin_dir:$PATH"
+        export SHOWTAIL_BIN_DIR="$bin_dir"
+        export SHOWTAIL_VERSION="$INPUT_VERSION"
+
+        bash "$GITHUB_ACTION_PATH/install.sh"
+
+        # Hand the binary to the following step (and to the rest of the job).
+        echo "$bin_dir" >> "$GITHUB_PATH"
+        showtail --version
+
+    - name: Verify trail
+      id: verify
+      shell: bash
+      env:
+        INPUT_PATH: ${{ inputs.path }}
+        INPUT_FAIL_ON_INVALID: ${{ inputs.fail-on-invalid }}
+      run: |
+        # The runner already runs this with `bash --noprofile --norc -eo pipefail`,
+        # so every command below must either succeed or handle its own failure —
+        # note the `|| status=$?` on the verify call, whose exit 3 is expected.
+        set -uo pipefail
+
+        tmp="${RUNNER_TEMP:-${TMPDIR:-/tmp}}"
+        summary="${GITHUB_STEP_SUMMARY:-/dev/null}"
+        out="${GITHUB_OUTPUT:-/dev/null}"
+        json="$tmp/showtail-verify.json"
+        errlog="$tmp/showtail-verify.err"
+
+        # Same containment as the install step: no bootstrap, no writes outside RUNNER_TEMP.
+        export SHOWTAIL_DISABLE_FIRST_RUN=1
+        export SHOWTAIL_HOME="$tmp/showtail-state/home"
+        export SHOWTAIL_IDENTITY_HOME="$tmp/showtail-state/identity"
+
+        case "$(printf '%s' "$INPUT_FAIL_ON_INVALID" | tr '[:upper:]' '[:lower:]')" in
+          false|0|no) fail_on_invalid=false ;;
+          *) fail_on_invalid=true ;;   # anything unrecognized fails closed
+        esac
+
+        cd "$INPUT_PATH" || {
+          echo "::error::Showtail: path not found: $INPUT_PATH"
+          exit 1
+        }
+
+        status=0
+        showtail verify --json >"$json" 2>"$errlog" || status=$?
+
+        # `verify` exits 0 (valid) or 3 (invalid). Anything else means the command
+        # itself could not run — a broken setup, not a student's tampered trail — so
+        # it always fails the step, whatever fail-on-invalid says.
+        if [ "$status" -ne 0 ] && [ "$status" -ne 3 ]; then
+          {
+            echo "## Showtail trail verification"
+            echo
+            echo "**\`showtail verify\` could not run in \`$INPUT_PATH\` (exit $status).**"
+            echo
+            echo "Check that the submission has a committed \`.showtail/\` folder. If the"
+            echo "error mentions an unknown \`--json\` option, the pinned \`version\` predates"
+            echo "machine-readable verify — use \`latest\`."
+            echo
+            echo '```'
+            cat "$errlog"
+            echo '```'
+          } >> "$summary"
+          cat "$errlog" >&2
+          echo "::error::Showtail: verify could not run in '$INPUT_PATH' (exit $status)."
+          exit 1
+        fi
+
+        # Branch on the stable fields only: top-level `ok`, and each check's
+        # `name`/`ok`. `details` is human text and may be reworded at any time.
+        ok=false
+        if command -v jq >/dev/null 2>&1; then
+          ok=$(jq -r 'if .ok then "true" else "false" end' "$json" 2>/dev/null || true)
+        elif [ "$status" -eq 0 ]; then
+          ok=true
+        fi
+        [ "$ok" = "true" ] || ok=false
+
+        {
+          echo "ok=$ok"
+          echo "checks-json<<SHOWTAIL_JSON_EOF"
+          cat "$json"
+          echo "SHOWTAIL_JSON_EOF"
+        } >> "$out"
+
+        # --- Job summary: what an educator reads in the checks tab ---------------
+        {
+          echo "## Showtail trail verification"
+          echo
+          echo "Project: \`$INPUT_PATH\` — Showtail \`$(showtail --version 2>/dev/null || echo unknown)\`"
+          echo
+          if command -v jq >/dev/null 2>&1; then
+            total=$(jq -r '.checks | length' "$json")
+            failed=$(jq -r '[.checks[] | select(.ok | not)] | length' "$json")
+            if [ "$ok" = "true" ]; then
+              echo "**PASS — the trail is intact.** All $total checks passed."
+            else
+              echo "**FAIL — the trail did not verify.** $failed of $total checks failed:"
+              echo
+              jq -r '.checks[] | select(.ok | not) | "- " + .name' "$json"
+              echo
+              echo "> A failing check means the recorded trail was **modified after it was"
+              echo "> written**. Students editing their own source files after a snapshot is"
+              echo "> normal work and never fails."
+            fi
+            echo
+            echo "### Checks"
+            echo
+            jq -r '
+              .checks[]
+              | (if .ok then "PASS" else "FAIL" end) as $mark
+              | (if .ok then 8 else 40 end) as $cap
+              | (.details // []) as $d
+              | "- **" + $mark + "** " + .name,
+                ( ( if ($d | length) > $cap
+                    then $d[0:$cap] + ["... and " + (($d | length) - $cap | tostring) + " more"]
+                    else $d end )[]
+                  | "  - " + . )
+            ' "$json"
+          else
+            echo "_\`jq\` is not available on this runner, so the raw result is shown._"
+            echo
+            echo '```json'
+            cat "$json"
+            echo '```'
+          fi
+        } >> "$summary"
+
+        if [ "$ok" = "true" ]; then
+          echo "Showtail: the trail verified — all checks passed."
+          exit 0
+        fi
+
+        if [ "$fail_on_invalid" = "false" ]; then
+          {
+            echo
+            echo "> \`fail-on-invalid: false\` — reported without failing the workflow."
+          } >> "$summary"
+          echo "::warning::Showtail: the trail did not verify (reported only; fail-on-invalid is false)."
+          exit 0
+        fi
+
+        echo "::error::Showtail: the trail did not verify — see the job summary."
+        exit 1
