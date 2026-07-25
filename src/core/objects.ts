@@ -13,7 +13,14 @@
  * plain text (no compression/encryption): findable, but not laid out so a
  * student can casually open one file and see a whole conversation.
  */
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { join } from 'node:path';
 import { sha256OfString } from './hash.ts';
 import type { ShowtailPaths } from './storage.ts';
@@ -38,6 +45,15 @@ function digestOf(ref: string): string {
 function objectPath(paths: ShowtailPaths, ref: string): string {
   const hex = digestOf(ref);
   return join(paths.objectsDir, hex.slice(0, 2), hex.slice(2));
+}
+
+/**
+ * The address `content` would be stored under, without writing anything. Lets a
+ * caller (e.g. `showtail redact --dry-run`) work out where rewritten content
+ * *would* land while staying strictly read-only.
+ */
+export function addressOf(content: string): string {
+  return `${ALGO}:${sha256OfString(content)}`;
 }
 
 /**
@@ -70,6 +86,24 @@ export function readObject(paths: ShowtailPaths, ref: string): string | null {
 /** Whether an object exists on disk for this address (ignores the cache). */
 export function objectExists(paths: ShowtailPaths, ref: string): boolean {
   return existsSync(objectPath(paths, ref));
+}
+
+/**
+ * Delete a stored object and forget it, returning whether a file was removed.
+ *
+ * Objects are immutable, so nothing else in Showtail deletes one — the single
+ * caller is `showtail redact`, which rewrites content to a new address and then
+ * drops the address the leaked text lived at. Dropping the {@link cache} entry is
+ * the load-bearing half: the cache exists *because* objects never change, so a
+ * removal that skipped it would keep serving the very text just scrubbed for the
+ * rest of the process (and to every later assertion in a test run).
+ */
+export function removeObject(paths: ShowtailPaths, ref: string): boolean {
+  cache.delete(ref);
+  const file = objectPath(paths, ref);
+  if (!existsSync(file)) return false;
+  rmSync(file, { force: true });
+  return true;
 }
 
 /** The verdict for one stored object (see {@link checkObjects}). */

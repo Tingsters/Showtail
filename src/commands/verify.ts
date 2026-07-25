@@ -120,6 +120,22 @@ export async function verifyProject(paths: ShowtailPaths): Promise<VerifyResult>
     let i = 0;
     for (const entry of journal.entries) {
       i += 1;
+      if (entry.kind === 'redaction') {
+        // An audit marker left by `showtail redact`, not an event: it has no
+        // text to reconstruct, only the counts check 3 reports.
+        const record = entry.redaction;
+        if (
+          !record ||
+          typeof record.entries !== 'number' ||
+          !Array.isArray(record.labels)
+        ) {
+          eventsCheck.ok = false;
+          eventsCheck.details.push(
+            `${journal.slug} entry ${i} (${entry.id}): redaction marker is malformed.`,
+          );
+        }
+        continue;
+      }
       if (entry.kind === 'artifact') {
         if (!entry.path || !entry.sha256) {
           eventsCheck.ok = false;
@@ -144,6 +160,13 @@ export async function verifyProject(paths: ShowtailPaths): Promise<VerifyResult>
 
   // 3. The journal's hash chain is unbroken: every entry still commits to the one
   //    before it, so a line that was edited, deleted, or spliced in shows up here.
+  //
+  //    A recorded `showtail redact` pass is reported *alongside* this result, not
+  //    instead of it. Such a pass re-chains what it rewrites, so it never produces
+  //    a break in the first place — which is exactly why it has to announce
+  //    itself, and equally why a marker must never excuse one. A break sitting
+  //    next to a marker is still a break: the marker is a disclosure that history
+  //    was rewritten on purpose, not a licence for any particular rewrite.
   const chainCheck: CheckResult = {
     name: 'journal chain is unbroken',
     ok: true,
@@ -151,12 +174,16 @@ export async function verifyProject(paths: ShowtailPaths): Promise<VerifyResult>
   };
   let chained = 0;
   let unchained = 0;
+  const passes: JournalEntry[] = [];
   for (const journal of journals) {
     if (journal.error !== undefined) continue; // Already reported by check 2.
     for (const shard of journal.shards) {
       const { breaks, unchained: legacy } = checkChain(shard.entries);
       chained += shard.entries.length - legacy;
       unchained += legacy;
+      for (const entry of shard.entries) {
+        if (entry.kind === 'redaction') passes.push(entry);
+      }
       for (const b of breaks) {
         chainCheck.ok = false;
         chainCheck.details.push(
@@ -177,11 +204,33 @@ export async function verifyProject(paths: ShowtailPaths): Promise<VerifyResult>
   }
   if (chainCheck.ok && chained > 0) {
     chainCheck.details.push(
-      `${chained} chained journal entr${chained === 1 ? 'y' : 'ies'} verified.`,
+      `chain intact; ${chained} chained journal entr${chained === 1 ? 'y' : 'ies'} verified.`,
     );
   }
   if (chainCheck.ok && chained === 0 && unchained === 0) {
     chainCheck.details.push('No journal entries yet.');
+  }
+  if (passes.length > 0) {
+    chainCheck.details.push(
+      `${passes.length} recorded redaction pass${passes.length === 1 ? '' : 'es'} ` +
+        '(`showtail redact` removed stored content on purpose and re-linked the chain):',
+    );
+    for (const entry of passes) {
+      const r = entry.redaction;
+      chainCheck.details.push(
+        `  ${entry.ts} — ${r?.mode ?? 'unknown'}: ${r?.entries ?? 0} entr` +
+          `${r?.entries === 1 ? 'y' : 'ies'} rewritten, ${r?.values ?? 0} value(s) removed` +
+          `${r?.labels?.length ? ` (${r.labels.join(', ')})` : ''}.`,
+      );
+    }
+    if (!chainCheck.ok) {
+      // Said plainly, because the marker is the one thing that could be mistaken
+      // for a licence to rewrite: a pass re-chains, so it cannot cause a break.
+      chainCheck.details.push(
+        '  A recorded pass re-links the chain, so it never causes a break — ' +
+          'the break(s) above are unexplained.',
+      );
+    }
   }
   checks.push(chainCheck);
 

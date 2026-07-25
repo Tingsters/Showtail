@@ -12,9 +12,64 @@ Showtail is privacy-first by design:
   card, SSN) from captured text *before* it is written, and the report notes how
   many it removed. It is a safety net, not a guarantee — still avoid putting
   secrets in prompts. Tune it under `settings.redact` in `config.json` (see
-  [Configuration](../reference/configuration.md#redaction)).
+  [Configuration](../reference/configuration.md#redaction)). When it does miss
+  something, `showtail redact` cleans it out after the fact — see
+  [If something leaked anyway](#if-something-leaked-anyway).
 - **The files are plain and inspectable.** They are JSON and JSONL files that
   you can open in any editor.
+
+## If something leaked anyway
+
+Write-time redaction is a safety net, and safety nets have holes: a credential in
+a format the rules do not know yet goes into the content-addressed object store
+and stays there. You should not have to delete `.showtail/` — and lose your whole
+trail — because you pasted a key once. Use `showtail redact`.
+
+```bash
+# Preview: what would the current rules remove from everything already stored?
+showtail redact --rescan --dry-run
+
+# Apply the current rules (including any settings.redact.custom you added since).
+showtail redact --rescan
+
+# Scrub one specific thing you know leaked. This previews by default;
+# --yes applies it.
+showtail redact --pattern 'dop_v1_[0-9a-f]{32}'
+showtail redact --pattern 'dop_v1_[0-9a-f]{32}' --yes
+```
+
+A pass rewrites the stored content, files it under its new address, repoints the
+journal entry at it, and **deletes the object the secret lived in**. It uses the
+same rule engine as capture, so a `settings.redact.custom` pattern you add today
+applies retroactively to work captured last week.
+
+### The pass is recorded, on purpose
+
+Rewriting stored content changes the trail's history, and the journal's hash
+chain is re-linked so the result still verifies. That is necessary — otherwise a
+legitimate scrub would look exactly like tampering — but it would also make the
+rewrite invisible. So every pass appends a dated **redaction marker** to the
+journal: when it ran, how many entries it touched, how many values it removed,
+and which rule labels fired. `showtail verify` prints it beside the chain result:
+
+```text
+PASS  journal chain is unbroken
+        chain intact; 7 chained journal entries verified.
+        1 recorded redaction pass (`showtail redact` removed stored content on
+        purpose and re-linked the chain):
+          2026-07-25T09:14:02.881Z — pattern: 1 entry rewritten, 1 value(s) removed (pattern).
+```
+
+The marker never stores a removed value — nor the `--pattern` you used, since a
+pattern is often the secret itself.
+
+!!! warning "What the marker is and is not"
+    It is an honest disclosure that history was rewritten, not cryptographic
+    proof of *which* rewrites happened. The chain check only proves the journal
+    is internally consistent, and anything that can write the folder can produce
+    a consistent journal. What the marker never does is *excuse* a break: an edit
+    made by hand still breaks the following entry's link, and `verify` still
+    reports it as unexplained whether or not a marker sits next to it.
 
 ## Committing `.showtail/`
 

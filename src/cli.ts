@@ -19,6 +19,7 @@ import { runIgnore } from './commands/ignore.ts';
 import { runMove } from './commands/move.ts';
 import { runHook, type HookEvent } from './commands/hook.ts';
 import { runImportUndo } from './commands/import.ts';
+import { runRedact } from './commands/redact.ts';
 import { eventTypeList } from './core/schema.ts';
 import { ShowtailError } from './core/errors.ts';
 import { NotInitializedError } from './core/storage.ts';
@@ -604,6 +605,42 @@ program
   .action(
     action(async (path: string | undefined, opts: { project?: string; json?: boolean }) =>
       runInit({ cwd: path, project: opts.project, json: opts.json }),
+    ),
+  );
+
+program
+  .command('redact')
+  .description(
+    'Scrub a secret the write-time rules missed out of an already-captured trail, without deleting it. --pattern previews unless you pass --yes.',
+  )
+  .helpGroup(G_MANAGE)
+  .option(
+    '--rescan',
+    "re-run this project's current redaction rules over everything stored",
+  )
+  .option(
+    '--pattern <regex>',
+    'scrub one specific value you know leaked (previews by default)',
+  )
+  .option('--dry-run', 'report what would change and write nothing')
+  .option('-y, --yes', 'apply a --pattern scrub (it is a preview without this)')
+  .option('--json', 'output machine-readable JSON')
+  .action(
+    action(
+      async (opts: {
+        rescan?: boolean;
+        pattern?: string;
+        dryRun?: boolean;
+        yes?: boolean;
+        json?: boolean;
+      }) =>
+        runRedact({
+          rescan: opts.rescan,
+          pattern: opts.pattern,
+          dryRun: opts.dryRun,
+          yes: opts.yes,
+          json: opts.json,
+        }),
     ),
   );
 

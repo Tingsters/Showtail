@@ -168,6 +168,32 @@ export interface RedactConfig {
   allow?: string[];
 }
 
+/**
+ * The audit record an after-the-fact `showtail redact` pass leaves in the
+ * journal. Write-time redaction needs no record (nothing was ever stored), but a
+ * later pass *rewrites history*: it re-addresses stored objects and re-links the
+ * hash chain, which by construction leaves no break for `verify` to notice. This
+ * marker is what keeps that from being silent — a dated, counted statement that
+ * the trail was scrubbed, which `showtail verify` surfaces next to the chain
+ * result.
+ *
+ * It deliberately holds no removed value, and no `--pattern` source either: a
+ * student scrubbing `hunter2` would otherwise leak it right back by recording
+ * the pattern they used.
+ */
+export interface RedactionRecord {
+  /** `rescan` re-ran the configured rules; `pattern` scrubbed one given regex. */
+  mode: 'rescan' | 'pattern';
+  /** How many journal entries were rewritten. */
+  entries: number;
+  /** How many sensitive values were removed in total. */
+  values: number;
+  /** Which rule labels fired (e.g. `api-key`, `pattern`) — never their values. */
+  labels: string[];
+  /** How many stored objects were rewritten to a new address. */
+  objects?: number;
+}
+
 /** The project-level configuration written at `init` time. */
 export interface Config {
   /** Showtail config schema version. */
@@ -372,17 +398,17 @@ export interface JournalEntry {
   v: number;
   /**
    * Which record this is: a logged "event" (prompt, ai_output, even an
-   * artifact-type note) or an "artifact" file snapshot. Distinct from `type`
-   * so an artifact-*type* event is not confused with a snapshot. Defaults to
-   * "event" when absent.
+   * artifact-type note), an "artifact" file snapshot, or a "redaction" audit
+   * marker left by `showtail redact`. Distinct from `type` so an artifact-*type*
+   * event is not confused with a snapshot. Defaults to "event" when absent.
    */
-  kind?: 'event' | 'artifact';
+  kind?: 'event' | 'artifact' | 'redaction';
   /** Event/Artifact id. */
   id: string;
   /** ISO-8601 timestamp. */
   ts: string;
-  /** Event type, or "artifact" for a file snapshot. */
-  type: EventType | 'artifact';
+  /** Event type, "artifact" for a file snapshot, or "redaction" for a marker. */
+  type: EventType | 'artifact' | 'redaction';
   tool?: Tool;
   /** Conversation/session id this entry belongs to. */
   conv?: string;
@@ -408,8 +434,13 @@ export interface JournalEntry {
   textPreview?: string;
   /** Byte length of the full content. */
   bytes?: number;
-  /** How many secrets/PII were scrubbed from this entry's content before storing. */
+  /**
+   * How many secrets/PII were scrubbed from this entry's content — at capture
+   * time, plus anything a later `showtail redact` pass removed.
+   */
   redacted?: number;
+  /** For a `redaction` marker (`kind: 'redaction'`): what that pass did. */
+  redaction?: RedactionRecord;
   files?: string[];
   tags?: string[];
   gitCommit?: string;

@@ -17,6 +17,7 @@ import {
 import {
   JOURNAL_ENTRY_VERSION,
   appendJournal,
+  isEventEntry,
   readJournal,
   rewriteJournal,
 } from './journal.ts';
@@ -55,8 +56,12 @@ export interface NewEventInput {
   sessionId?: string;
 }
 
-/** A one-line preview kept in the journal so the content stays glanceable. */
-function preview(text: string): string {
+/**
+ * A one-line preview kept in the journal so the content stays glanceable.
+ * Exported so `showtail redact` regenerates previews exactly as capture wrote
+ * them — a rewritten preview must be indistinguishable from a captured one.
+ */
+export function preview(text: string): string {
   return oneLine(text, 140);
 }
 
@@ -165,9 +170,12 @@ export function eventFromEntry(
   return event;
 }
 
-/** One author's journal entries that represent logged events (not artifacts). */
+/**
+ * One author's journal entries that represent logged events — not file
+ * snapshots, and not the `redaction` markers `showtail redact` leaves behind.
+ */
 function eventEntries(author: AuthorPaths): JournalEntry[] {
-  return readJournal(author).filter((e) => e.kind !== 'artifact');
+  return readJournal(author).filter(isEventEntry);
 }
 
 /**

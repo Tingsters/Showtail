@@ -17,6 +17,28 @@ export interface RedactResult {
   hits: number;
 }
 
+/**
+ * A {@link RedactResult} that also says *which* rules fired. `showtail redact`
+ * records the labels (never the values) on its audit marker, so a reader can see
+ * an after-the-fact pass removed, say, an `api-key` without learning the key.
+ */
+export interface DetailedRedactResult extends RedactResult {
+  /** Values replaced per rule label; only labels that actually hit appear. */
+  byLabel: Record<string, number>;
+}
+
+/**
+ * A caller-supplied rule applied on top of (or instead of) the built-ins — how
+ * `showtail redact --pattern <regex>` scrubs one specific thing a student knows
+ * leaked, without reimplementing the matching engine.
+ */
+export interface ExtraRule {
+  /** The label that appears in the placeholder and on the audit marker. */
+  label: string;
+  /** Regex source, compiled with the `g` flag. Invalid sources are ignored. */
+  source: string;
+}
+
 interface Rule {
   label: string;
   re: RegExp;
@@ -112,10 +134,18 @@ function applyRule(text: string, rule: Rule, allow: string[], onHit: () => void)
 
 /**
  * Scrub `text` of secrets and PII according to `cfg` (all categories on by
- * default). Returns the cleaned text and the number of values replaced.
+ * default), reporting a per-label breakdown as well as the total.
+ *
+ * `extra` appends caller-supplied rules — the hook `showtail redact --pattern`
+ * uses so an after-the-fact scrub goes through this same engine (allow-list,
+ * placeholder shape, capture-group handling) instead of its own matcher.
  */
-export function redact(text: string, cfg?: RedactConfig): RedactResult {
-  if (cfg?.enabled === false) return { text, hits: 0 };
+export function redactDetailed(
+  text: string,
+  cfg?: RedactConfig,
+  extra?: ExtraRule[],
+): DetailedRedactResult {
+  if (cfg?.enabled === false) return { text, hits: 0, byLabel: {} };
 
   const allow = cfg?.allow ?? [];
   const rules: Rule[] = [];
@@ -128,13 +158,32 @@ export function redact(text: string, cfg?: RedactConfig): RedactResult {
       // A malformed custom pattern is ignored rather than crashing capture.
     }
   }
+  for (const { label, source } of extra ?? []) {
+    try {
+      rules.push({ label, re: new RegExp(source, 'g') });
+    } catch {
+      // Same policy as `custom`: a bad pattern never breaks the caller. The
+      // `redact` command validates its own `--pattern` up front and errors there.
+    }
+  }
 
   let hits = 0;
+  const byLabel: Record<string, number> = {};
   let out = text;
   for (const rule of rules) {
     out = applyRule(out, rule, allow, () => {
       hits += 1;
+      byLabel[rule.label] = (byLabel[rule.label] ?? 0) + 1;
     });
   }
+  return { text: out, hits, byLabel };
+}
+
+/**
+ * Scrub `text` of secrets and PII according to `cfg` (all categories on by
+ * default). Returns the cleaned text and the number of values replaced.
+ */
+export function redact(text: string, cfg?: RedactConfig): RedactResult {
+  const { text: out, hits } = redactDetailed(text, cfg);
   return { text: out, hits };
 }

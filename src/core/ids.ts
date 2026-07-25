@@ -6,9 +6,10 @@ import { randomBytes } from 'node:crypto';
  * site without each one importing a constant.
  *  - `evt` events, `ses` sessions, `art` artifacts, `imp` import batches,
  *    `led` ledger sessions (the global durable store), `trl` trail ids (the
- *    stable per-repo identifier stamped into `.showtail/config.json`).
+ *    stable per-repo identifier stamped into `.showtail/config.json`),
+ *    `red` after-the-fact redaction passes (`showtail redact`).
  */
-export type IdPrefix = 'evt' | 'ses' | 'art' | 'imp' | 'led' | 'trl';
+export type IdPrefix = 'evt' | 'ses' | 'art' | 'imp' | 'led' | 'trl' | 'red';
 
 /**
  * Generate a short, sortable-ish, collision-resistant id with a type prefix,

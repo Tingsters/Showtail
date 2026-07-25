@@ -23,6 +23,7 @@ install later is captured too. You never run a getting-started command — just 
 | ------- | ------------ |
 | `setup` | Manage automatic tracking (it turns on by itself after install). `--off` turns it off; re-run to turn it back on. Flags: `--off`, `--yes`, `--json`. |
 | `track [path]` | Set up one project by hand: name it (`-p, --project <name>`), declare a non-code folder (like a book) as a project, and pull its already-captured work out of the inbox. Projects otherwise initialize automatically. Flags: `-p, --project <name>`, `--json`. |
+| `redact` | Scrub a secret the write-time rules missed out of an already-captured trail, instead of deleting `.showtail/`. `--rescan` re-runs the project's current rules (including a `settings.redact.custom` added since capture) over every stored object, preview, and plan file; `--pattern <regex>` scrubs one specific value — a **preview until you pass `--yes`**. Rewrites the content to its new address, repoints the journal, deletes the old object, re-links the hash chain, and records a dated redaction marker `verify` reports. Flags: `--rescan`, `--pattern <regex>`, `--dry-run`, `-y, --yes`, `--json`. See [Privacy &amp; redaction](../concepts/privacy.md#if-something-leaked-anyway). |
 
 !!! note "Hidden lifecycle commands"
     Tracking is automatic, so `ensure` (init + open a session), `start` (begin a

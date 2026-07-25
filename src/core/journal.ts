@@ -248,6 +248,16 @@ export function readJournalShards(author: AuthorPaths): JournalShard[] {
   return out;
 }
 
+/**
+ * Whether a journal line is a logged *event* — not a file snapshot and not a
+ * `redaction` audit marker. The journal is a superset log, so every reader that
+ * means "the student's prompts and replies" must go through this rather than
+ * testing `kind !== 'artifact'`, which would sweep markers in too.
+ */
+export function isEventEntry(entry: JournalEntry): boolean {
+  return entry.kind !== 'artifact' && entry.kind !== 'redaction';
+}
+
 /** Read every journal entry for one author across all segments, in write order. */
 export function readJournal(author: AuthorPaths): JournalEntry[] {
   const out: JournalEntry[] = [];
@@ -257,6 +267,46 @@ export function readJournal(author: AuthorPaths): JournalEntry[] {
     }
   }
   return out;
+}
+
+/**
+ * Rewrite one author's journal by mapping every entry through `edit`, and return
+ * how many entries changed. The counterpart to {@link rewriteJournal}: that one
+ * *drops* lines, this one *edits* them in place (the shape `showtail redact`
+ * needs — repointing `refs` at rewritten objects, refreshing `textPreview`).
+ *
+ * `edit` must return the entry unchanged (the same object) when it has nothing
+ * to do; identity is what decides whether a shard was touched. Touched shards
+ * are re-chained across all of their segments, so an edit that was made on
+ * purpose leaves an intact chain rather than looking like tampering — and one
+ * that was not still breaks it at the next line.
+ */
+export function mapJournal(
+  author: AuthorPaths,
+  edit: (entry: JournalEntry) => JournalEntry,
+): number {
+  let changed = 0;
+  for (const machineId of shardIds(author)) {
+    const files = segmentsInShard(join(author.journalDir, machineId));
+    const original = files.map((f) =>
+      readJsonl<Record<string, unknown>>(f).map(normalizeEntry),
+    );
+    const edited = original.map((entries) => entries.map(edit));
+    const touched = edited.reduce(
+      (n, entries, i) => n + entries.filter((e, j) => e !== original[i]![j]).length,
+      0,
+    );
+    if (touched === 0) continue; // Shard untouched — its chain is still valid.
+    changed += touched;
+    const rechained = rechainEntries(edited.flat());
+    let at = 0;
+    for (let i = 0; i < files.length; i += 1) {
+      const slice = rechained.slice(at, at + edited[i]!.length);
+      at += slice.length;
+      writeJsonl(files[i]!, slice);
+    }
+  }
+  return changed;
 }
 
 /**
