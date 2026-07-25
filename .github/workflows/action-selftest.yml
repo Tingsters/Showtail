@@ -81,7 +81,32 @@ jobs:
           set -euo pipefail
           log="$(find fixture/.showtail/authors -name '*.log' | head -1)"
           test -n "$log"
-          sed -i '1s/help me start a knapsack solver/I wrote the solver myself/' "$log"
+          # Rewrite the first entry that carries a preview, whichever line that
+          # is. An earlier version of this step pinned line 1 and a literal
+          # prompt string; the sed silently matched nothing, the commit was empty,
+          # and the step would have "passed" having tampered with nothing. Assert
+          # the mutation landed instead of assuming it.
+          python3 - "$log" <<'PY'
+          import json, sys
+          path = sys.argv[1]
+          with open(path) as fh:
+              entries = [json.loads(line) for line in fh if line.strip()]
+          for entry in entries:
+              if entry.get('textPreview'):
+                  entry['textPreview'] = 'I wrote the solver myself'
+                  break
+          else:
+              sys.exit('no journal entry carries a textPreview to tamper with')
+          with open(path, 'w') as fh:
+              for entry in entries:
+                  fh.write(json.dumps(entry, separators=(',', ':')) + '\n')
+          PY
+          # `prev` is deliberately left alone, so the hash chain breaks — the
+          # cheapest tamper to produce, and enough to prove the action reports it.
+          if git diff --quiet -- "$log"; then
+            echo "::error::the tamper changed nothing; this test would prove nothing"
+            exit 1
+          fi
           git add -A fixture
           git commit -q -m 'tweak'
 
