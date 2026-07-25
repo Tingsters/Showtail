@@ -78,12 +78,33 @@ before it: change one line, delete one, or splice one in, and the *next* line's
 segments are already sharded — that's what keeps two students' (or your own two
 laptops') trails merging through git without conflicts.
 
-`showtail verify` checks both, and reports a break as a failure. Two honest
-caveats: only the *last* entry of a shard has no following line to disagree with
-it, so editing or truncating the tail isn't visible; and anyone can of course
-delete the whole trail and start over.
-This is tamper-**evidence**, not tamper-proofing — enough that a fabricated
-process is no longer a quiet edit.
+`showtail verify` checks both, and reports a break as a failure.
+
+**What the chain does and does not catch.** It is unkeyed, and every byte of it
+lives in the student's own folder — so it detects an *unwitting* edit, not a
+determined one. Concretely, measured against a real trail:
+
+| | Detected? |
+|---|---|
+| Edit a stored prompt's text in `objects/` | ✅ address no longer matches |
+| Edit a journal line and leave `prev` alone | ✅ chain break, `verify` exits 3 |
+| Truncate entries off the end of a shard | ❌ the remaining chain is still valid |
+| Append a fabricated entry with a recomputed `prev` | ❌ passes cleanly |
+| Edit any entry, then re-chain everything after it | ❌ passes cleanly |
+
+The last three need only a short script, and Showtail is open source — the
+re-chaining helper ships in `src/core/journal.ts`. So this is tamper-**evidence**
+against casual editing, not an integrity guarantee against someone who reads the
+code. It raises fabricating a process from "edit a line" to "write a script,
+knowingly" — worth having, and worth not overstating.
+
+Closing the gap needs an anchor outside the folder. The practical one today is
+git: commit `.showtail/` and push it as you work, and the remote's history is a
+record the student cannot silently rewrite — verifying that on every push is
+what running Showtail in CI is for. Signed provenance records, on the
+[roadmap](../roadmap.md), are the stronger answer.
+And of course anyone can delete the whole trail and start over — no local file
+format prevents that.
 
 ### What is *not* tampering
 
