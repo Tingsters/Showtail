@@ -1,14 +1,6 @@
 # Changelog
 
-## Unreleased
-
-### Before tagging this release
-
-- **Point a `v1` tag at it.** `docs/educators/verify-in-ci.md` tells educators to use
-  `Tingsters/Showtail@v1`, and no `v1` tag exists (releases are tagged `v0.x`). The
-  GitHub Action is also inert until a release contains `verify --json` — v0.12.0 does
-  not, and fails with `unknown option '--json'`. Remove the "Not usable until the next
-  release" warning on that page once both are true.
+## 0.13.0
 
 ### What changed
 

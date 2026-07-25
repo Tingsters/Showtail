@@ -26,7 +26,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0   # full history — see below
-      - uses: Tingsters/Showtail@v1
+      - uses: Tingsters/Showtail@v0
 ```
 
 That's the whole thing. The action installs the `showtail` binary, runs
@@ -44,18 +44,11 @@ summary, and fails the job if the trail does not verify.
     at the top of the job summary — but the fix is one line, and without it you
     lose the check that catches a deliberately re-chained trail.
 
-!!! warning "Not usable until the next release"
-
-    This action needs `showtail verify --json`, which landed after v0.12.0 — the
-    current latest release does not have it, and the action fails with
-    `unknown option '--json'` against it. The `v1` tag it references does not
-    exist yet either (releases are tagged `v0.x`). Both are resolved by cutting
-    the next release and pointing a `v1` tag at it; until then this page
-    describes what will work, not what does.
-
-`@v1` follows the v1 major tag, so bug fixes reach your classes without you
-editing anything; pin a release tag or a commit SHA instead if you'd rather
-freeze it for a term.
+`@v0` follows a moving major tag: it is repointed at each 0.x release, so bug
+fixes reach your classes without you editing any workflow. For a grading gate you
+want frozen for a term, pin the exact release instead — `Tingsters/Showtail@v0.13.0`
+— or a commit SHA. Showtail is pre-1.0, so `v0` is the moving tag; there is
+deliberately no `v1` until the API settles.
 
 !!! note "Students must commit `.showtail/`"
 
@@ -78,7 +71,7 @@ freeze it for a term.
 | `fail-on-invalid` | `true` | Set to `false` to report the result without failing the job — useful early in a term, when you want the signal but not a red X. |
 
 ```yaml
-      - uses: Tingsters/Showtail@v1
+      - uses: Tingsters/Showtail@v0
         with:
           path: assignment
           version: latest
@@ -95,7 +88,7 @@ freeze it for a term.
 Use them in a later step — for example, to leave a comment or set a label:
 
 ```yaml
-      - uses: Tingsters/Showtail@v1
+      - uses: Tingsters/Showtail@v0
         id: showtail
         with:
           fail-on-invalid: false
