@@ -8,6 +8,14 @@ import {
 } from '../src/core/vscodeExtension.ts';
 import { cleanup, makeTempDir } from './helpers.ts';
 
+// The stub CLI below is a `#!/bin/sh` script made executable with chmod. Neither
+// half of that works on Windows: the shebang is ignored, `chmod` is a no-op, and
+// CreateProcess refuses to launch a `.sh` file, so `spawnSync(cli, …)` in
+// installVsCodeExtension() fails with ENOENT/EACCES before the assertion runs.
+// Only the tests that actually *spawn* the stub are gated; detection tests still
+// run everywhere. Windows extension install is covered manually for now.
+const skipOnWindows = process.platform === 'win32';
+
 /** Write an executable stub `code` CLI that records its argv to `recordPath` and exits 0. */
 function stubCli(dir: string, recordPath: string): string {
   const p = join(dir, 'code-stub.sh');
@@ -50,38 +58,44 @@ describe('vscode extension install (env-overridable, no real VS Code)', () => {
     }
   });
 
-  test('installs the bundled VSIX hands-off via `<cli> --install-extension <vsix> --force`', () => {
-    const dir = makeTempDir();
-    try {
-      const record = join(dir, 'args.txt');
-      const vsix = join(dir, 'showtail.vsix');
-      writeFileSync(vsix, 'fake-vsix');
-      process.env.SHOWTAIL_VSCODE_CLI = stubCli(dir, record);
-      process.env.SHOWTAIL_VSIX = vsix;
+  test.skipIf(skipOnWindows)(
+    'installs the bundled VSIX hands-off via `<cli> --install-extension <vsix> --force`',
+    () => {
+      const dir = makeTempDir();
+      try {
+        const record = join(dir, 'args.txt');
+        const vsix = join(dir, 'showtail.vsix');
+        writeFileSync(vsix, 'fake-vsix');
+        process.env.SHOWTAIL_VSCODE_CLI = stubCli(dir, record);
+        process.env.SHOWTAIL_VSIX = vsix;
 
-      const res = installVsCodeExtension();
-      expect(res.installed).toBe(true);
-      const args = readFileSync(record, 'utf8');
-      expect(args).toContain('--install-extension');
-      expect(args).toContain(vsix); // the bundled vsix, not the marketplace id
-      expect(args).toContain('--force');
-    } finally {
-      cleanup(dir);
-    }
-  });
+        const res = installVsCodeExtension();
+        expect(res.installed).toBe(true);
+        const args = readFileSync(record, 'utf8');
+        expect(args).toContain('--install-extension');
+        expect(args).toContain(vsix); // the bundled vsix, not the marketplace id
+        expect(args).toContain('--force');
+      } finally {
+        cleanup(dir);
+      }
+    },
+  );
 
-  test('falls back to the Marketplace id when no VSIX is bundled', () => {
-    const dir = makeTempDir();
-    try {
-      const record = join(dir, 'args.txt');
-      process.env.SHOWTAIL_VSCODE_CLI = stubCli(dir, record);
-      process.env.SHOWTAIL_VSIX = join(dir, 'absent.vsix'); // bundledVsixPath → null
+  test.skipIf(skipOnWindows)(
+    'falls back to the Marketplace id when no VSIX is bundled',
+    () => {
+      const dir = makeTempDir();
+      try {
+        const record = join(dir, 'args.txt');
+        process.env.SHOWTAIL_VSCODE_CLI = stubCli(dir, record);
+        process.env.SHOWTAIL_VSIX = join(dir, 'absent.vsix'); // bundledVsixPath → null
 
-      const res = installVsCodeExtension();
-      expect(res.installed).toBe(true);
-      expect(readFileSync(record, 'utf8')).toContain(VSCODE_EXTENSION_ID);
-    } finally {
-      cleanup(dir);
-    }
-  });
+        const res = installVsCodeExtension();
+        expect(res.installed).toBe(true);
+        expect(readFileSync(record, 'utf8')).toContain(VSCODE_EXTENSION_ID);
+      } finally {
+        cleanup(dir);
+      }
+    },
+  );
 });

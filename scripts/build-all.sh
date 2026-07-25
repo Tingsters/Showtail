@@ -16,6 +16,7 @@ build() {
 }
 
 build bun-linux-x64    showtail-linux-x64
+build bun-linux-arm64  showtail-linux-arm64
 build bun-darwin-x64   showtail-darwin-x64
 build bun-darwin-arm64 showtail-darwin-arm64
 build bun-windows-x64  showtail-windows-x64.exe

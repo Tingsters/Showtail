@@ -24,6 +24,20 @@ you install later. (Turn it off anytime with `showtail setup --off`.)
     irm https://raw.githubusercontent.com/Tingsters/Showtail/main/install.ps1 | iex
     ```
 
+### Supported platforms
+
+The installer detects your OS and CPU and fetches the matching binary:
+
+| Platform | Architectures |
+| --- | --- |
+| Linux | x86-64, ARM64 (`aarch64`) |
+| macOS | Intel (x86-64), Apple Silicon (ARM64) |
+| Windows | x86-64 |
+
+ARM64 Linux is a first-class target, so the one-line installer works on a
+Raspberry Pi (64-bit Raspberry Pi OS), an ARM Chromebook's Linux container, and
+ARM cloud instances — no from-source build needed.
+
 ## Option 2: Install with Bun
 
 If you already use [Bun](https://bun.sh), you can run Showtail from source:

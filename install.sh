@@ -37,7 +37,6 @@ case "$arch" in
   *) err "unsupported architecture: $arch" ;;
 esac
 
-# Bun's compile targets don't include linux-arm64 binaries in our release matrix.
 asset="showtail-${plat_os}-${plat_arch}"
 
 # --- Resolve the download URL --------------------------------------------

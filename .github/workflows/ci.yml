@@ -7,7 +7,13 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    # Showtail ships binaries for Linux, macOS and Windows (plus install.ps1 and
+    # Windows-specific path handling), so the gate has to run everywhere we ship.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
 
@@ -19,10 +25,14 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
+      # Typecheck and formatting are platform-independent — running them on all
+      # three legs would only triple the wall-clock cost of the gate.
       - name: Typecheck
+        if: matrix.os == 'ubuntu-latest'
         run: bun run typecheck
 
       - name: Check formatting
+        if: matrix.os == 'ubuntu-latest'
         run: bun run format:check
 
       - name: Run tests

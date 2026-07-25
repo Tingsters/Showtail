@@ -4,6 +4,13 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { copilotPlugin } from '../src/plugins/copilot.ts';
 import { cleanup, makeTempDir } from './helpers.ts';
 
+// The stub CLI below is a `#!/bin/sh` script made executable with chmod. Neither
+// half of that works on Windows: the shebang is ignored, `chmod` is a no-op, and
+// CreateProcess refuses to launch a `.sh` file, so the spawnSync inside
+// autoConnect() fails with ENOENT/EACCES before the assertion runs. Only the test
+// that actually *spawns* the stub is gated; detect() still runs everywhere.
+const skipOnWindows = process.platform === 'win32';
+
 function stubCli(dir: string, recordPath: string): string {
   const p = join(dir, 'code-stub.sh');
   writeFileSync(p, `#!/bin/sh\nprintf '%s\\n' "$@" > "${recordPath}"\nexit 0\n`);
@@ -46,22 +53,25 @@ describe('copilot (VS Code) hands-off extension install', () => {
     }
   });
 
-  test('autoConnect installs the extension via the VS Code CLI, hands-off', () => {
-    const dir = makeTempDir();
-    try {
-      const record = join(dir, 'args.txt');
-      const vsix = join(dir, 'showtail.vsix');
-      writeFileSync(vsix, 'fake');
-      process.env.SHOWTAIL_VSCODE_CLI = stubCli(dir, record);
-      process.env.SHOWTAIL_VSIX = vsix;
+  test.skipIf(skipOnWindows)(
+    'autoConnect installs the extension via the VS Code CLI, hands-off',
+    () => {
+      const dir = makeTempDir();
+      try {
+        const record = join(dir, 'args.txt');
+        const vsix = join(dir, 'showtail.vsix');
+        writeFileSync(vsix, 'fake');
+        process.env.SHOWTAIL_VSCODE_CLI = stubCli(dir, record);
+        process.env.SHOWTAIL_VSIX = vsix;
 
-      const result = copilotPlugin.connect?.autoConnect?.();
-      expect(result).toEqual({ hooks: false });
-      const args = readFileSync(record, 'utf8');
-      expect(args).toContain('--install-extension');
-      expect(args).toContain(vsix);
-    } finally {
-      cleanup(dir);
-    }
-  });
+        const result = copilotPlugin.connect?.autoConnect?.();
+        expect(result).toEqual({ hooks: false });
+        const args = readFileSync(record, 'utf8');
+        expect(args).toContain('--install-extension');
+        expect(args).toContain(vsix);
+      } finally {
+        cleanup(dir);
+      }
+    },
+  );
 });

@@ -65,25 +65,33 @@ describe('antigravity-ide extension install (env-overridable, no real IDE)', () 
     }
   });
 
-  test('installs hands-off when both the IDE CLI and the bundled VSIX are present', () => {
-    const dir = makeTempDir();
-    try {
-      const record = join(dir, 'args.txt');
-      const cli = join(dir, 'antigravity-ide.sh');
-      const vsix = join(dir, 'showtail.vsix');
-      writeFileSync(cli, `#!/bin/sh\nprintf '%s\\n' "$@" > "${record}"\nexit 0\n`);
-      chmodSync(cli, 0o755);
-      writeFileSync(vsix, 'fake');
-      process.env.SHOWTAIL_ANTIGRAVITY_CLI = cli;
-      process.env.SHOWTAIL_VSIX = vsix;
+  // The stub CLI here is a `#!/bin/sh` script made executable with chmod. Neither
+  // half works on Windows: the shebang is ignored, `chmod` is a no-op, and
+  // CreateProcess refuses to launch a `.sh` file, so the spawnSync inside
+  // installAntigravityIdeExtension() fails with ENOENT/EACCES before the assertion
+  // runs. The sibling `.cmd` detection tests above are platform-neutral and still run.
+  test.skipIf(process.platform === 'win32')(
+    'installs hands-off when both the IDE CLI and the bundled VSIX are present',
+    () => {
+      const dir = makeTempDir();
+      try {
+        const record = join(dir, 'args.txt');
+        const cli = join(dir, 'antigravity-ide.sh');
+        const vsix = join(dir, 'showtail.vsix');
+        writeFileSync(cli, `#!/bin/sh\nprintf '%s\\n' "$@" > "${record}"\nexit 0\n`);
+        chmodSync(cli, 0o755);
+        writeFileSync(vsix, 'fake');
+        process.env.SHOWTAIL_ANTIGRAVITY_CLI = cli;
+        process.env.SHOWTAIL_VSIX = vsix;
 
-      const res = installAntigravityIdeExtension();
-      expect(res.installed).toBe(true); // §3 vsix availability makes it hands-off
-      const args = readFileSync(record, 'utf8');
-      expect(args).toContain('--install-extension');
-      expect(args).toContain(vsix);
-    } finally {
-      cleanup(dir);
-    }
-  });
+        const res = installAntigravityIdeExtension();
+        expect(res.installed).toBe(true); // §3 vsix availability makes it hands-off
+        const args = readFileSync(record, 'utf8');
+        expect(args).toContain('--install-extension');
+        expect(args).toContain(vsix);
+      } finally {
+        cleanup(dir);
+      }
+    },
+  );
 });
