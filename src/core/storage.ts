@@ -148,7 +148,12 @@ export function findRoot(startDir: string = process.cwd()): string | null {
   // Walk up until the filesystem root (or the ceiling, if one is set).
   while (true) {
     if (existsSync(join(dir, SHOWTAIL_DIR))) return dir;
-    if (ceiling && dir === ceiling) return null;
+    // pathKey, not ===: on Windows the walked-up dir and the ceiling can spell the
+    // same directory differently (drive-letter case, or the 8.3 short form GitHub
+    // Actions puts in TEMP vs the long form a child's process.cwd() reports). A
+    // missed match here doesn't just fail a comparison — it lets the walk escape
+    // the test sandbox and resolve a real `~/.showtail`.
+    if (ceiling && pathKey(dir) === pathKey(ceiling)) return null;
     const parent = dirname(dir);
     if (parent === dir) return null;
     dir = parent;
@@ -265,7 +270,8 @@ export function eligibleProjectRoot(dir: string): string | null {
       if (!ceiling && isTempPath(d)) return null;
       return d;
     }
-    if (ceiling && d === ceiling) return null;
+    // pathKey, not ===: see findRoot's ceiling check.
+    if (ceiling && pathKey(d) === pathKey(ceiling)) return null;
     const parent = dirname(d);
     if (parent === d) return null;
     d = parent;

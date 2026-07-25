@@ -110,7 +110,7 @@ describe('placement and the inbox', () => {
   test('a placed session whose trail no longer exists resurfaces as target-missing', () => {
     const s = ensureLedgerSession({ tool: 'claude-code', nativeSessionId: 's1' });
     // Point at a path that has no .showtail/config.json with this trailId.
-    markPlaced(s.id, 'trl_gone', makeTempDir() + '/deleted-repo');
+    markPlaced(s.id, 'trl_gone', join(makeTempDir(), 'deleted-repo'));
     const surfaced = unplacedSessions({ includeHidden: true }).find((x) => x.id === s.id);
     expect(surfaced?.targetMissing).toBe(true);
   });

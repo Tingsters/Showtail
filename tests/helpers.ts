@@ -102,9 +102,18 @@ export function seedAuthor(paths: ShowtailPaths, email: string): AuthorPaths {
   return authorPaths(paths, slugifyEmail(email), machineId);
 }
 
-/** Remove a temp directory created with {@link makeTempDir}. */
+/**
+ * Remove a temp directory created with {@link makeTempDir}.
+ *
+ * `maxRetries` is for Windows: two dozen test files spawn the real CLI and then
+ * delete its cwd. `spawnSync` has reaped the child by then, but Windows releases
+ * file handles asynchronously and the indexer/AV can hold one a moment longer, so
+ * an immediate delete intermittently fails with EBUSY/EPERM. Node retries those
+ * two errnos with a backoff when `maxRetries` is set (it is 0 by default, so
+ * `force` alone does not help). A no-op on POSIX, where the first attempt wins.
+ */
 export function cleanup(dir: string): void {
-  rmSync(dir, { recursive: true, force: true });
+  rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 }
 
 /**

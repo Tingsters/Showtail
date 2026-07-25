@@ -26,8 +26,17 @@ process.env.SHOWTAIL_HOME ??= join(tmpdir(), 'showtail-test-home');
 afterEach(() => {
   const home = process.env.SHOWTAIL_HOME ?? '';
   try {
-    rmSync(join(home, 'ledger'), { recursive: true, force: true });
-    rmSync(join(home, 'config.json'), { force: true });
+    // maxRetries covers Windows, which releases file handles asynchronously and
+    // so intermittently fails an immediate delete with EBUSY/EPERM (see cleanup()
+    // in helpers.ts). Silently swallowing that here would leak ledger records into
+    // the next test, which is exactly what this hook exists to prevent.
+    rmSync(join(home, 'ledger'), {
+      recursive: true,
+      force: true,
+      maxRetries: 5,
+      retryDelay: 50,
+    });
+    rmSync(join(home, 'config.json'), { force: true, maxRetries: 5, retryDelay: 50 });
   } catch {
     /* ignore */
   }
