@@ -63,6 +63,64 @@ export async function gitToplevel(cwd: string): Promise<string | undefined> {
  * the caller concludes the directory sits outside its own repository. Asking git
  * removes the comparison altogether.
  */
+/** One path git is ignoring, with the rule responsible. */
+export interface IgnoredPath {
+  path: string;
+  /** The file the rule came from, e.g. `.gitignore`. */
+  source: string;
+  /** The pattern that matched, e.g. `*.log` or `.showtail/`. */
+  pattern: string;
+}
+
+/**
+ * Which of `paths` git is ignoring, as absolute paths. Empty when git is
+ * unavailable, none are ignored, or the paths aren't in a repo.
+ *
+ * Exists so "your journal isn't in git" can say *why*. A project-level `*.log`
+ * rule silently excludes every journal segment (`journal/<machine>/0001.log`),
+ * and "not committed yet" sends the reader looking for a missing `git add`
+ * instead of the ignore rule that is actually blocking it.
+ */
+export async function gitIgnoredPaths(
+  cwd: string,
+  paths: string[],
+): Promise<IgnoredPath[]> {
+  if (paths.length === 0) return [];
+  // `-v` so the caller can name the rule that did it rather than guess: the
+  // cause might be a `*.log` line, or a deliberate `.showtail/`, and those call
+  // for different advice.
+  //
+  // Deliberately no `-z`: git rejects it outright ("-z only makes sense with
+  // --stdin") and exits 128, which would look exactly like "nothing is ignored".
+  // Newline-splitting is safe for these inputs — the paths are journal segments
+  // Showtail generates itself (`journal/<machineId>/0001.log`).
+  //
+  // A plain exit 1 means nothing matched, and runGit maps that to undefined,
+  // indistinguishable from a real failure. Harmless either way here: both mean
+  // "report nothing extra".
+  const out = await runGit(['check-ignore', '-v', '--', ...paths], cwd);
+  if (!out) return [];
+  const found: IgnoredPath[] = [];
+  for (const line of out.split('\n')) {
+    // `<source>:<line>:<pattern>\t<path>` — split on the tab first, since the
+    // pattern itself can contain colons.
+    const tab = line.indexOf('\t');
+    if (tab === -1) continue;
+    const rule = line.slice(0, tab);
+    const path = line.slice(tab + 1).trim();
+    if (path.length === 0) continue;
+    const m = /^(.*):(\d+):(.*)$/.exec(rule);
+    const pattern = m?.[3] ?? rule;
+    // `-v` also reports a path matched by a *negation* (`!authors/**/…`), which
+    // means the opposite of ignored — that is precisely the rule Showtail writes
+    // to keep journals committable. Counting those would report every healthy
+    // trail as ignored.
+    if (pattern.startsWith('!')) continue;
+    found.push({ path, source: m?.[1] ?? rule, pattern });
+  }
+  return found;
+}
+
 export async function gitPrefix(cwd: string): Promise<string | undefined> {
   const out = await runGit(['rev-parse', '--show-prefix'], cwd);
   if (out === undefined) return undefined;

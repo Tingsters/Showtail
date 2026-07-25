@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import type { Config } from '../types.ts';
@@ -29,6 +29,19 @@ const GITATTRIBUTES = `# Showtail stores content-addressed objects; keep bytes b
 `;
 
 /**
+ * The negation that keeps journal segments committable. Journal files are named
+ * `journal/<machine>/0001.log`, and a `*.log` line in the *project's* own
+ * `.gitignore` — which the Node, Python and Java templates all ship — silently
+ * excludes every one of them. The trail then commits with its config and object
+ * store but **no journal**, so the educator receives a trail containing none of
+ * the student's prompts, and `verify`'s git-history check has nothing to read.
+ *
+ * A deeper `.gitignore` overrides a shallower one, and re-inclusion works here
+ * because only the files were excluded, never their parent directories.
+ */
+const JOURNAL_UNIGNORE = '!authors/**/journal/**/*.log';
+
+/**
  * Ephemeral/regenerable and machine-local bits don't belong in version control.
  * Everything else under .showtail/ — including every author's folder and the
  * shared object store — IS committed, so teammates' trails merge through git.
@@ -36,7 +49,34 @@ const GITATTRIBUTES = `# Showtail stores content-addressed objects; keep bytes b
 const GITIGNORE = `state.json
 reports/
 diag/
+
+# Keep journal segments committable even when the project ignores *.log.
+${JOURNAL_UNIGNORE}
 `;
+
+/**
+ * Make sure the trail's `.gitignore` carries {@link JOURNAL_UNIGNORE}.
+ *
+ * Written on create, but also repaired on every `ensure`: trails created before
+ * this existed are the ones actually at risk, and their journals are silently
+ * uncommitted right now. Appends rather than rewrites, so a line someone added
+ * themselves survives.
+ */
+export function ensureJournalUnignored(paths: ShowtailPaths): void {
+  const file = join(paths.base, '.gitignore');
+  if (!existsSync(file)) {
+    writeFileSync(file, GITIGNORE, 'utf8');
+    return;
+  }
+  const current = readFileSync(file, 'utf8');
+  if (current.includes(JOURNAL_UNIGNORE)) return;
+  const sep = current.endsWith('\n') ? '' : '\n';
+  writeFileSync(
+    file,
+    `${current}${sep}\n# Keep journal segments committable even when the project ignores *.log.\n${JOURNAL_UNIGNORE}\n`,
+    'utf8',
+  );
+}
 
 export interface InitOptions {
   project?: string;
@@ -72,6 +112,10 @@ export async function ensureInitialized(
     // Existing trail: upgrade it in place (mint trailId + bump version on a v3
     // trail). No-op once already at the current version.
     ensureTrailId(paths);
+    // Repair a trail whose journal a project-level `*.log` rule is silently
+    // keeping out of git. Trails created before that negation existed are the
+    // ones actually affected, and they only get fixed on a path like this one.
+    ensureJournalUnignored(paths);
     return { created: false, paths };
   }
 
@@ -149,6 +193,10 @@ export async function runInit(options: InitOptions = {}): Promise<void> {
   const paths = pathsForRoot(root);
 
   if (existsSync(paths.config)) {
+    // Repair a trail whose journal a project-level `*.log` rule is keeping out of
+    // git. `showtail track .` is what `verify` tells people to run for this, so it
+    // has to actually fix it — and this is the branch a re-run takes.
+    ensureJournalUnignored(paths);
     // The one mutation a re-run performs: set/update the project name. (init is
     // intentionally the single project-config entry point — no separate command.)
     let projectUpdated: string | null = null;

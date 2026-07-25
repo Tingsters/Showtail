@@ -12,16 +12,19 @@ import {
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { runInit } from '../src/commands/init.ts';
+import { gitIgnoredPaths } from '../src/core/git.ts';
+import { authorSlugs } from '../src/core/authors.ts';
 import { redactTrail } from '../src/commands/redact.ts';
 import { addArtifact } from '../src/core/artifacts.ts';
 import { logEvent, removeEventsByBatch } from '../src/core/events.ts';
 import { startSession } from '../src/core/sessions.ts';
 import {
+  authorPaths,
   pathsForRoot,
   type AuthorPaths,
   type ShowtailPaths,
 } from '../src/core/storage.ts';
-import { readJournal, rechainEntries } from '../src/core/journal.ts';
+import { journalSegmentPaths, readJournal, rechainEntries } from '../src/core/journal.ts';
 import { verifyProject } from '../src/commands/verify.ts';
 import type { JournalEntry } from '../src/types.ts';
 import { authorFor, cleanup, makeTempDir, runCli } from './helpers.ts';
@@ -709,9 +712,96 @@ describe('verify: git history as the outside anchor', () => {
 
       const result = await verifyProject(paths);
       const history = historyCheck(result);
-      expect(history.details.join('\n')).toContain('not committed to git yet');
+      // A `.showtail/` rule doesn't merely leave the trail uncommitted, it makes
+      // it uncommittable — so say that, and name the rule, rather than nudging
+      // toward a `git add` that would silently do nothing.
+      const text = history.details.join('\n');
+      expect(text).toContain('IGNORING');
+      expect(text).toContain('.gitignore: .showtail/');
+      expect(text).toContain('cannot be verified by anyone');
+      expect(history.skipped).toBe('journal-ignored');
       expect(history.ok).toBe(true);
       expect(result.ok).toBe(true);
+    } finally {
+      cleanup(dir);
+    }
+  });
+});
+
+describe('a project *.log rule must not silently swallow the journal', () => {
+  // Journal segments are named `journal/<machine>/0001.log`, and the Node,
+  // Python and Java .gitignore templates all ship a `*.log` line. Before the
+  // trail's own .gitignore negated it, that combination committed a trail with
+  // its config and object store but NO journal — so the educator received a
+  // trail containing none of the student's prompts, and the git-history check
+  // had nothing to read. Showtail's own repo has such a rule.
+
+  test('the journal is committable in a project that ignores *.log', async () => {
+    const dir = makeGitProject();
+    try {
+      writeFileSync(join(dir, '.gitignore'), '*.log\n');
+      await runInit({ cwd: dir });
+      const paths = pathsForRoot(dir);
+      await logEvent(authorFor(paths), { type: 'prompt', text: 'a prompt' });
+
+      const segments = journalSegmentPaths(authorPaths(paths, authorSlugs(paths)[0]!));
+      expect(segments.length).toBeGreaterThan(0);
+      // git must not be ignoring them, and `git add -A` must actually track them.
+      expect(await gitIgnoredPaths(dir, segments)).toEqual([]);
+      commitAll(dir, 'work + trail');
+      const tracked = git(dir, 'ls-files', '.showtail');
+      expect(tracked).toContain('journal');
+
+      // And with the journal genuinely in git, the anchor verifies for real
+      // rather than reporting that it had nothing to read.
+      const history = historyCheck(await verifyProject(pathsForRoot(dir)));
+      expect(history.skipped).toBeUndefined();
+      expect(history.details.join('\n')).toContain('Append-only across');
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('an already-ignored journal is diagnosed, not reported as uncommitted', async () => {
+    // A trail created before the negation existed: `verify` must name the ignore
+    // rule. "Not committed yet" would send someone hunting for a missing
+    // `git add` instead of the rule that is actually blocking it.
+    const dir = makeGitProject();
+    try {
+      writeFileSync(join(dir, '.gitignore'), '*.log\n');
+      await runInit({ cwd: dir });
+      const paths = pathsForRoot(dir);
+      // Undo the repair to recreate the old on-disk state.
+      writeFileSync(join(paths.base, '.gitignore'), 'state.json\nreports/\ndiag/\n');
+      await logEvent(authorFor(paths), { type: 'prompt', text: 'a prompt' });
+      commitAll(dir, 'work + trail');
+
+      const history = historyCheck(await verifyProject(pathsForRoot(dir)));
+      expect(history.skipped).toBe('journal-ignored');
+      const text = history.details.join('\n');
+      expect(text).toContain('IGNORING');
+      expect(text).toContain('.gitignore: *.log');
+      expect(text).toContain('showtail track .');
+      // Still not a failure: the student did nothing wrong.
+      expect(history.ok).toBe(true);
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('`showtail track .` repairs a trail whose journal is ignored', async () => {
+    const dir = makeGitProject();
+    try {
+      writeFileSync(join(dir, '.gitignore'), '*.log\n');
+      await runInit({ cwd: dir });
+      const paths = pathsForRoot(dir);
+      writeFileSync(join(paths.base, '.gitignore'), 'state.json\nreports/\ndiag/\n');
+      await logEvent(authorFor(paths), { type: 'prompt', text: 'a prompt' });
+      const segments = journalSegmentPaths(authorPaths(paths, authorSlugs(paths)[0]!));
+      expect((await gitIgnoredPaths(dir, segments)).length).toBeGreaterThan(0);
+
+      await runInit({ cwd: dir }); // re-running is the repair path
+      expect(await gitIgnoredPaths(dir, segments)).toEqual([]);
     } finally {
       cleanup(dir);
     }

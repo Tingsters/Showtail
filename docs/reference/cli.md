@@ -124,7 +124,7 @@ when any fails. It's the form to use in CI:
 - `checks[]` — one entry per check, in the order the human output prints them,
   each with a stable `name`, its own `ok`, and human-readable `details` lines.
 - `skipped` — present only when a check could not examine anything, set to a
-  short stable slug saying why: `no-git`, `no-journal`,
+  short stable slug saying why: `no-git`, `no-journal`, `journal-ignored`,
   `shallow-clone`, `not-committed`, `journal-not-text`. Such a check still
   reports `ok: true` (it found nothing wrong, and a student working without git
   must not be told their trail failed) — but **"nothing to check" is not

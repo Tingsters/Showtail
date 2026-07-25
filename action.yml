@@ -17,7 +17,7 @@ inputs:
     default: "."
   version:
     description: >-
-      Which Showtail to install: "latest", or a release tag such as "v0.13.0".
+      Which Showtail to install: "latest", or a release tag such as "v0.13.1".
       Pin a tag for a stable grading gate.
     required: false
     default: "latest"

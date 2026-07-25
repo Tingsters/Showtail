@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.13.1
+
+### Fixed
+
+- **A project that ignores `*.log` silently committed a trail with no prompts in it.**
+  Journal segments are named `journal/<machine>/0001.log`, and the Node, Python and
+  Java `.gitignore` templates all ship a `*.log` line — so git excluded every segment,
+  the student handed in a trail containing their config and object store but none of
+  their work, and nobody was told. The trail's own `.gitignore` now negates it
+  (`!authors/**/journal/**/*.log`), and re-running `showtail track .` repairs a trail
+  created before this fix. Showtail's own repository had the bug.
+- **`verify` now names the rule when git is ignoring the journal**, instead of saying
+  "not committed to git yet" and sending you after a `git add` that would do nothing.
+  It distinguishes an accidental `*.log` (which `showtail track .` repairs) from a
+  deliberate `.showtail/` exclusion (which only you can reverse), and reports
+  `skipped: "journal-ignored"` in `--json`.
+
 ## 0.13.0
 
 ### What changed

@@ -5,6 +5,7 @@ import { authorSlugs } from '../core/authors.ts';
 import { eventFromEntry } from '../core/events.ts';
 import {
   fileHistoryNumstat,
+  gitIgnoredPaths,
   gitPrefix,
   gitToplevel,
   isShallowClone,
@@ -203,6 +204,33 @@ async function checkJournalHistory(
   // files that exist today never would.
   const revisions = await fileHistoryNumstat(repoRoot, base, isJournalPath);
   if (revisions.length === 0) {
+    // Distinguish "not committed yet" from "cannot be committed": a `*.log` rule
+    // in the project's own .gitignore silently excludes every journal segment,
+    // and telling someone to commit a file git refuses to add sends them looking
+    // in the wrong place entirely.
+    const ignored = await gitIgnoredPaths(repoRoot, segments);
+    if (ignored.length > 0) {
+      const rules = [...new Set(ignored.map((i) => `${i.source}: ${i.pattern}`))];
+      check.details.push(
+        `git is IGNORING ${ignored.length} of ${segments.length} journal segment(s), so ` +
+          'they can never be committed and there is no history to hold them against. ' +
+          'Left as is, the trail commits with none of the prompts in it.',
+      );
+      for (const rule of rules.slice(0, 3)) check.details.push(`  rule  ${rule}`);
+      // Name the fix for each cause rather than guessing at one: a stray `*.log`
+      // is an accident Showtail can repair, while an explicit `.showtail/` is a
+      // deliberate choice only the student can reverse.
+      check.details.push(
+        rules.some((r) => r.includes('.showtail'))
+          ? '  A rule excludes the trail itself. That is a choice, not a bug — but an ' +
+              'excluded trail cannot be verified by anyone, including an educator. ' +
+              'Remove it if you meant to hand the trail in.'
+          : '  Journal segments are named `0001.log`, so a `*.log` rule catches them. ' +
+              'Run `showtail track .` to repair the trail’s own .gitignore, then commit.',
+      );
+      check.skipped = 'journal-ignored';
+      return check;
+    }
     check.details.push(
       `The journal is not committed to git yet (${segments.length} segment file(s) on ` +
         'disk), so there is no history to check it against. Commit `.showtail/` — a ' +
