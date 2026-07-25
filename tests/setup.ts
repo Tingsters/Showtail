@@ -1,7 +1,67 @@
 import { afterEach } from 'bun:test';
-import { rmSync } from 'node:fs';
+import { readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+
+/**
+ * Per-process root for every pinned temp home below.
+ *
+ * These pins used to be fixed names (`$TMPDIR/showtail-test-home`, …), which made
+ * the suite un-runnable concurrently: two `bun test` runs — two worktrees, two
+ * agents, or a parallel CI leg — shared one ledger and one set of tool homes, and
+ * the `afterEach` sweeps below would delete state out from under the *other* run
+ * mid-test. The result was a drifting handful of failures in whichever suite lost
+ * the race (the plan-capture / capability-backing / inbox-surface tests, which all
+ * touch machine-global state), reproducible only under load and easy to misread as
+ * a pre-existing flake in the code under test.
+ *
+ * Keying on the pid makes each run's state private, so concurrent runs are honest.
+ * An externally-set value still wins everywhere (the `??=` below), so CI can pin
+ * its own paths.
+ */
+// `testrun`, deliberately NOT the `showtail-test-` prefix `makeTempDir()` uses for
+// per-test dirs — these are a different kind of thing with a different lifetime,
+// and keeping the namespaces apart is what lets the sweep below match on its own
+// names only, instead of a broad wildcard over shared /tmp.
+const RUN_ROOT_PREFIX = 'showtail-testrun-';
+const RUN_ROOT = join(tmpdir(), `${RUN_ROOT_PREFIX}${process.pid}`);
+
+/**
+ * Drop this run's private root, plus any left behind by a run that is no longer
+ * alive. The exit hook alone isn't enough — a suite killed by a signal, or a
+ * timeout, never runs it — so roots would otherwise accumulate one per aborted
+ * run. Matching is on our own `showtail-testrun-<pid>` names and gated on the pid
+ * being dead, so a *concurrent* run's root is never touched. Best-effort throughout.
+ */
+function sweepRunRoots(): void {
+  const drop = (dir: string) => {
+    try {
+      rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+    } catch {
+      /* ignore */
+    }
+  };
+  drop(RUN_ROOT);
+  try {
+    for (const name of readdirSync(tmpdir())) {
+      if (!name.startsWith(RUN_ROOT_PREFIX)) continue;
+      const pid = Number(name.slice(RUN_ROOT_PREFIX.length));
+      if (!Number.isInteger(pid) || pid <= 0 || pid === process.pid) continue;
+      try {
+        process.kill(pid, 0); // Alive — another suite is using it. Leave it alone.
+        continue;
+      } catch {
+        /* ESRCH: the owning process is gone, so its root is ours to remove. */
+      }
+      drop(join(tmpdir(), name));
+    }
+  } catch {
+    /* ignore */
+  }
+}
+
+sweepRunRoots();
+process.on('exit', sweepRunRoots);
 
 // Give in-process tests a deterministic student identity so `runInit` and the
 // hooks can establish an author folder without prompting or shelling out to
@@ -9,13 +69,13 @@ import { join } from 'node:path';
 // OS temp dir, never the developer's real `~/.config/showtail`.
 process.env.SHOWTAIL_IDENTITY_EMAIL ??= 'tester@example.com';
 process.env.SHOWTAIL_IDENTITY_NAME ??= 'Test Student';
-process.env.SHOWTAIL_IDENTITY_HOME ??= join(tmpdir(), 'showtail-test-identity');
+process.env.SHOWTAIL_IDENTITY_HOME ??= join(RUN_ROOT, 'identity');
 
 // Isolate the machine-global durable ledger (`SHOWTAIL_HOME`) for the whole test
 // run, so hooks never write to the developer's real `~/.showtail-cli/ledger`.
 // Spawned CLIs inherit it through `spawnEnv()`'s `...process.env`; tests that pin
 // their own home via `envWithHome` override it per test.
-process.env.SHOWTAIL_HOME ??= join(tmpdir(), 'showtail-test-home');
+process.env.SHOWTAIL_HOME ??= join(RUN_ROOT, 'home');
 
 // Clear the shared machine-global state after each test. The per-project `.showtail/`
 // is already isolated by its temp dir, but the ledger AND global config live under
@@ -60,7 +120,7 @@ process.env.SHOWTAIL_ROOT_CEILING ??= tmpdir();
 // Showtail bundle, silently breaking the dev's own IDE capture. Pin it to a temp
 // dir so tests never touch the real file. Spawned CLIs inherit it via spawnEnv();
 // per-test overrides (antigravityIde.test) still win. Honor an external value.
-process.env.GEMINI_HOME ??= join(tmpdir(), 'showtail-test-gemini');
+process.env.GEMINI_HOME ??= join(RUN_ROOT, 'gemini');
 
 // Isolate the Codex config home (`~/.codex`). Every user-scope Codex target —
 // `hooks.json`, `config.toml`, `AGENTS.md` — resolves under `CODEX_HOME`, and the
@@ -72,7 +132,7 @@ process.env.GEMINI_HOME ??= join(tmpdir(), 'showtail-test-gemini');
 // real Showtail hooks installed saw "capture active" where CI (no `~/.codex`)
 // saw the opposite — the long-standing local-only failure in codex.test.ts.
 // Spawned CLIs inherit it via spawnEnv(); per-test overrides still win.
-const CODEX_HOME_DEFAULT = join(tmpdir(), 'showtail-test-codex');
+const CODEX_HOME_DEFAULT = join(RUN_ROOT, 'codex');
 process.env.CODEX_HOME ??= CODEX_HOME_DEFAULT;
 
 // Isolate the Copilot CLI config home (`~/.copilot`). User-scope connect writes
@@ -80,7 +140,7 @@ process.env.CODEX_HOME ??= CODEX_HOME_DEFAULT;
 // removes them — so without this pin a connect/uninstall test would clobber the
 // developer's live Copilot CLI hooks. Also keeps session discovery
 // (`~/.copilot/session-state`) off their real transcripts.
-const COPILOT_HOME_DEFAULT = join(tmpdir(), 'showtail-test-copilot');
+const COPILOT_HOME_DEFAULT = join(RUN_ROOT, 'copilot');
 process.env.COPILOT_HOME ??= COPILOT_HOME_DEFAULT;
 
 // Isolate the Claude Code config home (`~/.claude`). User-scope `connect claude`
@@ -90,7 +150,7 @@ process.env.COPILOT_HOME ??= COPILOT_HOME_DEFAULT;
 // Claude Code config, so an unpinned run would rewrite the settings file driving
 // the very session under way. Also keeps transcript discovery
 // (`~/.claude/projects`) off their real session logs.
-const CLAUDE_CONFIG_DIR_DEFAULT = join(tmpdir(), 'showtail-test-claude');
+const CLAUDE_CONFIG_DIR_DEFAULT = join(RUN_ROOT, 'claude');
 process.env.CLAUDE_CONFIG_DIR ??= CLAUDE_CONFIG_DIR_DEFAULT;
 
 // Sweep the pinned host-tool homes after each test, for the same reason the
