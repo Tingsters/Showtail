@@ -37,8 +37,8 @@
  */
 
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { hostHome } from './hostHome.ts';
 import { asArray, asString, isObject, prop } from './parse.ts';
 import type {
   DiscoveredPlanFile,
@@ -114,12 +114,14 @@ const DECISION_TYPES = new Set<string>([]);
  * a relocated home is found.
  */
 export function geminiHome(): string {
-  const override =
-    process.env.ANTIGRAVITY_HOME ||
-    process.env.GEMINI_HOME ||
-    process.env.GEMINI_CONFIG_DIR;
-  if (override && override.length > 0) return override;
-  return join(homedir(), '.gemini');
+  // `agy` accepts several names for this one directory; check them in the order
+  // it does. The last step — `GEMINI_HOME` else `~/.gemini` — is the override
+  // pattern every host tool shares, so it goes through `hostHome`.
+  const alias = process.env.ANTIGRAVITY_HOME || process.env.GEMINI_HOME;
+  if (alias && alias.length > 0) return alias;
+  const legacy = process.env.GEMINI_CONFIG_DIR;
+  if (legacy && legacy.length > 0) return legacy;
+  return hostHome('GEMINI_HOME', '.gemini');
 }
 
 /** The dir Antigravity stores per-conversation brains under. */

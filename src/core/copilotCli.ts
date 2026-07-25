@@ -34,11 +34,11 @@
  * (`showtail hook <subcommand>`), since those drive Showtail's own dispatch.
  */
 import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { join } from 'node:path';
 // Single source of truth: committed under assets/ AND embedded into the binary,
 // so `showtail connect copilot-cli` is fully self-contained (no files to ship).
 import COPILOT_BODY from '../../assets/copilot-cli/showtail.showtail.md' with { type: 'text' };
+import { hostHome } from './hostHome.ts';
 import {
   hasOurHooks,
   mergeHookEvents,
@@ -131,7 +131,7 @@ export function resolveCopilotCliTarget(
   cwd: string = process.cwd(),
 ): CopilotCliTarget {
   if (scope === 'user') {
-    const copilotHome = join(homedir(), '.copilot');
+    const copilotHome = hostHome('COPILOT_HOME', '.copilot');
     return {
       scope,
       hooksFile: join(copilotHome, 'hooks', 'showtail.json'),

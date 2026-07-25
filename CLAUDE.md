@@ -19,7 +19,7 @@ or `desk`. Inspect the trunk without checking it out: `git log main`,
 **2 — Land straight to `main` when your work is done and tests pass. No PR.**
 
     git rebase main                 # replay your work onto the current trunk
-    bun test                        # must pass — see "known failure" below
+    bun test                        # must pass — zero failures, no exceptions
     base=$(git rev-parse main)
     git update-ref refs/heads/main "$(git rev-parse HEAD)" "$base"   # advance trunk
     git push origin main            # mirror to GitHub
@@ -41,11 +41,6 @@ for a human. Keep tasks scoped so parallel agents rarely touch the same files.
 
 **Never**: open a PR, `git push --force`, `git checkout main`, or edit the bare hub
 directly.
-
-## Known test failure (pre-existing, ignore)
-`codex install / uninstall > install --no-hooks writes only AGENTS.md, no
-hooks/config` fails independently of your change (it fails on a pristine `main`).
-Don't let it block a land; don't "fix" it as part of an unrelated task.
 
 ## Layout
 - **Hub** (bare, source of truth): `~/Nextcloud/Showtail.git` — holds `main` + the

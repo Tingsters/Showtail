@@ -1,5 +1,4 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { join } from 'node:path';
 // Single source of truth: committed under assets/ AND embedded into the binary,
 // so `showtail connect codex` is fully self-contained (no files to ship).
@@ -10,6 +9,7 @@ import {
   unmergeHookEvents,
   type HookEvents,
 } from './hookMerge.ts';
+import { hostHome } from './hostHome.ts';
 import {
   applyManagedBlock,
   classify,
@@ -69,21 +69,24 @@ export interface CodexTarget {
 
 /**
  * Resolve where to install for the given scope.
- *  - user: ~/.codex/{hooks.json,config.toml,AGENTS.md}
+ *  - user: ~/.codex/{hooks.json,config.toml,AGENTS.md} (`CODEX_HOME` relocates it)
  *  - project: <root>/.codex/{hooks.json,config.toml} and <root>/AGENTS.md
  */
 export function resolveCodexTarget(
   scope: InstallScope,
   cwd: string = process.cwd(),
 ): CodexTarget {
-  const base = scope === 'user' ? homedir() : (findRoot(cwd) ?? cwd);
-  const codexDir = join(base, '.codex');
+  const user = scope === 'user';
+  // User scope: the override names `.codex` itself, so there is no home to join
+  // onto (project scope still hangs everything off the repo root).
+  const root = user ? '' : (findRoot(cwd) ?? cwd);
+  const codexDir = user ? hostHome('CODEX_HOME', '.codex') : join(root, '.codex');
   return {
     scope,
     codexDir,
     hooksFile: join(codexDir, 'hooks.json'),
     configToml: join(codexDir, 'config.toml'),
-    agentsFile: scope === 'user' ? join(codexDir, 'AGENTS.md') : join(base, 'AGENTS.md'),
+    agentsFile: user ? join(codexDir, 'AGENTS.md') : join(root, 'AGENTS.md'),
   };
 }
 

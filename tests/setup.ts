@@ -62,6 +62,62 @@ process.env.SHOWTAIL_ROOT_CEILING ??= tmpdir();
 // per-test overrides (antigravityIde.test) still win. Honor an external value.
 process.env.GEMINI_HOME ??= join(tmpdir(), 'showtail-test-gemini');
 
+// Isolate the Codex config home (`~/.codex`). Every user-scope Codex target —
+// `hooks.json`, `config.toml`, `AGENTS.md` — resolves under `CODEX_HOME`, and the
+// connect/disconnect tests write and DELETE those files: without this pin an
+// in-process `codex install --user` (or the first-run bootstrap) would overwrite
+// the developer's real `~/.codex/hooks.json` and `uninstall` would strip it,
+// silently killing their own Codex capture. It also skews detection the other
+// way: `codexAutoCaptureActive()` reads the user-scope hooks.json, so a dev with
+// real Showtail hooks installed saw "capture active" where CI (no `~/.codex`)
+// saw the opposite — the long-standing local-only failure in codex.test.ts.
+// Spawned CLIs inherit it via spawnEnv(); per-test overrides still win.
+const CODEX_HOME_DEFAULT = join(tmpdir(), 'showtail-test-codex');
+process.env.CODEX_HOME ??= CODEX_HOME_DEFAULT;
+
+// Isolate the Copilot CLI config home (`~/.copilot`). User-scope connect writes
+// `~/.copilot/hooks/showtail.json` and an instructions file, and disconnect
+// removes them — so without this pin a connect/uninstall test would clobber the
+// developer's live Copilot CLI hooks. Also keeps session discovery
+// (`~/.copilot/session-state`) off their real transcripts.
+const COPILOT_HOME_DEFAULT = join(tmpdir(), 'showtail-test-copilot');
+process.env.COPILOT_HOME ??= COPILOT_HOME_DEFAULT;
+
+// Isolate the Claude Code config home (`~/.claude`). User-scope `connect claude`
+// merges our hooks into `~/.claude/settings.json` and installs
+// `~/.claude/skills/showtail/SKILL.md`; disconnect unmerges and deletes them. On
+// the machine running these tests that settings.json is the developer's OWN
+// Claude Code config, so an unpinned run would rewrite the settings file driving
+// the very session under way. Also keeps transcript discovery
+// (`~/.claude/projects`) off their real session logs.
+const CLAUDE_CONFIG_DIR_DEFAULT = join(tmpdir(), 'showtail-test-claude');
+process.env.CLAUDE_CONFIG_DIR ??= CLAUDE_CONFIG_DIR_DEFAULT;
+
+// Sweep the pinned host-tool homes after each test, for the same reason the
+// `SHOWTAIL_HOME` hook above exists: a user-scope `connect` writes real hooks /
+// settings / skills into them, and a later test that asks "is auto-capture
+// active?" would see the previous test's install and assert the opposite of what
+// a clean machine reports. Until now that residue landed in the developer's REAL
+// `~/.codex`, which is exactly why `codex.test.ts` failed locally and passed in
+// CI. Only the pinned defaults are removed — never a path a test set itself, so
+// per-test `CODEX_HOME` fixtures survive their own run. Best-effort; never throws.
+afterEach(() => {
+  for (const dir of [
+    CODEX_HOME_DEFAULT,
+    COPILOT_HOME_DEFAULT,
+    CLAUDE_CONFIG_DIR_DEFAULT,
+  ]) {
+    try {
+      // maxRetries for the same Windows reason as the hook above: a spawned CLI
+      // may still be releasing handles, and an EBUSY here would leak a user-scope
+      // install into the next test's detection.
+      rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+    } catch {
+      /* ignore */
+    }
+  }
+});
+
 // Neutralize VS Code detection for the whole test run. The copilot plugin's
 // `findVsCodeCli()` probes absolute app-bundle paths (e.g. /Applications/Visual Studio
 // Code.app) that escape PATH/HOME isolation — so on a dev machine with VS Code installed
@@ -70,3 +126,20 @@ process.env.GEMINI_HOME ??= join(tmpdir(), 'showtail-test-gemini');
 // Point the override at a nonexistent path so `findVsCodeCli()` returns null unless a test
 // opts in by setting `SHOWTAIL_VSCODE_CLI` to its own stub. Honor an external value.
 process.env.SHOWTAIL_VSCODE_CLI ??= join(tmpdir(), 'showtail-no-vscode-cli');
+
+// Same hazard, Antigravity IDE: `findAntigravityIdeCli()` probes absolute app-bundle
+// paths (/Applications/Antigravity.app, ~/.local/bin/antigravity-ide) that no HOME or
+// PATH isolation reaches, and `installAntigravityIdeExtension()` then SPAWNS it — so on
+// a dev machine with the IDE installed a connect/auto-connect test could really install
+// (or downgrade) the extension in their editor. Point it at a nonexistent path so the
+// lookup returns null unless a test supplies its own stub. Honor an external value.
+process.env.SHOWTAIL_ANTIGRAVITY_CLI ??= join(tmpdir(), 'showtail-no-antigravity-cli');
+
+// Isolate VS Code's `workspaceStorage`, where Copilot Chat keeps its session files.
+// `copilotWorkspaceStorageDirs()` otherwise walks the real per-platform locations
+// (~/Library/Application Support/Code/User/workspaceStorage on macOS), so a Copilot
+// import/detection test on a dev machine would read — and could import into a trail —
+// the developer's actual Copilot Chat history. Read-only today, but it makes results
+// depend on whoever's laptop is running the suite. Point it at a nonexistent dir so
+// discovery finds nothing unless a test opts in. Honor an external value.
+process.env.SHOWTAIL_VSCODE_STORAGE ??= join(tmpdir(), 'showtail-no-vscode-storage');

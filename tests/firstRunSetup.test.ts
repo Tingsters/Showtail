@@ -9,6 +9,11 @@ import { cleanup, makeTempDir, runCli, spawnEnv } from './helpers.ts';
  * global-config home, an empty PATH (so NO tool is detected — proving the pre-wire
  * happens anyway), and the suite's bootstrap-disable flag DELETED so the bootstrap
  * actually runs (spawnEnv sets it to keep every other test hermetic).
+ *
+ * Each host tool's config-dir override is re-pointed *inside* this temp HOME. Those
+ * overrides (`CLAUDE_CONFIG_DIR` and friends, pinned suite-wide in setup.ts) beat
+ * HOME, so without this the pre-wire would land in the shared suite sandbox and the
+ * `<home>/.claude/settings.json` assertions below would test nothing.
  */
 function bootstrapEnv(home: string, ghome: string): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {
@@ -16,6 +21,10 @@ function bootstrapEnv(home: string, ghome: string): NodeJS.ProcessEnv {
     HOME: home,
     USERPROFILE: home,
     SHOWTAIL_HOME: ghome,
+    CLAUDE_CONFIG_DIR: join(home, '.claude'),
+    CODEX_HOME: join(home, '.codex'),
+    COPILOT_HOME: join(home, '.copilot'),
+    GEMINI_HOME: join(home, '.gemini'),
     PATH: '',
     Path: '',
   };

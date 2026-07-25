@@ -21,9 +21,9 @@ import {
   readSync,
   statSync,
 } from 'node:fs';
-import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { importedSourceIds, logEvent } from './events.ts';
+import { hostHome } from './hostHome.ts';
 import { isSyntheticPrompt } from './syntheticPrompt.ts';
 import { asArray, asString, isObject, prop } from './parse.ts';
 import { toRepoRelative, type AuthorPaths } from './storage.ts';
@@ -138,8 +138,7 @@ function isInternalPath(p: string): boolean {
 // --- Locating transcripts on disk -----------------------------------------
 
 function claudeHome(): string {
-  const override = process.env.CLAUDE_CONFIG_DIR;
-  return override && override.length > 0 ? override : join(homedir(), '.claude');
+  return hostHome('CLAUDE_CONFIG_DIR', '.claude');
 }
 
 /** The directory Claude Code stores per-project session transcripts under. */

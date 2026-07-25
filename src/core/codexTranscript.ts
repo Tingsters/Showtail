@@ -45,9 +45,9 @@
  */
 
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { importEditArtifact, importedArtifactSourceIds } from './artifacts.ts';
+import { hostHome } from './hostHome.ts';
 import {
   parseDecisionQuestions,
   renderDecisionText,
@@ -122,9 +122,7 @@ function isInternalPath(p: string): boolean {
 
 /** The directory Codex stores per-session rollout files under (`~/.codex/sessions`). */
 export function codexSessionsDir(): string {
-  const override = process.env.CODEX_HOME;
-  const base = override && override.length > 0 ? override : join(homedir(), '.codex');
-  return join(base, 'sessions');
+  return join(hostHome('CODEX_HOME', '.codex'), 'sessions');
 }
 
 function safeReaddir(dir: string): string[] {

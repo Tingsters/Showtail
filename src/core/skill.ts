@@ -1,5 +1,4 @@
 import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 // The skill markdown is the single source of truth: it is committed under
 // assets/ AND embedded into the compiled binary via this text import, so
@@ -11,6 +10,7 @@ import {
   unmergeHookEvents,
   type HookEvents,
 } from './hookMerge.ts';
+import { hostHome } from './hostHome.ts';
 import {
   applyManagedBlock,
   classify,
@@ -62,15 +62,17 @@ export interface SkillTarget {
 
 /**
  * Resolve where to install for the given scope.
- *  - user: ~/.claude
+ *  - user: ~/.claude (`CLAUDE_CONFIG_DIR` relocates it, as in claudeCode.ts)
  *  - project: the nearest Showtail/project root (or cwd) /.claude
  */
 export function resolveTarget(
   scope: InstallScope,
   cwd: string = process.cwd(),
 ): SkillTarget {
-  const base = scope === 'user' ? homedir() : (findRoot(cwd) ?? cwd);
-  const claudeDir = join(base, '.claude');
+  const claudeDir =
+    scope === 'user'
+      ? hostHome('CLAUDE_CONFIG_DIR', '.claude')
+      : join(findRoot(cwd) ?? cwd, '.claude');
   const skillDir = join(claudeDir, 'skills', 'showtail');
   return {
     scope,

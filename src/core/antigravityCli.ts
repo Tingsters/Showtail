@@ -1,9 +1,9 @@
 import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { join } from 'node:path';
 // Single source of truth: committed under assets/ AND embedded into the binary,
 // so `showtail connect antigravity-cli` is fully self-contained (no files to ship).
 import AGY_BODY from '../../assets/antigravity-cli/AGY.showtail.md' with { type: 'text' };
+import { geminiHome } from './antigravityCliTranscript.ts';
 import type { HookEvents } from './hookMerge.ts';
 import {
   applyManagedBlock,
@@ -108,7 +108,7 @@ export function resolveAntigravityCliTarget(
   cwd: string = process.cwd(),
 ): AntigravityCliTarget {
   if (scope === 'user') {
-    const gemini = join(homedir(), '.gemini');
+    const gemini = geminiHome();
     return {
       scope,
       hooksFile: join(gemini, 'config', 'hooks.json'),

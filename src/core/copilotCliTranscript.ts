@@ -39,8 +39,8 @@
  */
 
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { join, relative } from 'node:path';
+import { hostHome } from './hostHome.ts';
 import { asString, prop } from './parse.ts';
 import type { HookTranscript, HookTranscriptMessage } from '../plugins/types.ts';
 
@@ -88,9 +88,7 @@ function isInternalPath(p: string): boolean {
  * Codex's `CODEX_HOME`) for tests and non-default installs, else `~/.copilot`.
  */
 export function copilotCliSessionsDir(): string {
-  const override = process.env.COPILOT_HOME;
-  const base = override && override.length > 0 ? override : join(homedir(), '.copilot');
-  return join(base, 'session-state');
+  return join(hostHome('COPILOT_HOME', '.copilot'), 'session-state');
 }
 
 function safeReaddir(dir: string): string[] {
