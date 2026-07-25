@@ -45,7 +45,7 @@ install later is captured too. You never run a getting-started command — just 
 | `sessions` | List your work sessions. Flags: `--all` (every contributor's), `--json`. |
 | `capabilities` | Report this folder's tracking state and what to do next (for AI agents). Flags: `--json`. |
 | `report` | Generate a shareable report. A combined **team** report is written only when the project has **two or more** contributors; a solo project gets a single report. After writing, an interactive menu offers to open the report (**once / always / never**, Esc to skip); *always*/*never* is remembered in `~/.showtail-cli/config.json`. Flags: `--format <html\|md\|json>` (default `html`), `--ai <collapsed\|full\|off>` (how much AI narration to show; `--no-ai` = off), `--open` (open without asking), `--no-open` (don't open or prompt), `--ask` (show the menu, ignoring a remembered choice), `--author <slug>`, `--team`, `--title <text>`, `--json`. |
-| `verify` | Run integrity checks on your trail (config, journal, artifact hashes, report). |
+| `verify` | Run integrity checks on your trail: config, journal entry validity, the journal **hash chain**, stored content vs. its content address, file snapshots, path portability, and report generation. Exits `3` if a check fails. Flags: `--json`. |
 | `trace <file>` | Show every snapshot and related event for a file. Flags: `--format <text\|json>` (default `text`). |
 
 !!! note "Maintainer command"
@@ -86,6 +86,38 @@ on-disk transcript:
 
 See each tool's [integration guide](../integrations/index.md) for worked
 examples.
+
+## `verify --json`
+
+`showtail verify --json` prints one JSON object on stdout (nothing else) and
+keeps the same exit codes as the human output — `0` when every check passes, `3`
+when any fails. It's the form to use in CI:
+
+```json
+{
+  "ok": false,
+  "checks": [
+    {
+      "name": "journal chain is unbroken",
+      "ok": false,
+      "details": [
+        "ada-at-example-com/9f3c… entry 12 (evt_lqz3k8_a1b2): the entry before it does not match this entry’s recorded link — the journal was edited after it was written."
+      ]
+    },
+    {
+      "name": "file snapshots are accounted for",
+      "ok": true,
+      "details": ["edited  src/main.py", "1 file(s) edited since their last snapshot — expected if you kept working."]
+    }
+  ]
+}
+```
+
+- `ok` — true only when every check passed.
+- `checks[]` — one entry per check, in the order the human output prints them,
+  each with a stable `name`, its own `ok`, and human-readable `details` lines.
+
+`details` text may be reworded between releases; branch on `ok` and `name`.
 
 ## Exit codes
 

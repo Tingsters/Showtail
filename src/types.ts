@@ -390,6 +390,15 @@ export interface JournalEntry {
   turn?: string;
   /** Import batch id (retained so a specific import can be removed later). */
   batch?: string;
+  /**
+   * SHA-256 of the previous entry in this author+machine shard, chaining the log.
+   * Each line therefore commits to every line before it, so an entry that is
+   * edited, deleted, or spliced in after the fact breaks the chain at the next
+   * line and `showtail verify` reports it. Chained per shard (never across one)
+   * so two machines' segments still merge without conflict. Absent on the first
+   * entry of a shard, and on trails written before chaining existed.
+   */
+  prev?: string;
   /** Which author recorded it. Optional on read (defaults to the folder slug). */
   actorSlug?: ActorSlug;
   // --- event content (referenced, not inlined) ---

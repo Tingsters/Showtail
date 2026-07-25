@@ -4,6 +4,23 @@
 
 ### What changed
 
+- **`showtail verify` now verifies that the trail is *unmodified*.** Two new checks:
+  the journal is **hash-chained** (every entry carries `prev`, the SHA-256 of the line
+  before it in that author+machine shard, so an edited, deleted, or spliced-in line
+  breaks the chain at the next line), and **stored content is re-hashed against its
+  content address** (an edited object in `.showtail/objects/` no longer matches the
+  name it's filed under — this is what catches an invented prompt, since prompt and
+  AI-response text lives there). No keys, no service, nothing to configure.
+- **Editing your own code after a snapshot no longer fails verification.** It was
+  reported as an error, which had the tool exactly backwards: a student who kept
+  working failed, while one who hand-edited their journal passed. "N file(s) edited
+  since their last snapshot" is now informational, a recorded file that's since been
+  moved or deleted is a warning, and failure is reserved for the trail itself being
+  modified. Trails written before chaining report their entries as *unchained*
+  (informational), never as tampering.
+- **`showtail verify --json`** prints the structured result (`{ ok, checks: [{ name,
+  ok, details }] }`) for CI, keeping the existing exit code `3` on failure.
+
 - **`showtail report` now offers to open the report on every platform.** The printed
   path was a clickable hyperlink only in terminals that support OSC 8 (Windows
   Terminal, iTerm2, VS Code); macOS Terminal.app has no such support, so the link was

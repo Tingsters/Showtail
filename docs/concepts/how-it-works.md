@@ -58,3 +58,36 @@ Captured text is scrubbed for secrets and personal data before it is stored (see
 Each event is appended to a local, file-based trail under `.showtail/`. See
 [Data layout](data-layout.md) for the exact structure, and
 [Example report](example-report.md) for what the rendered output looks like.
+
+## Why the trail is hard to fake
+
+The trail is plain text on your own machine, so nothing stops you from opening
+it in an editor. What Showtail guarantees instead is that doing so **shows**.
+Two mechanisms, both just SHA-256 — no keys, no server, nothing to set up:
+
+**Content addressing.** The heavy content — your prompt text, the AI's replies,
+captured diffs — isn't stored in the journal. It lives in `.showtail/objects/`
+under a filename derived from a hash of the content itself
+(`objects/ab/cdef…`), and the journal references it by that address. Edit the
+stored text of a prompt and it no longer hashes to the name it's filed under.
+
+**A hash chain over the journal.** Every journal line carries `prev`, the
+SHA-256 of the line before it. Each entry therefore commits to every entry
+before it: change one line, delete one, or splice one in, and the *next* line's
+`prev` stops matching. The chain runs per author *and* per machine, matching how
+segments are already sharded — that's what keeps two students' (or your own two
+laptops') trails merging through git without conflicts.
+
+`showtail verify` checks both, and reports a break as a failure. Two honest
+caveats: only the *last* entry of a shard has no following line to disagree with
+it, so editing or truncating the tail isn't visible; and anyone can of course
+delete the whole trail and start over.
+This is tamper-**evidence**, not tamper-proofing — enough that a fabricated
+process is no longer a quiet edit.
+
+### What is *not* tampering
+
+Editing your own source code after Showtail snapshotted it is normal work, not a
+problem. `verify` reports it as information ("N file(s) edited since their last
+snapshot — expected if you kept working") and still passes. Failure is reserved
+for the trail itself being modified.

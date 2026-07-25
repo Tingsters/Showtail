@@ -364,12 +364,13 @@ program
 program
   .command('verify')
   .description(
-    'Run integrity checks on your trail (config, journal, artifact hashes, report).',
+    'Run integrity checks on your trail (config, journal chain, stored content, report).',
   )
   .helpGroup(G_REVIEW)
+  .option('--json', 'output machine-readable JSON ({ ok, checks: [...] })')
   .action(
-    action(async () => {
-      const ok = await runVerify();
+    action(async (opts: { json?: boolean }) => {
+      const ok = await runVerify({ json: opts.json });
       if (!ok) process.exitCode = 3;
     }),
   );

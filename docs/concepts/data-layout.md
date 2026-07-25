@@ -13,6 +13,7 @@ what lets two students merge their trails through git without a conflict.
       author.json                # that student's identity (name, email, github login)
       sessions.json              # their list of work sessions
       journal/                   # their append-only log of events + file snapshots (JSONL segments)
+        <machineId>/             # one shard per machine; each line carries `prev`, hash-chaining the shard
   objects/                       # shared, content-addressed store: prompt/response text & code diffs, deduped
   reports/                       # generated reports (git-ignored — regenerate with `showtail report`)
     report-team-<timestamp>.html       # combined team report (open in a browser)
@@ -29,6 +30,7 @@ and cached per machine.
 
 ## See also
 
+- [Why the trail is hard to fake](how-it-works.md#why-the-trail-is-hard-to-fake) — the journal chain and content addressing.
 - [Privacy &amp; redaction](privacy.md) — what gets scrubbed, and committing `.showtail/`.
 - [Configuration](../reference/configuration.md) — every key in `config.json`.
 - [Working as a team](../educators/teams.md) — how the `authors/<slug>/` split merges.

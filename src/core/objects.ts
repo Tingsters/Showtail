@@ -13,7 +13,7 @@
  * plain text (no compression/encryption): findable, but not laid out so a
  * student can casually open one file and see a whole conversation.
  */
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { sha256OfString } from './hash.ts';
 import type { ShowtailPaths } from './storage.ts';
@@ -65,4 +65,58 @@ export function readObject(paths: ShowtailPaths, ref: string): string | null {
   const content = readFileSync(file, 'utf8');
   cache.set(ref, content);
   return content;
+}
+
+/** Whether an object exists on disk for this address (ignores the cache). */
+export function objectExists(paths: ShowtailPaths, ref: string): boolean {
+  return existsSync(objectPath(paths, ref));
+}
+
+/** The verdict for one stored object (see {@link checkObjects}). */
+export interface ObjectCheck {
+  /** The object's address, as the journal would reference it (`sha256:…`). */
+  ref: string;
+  /** `ok` — content still hashes to its address; `mismatch` — it was edited. */
+  status: 'ok' | 'mismatch' | 'missing';
+}
+
+/**
+ * Re-hash every stored object and report any whose content no longer matches
+ * its address. This is the check that makes the store's central promise real:
+ * prompt text and AI replies live here, so a student who hand-edits an object to
+ * invent a prompt they never wrote changes its content without being able to
+ * change the filename it is stored under — and it shows up here as a `mismatch`.
+ *
+ * Reads straight from disk, deliberately bypassing the in-process {@link cache}:
+ * the cache is keyed by ref and would hand back the value that was just written,
+ * verifying nothing.
+ */
+export function checkObjects(paths: ShowtailPaths): ObjectCheck[] {
+  const out: ObjectCheck[] = [];
+  if (!existsSync(paths.objectsDir)) return out;
+  for (const shard of readdirSync(paths.objectsDir).sort()) {
+    // Only the two-character shard dirs hold objects; ignore anything else.
+    if (!/^[0-9a-f]{2}$/.test(shard)) continue;
+    const shardDir = join(paths.objectsDir, shard);
+    let names: string[];
+    try {
+      names = readdirSync(shardDir).sort();
+    } catch {
+      continue; // Not a directory (defensive) — skip.
+    }
+    for (const name of names) {
+      const hex = shard + name;
+      const ref = `${ALGO}:${hex}`;
+      let content: string;
+      try {
+        content = readFileSync(join(shardDir, name), 'utf8');
+      } catch {
+        // Listed but unreadable (removed mid-walk, or not a regular file).
+        out.push({ ref, status: 'missing' });
+        continue;
+      }
+      out.push({ ref, status: sha256OfString(content) === hex ? 'ok' : 'mismatch' });
+    }
+  }
+  return out;
 }
