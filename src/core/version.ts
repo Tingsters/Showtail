@@ -5,4 +5,4 @@
  * updated hooks). Keep in sync with `package.json` on release (same manual bump the
  * CLI banner already required).
  */
-export const SHOWTAIL_VERSION = '0.13.1';
+export const SHOWTAIL_VERSION = '0.13.2';

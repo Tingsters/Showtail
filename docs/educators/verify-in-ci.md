@@ -46,7 +46,7 @@ summary, and fails the job if the trail does not verify.
 
 `@v0` follows a moving major tag: it is repointed at each 0.x release, so bug
 fixes reach your classes without you editing any workflow. For a grading gate you
-want frozen for a term, pin the exact release instead — `Tingsters/Showtail@v0.13.1`
+want frozen for a term, pin the exact release instead — `Tingsters/Showtail@v0.13.2`
 — or a commit SHA. Showtail is pre-1.0, so `v0` is the moving tag; there is
 deliberately no `v1` until the API settles.
 

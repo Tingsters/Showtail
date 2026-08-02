@@ -16,7 +16,6 @@ import { authorPaths, requirePaths, writeJson } from '../core/storage.ts';
 import { fileLink, openInDefaultApp } from '../core/terminal.ts';
 import { readAutoOpenReport, setAutoOpenReport } from '../core/globalConfig.ts';
 import { type OpenableReport, promptOpenReport } from '../core/prompt.ts';
-import { basename } from 'node:path';
 import { writeFileSync, mkdirSync } from 'node:fs';
 import type { ReportData } from '../types.ts';
 
@@ -181,9 +180,10 @@ function writeOneReport(
   const format = options.format ?? 'html';
   const quiet = options.json === true;
   const renderOpts: ReportRenderOptions = { ai: aiMode(options.ai) };
-  // The printed link uses the basename as its text: a clickable hyperlink where the
-  // terminal supports one, and a short, tidy filename where it doesn't.
-  const link = (out: string) => fileLink(out, basename(out));
+  // The printed link's text is the full path: the click target where the terminal
+  // renders OSC 8 hyperlinks, and — everywhere else — the location itself, so it can
+  // be read and copied. A basename alone says nothing about where the file landed.
+  const link = (out: string) => fileLink(out);
 
   if (format === 'json') {
     const out = join(reportsDir, `${base}.json`);

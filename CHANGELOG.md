@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.13.2
+
+### Fixed
+
+- **`showtail report` prints the report's full path again.** 0.13.0's open menu
+  shortened the printed line to the bare filename — `Wrote report (ada): report-ada-
+  2026-08-02T175428.html` — which said the report existed but not where, so there was
+  nothing to copy, hand to someone, or feed to another command, and terminals had no
+  path to linkify. The line names the whole path once more, and stays a clickable
+  hyperlink in terminals that render OSC 8 (Windows Terminal, VS Code, iTerm2, kitty,
+  GNOME Terminal, WezTerm, Ghostty). The once/always/never open menu is unchanged.
+
 ## 0.13.1
 
 ### Fixed

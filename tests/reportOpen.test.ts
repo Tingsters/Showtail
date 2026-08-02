@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import { reportTargets, resolveOpenAction } from '../src/commands/report.ts';
+import { runInit } from '../src/commands/init.ts';
+import { reportTargets, resolveOpenAction, runReport } from '../src/commands/report.ts';
 import { readAutoOpenReport, setAutoOpenReport } from '../src/core/globalConfig.ts';
 import { keyToChoice, promptOpenReport } from '../src/core/prompt.ts';
 import { pathsForRoot } from '../src/core/storage.ts';
@@ -101,6 +102,31 @@ describe('keyToChoice', () => {
     expect(keyToChoice('\x03', multi, team)).toEqual({ kind: 'skip' }); // Ctrl-C
     expect(keyToChoice('\r', multi, team)).toEqual({ kind: 'skip' }); // Enter
     expect(keyToChoice('\x1b[A', multi, team)).toEqual({ kind: 'skip' }); // up arrow
+  });
+});
+
+describe('the printed report line', () => {
+  // Regression: the open menu once shortened this line to the bare filename, which
+  // told the student the report existed but not where — nothing to copy, and nothing
+  // for a terminal to linkify. The full path must survive.
+  test('names the full path, not just the filename', async () => {
+    const dir = makeTempDir();
+    const lines: string[] = [];
+    const realLog = console.log;
+    console.log = (...args: unknown[]) => void lines.push(args.join(' '));
+    try {
+      await runInit({ cwd: dir, project: 'Path Project' });
+      await runReport({ cwd: dir, open: false });
+
+      const wrote = lines.find((l) => l.startsWith('Wrote report'));
+      expect(wrote).toBeDefined();
+      const reportsDir = pathsForRoot(dir).reportsDir;
+      expect(wrote).toContain(reportsDir); // the directory, not just the basename
+      expect(wrote).toMatch(/report-.*\.html/);
+    } finally {
+      console.log = realLog;
+      cleanup(dir);
+    }
   });
 });
 
