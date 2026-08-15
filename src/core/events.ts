@@ -52,6 +52,22 @@ export interface NewEventInput {
   gitCommit?: string;
   /** For a `plan` event: trail-relative path of the saved plan file (`plans/<id>.md`). */
   planPath?: string;
+  /** For a `tool_call` event: the tool's name (e.g. `Bash`, `Read`, `Grep`). */
+  toolName?: string;
+  /** For a `tool_call` event: whether the tool result was an error. */
+  isError?: boolean;
+  /** For a `recap` event: the turn's wall-clock duration, in milliseconds. */
+  durationMs?: number;
+  /** For a `recap` event: the git branch at the time the turn closed. */
+  gitBranch?: string;
+  /** For a `recap` event: input tokens used across the turn. */
+  inputTokens?: number;
+  /** For a `recap` event: output tokens used across the turn. */
+  outputTokens?: number;
+  /** For a `recap` event: cache-read tokens used across the turn. */
+  cacheReadTokens?: number;
+  /** For a `recap` event: cache-creation tokens used across the turn. */
+  cacheCreationTokens?: number;
   /** Force a specific session; otherwise the current/started session is used. */
   sessionId?: string;
 }
@@ -132,6 +148,16 @@ export async function logEvent(
   if (input.turnId) entry.turn = input.turnId;
   if (planPath) entry.planPath = planPath;
   if (gitCommit) entry.gitCommit = gitCommit;
+  if (input.toolName) entry.toolName = input.toolName;
+  if (input.isError) entry.isError = input.isError;
+  if (input.durationMs !== undefined) entry.durationMs = input.durationMs;
+  if (input.gitBranch) entry.gitBranch = input.gitBranch;
+  if (input.inputTokens !== undefined) entry.inputTokens = input.inputTokens;
+  if (input.outputTokens !== undefined) entry.outputTokens = input.outputTokens;
+  if (input.cacheReadTokens !== undefined) entry.cacheReadTokens = input.cacheReadTokens;
+  if (input.cacheCreationTokens !== undefined) {
+    entry.cacheCreationTokens = input.cacheCreationTokens;
+  }
 
   appendJournal(author, entry);
   return { event: eventFromEntry(paths, entry, author.slug), session };
@@ -167,6 +193,16 @@ export function eventFromEntry(
   if (entry.batch) event.batchId = entry.batch;
   if (entry.turn) event.turnId = entry.turn;
   if (entry.planPath) event.planPath = entry.planPath;
+  if (entry.toolName) event.toolName = entry.toolName;
+  if (entry.isError) event.isError = entry.isError;
+  if (entry.durationMs !== undefined) event.durationMs = entry.durationMs;
+  if (entry.gitBranch) event.gitBranch = entry.gitBranch;
+  if (entry.inputTokens !== undefined) event.inputTokens = entry.inputTokens;
+  if (entry.outputTokens !== undefined) event.outputTokens = entry.outputTokens;
+  if (entry.cacheReadTokens !== undefined) event.cacheReadTokens = entry.cacheReadTokens;
+  if (entry.cacheCreationTokens !== undefined) {
+    event.cacheCreationTokens = entry.cacheCreationTokens;
+  }
   return event;
 }
 

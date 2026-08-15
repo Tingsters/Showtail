@@ -521,6 +521,59 @@ blockquote {
   font-size: 0.8rem;
   font-weight: 500;
 }
+/* A tool call (Bash, Read, Grep, ...) the AI made — collapsible like a plan, with
+   a teal accent; an errored call tints red instead so it stands out at a glance. */
+.tool-call {
+  margin: 0.4rem 0 0.6rem;
+  padding: 0.2rem 0 0.2rem 0.7rem;
+  border-left: 3px solid #2b9a8f;
+  background: #eaf6f4;
+}
+.tool-call > summary {
+  cursor: pointer;
+  list-style: none;
+}
+.tool-call > summary::-webkit-details-marker {
+  display: none;
+}
+.tool-call > summary::before {
+  content: '▸ ';
+  color: #2b9a8f;
+}
+.tool-call[open] > summary::before {
+  content: '▾ ';
+}
+.tool-call-tag {
+  color: #1c6b62;
+}
+.tool-call.is-error {
+  border-left-color: #c0392b;
+  background: #fbeceb;
+}
+.tool-call.is-error .tool-call-tag {
+  color: #a03327;
+}
+.tool-call-badge {
+  font-size: 0.68rem;
+  font-weight: 600;
+  color: #a03327;
+  margin-left: 0.3rem;
+}
+.tool-call .ai-text {
+  margin: 0.3rem 0 0;
+}
+/* The turn's end-of-turn recap — a quiet quoted note above the AI work, distinct
+   from the prompt block it follows. */
+.recap {
+  margin: 0.3rem 0 0.6rem;
+  padding: 0.1rem 0 0.1rem 0.7rem;
+  border-left: 3px solid #c6cbf0;
+  color: #5a5a64;
+  font-style: italic;
+}
+.recap .ai-text {
+  margin: 0.1rem 0 0;
+}
 /* The per-prompt AI layer: each run of AI messages collapses to a slim, quiet inline
    marker — about the visual weight of a code row — so many of them, interleaved with
    edits, read as one tidy list instead of a stack of boxes. Uniform in every turn:
@@ -892,6 +945,27 @@ pre.codeblock code {
   }
   .plan-tag {
     color: #aab0ff;
+  }
+  .tool-call {
+    background: #14282a;
+    border-left-color: #3ab3a4;
+  }
+  .tool-call-tag {
+    color: #5cccbd;
+  }
+  .tool-call.is-error {
+    background: #2c1917;
+    border-left-color: #d9584a;
+  }
+  .tool-call.is-error .tool-call-tag {
+    color: #e08277;
+  }
+  .tool-call-badge {
+    color: #e08277;
+  }
+  .recap {
+    border-left-color: #44444c;
+    color: #a0a0aa;
   }
   .st-exbar {
     background: #1f1f23;

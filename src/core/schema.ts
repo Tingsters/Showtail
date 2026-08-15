@@ -63,6 +63,29 @@ export function validateEvent(value: unknown): ValidationIssue[] {
   if (e.model !== undefined && typeof e.model !== 'string') {
     issues.push({ field: 'model', message: 'model must be a string' });
   }
+  // `tool_call`/`recap` fields: forward-compatible, absent on older/other events.
+  if (e.toolName !== undefined && typeof e.toolName !== 'string') {
+    issues.push({ field: 'toolName', message: 'toolName must be a string' });
+  }
+  if (e.isError !== undefined && typeof e.isError !== 'boolean') {
+    issues.push({ field: 'isError', message: 'isError must be a boolean' });
+  }
+  if (e.durationMs !== undefined && typeof e.durationMs !== 'number') {
+    issues.push({ field: 'durationMs', message: 'durationMs must be a number' });
+  }
+  if (e.gitBranch !== undefined && typeof e.gitBranch !== 'string') {
+    issues.push({ field: 'gitBranch', message: 'gitBranch must be a string' });
+  }
+  for (const field of [
+    'inputTokens',
+    'outputTokens',
+    'cacheReadTokens',
+    'cacheCreationTokens',
+  ] as const) {
+    if (e[field] !== undefined && typeof e[field] !== 'number') {
+      issues.push({ field, message: `${field} must be a number` });
+    }
+  }
   return issues;
 }
 

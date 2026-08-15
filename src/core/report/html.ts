@@ -5,6 +5,7 @@ import type { Event, ReportData, Turn } from '../../types.ts';
 import { escapeHtml, firstLine } from '../html.ts';
 import { highlightCode } from '../highlight.ts';
 import {
+  formatDuration,
   modelLabel,
   nameBySlugMap,
   shouldShowAuthor,
@@ -85,6 +86,8 @@ function renderTurnSummary(
   }
   if (turn.decisions.length > 0) statParts.push(`${turn.decisions.length} decision(s)`);
   if (turn.plans.length > 0) statParts.push(`${turn.plans.length} plan(s)`);
+  if (turn.toolCalls.length > 0) statParts.push(`${turn.toolCalls.length} tool call(s)`);
+  if (turn.recap?.durationMs) statParts.push(formatDuration(turn.recap.durationMs));
   const stat = statParts.join(' · ');
   const authorName = showAuthor ? (nameBySlug.get(turn.actorSlug) ?? turn.actorSlug) : '';
   const authorBadge = authorName
@@ -154,6 +157,19 @@ function renderTimelineItem(item: TurnItem): string {
         (planLink ? ` ${planLink}` : '') +
         '</summary>',
       `<div class="ai-text">${renderRichText(plan)}</div>`,
+      '</details>',
+    ].join('\n');
+  }
+  if (item.kind === 'tool_call') {
+    const label = item.event.toolName ?? 'Tool';
+    const cls = item.event.isError ? 'tool-call is-error' : 'tool-call';
+    const badge = item.event.isError
+      ? ' <span class="tool-call-badge">⚠️ error</span>'
+      : '';
+    return [
+      `<details class="${cls}">`,
+      `<summary><span class="role-tag tool-call-tag">🛠️ ${escapeHtml(label)}</span>${badge}</summary>`,
+      `<div class="ai-text">${renderRichText(item.event.text)}</div>`,
       '</details>',
     ].join('\n');
   }
@@ -277,6 +293,12 @@ function turnsHtml(data: ReportData, mode: AiMode): string {
       out.push(
         `<div class="prompt-block"><span class="role-tag">Prompt</span>` +
           `<div class="ai-text">${renderRichText(turn.prompt.text)}</div></div>`,
+      );
+    }
+    if (turn.recap?.text) {
+      out.push(
+        `<div class="recap"><span class="role-tag">✻ Recap</span>` +
+          `<div class="ai-text">${renderRichText(turn.recap.text)}</div></div>`,
       );
     }
     // One chronological stream: work items inline, each run of AI messages as a

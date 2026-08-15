@@ -2,6 +2,7 @@ import type { ReportData, Turn } from '../../types.ts';
 import { PLAN_APPROVED_TAG, PLAN_REVISED_TAG } from '../plans.ts';
 import {
   filesChanged,
+  formatDuration,
   modelLabel,
   nameBySlugMap,
   shouldShowAuthor,
@@ -80,6 +81,7 @@ export function buildMarkdown(
     ...contributorsSection(data),
     ...toolsSection(data, fmt),
     ...modelsSection(data),
+    ...sessionStatsSection(data),
     ...plansSection(data),
     ...turnsSection(data, turnsPlaceholder, resolveAiMode(opts)),
     ...authorshipSection(data),
@@ -200,6 +202,35 @@ function modelsSection(data: ReportData): string[] {
 }
 
 /**
+ * Session stats — total turn duration and token usage, from captured `recap`
+ * events. Omitted entirely when none were captured (older trails, or a tool
+ * that never surfaces this), so the section never shows all-zero stats.
+ */
+function sessionStatsSection(data: ReportData): string[] {
+  const stats = data.summary.stats;
+  if (!stats) return [];
+  const lines = ['## Session stats', ''];
+  if (stats.totalDurationMs > 0) {
+    lines.push(`- **Total AI working time** — ${formatDuration(stats.totalDurationMs)}`);
+  }
+  const totalTokens =
+    stats.totalInputTokens +
+    stats.totalOutputTokens +
+    stats.totalCacheReadTokens +
+    stats.totalCacheCreationTokens;
+  if (totalTokens > 0) {
+    lines.push(
+      `- **Total tokens** — ${totalTokens.toLocaleString()} ` +
+        `(${stats.totalInputTokens.toLocaleString()} in, ` +
+        `${stats.totalOutputTokens.toLocaleString()} out, ` +
+        `${(stats.totalCacheReadTokens + stats.totalCacheCreationTokens).toLocaleString()} cached)`,
+    );
+  }
+  lines.push('');
+  return lines;
+}
+
+/**
  * Prompts & AI exchanges — the heart of the report. In HTML this becomes
  * collapsible cards; in Markdown it reads top-to-bottom.
  */
@@ -243,6 +274,13 @@ function turnMarkdown(lines: string[], turn: Turn, ai: AiMode, author?: string):
   lines.push(`**Prompt** · ${meta}`, '');
   lines.push(turn.prompt.text, '');
 
+  if (turn.recap?.durationMs) {
+    lines.push(`_✻ Crunched for ${formatDuration(turn.recap.durationMs)}_`, '');
+  }
+  if (turn.recap?.text) {
+    lines.push(`_Recap: ${turn.recap.text}_`, '');
+  }
+
   // One chronological stream: work items inline; each run of AI messages as one
   // collapsed <details> in place (GitHub renders it). `--ai off` drops the AI runs.
   for (const seg of turnSegments(turn)) {
@@ -285,6 +323,11 @@ function turnMarkdown(lines: string[], turn: Turn, ai: AiMode, author?: string):
         // No diff captured — name the changed file without promising code below it.
         lines.push(`_Changed file — ${link}${stat}._`, '');
       }
+    } else if (item.kind === 'tool_call') {
+      const label = item.event.toolName ?? 'Tool';
+      const badge = item.event.isError ? ' ⚠️ _error_' : '';
+      lines.push(`🛠️ **${label}**${badge}`, '');
+      lines.push(item.event.text, '');
     }
   }
 }

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { runInit } from '../src/commands/init.ts';
 import { readAllArtifacts } from '../src/core/artifacts.ts';
@@ -133,6 +133,136 @@ describe('projection parity foundation (gitCommit + sha256)', () => {
       expect(edit?.sha256).toBeTruthy();
     } finally {
       cleanup(repo);
+      cleanup(home);
+    }
+  });
+});
+
+describe('tool_call/recap projection parity', () => {
+  test('materialize projects a tool_call record with its tool name + error flag', async () => {
+    const home = makeTempDir();
+    const dir = makeTempDir();
+    try {
+      process.env.SHOWTAIL_HOME = home;
+      await runInit({ cwd: dir });
+      const paths = pathsForRoot(dir);
+      const author = authorFor(paths);
+
+      const session = ensureLedgerSession({
+        tool: 'claude-code',
+        nativeSessionId: 's1',
+        cwd: dir,
+      });
+      const p = appendLedgerRecord(session.id, {
+        kind: 'prompt',
+        tool: 'claude-code',
+        text: 'install pygame',
+      });
+      appendLedgerRecord(session.id, {
+        kind: 'tool_call',
+        tool: 'claude-code',
+        text: '$ pip3 install pygame\n\nERROR',
+        toolName: 'Bash',
+        isError: true,
+        turnKey: p.id,
+      });
+
+      await materializeLedgerSession(session, author);
+
+      const toolCall = readAllEvents(paths).find((e) => e.type === 'tool_call');
+      expect(toolCall?.toolName).toBe('Bash');
+      expect(toolCall?.isError).toBe(true);
+      expect(toolCall?.text).toContain('pip3 install pygame');
+    } finally {
+      cleanup(dir);
+      cleanup(home);
+    }
+  });
+
+  test('materialize projects a recap record with its duration, branch, and tokens', async () => {
+    const home = makeTempDir();
+    const dir = makeTempDir();
+    try {
+      process.env.SHOWTAIL_HOME = home;
+      await runInit({ cwd: dir });
+      const paths = pathsForRoot(dir);
+      const author = authorFor(paths);
+
+      const session = ensureLedgerSession({
+        tool: 'claude-code',
+        nativeSessionId: 's1',
+        cwd: dir,
+      });
+      const p = appendLedgerRecord(session.id, {
+        kind: 'prompt',
+        tool: 'claude-code',
+        text: 'install pygame',
+      });
+      appendLedgerRecord(session.id, {
+        kind: 'recap',
+        tool: 'claude-code',
+        text: 'Tried installing pygame.',
+        durationMs: 4200,
+        gitBranch: 'main',
+        inputTokens: 5,
+        outputTokens: 10,
+        cacheReadTokens: 1,
+        cacheCreationTokens: 2,
+        turnKey: p.id,
+      });
+
+      await materializeLedgerSession(session, author);
+
+      const recap = readAllEvents(paths).find((e) => e.type === 'recap');
+      expect(recap?.text).toBe('Tried installing pygame.');
+      expect(recap?.durationMs).toBe(4200);
+      expect(recap?.gitBranch).toBe('main');
+      expect(recap?.inputTokens).toBe(5);
+      expect(recap?.outputTokens).toBe(10);
+      expect(recap?.cacheReadTokens).toBe(1);
+      expect(recap?.cacheCreationTokens).toBe(2);
+    } finally {
+      cleanup(dir);
+      cleanup(home);
+    }
+  });
+
+  test('materialize skips a tool_call when the project has captureToolCalls: false', async () => {
+    const home = makeTempDir();
+    const dir = makeTempDir();
+    try {
+      process.env.SHOWTAIL_HOME = home;
+      await runInit({ cwd: dir });
+      const paths = pathsForRoot(dir);
+      const author = authorFor(paths);
+      const configPath = join(dir, '.showtail', 'config.json');
+      const config = JSON.parse(readFileSync(configPath, 'utf8'));
+      config.settings.captureToolCalls = false;
+      writeFileSync(configPath, JSON.stringify(config, null, 2));
+
+      const session = ensureLedgerSession({
+        tool: 'claude-code',
+        nativeSessionId: 's1',
+        cwd: dir,
+      });
+      const p = appendLedgerRecord(session.id, {
+        kind: 'prompt',
+        tool: 'claude-code',
+        text: 'install pygame',
+      });
+      appendLedgerRecord(session.id, {
+        kind: 'tool_call',
+        tool: 'claude-code',
+        text: '$ pip3 install pygame',
+        toolName: 'Bash',
+        turnKey: p.id,
+      });
+
+      await materializeLedgerSession(session, author);
+
+      expect(readAllEvents(paths).some((e) => e.type === 'tool_call')).toBe(false);
+    } finally {
+      cleanup(dir);
       cleanup(home);
     }
   });

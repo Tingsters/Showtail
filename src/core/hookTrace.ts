@@ -56,6 +56,10 @@ export interface HookTrace {
   decisions?: number;
   /** stop: plans captured. */
   plans?: number;
+  /** stop: tool calls (Bash, Read, Grep, ...) captured. */
+  toolCalls?: number;
+  /** stop: end-of-turn recaps captured. */
+  recaps?: number;
   /**
    * stop: transcript prompts dropped as pre-window backlog (older than the
    * resolved session's start). A Stop that captures 0 replies while skipping

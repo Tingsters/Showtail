@@ -347,6 +347,10 @@ program
   )
   .option('--no-ai', 'omit AI narration entirely (same as --ai off)')
   .option('--json', 'output machine-readable JSON (the written paths + summary)')
+  .option(
+    '--no-sync',
+    'skip the catch-up read of your AI tool’s transcript (report only what is already captured)',
+  )
   .action(
     action(
       async (opts: {
@@ -358,6 +362,7 @@ program
         title?: string;
         ai?: string | boolean;
         json?: boolean;
+        sync?: boolean;
       }) => runReport(opts),
     ),
   );

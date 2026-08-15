@@ -151,7 +151,7 @@ export interface NormalizedHookEvent {
 
 /** One message of a normalized transcript used for stop-time reconciliation. */
 export interface HookTranscriptMessage {
-  /** 'user' | 'assistant' | 'decision' | 'plan' | 'edit'. */
+  /** 'user' | 'assistant' | 'decision' | 'plan' | 'edit' | 'tool_call' | 'recap'. */
   role: string;
   text: string;
   timestamp?: string;
@@ -167,6 +167,22 @@ export interface HookTranscriptMessage {
    * hook payload carries the file but not the diff.
    */
   edits?: EditedFile[];
+  /** For a 'tool_call' message: the tool's name (e.g. `Bash`, `Read`, `Grep`). */
+  toolName?: string;
+  /** For a 'tool_call' message: whether its result was an error. */
+  isError?: boolean;
+  /** For a 'recap' message: the turn's wall-clock duration, in milliseconds. */
+  durationMs?: number;
+  /** For a 'recap' message: the git branch at the time the turn closed. */
+  gitBranch?: string;
+  /** For a 'recap' message: input tokens used across the turn. */
+  inputTokens?: number;
+  /** For a 'recap' message: output tokens used across the turn. */
+  outputTokens?: number;
+  /** For a 'recap' message: cache-read tokens used across the turn. */
+  cacheReadTokens?: number;
+  /** For a 'recap' message: cache-creation tokens used across the turn. */
+  cacheCreationTokens?: number;
 }
 
 /** A normalized conversation transcript, in order. */

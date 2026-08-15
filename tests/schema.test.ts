@@ -12,7 +12,15 @@ const validEvent: Event = {
 
 describe('schema', () => {
   test('isEventType accepts all supported types', () => {
-    for (const t of ['prompt', 'ai_output', 'artifact', 'decision']) {
+    for (const t of [
+      'prompt',
+      'ai_output',
+      'artifact',
+      'decision',
+      'plan',
+      'tool_call',
+      'recap',
+    ]) {
       expect(isEventType(t)).toBe(true);
     }
   });
@@ -57,5 +65,49 @@ describe('schema', () => {
   test('non-object input is reported', () => {
     expect(validateEvent(null).length).toBeGreaterThan(0);
     expect(validateEvent('string').length).toBeGreaterThan(0);
+  });
+
+  test('a well-formed tool_call event has no issues', () => {
+    expect(
+      validateEvent({
+        ...validEvent,
+        type: 'tool_call',
+        toolName: 'Bash',
+        isError: false,
+      }),
+    ).toEqual([]);
+  });
+
+  test('a well-formed recap event has no issues', () => {
+    expect(
+      validateEvent({
+        ...validEvent,
+        type: 'recap',
+        text: 'Building a snake game.',
+        durationMs: 53479,
+        gitBranch: 'main',
+        inputTokens: 4,
+        outputTokens: 436,
+        cacheReadTokens: 110,
+        cacheCreationTokens: 55,
+      }),
+    ).toEqual([]);
+  });
+
+  test('wrong-typed tool_call/recap fields are reported', () => {
+    const issues = validateEvent({
+      ...validEvent,
+      toolName: 42,
+      isError: 'yes',
+      durationMs: '53s',
+      gitBranch: 7,
+      inputTokens: '4',
+    });
+    const fields = issues.map((i) => i.field);
+    expect(fields).toContain('toolName');
+    expect(fields).toContain('isError');
+    expect(fields).toContain('durationMs');
+    expect(fields).toContain('gitBranch');
+    expect(fields).toContain('inputTokens');
   });
 });

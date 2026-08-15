@@ -7,10 +7,12 @@ import {
   type ReportRenderOptions,
 } from '../core/report.ts';
 import {
+  activeAuthorPaths,
   authorSlugs,
   readAuthor,
   upgradeIdentityIfProvisional,
 } from '../core/authors.ts';
+import { catchUpFromTranscripts } from '../core/catchUp.ts';
 import { emitJson } from '../core/output.ts';
 import { authorPaths, requirePaths, writeJson } from '../core/storage.ts';
 import { fileLink, openInDefaultApp } from '../core/terminal.ts';
@@ -40,6 +42,14 @@ export interface ReportOptions {
   json?: boolean;
   /** Force the open menu this run, ignoring a remembered choice (from `--ask`). */
   ask?: boolean;
+  /**
+   * Skip the catch-up sweep of the AI tools' own transcripts. Commander sets
+   * this `false` for `--no-sync`. The sweep is on by default because a host
+   * writes its transcript asynchronously and appends its end-of-turn recap
+   * minutes after the last hook ran — so without it a report can be missing the
+   * final exchange of a session (see `src/core/catchUp.ts`).
+   */
+  sync?: boolean;
 }
 
 /** Normalize the `--ai` flag (and `--no-ai` → false) to a render mode. */
@@ -122,6 +132,18 @@ export async function runReport(options: ReportOptions): Promise<void> {
   // the student's real identity (gh/git/env) now and re-attribute the work, so the report
   // is under their real name even if they never made a git commit. Best-effort, silent.
   await upgradeIdentityIfProvisional(paths, { cwd: options.cwd ?? process.cwd() });
+  // Complete the trail before reading it: hosts write their transcripts
+  // asynchronously and append the end-of-turn recap after every hook has run, so
+  // the last exchange of a session only becomes visible on a later re-read.
+  // Best-effort and idempotent — see `src/core/catchUp.ts`.
+  if (options.sync !== false) {
+    try {
+      const active = activeAuthorPaths(paths);
+      if (active) await catchUpFromTranscripts(active);
+    } catch {
+      // Never block a report on the sweep; the trail is still fully readable.
+    }
+  }
   const slugs = authorSlugs(paths);
   const stamp = fileStamp(new Date().toISOString());
   mkdirSync(paths.reportsDir, { recursive: true });

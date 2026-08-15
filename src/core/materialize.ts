@@ -24,7 +24,7 @@ import {
 import { importedSourceIds, logEvent, readSessionEvents } from './events.ts';
 import { materializePlan, PLAN_APPROVED_TAG, PLAN_REVISED_TAG } from './plans.ts';
 import { sessionForNativeSession } from './sessions.ts';
-import { toRepoRelative, type AuthorPaths } from './storage.ts';
+import { readConfig, toRepoRelative, type AuthorPaths } from './storage.ts';
 import { readLedgerRecords, type LedgerSession } from './ledger.ts';
 
 /** The deterministic batch id a session's projected records are tagged with. */
@@ -45,6 +45,8 @@ export interface MaterializeResult {
   replies: number;
   decisions: number;
   plans: number;
+  toolCalls: number;
+  recaps: number;
   edits: number;
   /** The repo session the records were projected into. */
   sessionId: string;
@@ -89,9 +91,14 @@ export async function materializeLedgerSession(
     replies: 0,
     decisions: 0,
     plans: 0,
+    toolCalls: 0,
+    recaps: 0,
     edits: 0,
     sessionId: repoSession.id,
   };
+  // Tool calls obey the target project's own setting, same as the direct-write
+  // reconcile path; recaps (turn stats) are captured regardless, like decisions/plans.
+  const captureTools = readConfig(author.shared).settings.captureToolCalls !== false;
 
   for (const rec of readLedgerRecords(session.id)) {
     const sourceId = rec.sourceId ?? recordSourceId(session.id, rec.id);
@@ -167,6 +174,44 @@ export async function materializeLedgerSession(
       seen.add(sourceId);
       out.projected += 1;
       out.plans += 1;
+    } else if (rec.kind === 'tool_call') {
+      if (!captureTools || seen.has(sourceId)) continue;
+      await logEvent(author, {
+        type: 'tool_call',
+        text: rec.text ?? '',
+        tool: rec.tool,
+        timestamp: rec.ts,
+        turnId,
+        sourceId,
+        sessionId: repoSession.id,
+        batchId,
+        toolName: rec.toolName,
+        isError: rec.isError,
+      });
+      seen.add(sourceId);
+      out.projected += 1;
+      out.toolCalls += 1;
+    } else if (rec.kind === 'recap') {
+      if (seen.has(sourceId)) continue;
+      await logEvent(author, {
+        type: 'recap',
+        text: rec.text ?? '',
+        tool: rec.tool,
+        timestamp: rec.ts,
+        turnId,
+        sourceId,
+        sessionId: repoSession.id,
+        batchId,
+        durationMs: rec.durationMs,
+        gitBranch: rec.gitBranch,
+        inputTokens: rec.inputTokens,
+        outputTokens: rec.outputTokens,
+        cacheReadTokens: rec.cacheReadTokens,
+        cacheCreationTokens: rec.cacheCreationTokens,
+      });
+      seen.add(sourceId);
+      out.projected += 1;
+      out.recaps += 1;
     } else if (rec.kind === 'edit') {
       if (!rec.file || seenArtifacts.has(sourceId)) continue;
       const path = toRepoRelative(author.shared.root, rec.file);

@@ -119,6 +119,10 @@ export function buildReportData(
   // a bare "Showtail Report" even when no project name was ever set.
   const displayName = scope.title ?? config.project ?? basename(paths.root);
 
+  // Built before the summary: session stats are derived from each turn's chosen
+  // recap, so a turn that captured more than one never double-counts.
+  const turns = buildTurns(withSession, artifacts, paths);
+
   return {
     project: config.project ?? null,
     displayName,
@@ -130,12 +134,13 @@ export function buildReportData(
       artifacts: artifacts.length,
       decisions: events.filter((e) => e.type === 'decision').length,
       plans: events.filter((e) => e.type === 'plan').length,
+      stats: buildSessionStats(turns),
     },
     contributors,
     tools,
     models,
     toolTimeline: buildToolBlocks(sorted),
-    turns: buildTurns(withSession, artifacts, paths),
+    turns,
     plans: buildReportPlans(sorted),
     redactionCount: countRedactions(paths, slugsInScope),
     authorship: buildAuthorshipStatement(displayName, contributors, scopeName),
@@ -235,6 +240,7 @@ export function buildTurns(
     codeChanges: [],
     decisions: [],
     plans: [],
+    toolCalls: [],
     tool: toolOf(event),
     actorSlug: event.actorSlug,
     sessionId,
@@ -301,6 +307,28 @@ export function buildTurns(
     if (turn) turn.plans.push(event);
   }
 
+  // Tool calls (Bash, Read, Grep, ...) attach to their turn the same way.
+  for (const { event, sessionId, actorSlug } of withSession) {
+    if (event.type !== 'tool_call') continue;
+    const turn =
+      (event.turnId ? turnByPrompt.get(event.turnId) : undefined) ??
+      fallback(event.timestamp, actorSlug, sessionId);
+    if (turn) turn.toolCalls.push(event);
+  }
+
+  // Each turn's recap (its own end-of-turn stats/summary). A turn can capture
+  // more than one: a Stop that lands before the host has written the turn's
+  // recap records the duration alone, and the later catch-up read then records
+  // the complete one under its own id. Choose deliberately rather than letting
+  // journal order decide — see `betterRecap`.
+  for (const { event, sessionId, actorSlug } of withSession) {
+    if (event.type !== 'recap') continue;
+    const turn =
+      (event.turnId ? turnByPrompt.get(event.turnId) : undefined) ??
+      fallback(event.timestamp, actorSlug, sessionId);
+    if (turn) turn.recap = betterRecap(turn.recap, event);
+  }
+
   for (const a of artifacts) {
     const turn =
       (a.turnId ? turnByPrompt.get(a.turnId) : undefined) ??
@@ -339,7 +367,8 @@ export type TurnItem =
   | { kind: 'ai'; event: Event }
   | { kind: 'decision'; event: Event }
   | { kind: 'plan'; event: Event }
-  | { kind: 'code'; change: TurnCodeChange };
+  | { kind: 'code'; change: TurnCodeChange }
+  | { kind: 'tool_call'; event: Event };
 
 /**
  * A turn's AI replies, code changes, decisions, and plans merged into one
@@ -365,6 +394,10 @@ export function turnTimeline(turn: Turn): TurnItem[] {
     ...turn.plans.map((event) => ({
       at: event.timestamp,
       item: { kind: 'plan', event } as TurnItem,
+    })),
+    ...turn.toolCalls.map((event) => ({
+      at: event.timestamp,
+      item: { kind: 'tool_call', event } as TurnItem,
     })),
   ];
   dated.sort((a, b) => a.at.localeCompare(b.at));
@@ -439,6 +472,57 @@ function buildModelUsage(events: Event[]): ModelUsage[] {
   return [...counts.entries()]
     .map(([model, count]) => ({ model, events: count }))
     .sort((a, b) => b.events - a.events);
+}
+
+/** A duration in milliseconds as a short human string (`"53s"`, `"1m 20s"`). */
+export function formatDuration(ms: number): string {
+  const totalSeconds = Math.round(ms / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`;
+}
+
+/**
+ * Which of two recaps for the same turn to show. A turn can capture several:
+ * the host writes its transcript asynchronously and appends the end-of-turn
+ * recap minutes after the last hook ran, so an early Stop can record the
+ * duration alone before the complete recap exists. Prefer the one that actually
+ * carries the recap text, then the longer duration (a later read sums every
+ * Stop cycle in the turn, so the larger figure is the more complete one).
+ */
+function betterRecap(current: Event | undefined, candidate: Event): Event {
+  if (!current) return candidate;
+  const currentHasText = current.text.trim().length > 0;
+  const candidateHasText = candidate.text.trim().length > 0;
+  if (currentHasText !== candidateHasText) return candidateHasText ? candidate : current;
+  return (candidate.durationMs ?? 0) > (current.durationMs ?? 0) ? candidate : current;
+}
+
+/**
+ * Session-wide totals from each turn's chosen recap (duration + token usage).
+ * Derived per turn, never by summing every `recap` event, so a turn that
+ * captured a partial recap *and* its later complete one counts only once.
+ * Undefined when no recap was captured, so the report omits the section
+ * entirely rather than showing all-zero stats.
+ */
+function buildSessionStats(turns: Turn[]): ReportData['summary']['stats'] {
+  const recaps = turns.map((t) => t.recap).filter((r): r is Event => r !== undefined);
+  if (recaps.length === 0) return undefined;
+  const stats = {
+    totalDurationMs: 0,
+    totalInputTokens: 0,
+    totalOutputTokens: 0,
+    totalCacheReadTokens: 0,
+    totalCacheCreationTokens: 0,
+  };
+  for (const e of recaps) {
+    stats.totalDurationMs += e.durationMs ?? 0;
+    stats.totalInputTokens += e.inputTokens ?? 0;
+    stats.totalOutputTokens += e.outputTokens ?? 0;
+    stats.totalCacheReadTokens += e.cacheReadTokens ?? 0;
+    stats.totalCacheCreationTokens += e.cacheCreationTokens ?? 0;
+  }
+  return stats;
 }
 
 /**

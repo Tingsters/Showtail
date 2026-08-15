@@ -8,7 +8,14 @@
  * It is pure (no I/O) and depends only on the small `parse.ts` value helpers, so
  * it can be unit-tested in isolation.
  */
-import { asArray, asString, isObject, prop } from './parse.ts';
+import {
+  asArray,
+  asString,
+  collectToolResults,
+  isObject,
+  prop,
+  type ToolResult,
+} from './parse.ts';
 
 /** One option the AI offered for a decision, and whether the student picked it. */
 export interface DecisionOption {
@@ -70,19 +77,15 @@ export function collectDecisionAnswers(
   obj: unknown,
   into: Map<string, DecisionResult>,
 ): void {
-  const content = asArray(prop(prop(obj, 'message'), 'content'));
-  if (!content) return;
   // The structured result sits at the line level, alongside `message`.
   const tur = prop(obj, 'toolUseResult');
   const answers = prop(tur, 'answers');
   const annotations = prop(tur, 'annotations');
-  for (const part of content) {
-    if (prop(part, 'type') !== 'tool_result') continue;
-    const id = asString(prop(part, 'tool_use_id'));
-    if (!id) continue;
+  const results = new Map<string, ToolResult>();
+  collectToolResults(obj, results);
+  for (const [id, r] of results) {
     const rec: DecisionResult = into.get(id) ?? {};
-    const text = asString(prop(part, 'content'));
-    if (text) rec.blob = text;
+    if (r.content) rec.blob = r.content;
     if (isObject(answers)) rec.answers = answers;
     if (isObject(annotations)) rec.annotations = annotations;
     into.set(id, rec);

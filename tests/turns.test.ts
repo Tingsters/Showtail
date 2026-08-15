@@ -530,4 +530,86 @@ describe('turns', () => {
       cleanup(dir);
     }
   });
+
+  test('a tool call renders its command, output, and error state', async () => {
+    const dir = makeTempDir();
+    try {
+      await runInit({ cwd: dir });
+      const paths = pathsForRoot(dir);
+      const author = authorFor(paths);
+      startSession(author);
+      const { event: prompt } = await logEvent(author, {
+        type: 'prompt',
+        text: 'install pygame',
+        tool: 'claude-code',
+      });
+      await logEvent(author, {
+        type: 'tool_call',
+        text: '$ pip3 install pygame\n\n**Error:**\n```\nModuleNotFoundError\n```',
+        tool: 'claude-code',
+        turnId: prompt.id,
+        toolName: 'Bash',
+        isError: true,
+      });
+
+      const data = buildReportData(paths);
+      expect(data.turns[0]!.toolCalls).toHaveLength(1);
+
+      const html = renderHtml(data);
+      expect(html).toContain('class="tool-call is-error"');
+      expect(html).toContain('tool-call-tag">🛠️ Bash');
+      expect(html).toContain('tool-call-badge');
+      expect(html).toContain('ModuleNotFoundError');
+
+      const md = renderMarkdown(data);
+      expect(md).toContain('🛠️ **Bash**');
+      expect(md).toContain('⚠️ _error_');
+      expect(md).toContain('ModuleNotFoundError');
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('a turn recap renders its duration, text, and session-wide stats', async () => {
+    const dir = makeTempDir();
+    try {
+      await runInit({ cwd: dir });
+      const paths = pathsForRoot(dir);
+      const author = authorFor(paths);
+      startSession(author);
+      const { event: prompt } = await logEvent(author, {
+        type: 'prompt',
+        text: 'write a snake game',
+        tool: 'claude-code',
+      });
+      await logEvent(author, {
+        type: 'recap',
+        text: 'Building a simple Snake game in pygame.',
+        tool: 'claude-code',
+        turnId: prompt.id,
+        durationMs: 53000,
+        inputTokens: 100,
+        outputTokens: 200,
+        cacheReadTokens: 10,
+        cacheCreationTokens: 5,
+      });
+
+      const data = buildReportData(paths);
+      expect(data.turns[0]!.recap?.text).toBe('Building a simple Snake game in pygame.');
+      expect(data.summary.stats?.totalDurationMs).toBe(53000);
+
+      const html = renderHtml(data);
+      expect(html).toContain('class="recap"');
+      expect(html).toContain('Building a simple Snake game in pygame.');
+
+      const md = renderMarkdown(data);
+      expect(md).toContain('✻ Crunched for 53s');
+      expect(md).toContain('Recap: Building a simple Snake game in pygame.');
+      expect(md).toContain('## Session stats');
+      expect(md).toContain('53s');
+      expect(md).toContain('315'); // total tokens: 100+200+10+5
+    } finally {
+      cleanup(dir);
+    }
+  });
 });

@@ -26,8 +26,32 @@ What this gives you:
 | ---- | ------------------ |
 | You submit a prompt | Logs it as a `prompt` event |
 | Claude edits or writes a file | Snapshots that file as an `artifact` |
+| Claude runs a Bash command, reads a file, searches, etc. | Logs it (and its result) as a `tool_call` event |
+| A backgrounded command or a subagent Claude started finishes | Logs how it finished (completed, failed, or stopped) as a `tool_call` event |
 | Claude pauses to ask you to choose between options | Logs your choice as a `decision` |
+| Claude shows an end-of-turn recap | Logs it, plus the turn's duration and token usage, as a `recap` event |
 | A session starts | Ensures a work session exists |
+
+Tool-call capture can be turned off per project with
+`settings.captureToolCalls: false` in `.showtail/config.json` (see
+[Configuration](../reference/configuration.md)) if you'd rather keep the report
+focused on prompts, replies, and edits.
+
+### Catching the end of a session
+
+Claude Code writes its transcript *asynchronously* — its own docs describe
+`transcript_path` as "written asynchronously, may lag current turn" — and it
+appends each turn's recap a few minutes after the turn ends, once you've stepped
+away. Both land after the hooks for that turn have already run. Mid-session this
+sorts itself out (the next turn's hook re-reads the whole transcript), but the
+**last** exchange of a session has no later hook to catch it.
+
+So Showtail re-reads the transcript at the points that matter: when a session
+ends or resumes, and once more when you run `showtail report`. That last sweep
+is what guarantees your report includes the final exchange and its recap no
+matter when you closed Claude Code. It only ever adds what was missing, so
+running `showtail report` repeatedly changes nothing. Pass `--no-sync` to skip
+it and report strictly what was already captured.
 
 If you install with `--no-hooks`, the skill can still check `showtail status --json`
 and log prompts and file snapshots itself. That mode is model-driven rather than
@@ -117,10 +141,14 @@ Options:
 
 The command is also available as `showtail import claude-code`.
 
-Your prompts become `prompt` events, Claude's replies become `ai_output`, and
-each file Claude edited becomes an `artifact` — all tagged `claude-code` and
-stamped with their original times, so they interleave correctly with the rest of
-your trail. Re-importing is safe: messages already in your trail are skipped
+Your prompts become `prompt` events, Claude's replies become `ai_output`, each
+file Claude edited becomes an `artifact`, and Claude's tool calls (Bash, Read,
+Grep, ...) become `tool_call` events (imported alongside replies — both are
+skipped with `--no-responses`) — all tagged `claude-code` and stamped with their
+original times, so they interleave correctly with the rest of your trail. Each
+turn's recap and duration/token stats, when present, import as a `recap` event
+regardless of `--no-responses` (they're the turn's own stats, not AI-authored
+content). Re-importing is safe: messages already in your trail are skipped
 (that is what the `[imported]` marker means), and you can undo a whole batch in
 one step:
 

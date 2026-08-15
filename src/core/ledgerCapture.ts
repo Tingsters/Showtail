@@ -137,7 +137,9 @@ export function captureTranscriptToLedger(
     } else if (
       msg.role === 'assistant' ||
       msg.role === 'decision' ||
-      msg.role === 'plan'
+      msg.role === 'plan' ||
+      msg.role === 'tool_call' ||
+      msg.role === 'recap'
     ) {
       if (!currentTurnKey || seen.has(msg.sourceId)) continue;
       const kind = msg.role === 'assistant' ? 'ai_output' : msg.role;
@@ -151,6 +153,14 @@ export function captureTranscriptToLedger(
         approved: msg.role === 'plan' ? msg.approved : undefined,
         planFileContent: msg.role === 'plan' ? planFile?.content : undefined,
         planFileSourceId: msg.role === 'plan' ? planFile?.sourceId : undefined,
+        toolName: msg.role === 'tool_call' ? msg.toolName : undefined,
+        isError: msg.role === 'tool_call' ? msg.isError : undefined,
+        durationMs: msg.role === 'recap' ? msg.durationMs : undefined,
+        gitBranch: msg.role === 'recap' ? msg.gitBranch : undefined,
+        inputTokens: msg.role === 'recap' ? msg.inputTokens : undefined,
+        outputTokens: msg.role === 'recap' ? msg.outputTokens : undefined,
+        cacheReadTokens: msg.role === 'recap' ? msg.cacheReadTokens : undefined,
+        cacheCreationTokens: msg.role === 'recap' ? msg.cacheCreationTokens : undefined,
       });
       seen.add(msg.sourceId);
     } else if (msg.role === 'edit') {

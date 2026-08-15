@@ -25,7 +25,15 @@ import { join } from 'node:path';
 import { importedSourceIds, logEvent } from './events.ts';
 import { hostHome } from './hostHome.ts';
 import { isSyntheticPrompt } from './syntheticPrompt.ts';
-import { asArray, asString, isObject, prop } from './parse.ts';
+import {
+  asArray,
+  asNumber,
+  asString,
+  collectToolResults,
+  isObject,
+  prop,
+  type ToolResult,
+} from './parse.ts';
 import { toRepoRelative, type AuthorPaths } from './storage.ts';
 import {
   collectDecisionAnswers,
@@ -42,6 +50,13 @@ import {
   PLAN_APPROVED_TAG,
   PLAN_REVISED_TAG,
 } from './plans.ts';
+import {
+  BACKGROUND_TASK_LABEL,
+  NOISY_TOOLS,
+  parseTaskNotification,
+  renderToolCallInput,
+  renderToolCallText,
+} from './toolCalls.ts';
 
 // The decision types are part of this module's public surface (they appear on
 // ClaudeMessage); re-export them so any importer keeps its existing path.
@@ -52,9 +67,10 @@ export interface ClaudeMessage {
   /**
    * "user" (a typed prompt), "assistant" (a text reply), "edit" (a file the AI
    * changed), "decision" (a choice the student made when the AI paused to ask),
-   * or "plan" (a plan the AI proposed in plan mode).
+   * "plan" (a plan the AI proposed in plan mode), "tool_call" (a Bash/Read/Grep/
+   * etc. call and its result), or "recap" (the end-of-turn recap + stats).
    */
-  role: 'user' | 'assistant' | 'edit' | 'decision' | 'plan';
+  role: 'user' | 'assistant' | 'edit' | 'decision' | 'plan' | 'tool_call' | 'recap';
   text: string;
   /** ISO-8601 timestamp from the transcript line, if present. */
   timestamp?: string;
@@ -72,6 +88,22 @@ export interface ClaudeMessage {
   approved?: boolean;
   /** For an assistant reply: the model id from the transcript line (`message.model`). */
   model?: string;
+  /** For a tool_call: the tool's name (e.g. `Bash`, `Read`, `Grep`). */
+  toolName?: string;
+  /** For a tool_call: whether its result was an error (resolved in the second pass). */
+  isError?: boolean;
+  /** For a recap: the turn's wall-clock duration, in milliseconds. */
+  durationMs?: number;
+  /** For a recap: the git branch at the time the turn closed. */
+  gitBranch?: string;
+  /** For a recap: input tokens used across the turn. */
+  inputTokens?: number;
+  /** For a recap: output tokens used across the turn. */
+  outputTokens?: number;
+  /** For a recap: cache-read tokens used across the turn. */
+  cacheReadTokens?: number;
+  /** For a recap: cache-creation tokens used across the turn. */
+  cacheCreationTokens?: number;
 }
 
 /** A normalized transcript: just the messages we care about, in order. */
@@ -235,6 +267,32 @@ export function findProjectTranscripts(root: string): TranscriptInfo[] {
 }
 
 /**
+ * Locate a session's transcript by the tool's own session id, across every
+ * project directory. Claude Code names each transcript `<session-uuid>.jsonl`,
+ * so this finds it without matching `cwd` — which matters for the catch-up
+ * sweep: a session's `cwd` (e.g. `~/.claude`) is often not the trail root its
+ * work was filed under, so {@link findProjectTranscripts} can't reach it.
+ * Returns null when no such transcript exists (a different tool, or purged).
+ */
+export function findTranscriptBySessionId(sessionId: string): string | null {
+  if (!sessionId) return null;
+  const dir = claudeProjectsDir();
+  if (!existsSync(dir)) return null;
+  const file = `${sessionId}.jsonl`;
+  for (const projectDir of safeReaddir(dir)) {
+    const full = join(dir, projectDir);
+    if (!isDir(full)) continue;
+    const candidate = join(full, file);
+    try {
+      if (statSync(candidate).isFile()) return candidate;
+    } catch {
+      // Not in this project dir — keep looking.
+    }
+  }
+  return null;
+}
+
+/**
  * Summarize every transcript for `paths.root`, newest first, so the picker can
  * show counts, a time span, and first/last prompt for each. Each transcript is
  * parsed once; a transcript that fails to parse still appears (counts zeroed)
@@ -314,6 +372,13 @@ export function readTranscriptFile(path: string, root: string): ClaudeTranscript
   return parseClaudeTranscript(readFileSync(path, 'utf8'), root);
 }
 
+/** A `turn_duration` system line seen but not yet paired with an `away_summary`. */
+interface PendingDuration {
+  durationMs: number;
+  sourceId: string;
+  timestamp?: string;
+}
+
 /**
  * Parse a Claude Code JSONL transcript into normalized messages. Edits are
  * reported relative to `root` (and edits outside the repo, or to internal
@@ -326,6 +391,42 @@ export function parseClaudeTranscript(content: string, root: string): ClaudeTran
   // by the question's `tool_use` id. Collect them as we go, then resolve each
   // decision's answer + note in a second pass below.
   const answersByToolId = new Map<string, DecisionResult>();
+  // Generic tool_use results (Bash output, Read content, ...) arrive the same
+  // way — resolved for `tool_call` messages in the same second pass.
+  const toolResultsByToolId = new Map<string, ToolResult>();
+
+  // Per-turn token accumulation (reset each time a genuine user prompt opens a
+  // new turn, or a recap closes one out) and the most recently seen
+  // `gitBranch`, both bundled onto the `recap` message that closes the turn.
+  // `countedMessageIds` dedupes token accumulation by API response (see
+  // `accumulateUsage`) and is reset in lockstep with `turnTokens`.
+  let turnTokens = { input: 0, output: 0, cacheRead: 0, cacheCreation: 0 };
+  let countedMessageIds = new Set<string>();
+  let lastGitBranch: string | undefined;
+  // A `turn_duration` line always (so far as observed) precedes its `away_summary`
+  // — but the recap itself is independently disable-able via `/config`, so a
+  // duration can arrive with no summary ever following it. Stashed here until
+  // paired, or flushed duration-only once it's clear no summary is coming.
+  // A turn can span *multiple* Stop-hook cycles (e.g. a backgrounded command
+  // finishes after the first Stop, prompting a second one with no new user
+  // prompt in between) — each cycle's `turn_duration` sums into this one
+  // pending total rather than each flushing its own (empty) recap, so a turn
+  // that spans several cycles still produces exactly one `recap` event.
+  let pendingDuration: PendingDuration | undefined;
+
+  const flushPendingDuration = (): void => {
+    if (!pendingDuration) return;
+    messages.push({
+      role: 'recap',
+      text: '',
+      durationMs: pendingDuration.durationMs,
+      gitBranch: lastGitBranch,
+      timestamp: pendingDuration.timestamp,
+      sourceId: pendingDuration.sourceId,
+      ...tokenTotals(turnTokens),
+    });
+    pendingDuration = undefined;
+  };
 
   for (const rawLine of content.split(/\r?\n/)) {
     const line = rawLine.trim();
@@ -340,6 +441,8 @@ export function parseClaudeTranscript(content: string, root: string): ClaudeTran
 
     const sid = asString(prop(obj, 'sessionId'));
     if (sid !== undefined && !sessionId) sessionId = sid;
+    const branch = asString(prop(obj, 'gitBranch'));
+    if (branch !== undefined) lastGitBranch = branch;
 
     // Drop noise that isn't the student's direct work. `isCompactSummary` is the
     // context-compaction recap Claude injects as a user turn — a redundant summary
@@ -357,14 +460,72 @@ export function parseClaudeTranscript(content: string, root: string): ClaudeTran
     const type = prop(obj, 'type');
     if (type === 'user') {
       collectDecisionAnswers(obj, answersByToolId);
+      collectToolResults(obj, toolResultsByToolId);
+      // Work this turn started in the background (a backgrounded command, a
+      // subagent) reports its outcome on a tooling-injected user line. It is
+      // mid-turn, not a boundary: pushed directly, so it neither opens a turn
+      // nor closes out the turn's pending duration/token accounting.
+      const note = handleTaskNotification(obj);
+      if (note) messages.push(note);
       const msg = handleUser(obj);
-      if (msg) messages.push(msg);
+      if (msg) {
+        // A genuine typed prompt opens a new turn — any duration still pending
+        // from the previous turn never got its recap, so flush it now, then
+        // start this turn's token accounting fresh.
+        flushPendingDuration();
+        turnTokens = { input: 0, output: 0, cacheRead: 0, cacheCreation: 0 };
+        countedMessageIds = new Set();
+        messages.push(msg);
+      }
     } else if (type === 'assistant') {
       messages.push(...handleAssistant(obj, root));
+      accumulateUsage(turnTokens, prop(obj, 'message'), countedMessageIds);
+    } else if (type === 'system') {
+      const subtype = prop(obj, 'subtype');
+      if (subtype === 'turn_duration') {
+        const durationMs = asNumber(prop(obj, 'durationMs'));
+        if (durationMs !== undefined) {
+          pendingDuration = {
+            // A prior Stop-hook cycle in this same turn may have already
+            // stashed a duration with no `away_summary` yet (see above) — sum
+            // rather than overwrite, so a turn spanning several cycles reports
+            // its true total crunch time in one recap.
+            durationMs: (pendingDuration?.durationMs ?? 0) + durationMs,
+            timestamp: asString(prop(obj, 'timestamp')),
+            sourceId:
+              asString(prop(obj, 'uuid')) ??
+              pendingDuration?.sourceId ??
+              `cc:recap:${asString(prop(obj, 'timestamp')) ?? durationMs}`,
+          };
+        }
+      } else if (subtype === 'away_summary') {
+        const recapText = asString(prop(obj, 'content')) ?? '';
+        messages.push({
+          role: 'recap',
+          text: recapText,
+          durationMs: pendingDuration?.durationMs,
+          gitBranch: lastGitBranch,
+          timestamp: asString(prop(obj, 'timestamp')),
+          sourceId:
+            asString(prop(obj, 'uuid')) ??
+            pendingDuration?.sourceId ??
+            `cc:recap:${asString(prop(obj, 'timestamp')) ?? recapText.slice(0, 24)}`,
+          ...tokenTotals(turnTokens),
+        });
+        pendingDuration = undefined;
+        // A summary closes out the tokens/messages counted so far — reset in
+        // case more work follows in the same still-open turn (another
+        // backgrounded cycle) before the next real prompt.
+        turnTokens = { input: 0, output: 0, cacheRead: 0, cacheCreation: 0 };
+        countedMessageIds = new Set();
+      }
+      // `stop_hook_summary` (Showtail's own hook execution time, echoed back by
+      // Claude Code) and any other system subtype: not useful, ignored.
     }
   }
+  flushPendingDuration(); // A duration with no summary yet at end-of-transcript.
 
-  // Second pass: pair each decision with the student's answer + note and re-render.
+  // Second pass: pair each decision/tool_call with its later result and re-render.
   for (const m of messages) {
     if (m.role === 'decision' && m.questions) {
       const rec = answersByToolId.get(m.sourceId);
@@ -377,6 +538,13 @@ export function parseClaudeTranscript(content: string, root: string): ClaudeTran
       );
       m.approved = approved;
       m.text = renderPlanText(m.text, approved, feedback);
+    } else if (m.role === 'tool_call') {
+      const result = toolResultsByToolId.get(m.sourceId);
+      // Only a real result decides the error state. A tool call still running
+      // has none (already undefined), and a background-completion notice
+      // carries its own — which must not be cleared here.
+      if (result) m.isError = result.isError;
+      m.text = renderToolCallText(m.text, result);
     }
   }
 
@@ -386,6 +554,85 @@ export function parseClaudeTranscript(content: string, root: string): ClaudeTran
       ? `Claude Code session ${sessionId.slice(0, 8)}`
       : 'Claude Code session',
     messages,
+  };
+}
+
+interface TurnTokens {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheCreation: number;
+}
+
+/**
+ * Add one assistant message's `message.usage` token counts onto a running
+ * total — but only once per API response. Claude Code splits one response's
+ * content (thinking/text/tool_use) across several transcript lines, each
+ * stamped with an identical copy of that response's `usage`; `counted` (reset
+ * alongside `totals`) dedupes by `message.id` so a 3-way-split response isn't
+ * summed 3 times. A response with no `id` (older/malformed transcripts) is
+ * always counted — no dedup possible, same degrade-gracefully posture as the
+ * rest of this parser.
+ */
+function accumulateUsage(totals: TurnTokens, msg: unknown, counted: Set<string>): void {
+  const usage = prop(msg, 'usage');
+  if (!usage) return;
+  const id = asString(prop(msg, 'id'));
+  if (id) {
+    if (counted.has(id)) return;
+    counted.add(id);
+  }
+  totals.input += asNumber(prop(usage, 'input_tokens')) ?? 0;
+  totals.output += asNumber(prop(usage, 'output_tokens')) ?? 0;
+  totals.cacheRead += asNumber(prop(usage, 'cache_read_input_tokens')) ?? 0;
+  totals.cacheCreation += asNumber(prop(usage, 'cache_creation_input_tokens')) ?? 0;
+}
+
+/** Project a running token total onto the field names a `recap` message carries. */
+function tokenTotals(totals: TurnTokens): {
+  inputTokens?: number;
+  outputTokens?: number;
+  cacheReadTokens?: number;
+  cacheCreationTokens?: number;
+} {
+  const hasAny =
+    totals.input || totals.output || totals.cacheRead || totals.cacheCreation;
+  if (!hasAny) return {};
+  return {
+    inputTokens: totals.input,
+    outputTokens: totals.output,
+    cacheReadTokens: totals.cacheRead,
+    cacheCreationTokens: totals.cacheCreation,
+  };
+}
+
+/**
+ * A background command / subagent completion notice, as a `tool_call` message —
+ * the outcome of work the turn started earlier, which arrives too late to be
+ * that tool call's own `tool_result`. Null for any other user line.
+ */
+function handleTaskNotification(obj: unknown): ClaudeMessage | null {
+  const content = asString(prop(prop(obj, 'message'), 'content'));
+  if (content === undefined) return null; // tool_result lines carry an array.
+  // The explicit marker where the host sets one; the body test covers older
+  // transcripts (and any host that injects the block without it).
+  const kind = asString(prop(prop(obj, 'origin'), 'kind'));
+  if (kind !== 'task-notification' && !content.includes('<task-notification>')) {
+    return null;
+  }
+  const note = parseTaskNotification(content);
+  if (!note) return null;
+  const timestamp = asString(prop(obj, 'timestamp'));
+  return {
+    role: 'tool_call',
+    text: note.summary,
+    toolName: BACKGROUND_TASK_LABEL,
+    // `killed` is the student deliberately stopping it, not a failure.
+    isError: note.status === 'failed',
+    timestamp,
+    sourceId:
+      asString(prop(obj, 'uuid')) ??
+      `cc:task:${note.toolUseId ?? timestamp ?? note.summary.slice(0, 24)}`,
   };
 }
 
@@ -468,6 +715,22 @@ function handleAssistant(obj: unknown, root: string): ClaudeMessage[] {
         timestamp,
         sourceId: partId ? partId : `${uuid}:${out.length}`,
       });
+    } else if (
+      type === 'tool_use' &&
+      typeof name === 'string' &&
+      !NOISY_TOOLS.has(name)
+    ) {
+      // Any other tool call (Bash, Read, Grep, WebFetch, MCP tools, ...). Its
+      // result arrives on a later user line's tool_result block, resolved in
+      // the second pass below (same pattern as decisions/plans).
+      const partId = asString(prop(part, 'id'));
+      out.push({
+        role: 'tool_call',
+        text: renderToolCallInput(name, prop(part, 'input')), // provisional; re-rendered with the result
+        toolName: name,
+        timestamp,
+        sourceId: partId ? partId : `${uuid}:${out.length}`,
+      });
     }
   }
 
@@ -509,6 +772,8 @@ export interface ClaudeImportResult {
   edits: number;
   decisions: number;
   plans: number;
+  toolCalls: number;
+  recaps: number;
   skipped: number;
   first?: string;
   last?: string;
@@ -536,6 +801,8 @@ export async function importClaudeTranscript(
     edits: 0,
     decisions: 0,
     plans: 0,
+    toolCalls: 0,
+    recaps: 0,
     skipped: 0,
   };
 
@@ -544,7 +811,16 @@ export async function importClaudeTranscript(
   let currentTurnId: string | undefined;
 
   for (const msg of transcript.messages) {
-    if (msg.role === 'assistant' && !options.withResponses) continue;
+    // Tool calls are Claude's own actions during the exchange, same as its text
+    // replies — gated by the same flag. Recaps (duration/tokens/branch) are the
+    // turn's own stats, not AI-authored content, so (like decisions/plans) they
+    // are always imported.
+    if (
+      (msg.role === 'assistant' || msg.role === 'tool_call') &&
+      !options.withResponses
+    ) {
+      continue;
+    }
     if (seen.has(msg.sourceId)) {
       result.skipped += 1;
       continue;
@@ -560,7 +836,11 @@ export async function importClaudeTranscript(
             ? 'decision'
             : msg.role === 'plan'
               ? 'plan'
-              : 'artifact';
+              : msg.role === 'tool_call'
+                ? 'tool_call'
+                : msg.role === 'recap'
+                  ? 'recap'
+                  : 'artifact';
 
     // Plans carry their approval status as a tag (in addition to `imported`).
     const tags =
@@ -580,6 +860,14 @@ export async function importClaudeTranscript(
       files: msg.files,
       tags,
       turnId: msg.role === 'user' ? undefined : currentTurnId,
+      toolName: msg.toolName,
+      isError: msg.isError,
+      durationMs: msg.durationMs,
+      gitBranch: msg.gitBranch,
+      inputTokens: msg.inputTokens,
+      outputTokens: msg.outputTokens,
+      cacheReadTokens: msg.cacheReadTokens,
+      cacheCreationTokens: msg.cacheCreationTokens,
     });
     if (msg.role === 'user') currentTurnId = event.id;
 
@@ -587,6 +875,8 @@ export async function importClaudeTranscript(
     else if (msg.role === 'assistant') result.responses += 1;
     else if (msg.role === 'decision') result.decisions += 1;
     else if (msg.role === 'plan') result.plans += 1;
+    else if (msg.role === 'tool_call') result.toolCalls += 1;
+    else if (msg.role === 'recap') result.recaps += 1;
     else result.edits += 1;
 
     if (msg.timestamp) {

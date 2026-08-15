@@ -71,6 +71,17 @@ export interface LedgerSession {
   /** Ledger record id of the prompt that opened the current turn (replay linkage). */
   currentTurnKey?: string;
   /**
+   * Last-known path of the host tool's own transcript for this session, recorded
+   * whenever a hook hands us one. The catch-up sweep re-reads it to recover
+   * content the live hooks couldn't see: hosts write the transcript
+   * asynchronously (Claude Code documents `transcript_path` as "written
+   * asynchronously, may lag current turn"), and its end-of-turn recap lands
+   * minutes after the last hook has run. Stored per session because a session's
+   * `cwd` often isn't the trail root, so the transcript can't be found by path
+   * matching alone.
+   */
+  transcriptPath?: string;
+  /**
    * When set, the student explicitly dismissed this (still-`inbox`) session from the
    * default `showtail inbox` view. It stays in the ledger and under `--all`/`move` —
    * dismissal is a reversible view filter, not a delete. Cleared on (re)placement.
@@ -79,7 +90,14 @@ export interface LedgerSession {
 }
 
 /** The kind of a single captured record. */
-export type LedgerRecordKind = 'prompt' | 'ai_output' | 'decision' | 'plan' | 'edit';
+export type LedgerRecordKind =
+  | 'prompt'
+  | 'ai_output'
+  | 'decision'
+  | 'plan'
+  | 'edit'
+  | 'tool_call'
+  | 'recap';
 
 /** One append-only capture line in a session's `records.jsonl`. */
 export interface LedgerRecord {
@@ -118,6 +136,22 @@ export interface LedgerRecord {
   sha256?: string;
   /** Upstream source id (e.g. a transcript message id), when one exists. */
   sourceId?: string;
+  /** For a `tool_call` record: the tool's name (e.g. `Bash`, `Read`, `Grep`). */
+  toolName?: string;
+  /** For a `tool_call` record: whether its result was an error. */
+  isError?: boolean;
+  /** For a `recap` record: the turn's wall-clock duration, in milliseconds. */
+  durationMs?: number;
+  /** For a `recap` record: the git branch at the time the turn closed. */
+  gitBranch?: string;
+  /** For a `recap` record: input tokens used across the turn. */
+  inputTokens?: number;
+  /** For a `recap` record: output tokens used across the turn. */
+  outputTokens?: number;
+  /** For a `recap` record: cache-read tokens used across the turn. */
+  cacheReadTokens?: number;
+  /** For a `recap` record: cache-creation tokens used across the turn. */
+  cacheCreationTokens?: number;
 }
 
 /** The global cross-session index: trail locations and where each session was placed. */
@@ -288,6 +322,18 @@ export function setLedgerTurn(id: string, turnKey: string): void {
   const session = readLedgerSession(id);
   if (!session) return;
   session.currentTurnKey = turnKey;
+  writeLedgerSession(session);
+}
+
+/**
+ * Remember where this session's host transcript lives, so the catch-up sweep can
+ * re-read it later (see {@link LedgerSession.transcriptPath}). No-op when the
+ * path is already recorded, so the common case costs nothing.
+ */
+export function setLedgerTranscriptPath(id: string, transcriptPath: string): void {
+  const session = readLedgerSession(id);
+  if (!session || session.transcriptPath === transcriptPath) return;
+  session.transcriptPath = transcriptPath;
   writeLedgerSession(session);
 }
 
@@ -484,6 +530,16 @@ export function appendLedgerRecord(id: string, input: NewLedgerRecord): LedgerRe
   if (input.gitCommit) record.gitCommit = input.gitCommit;
   if (input.sha256) record.sha256 = input.sha256;
   if (input.sourceId) record.sourceId = input.sourceId;
+  if (input.toolName) record.toolName = input.toolName;
+  if (input.isError) record.isError = input.isError;
+  if (input.durationMs !== undefined) record.durationMs = input.durationMs;
+  if (input.gitBranch) record.gitBranch = input.gitBranch;
+  if (input.inputTokens !== undefined) record.inputTokens = input.inputTokens;
+  if (input.outputTokens !== undefined) record.outputTokens = input.outputTokens;
+  if (input.cacheReadTokens !== undefined) record.cacheReadTokens = input.cacheReadTokens;
+  if (input.cacheCreationTokens !== undefined) {
+    record.cacheCreationTokens = input.cacheCreationTokens;
+  }
   appendJsonl(recordsFile(id), record);
   return record;
 }

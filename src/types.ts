@@ -16,6 +16,8 @@ export const EVENT_TYPES = [
   'artifact', // a file that was created or changed (usually auto-logged)
   'decision', // a choice the student made when the AI paused to ask (AskUserQuestion)
   'plan', // a plan the AI proposed in plan mode (ExitPlanMode), and its approval
+  'tool_call', // a tool the AI invoked (Bash, Read, Grep, ...) and its result
+  'recap', // the AI's end-of-turn recap, plus duration/token/branch stats
 ] as const;
 
 export type EventType = (typeof EVENT_TYPES)[number];
@@ -83,6 +85,22 @@ export interface Event {
    * (every captured plan is); absent on older trails.
    */
   planPath?: string;
+  /** For a `tool_call` event: the tool's name (e.g. `Bash`, `Read`, `Grep`). */
+  toolName?: string;
+  /** For a `tool_call` event: whether the tool result was an error. */
+  isError?: boolean;
+  /** For a `recap` event: the turn's wall-clock duration, in milliseconds. */
+  durationMs?: number;
+  /** For a `recap` event: the git branch at the time the turn closed. */
+  gitBranch?: string;
+  /** For a `recap` event: input tokens used across the turn. */
+  inputTokens?: number;
+  /** For a `recap` event: output tokens used across the turn. */
+  outputTokens?: number;
+  /** For a `recap` event: cache-read tokens used across the turn. */
+  cacheReadTokens?: number;
+  /** For a `recap` event: cache-creation tokens used across the turn. */
+  cacheCreationTokens?: number;
   /** Which author recorded it (folder slug under `authors/<slug>/`). */
   actorSlug: ActorSlug;
 }
@@ -241,6 +259,8 @@ export interface Config {
     captureAiOutput?: boolean;
     /** Capture AI-suggested code/diffs alongside edits. Default on. */
     captureCode?: boolean;
+    /** Capture non-edit tool calls (Bash, Read, Grep, ...) and their results. Default on. */
+    captureToolCalls?: boolean;
     /**
      * Minutes of inactivity after which an open session is automatically closed
      * (stamped at its last event). Defaults to 60 when absent.
@@ -333,6 +353,18 @@ export interface ReportData {
     decisions: number;
     /** How many `plan` events (plan-mode plans the AI proposed) were captured. */
     plans: number;
+    /**
+     * Session-wide totals from captured `recap` events (turn duration + token
+     * usage). Undefined when no `recap` events were captured, so the report
+     * omits the section entirely rather than showing all-zero stats.
+     */
+    stats?: {
+      totalDurationMs: number;
+      totalInputTokens: number;
+      totalOutputTokens: number;
+      totalCacheReadTokens: number;
+      totalCacheCreationTokens: number;
+    };
   };
   /** Everyone who contributed to the trail (one entry for a single-author report). */
   contributors: Contributor[];
@@ -394,6 +426,10 @@ export interface Turn {
   decisions: Event[];
   /** Plans the AI proposed in plan mode (with their approval status). */
   plans: Event[];
+  /** Tool calls (Bash, Read, Grep, ...) the AI made during the exchange. */
+  toolCalls: Event[];
+  /** The turn's end-of-turn recap + duration/token/branch stats, if captured. */
+  recap?: Event;
   tool: Tool;
   /** Which author this exchange belongs to — used to attribute/color turns. */
   actorSlug: ActorSlug;
@@ -464,6 +500,22 @@ export interface JournalEntry {
   model?: string;
   /** For a `plan` event: trail-relative path of the saved plan file (`plans/<id>.md`). */
   planPath?: string;
+  /** For a `tool_call` event: the tool's name. See {@link Event.toolName}. */
+  toolName?: string;
+  /** For a `tool_call` event: whether the tool result was an error. */
+  isError?: boolean;
+  /** For a `recap` event: the turn's wall-clock duration, in milliseconds. */
+  durationMs?: number;
+  /** For a `recap` event: the git branch at the time the turn closed. */
+  gitBranch?: string;
+  /** For a `recap` event: input tokens used across the turn. */
+  inputTokens?: number;
+  /** For a `recap` event: output tokens used across the turn. */
+  outputTokens?: number;
+  /** For a `recap` event: cache-read tokens used across the turn. */
+  cacheReadTokens?: number;
+  /** For a `recap` event: cache-creation tokens used across the turn. */
+  cacheCreationTokens?: number;
   // --- artifact-specific ---
   path?: string;
   /** Trail-root-relative path for the report link, when it differs from `path`. */

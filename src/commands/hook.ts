@@ -58,6 +58,7 @@ import {
   markInbox,
   markPlaced,
   readLedgerSession,
+  setLedgerTranscriptPath,
   setLedgerTurn,
   type LedgerSession,
 } from '../core/ledger.ts';
@@ -333,8 +334,21 @@ export async function runHook(
         // (or post-edit for hosts that only fire that), so an inbox session keeps
         // its replies/decisions/plans — discoverable by native id even with no root.
         const adapter = adapterFor(tool);
+        // Remember where the host keeps this session's transcript, so the
+        // catch-up sweep can re-read it later (see `core/catchUp.ts`) — the
+        // session's `cwd` is often not the trail root, so it can't be found by
+        // path matching alone.
+        const seenTranscript = asString(prop(payload, 'transcript_path'));
+        if (seenTranscript) setLedgerTranscriptPath(ledger.id, seenTranscript);
         if (
-          (event === 'stop' || (event === 'post-edit' && adapter?.reconcileOnPostEdit)) &&
+          (event === 'stop' ||
+            // A session's LAST turn has no following Stop to re-read the
+            // transcript, and the host writes it asynchronously (plus appends
+            // its recap minutes later) — so sweep again as the session ends and
+            // when it resumes, or that final exchange is never captured.
+            event === 'session-end' ||
+            event === 'session-start' ||
+            (event === 'post-edit' && adapter?.reconcileOnPostEdit)) &&
           adapter?.getTranscript
         ) {
           const transcript = adapter.getTranscript(payload, root ?? cwd);
@@ -420,6 +434,22 @@ export async function runHook(
     // ledger (captured above, replies included on Stop); project it into the repo
     // instead of writing the repo from the live handlers. Session start/end keep
     // their lifecycle handlers (the context note + deterministic close) below.
+    // Session start/end also sweep the transcript above (to catch a final
+    // exchange the host wrote asynchronously), so project what that recovered —
+    // then fall through to the lifecycle handlers below, which still own the
+    // context note and the deterministic session close.
+    if (
+      ledgerWriterEnabled() &&
+      ledger &&
+      (event === 'session-start' || event === 'session-end')
+    ) {
+      try {
+        await materializeLedgerSession(ledger, author);
+      } catch {
+        // A projection failure must never block the session lifecycle.
+      }
+    }
+
     if (
       ledgerWriterEnabled() &&
       ledger &&
@@ -438,6 +468,8 @@ export async function runHook(
       if (m.replies > 0) trace.replies = m.replies;
       if (m.decisions > 0) trace.decisions = m.decisions;
       if (m.plans > 0) trace.plans = m.plans;
+      if (m.toolCalls > 0) trace.toolCalls = m.toolCalls;
+      if (m.recaps > 0) trace.recaps = m.recaps;
       if (m.edits > 0) trace.edits = m.edits;
       return;
     }
@@ -783,6 +815,8 @@ async function reconcileFromAdapter(
     trace.replies = summary.replies;
     trace.decisions = summary.decisions;
     trace.plans = summary.plans;
+    if (summary.toolCalls > 0) trace.toolCalls = summary.toolCalls;
+    if (summary.recaps > 0) trace.recaps = summary.recaps;
     if (summary.edits > 0) trace.edits = summary.edits;
     if (summary.backlogSkipped > 0) trace.backlogSkipped = summary.backlogSkipped;
     if (summary.recoveredReplies > 0) trace.recoveredReplies = summary.recoveredReplies;
@@ -798,6 +832,10 @@ interface StopSummary {
   replies: number;
   decisions: number;
   plans: number;
+  /** Tool calls (Bash, Read, Grep, ...) captured. */
+  toolCalls: number;
+  /** End-of-turn recaps captured. */
+  recaps: number;
   /** Per-file diff artifacts imported from the transcript (Codex apply_patch). */
   edits: number;
   /** Transcript prompts dropped as pre-window backlog (older than the session). */
@@ -834,6 +872,9 @@ async function reconcileTranscript(
   // AI text replies obey `captureAiOutput`; prompts and decisions are the
   // student's own work and are captured regardless.
   const captureAi = config.settings.captureAiOutput !== false;
+  // Tool calls (Bash, Read, Grep, ...) obey their own setting — noisier than AI
+  // text and worth an independent opt-out.
+  const captureTools = config.settings.captureToolCalls !== false;
 
   // Resolve the session this transcript belongs to. The transcript's own
   // session id is the source of truth; fall back to the payload's, then to the
@@ -866,6 +907,8 @@ async function reconcileTranscript(
     replies: 0,
     decisions: 0,
     plans: 0,
+    toolCalls: 0,
+    recaps: 0,
     edits: 0,
     backlogSkipped: 0,
     recoveredReplies: 0,
@@ -1054,6 +1097,45 @@ async function reconcileTranscript(
           summary.edits += 1;
         }
       }
+    } else if (msg.role === 'tool_call') {
+      // A Bash/Read/Grep/... call the AI made — obeys `captureToolCalls`, same
+      // as edits obey `captureCode`. Attach to the open turn.
+      if (!captureTools || !currentTurn || seen.has(msg.sourceId)) continue;
+      await logEvent(author, {
+        type: 'tool_call',
+        text: msg.text,
+        tool,
+        timestamp: msg.timestamp,
+        turnId: currentTurn,
+        sourceId: msg.sourceId,
+        sessionId: currentTurnSession,
+        toolName: msg.toolName,
+        isError: msg.isError,
+      });
+      seen.add(msg.sourceId);
+      summary.toolCalls += 1;
+    } else if (msg.role === 'recap') {
+      // The turn's own closing stats (duration/tokens/branch) plus its recap
+      // text, if any — captured regardless of AI-output capture, same as
+      // decisions/plans (it's the turn's own metadata, not AI-authored content).
+      if (!currentTurn || seen.has(msg.sourceId)) continue;
+      await logEvent(author, {
+        type: 'recap',
+        text: msg.text,
+        tool,
+        timestamp: msg.timestamp,
+        turnId: currentTurn,
+        sourceId: msg.sourceId,
+        sessionId: currentTurnSession,
+        durationMs: msg.durationMs,
+        gitBranch: msg.gitBranch,
+        inputTokens: msg.inputTokens,
+        outputTokens: msg.outputTokens,
+        cacheReadTokens: msg.cacheReadTokens,
+        cacheCreationTokens: msg.cacheCreationTokens,
+      });
+      seen.add(msg.sourceId);
+      summary.recaps += 1;
     }
   }
   return summary;

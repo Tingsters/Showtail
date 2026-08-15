@@ -18,6 +18,7 @@ tree.
     "git": true,
     "captureAiOutput": true,
     "captureCode": true,
+    "captureToolCalls": true,
     "idleTimeoutMinutes": 60,
     "redact": { "enabled": true, "secrets": true, "pii": true }
   }
@@ -33,6 +34,7 @@ tree.
 | `settings.git` | Try to capture the git commit hash on each event. |
 | `settings.captureAiOutput` | Capture AI text responses (Stop hook / imports). Default on. |
 | `settings.captureCode` | Capture AI-suggested code/diffs alongside edits. Default on. |
+| `settings.captureToolCalls` | Capture non-edit tool calls (Bash, Read, Grep, ...) and their results. Default on. |
 | `settings.idleTimeoutMinutes` | Minutes of inactivity after which an open session auto-closes (stamped at its last event). Defaults to 60. |
 | `settings.redact` | Sensitive-data redaction settings — see below. |
 
