@@ -5,8 +5,16 @@ import { runInit } from '../src/commands/init.ts';
 import { addArtifact, importEditArtifact } from '../src/core/artifacts.ts';
 import { logEvent } from '../src/core/events.ts';
 import { buildReportData, renderHtml, renderMarkdown } from '../src/core/report.ts';
+import {
+  hasSignals,
+  summarizeToolRun,
+  turnSegments,
+  turnSignals,
+} from '../src/core/report/data.ts';
+import { PLAN_REVISED_TAG } from '../src/core/plans.ts';
 import { startSession } from '../src/core/sessions.ts';
 import { pathsForRoot } from '../src/core/storage.ts';
+import type { Event } from '../src/types.ts';
 import { authorFor, cleanup, makeTempDir } from './helpers.ts';
 
 describe('turns', () => {
@@ -555,16 +563,185 @@ describe('turns', () => {
       const data = buildReportData(paths);
       expect(data.turns[0]!.toolCalls).toHaveLength(1);
 
+      // A lone call renders as a single quiet row, not a group around one item.
       const html = renderHtml(data);
-      expect(html).toContain('class="tool-call is-error"');
-      expect(html).toContain('tool-call-tag">🛠️ Bash');
-      expect(html).toContain('tool-call-badge');
+      expect(html).toContain('class="tool-row is-error"');
+      expect(html).toContain('tool-row-name">Bash');
+      expect(html).toContain('pip3 install pygame');
       expect(html).toContain('ModuleNotFoundError');
+      expect(html).not.toContain('class="tools'); // no group for one call
 
       const md = renderMarkdown(data);
-      expect(md).toContain('🛠️ **Bash**');
+      expect(md).toContain('**Bash**');
       expect(md).toContain('⚠️ _error_');
       expect(md).toContain('ModuleNotFoundError');
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('consecutive tool calls collapse into one group, split by real work', async () => {
+    const dir = makeTempDir();
+    try {
+      await runInit({ cwd: dir });
+      const paths = pathsForRoot(dir);
+      const author = authorFor(paths);
+      startSession(author);
+      const { event: prompt } = await logEvent(author, {
+        type: 'prompt',
+        text: 'build it',
+        tool: 'claude-code',
+      });
+      const at = (s: number) => `2026-07-01T10:00:${String(s).padStart(2, '0')}.000Z`;
+      const call = async (n: number, toolName: string, isError = false) =>
+        logEvent(author, {
+          type: 'tool_call',
+          text: `$ cmd ${n}`,
+          tool: 'claude-code',
+          turnId: prompt.id,
+          timestamp: at(n),
+          toolName,
+          isError,
+        });
+      // Two calls, then an edit, then two more: the edit breaks the run in half.
+      await call(1, 'Bash');
+      await call(2, 'Read');
+      importEditArtifact(author, {
+        path: 'a.ts',
+        diff: '+ x',
+        tool: 'claude-code',
+        turnId: prompt.id,
+        timestamp: at(3),
+      });
+      await call(4, 'Bash', true);
+      await call(5, 'Bash');
+
+      const turn = buildReportData(paths).turns[0]!;
+      const kinds = turnSegments(turn).map((s) => s.kind);
+      expect(kinds).toEqual(['tools', 'work', 'tools']);
+
+      const runs = turnSegments(turn).filter((s) => s.kind === 'tools');
+      expect(summarizeToolRun((runs[0] as { events: Event[] }).events)).toEqual({
+        total: 2,
+        byTool: [
+          { name: 'Bash', count: 1 },
+          { name: 'Read', count: 1 },
+        ],
+        failed: 0,
+      });
+      const second = summarizeToolRun((runs[1] as { events: Event[] }).events);
+      expect(second.total).toBe(2);
+      expect(second.byTool).toEqual([{ name: 'Bash', count: 2 }]);
+      expect(second.failed).toBe(1);
+
+      // A run renders as one collapsed group, not one card per call.
+      const html = renderHtml(buildReportData(paths));
+      expect((html.match(/<details class="tools/g) || []).length).toBe(2);
+      expect(html).toContain('2 tool calls');
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('the collapsed row flags a turn worth opening and stays quiet otherwise', async () => {
+    const dir = makeTempDir();
+    try {
+      await runInit({ cwd: dir });
+      const paths = pathsForRoot(dir);
+      const author = authorFor(paths);
+      startSession(author);
+
+      // A routine turn: work happened, but nothing that needs a second look.
+      const { event: routine } = await logEvent(author, {
+        type: 'prompt',
+        text: 'tidy the imports',
+        tool: 'claude-code',
+      });
+      await logEvent(author, {
+        type: 'tool_call',
+        text: '$ npm run lint',
+        tool: 'claude-code',
+        turnId: routine.id,
+        toolName: 'Bash',
+      });
+      // A notable turn: the student sent a plan back rather than approving it.
+      const { event: notable } = await logEvent(author, {
+        type: 'prompt',
+        text: 'use JWT instead',
+        tool: 'claude-code',
+      });
+      await logEvent(author, {
+        type: 'plan',
+        text: 'Switch to JWT',
+        tool: 'claude-code',
+        turnId: notable.id,
+        tags: [PLAN_REVISED_TAG],
+      });
+
+      const data = buildReportData(paths);
+      const [first, second] = data.turns;
+      expect(turnSignals(first!)).toMatchObject({ decisions: 0, plansRevised: 0 });
+      expect(hasSignals(turnSignals(first!))).toBe(false); // a quiet row
+      expect(turnSignals(second!).plansRevised).toBe(1);
+
+      const html = renderHtml(data);
+      // Revising a plan reads differently from merely being offered one — it is
+      // the stronger evidence that the student engaged with it.
+      expect(html).toContain('↩ plan revised');
+      expect(html).toContain('signal--revised');
+      // Tool-call counts never reach the row; they live in the detail strip.
+      expect(html).not.toContain('1 tool call</span>');
+      expect(html).toContain('class="turn-detail"');
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('badges stay in the markup; repeats are marked so a re-sort can recompute', async () => {
+    const dir = makeTempDir();
+    try {
+      await runInit({ cwd: dir });
+      const paths = pathsForRoot(dir);
+      const author = authorFor(paths);
+      startSession(author);
+      await logEvent(author, {
+        type: 'prompt',
+        text: 'first',
+        tool: 'claude-code',
+        timestamp: '2026-07-01T10:00:00.000Z',
+      });
+      await logEvent(author, {
+        type: 'prompt',
+        text: 'second, same tool',
+        tool: 'claude-code',
+        timestamp: '2026-07-01T10:01:00.000Z',
+      });
+      await logEvent(author, {
+        type: 'prompt',
+        text: 'third, switched',
+        tool: 'github-copilot',
+        timestamp: '2026-07-01T10:02:00.000Z',
+      });
+
+      const html = renderHtml(buildReportData(paths));
+      const rows = html.match(/<details class="turn[^>]*>/g) ?? [];
+      expect(rows).toHaveLength(3);
+
+      // Every row keeps its badge in the DOM. Hiding is a CSS concern driven by
+      // the marks, because the reader can re-sort and "repeats the row above"
+      // is a property of the order on screen — not the order we rendered.
+      expect((html.match(/class="badge badge--claude-code"/g) || []).length).toBe(2);
+      expect((html.match(/class="badge badge--github-copilot"/g) || []).length).toBe(1);
+
+      // Marked for the default chronological order: only the middle row repeats.
+      expect(rows[0]).not.toContain('is-repeat-tool');
+      expect(rows[1]).toContain('is-repeat-tool');
+      expect(rows[2]).not.toContain('is-repeat-tool');
+
+      // The data the client recompute (and the session separator label) reads.
+      expect(rows[0]).toContain('data-tool-label="Claude Code"');
+      expect(rows[2]).toContain('data-tool-label="GitHub Copilot"');
+      for (const row of rows) expect(row).toContain('data-models=');
     } finally {
       cleanup(dir);
     }

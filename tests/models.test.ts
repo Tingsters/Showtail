@@ -74,7 +74,7 @@ describe('report — models', () => {
 
       const md = renderMarkdown(data);
       expect(md).toContain('## Models used');
-      expect(md).toContain('**Opus 4.8** — 1 response(s)');
+      expect(md).toContain('**Opus 4.8** — 1 response');
       // The turn's meta line carries the prettified model next to the tool.
       expect(md).toContain('`Opus 4.8`');
 

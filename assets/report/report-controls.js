@@ -79,8 +79,10 @@
     var makeSep = function (group) {
       var first = group[0];
       var tool = first.getAttribute('data-tool') || '';
-      var toolEl = tool ? first.querySelector('.badge--' + tool) : null;
-      var toolName = toolEl ? toolEl.textContent : tool;
+      // Read the label off the row itself. Scraping it out of the badge used to
+      // work, but the badge is hidden on rows that repeat the one above, so the
+      // lookup could miss and fall back to the raw id ("claude-code").
+      var toolName = first.getAttribute('data-tool-label') || tool;
       var timeEl = first.querySelector('time.st-time');
       var when = timeEl ? timeEl.textContent : '';
       var n = group.length;
@@ -95,6 +97,29 @@
         ' exchange' +
         (n === 1 ? '' : 's');
       return sep;
+    };
+
+    // A tool/model badge is worth showing where it changes, so a row repeating
+    // the row above it hides its own. That is a property of the order on
+    // screen, not the order the document was written in — so it is recomputed
+    // here after every reorder. Without this the marks stay as rendered and the
+    // badges land on seemingly arbitrary rows once you sort.
+    var markBadgeRuns = function () {
+      var turns = list.querySelectorAll('details.turn');
+      var prevTool = null,
+        prevModels = null;
+      for (var i = 0; i < turns.length; i++) {
+        var t = turns[i];
+        var tool = t.getAttribute('data-tool-label') || '';
+        var models = t.getAttribute('data-models') || '';
+        t.classList.toggle('is-repeat-tool', prevTool !== null && tool === prevTool);
+        t.classList.toggle(
+          'is-repeat-model',
+          prevModels !== null && models === prevModels,
+        );
+        prevTool = tool;
+        prevModels = models;
+      }
     };
 
     var apply = function (mode, dir) {
@@ -125,16 +150,25 @@
             y = minTs(b);
           return (x < y ? -1 : x > y ? 1 : 0) * (dir === 'desc' ? -1 : 1);
         });
+        var firsts = [];
         for (var g = 0; g < order.length; g++) {
           var grp = groups[order[g]];
           grp.sort(byTs);
           list.appendChild(makeSep(grp));
           for (var j = 0; j < grp.length; j++) list.appendChild(grp[j]);
+          firsts.push(grp[0]);
+        }
+        markBadgeRuns();
+        // Each session block states its own tool, even when it follows a block
+        // that used the same one — the run restarts at every separator.
+        for (var f = 0; f < firsts.length; f++) {
+          firsts[f].classList.remove('is-repeat-tool', 'is-repeat-model');
         }
       } else {
         turns.sort(byTs);
         if (dir === 'desc') turns.reverse();
         for (var k = 0; k < turns.length; k++) list.appendChild(turns[k]);
+        markBadgeRuns();
       }
     };
 

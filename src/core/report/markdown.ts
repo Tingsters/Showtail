@@ -1,4 +1,4 @@
-import type { ReportData, Turn } from '../../types.ts';
+import type { Event, ReportData, Turn } from '../../types.ts';
 import { PLAN_APPROVED_TAG, PLAN_REVISED_TAG } from '../plans.ts';
 import {
   filesChanged,
@@ -6,10 +6,12 @@ import {
   modelLabel,
   nameBySlugMap,
   shouldShowAuthor,
+  summarizeToolRun,
   toolLabel,
   turnModels,
   turnSegments,
 } from './data.ts';
+import { pluralS } from '../text.ts';
 import { staticUtc, timeToken } from './time.ts';
 
 /** A unique token swapped for the interactive turns HTML after Markdown→HTML. */
@@ -121,23 +123,25 @@ function metadataSection(data: ReportData, fmt: (iso: string) => string): string
   // the student ran and how many files they built — then the judgment signals
   // (decisions/plans), with the raw session/event totals kept last as backing.
   const files = filesChanged(data.turns);
-  const filesPart = files > 0 ? `, ${files} file(s) changed` : '';
+  const tasks = data.turns.length;
+  const { sessions, events, artifacts, decisions, plans } = data.summary;
+  const filesPart = files > 0 ? `, ${files} file${pluralS(files)} changed` : '';
   const decisionsPart =
-    data.summary.decisions > 0 ? `, ${data.summary.decisions} decision(s)` : '';
-  const plansPart = data.summary.plans > 0 ? `, ${data.summary.plans} plan(s)` : '';
+    decisions > 0 ? `, ${decisions} decision${pluralS(decisions)}` : '';
+  const plansPart = plans > 0 ? `, ${plans} plan${pluralS(plans)}` : '';
   const lines = [
     `# ${title}`,
     '',
     `_Generated ${fmt(data.generatedAt)}_`,
     '',
-    `**Summary:** ${data.turns.length} task(s)${filesPart}${decisionsPart}${plansPart} · ` +
-      `${data.summary.sessions} session(s), ${data.summary.events} event(s), ` +
-      `${data.summary.artifacts} artifact record(s).`,
+    `**Summary:** ${tasks} task${pluralS(tasks)}${filesPart}${decisionsPart}${plansPart} · ` +
+      `${sessions} session${pluralS(sessions)}, ${events} event${pluralS(events)}, ` +
+      `${artifacts} artifact record${pluralS(artifacts)}.`,
     '',
   ];
   if (data.redactionCount > 0) {
     lines.push(
-      `_Showtail removed ${data.redactionCount} secret(s)/personal detail(s) ` +
+      `_Showtail removed ${data.redactionCount} secret${pluralS(data.redactionCount)}/personal detail${pluralS(data.redactionCount)} ` +
         `before saving._`,
       '',
     );
@@ -154,7 +158,7 @@ function contributorsSection(data: ReportData): string[] {
   const lines = ['## Contributors', ''];
   for (const c of data.contributors) {
     lines.push(
-      `- **${c.name}** (\`${c.slug}\`) — ${c.events} event(s), ${c.artifacts} file record(s)`,
+      `- **${c.name}** (\`${c.slug}\`) — ${c.events} event${pluralS(c.events)}, ${c.artifacts} file record${pluralS(c.artifacts)}`,
     );
   }
   lines.push('');
@@ -172,14 +176,16 @@ function toolsSection(data: ReportData, fmt: (iso: string) => string): string[] 
     return lines;
   }
   for (const t of data.tools) {
-    lines.push(`- **${toolLabel(t.tool)}** — ${t.events} event(s)`);
+    lines.push(`- **${toolLabel(t.tool)}** — ${t.events} event${pluralS(t.events)}`);
   }
   lines.push('');
   if (data.toolTimeline.length > 1) {
     lines.push('Tool timeline (each arrow is a switch):', '');
     for (const b of data.toolTimeline) {
       const span = b.from === b.to ? fmt(b.from) : `${fmt(b.from)} → ${fmt(b.to)}`;
-      lines.push(`- **${toolLabel(b.tool)}** · ${span} · ${b.count} event(s)`);
+      lines.push(
+        `- **${toolLabel(b.tool)}** · ${span} · ${b.count} event${pluralS(b.count)}`,
+      );
     }
     lines.push('');
   }
@@ -195,7 +201,7 @@ function modelsSection(data: ReportData): string[] {
   if (data.models.length === 0) return [];
   const lines = ['## Models used', ''];
   for (const m of data.models) {
-    lines.push(`- **${modelLabel(m.model)}** — ${m.events} response(s)`);
+    lines.push(`- **${modelLabel(m.model)}** — ${m.events} response${pluralS(m.events)}`);
   }
   lines.push('');
   return lines;
@@ -289,12 +295,29 @@ function turnMarkdown(lines: string[], turn: Turn, ai: AiMode, author?: string):
       const n = seg.events.length;
       const open = ai === 'full' ? ' open' : '';
       lines.push(
-        `<details${open}><summary>🤖 ${n} AI message(s)</summary>`,
+        `<details${open}><summary>🤖 ${n} AI message${pluralS(n)}</summary>`,
         '',
         ...seg.events.map((e) => aiText(e.text)),
         '</details>',
         '',
       );
+      continue;
+    }
+    if (seg.kind === 'tools') {
+      // A run of tool calls collapses like the AI run above: the mechanism is
+      // one line until asked for, so a turn with dozens of calls stays readable.
+      // A lone call needs no group — that would be chrome around one item.
+      if (seg.events.length === 1) {
+        lines.push(`🛠️ ${toolCallBlock(seg.events[0]!)}`, '');
+      } else {
+        lines.push(
+          `<details><summary>${toolRunHeading(seg.events)}</summary>`,
+          '',
+          ...seg.events.map((e) => toolCallBlock(e)),
+          '</details>',
+          '',
+        );
+      }
       continue;
     }
     const item = seg.item;
@@ -314,7 +337,9 @@ function turnMarkdown(lines: string[], turn: Turn, ai: AiMode, author?: string):
       }
     } else if (item.kind === 'code') {
       const code = item.change;
-      const stat = code.diffLines ? ` (~${code.diffLines} line(s))` : '';
+      const stat = code.diffLines
+        ? ` (~${code.diffLines} line${pluralS(code.diffLines)})`
+        : '';
       const link = `[\`${code.path}\`](${fileHref(code.linkPath ?? code.path)})`;
       if (code.diff) {
         lines.push(`_Suggested code — ${link}${stat}:_`, '');
@@ -323,13 +348,23 @@ function turnMarkdown(lines: string[], turn: Turn, ai: AiMode, author?: string):
         // No diff captured — name the changed file without promising code below it.
         lines.push(`_Changed file — ${link}${stat}._`, '');
       }
-    } else if (item.kind === 'tool_call') {
-      const label = item.event.toolName ?? 'Tool';
-      const badge = item.event.isError ? ' ⚠️ _error_' : '';
-      lines.push(`🛠️ **${label}**${badge}`, '');
-      lines.push(item.event.text, '');
     }
   }
+}
+
+/** The one-line heading for a run of tool calls: totals, then the busiest tools. */
+function toolRunHeading(events: Event[]): string {
+  const { total, byTool, failed } = summarizeToolRun(events);
+  const breakdown = byTool.map((t) => `${t.count} ${t.name}`).join(' · ');
+  const failedPart = failed > 0 ? ` · ⚠️ ${failed} failed` : '';
+  return `🛠️ ${total} tool call${pluralS(total)}${breakdown ? ` · ${breakdown}` : ''}${failedPart}`;
+}
+
+/** One tool call inside a run: its name, then whatever it printed. */
+function toolCallBlock(event: Event): string {
+  const label = event.toolName ?? 'Tool';
+  const badge = event.isError ? ' ⚠️ _error_' : '';
+  return `**${label}**${badge}\n\n${event.text}\n`;
 }
 
 /** One AI message as a labelled Markdown block, with a trailing blank line. */

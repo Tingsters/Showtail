@@ -94,10 +94,10 @@ describe('report', () => {
 
       const md = renderMarkdown(buildReportData(paths));
       // The summary leads with what a reviewer scans for: tasks (prompts).
-      expect(md).toMatch(/\*\*Summary:\*\* 1 task\(s\)/);
+      expect(md).toMatch(/\*\*Summary:\*\* 1 task\b/);
       // Two AI runs, each folded into its own collapsed <details>, around the edit.
       expect(
-        (md.match(/<details><summary>🤖 1 AI message\(s\)<\/summary>/g) || []).length,
+        (md.match(/<details><summary>🤖 1 AI message<\/summary>/g) || []).length,
       ).toBe(2);
       // The edit reads inline, chronologically between the two AI runs.
       const iFirst = md.indexOf('Reading the files first');

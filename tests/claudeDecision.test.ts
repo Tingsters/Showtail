@@ -367,13 +367,14 @@ describe('claude-code decision import', () => {
       const md = renderMarkdown(data);
       expect(md).toContain('🔀 **Decision**');
       expect(md).toContain('**JWT** ✅');
-      expect(md).toContain('1 decision(s)'); // summary line
+      expect(md).toContain('1 decision'); // summary line
 
-      // The collapsed HTML card surfaces the decision count in its stat (under the
-      // date), so a reviewer sees a decision happened without expanding the card.
+      // The collapsed card flags the decision as a marker, so a reviewer scanning
+      // the rows can see one happened — and that this turn repays expanding —
+      // without opening it.
       const html = renderHtml(data);
-      const stat = /<span class="stat">([^<]*)<\/span>/.exec(html)?.[1] ?? '';
-      expect(stat).toContain('1 decision(s)');
+      expect(html).toContain('signal--decision');
+      expect(html).toContain('🔀 decision');
     } finally {
       cleanup(dir);
     }
@@ -416,11 +417,11 @@ describe('claude-code decision import', () => {
       expect(turn).toBeDefined(); // the edit and the decision share one turn
 
       const html = renderHtml(data);
-      const stat = /<span class="stat">([^<]*)<\/span>/.exec(html)?.[1] ?? '';
-      // Both counts appear on the one stat line, joined — no conflict.
-      expect(stat).toContain('1 file(s)');
-      expect(stat).toContain('1 decision(s)');
-      expect(stat).toContain(' · ');
+      // The outcome is stated plainly; the decision rides alongside as a marker.
+      // Both on the same row — no conflict — and properly pluralised.
+      expect(html).toContain('<span class="stat">1 file</span>');
+      expect(html).toContain('🔀 decision');
+      expect(html).not.toContain('file(s)');
     } finally {
       cleanup(dir);
     }
@@ -533,9 +534,9 @@ describe('turn timeline (chronological interleaving)', () => {
     expect(at('second reply')).toBeLessThan(at('second.ts'));
     expect(at('second.ts')).toBeLessThan(at('🔀 **Decision**'));
     // The AI replies are collapsed into in-place pills (one run each), not one bucket.
-    expect(
-      (md.match(/<details><summary>🤖 1 AI message\(s\)<\/summary>/g) || []).length,
-    ).toBe(2);
+    expect((md.match(/<details><summary>🤖 1 AI message<\/summary>/g) || []).length).toBe(
+      2,
+    );
     // The decision renders exactly once (no duplication into an AI section).
     expect((md.match(/🔀 \*\*Decision\*\*/g) || []).length).toBe(1);
   });

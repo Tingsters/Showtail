@@ -421,27 +421,140 @@ export function turnTimeline(turn: Turn): TurnItem[] {
  */
 export type TurnSegment =
   | { kind: 'work'; item: TurnItem } // a code | decision | plan item, rendered inline
-  | { kind: 'ai'; events: Event[] }; // a run of consecutive AI messages → one pill
+  | { kind: 'ai'; events: Event[] } // a run of consecutive AI messages → one pill
+  | { kind: 'tools'; events: Event[] }; // a run of consecutive tool calls → one group
 
 export function turnSegments(turn: Turn): TurnSegment[] {
   const segments: TurnSegment[] = [];
-  let run: Event[] = [];
-  const flushAi = () => {
-    if (run.length > 0) {
-      segments.push({ kind: 'ai', events: run });
-      run = [];
+  // Two accumulators, same shape: a run of consecutive AI messages and a run of
+  // consecutive tool calls each collapse to a single segment. Anything else
+  // (code, decision, plan) closes both — it is the work the run led up to.
+  let ai: Event[] = [];
+  let tools: Event[] = [];
+  const flush = () => {
+    if (ai.length > 0) {
+      segments.push({ kind: 'ai', events: ai });
+      ai = [];
+    }
+    if (tools.length > 0) {
+      segments.push({ kind: 'tools', events: tools });
+      tools = [];
     }
   };
   for (const item of turnTimeline(turn)) {
     if (item.kind === 'ai') {
-      run.push(item.event);
+      if (tools.length > 0) flush(); // the tools so far ran before this reply
+      ai.push(item.event);
+    } else if (item.kind === 'tool_call') {
+      if (ai.length > 0) flush(); // the AI so far explains the calls that follow
+      tools.push(item.event);
     } else {
-      flushAi(); // the AI so far explains what came before this work item
+      flush(); // the AI/tools so far led to this work item
       segments.push({ kind: 'work', item });
     }
   }
-  flushAi();
+  flush();
   return segments;
+}
+
+/** One tool's share of a run, for the group's one-line summary. */
+export interface ToolRunTally {
+  name: string;
+  count: number;
+}
+
+/** What a run of consecutive tool calls amounts to, for its collapsed header. */
+export interface ToolRunSummary {
+  total: number;
+  /** Per-tool counts, busiest first (name ascending on ties, so it is stable). */
+  byTool: ToolRunTally[];
+  /** How many of the calls reported an error — surfaced so failures aren't buried. */
+  failed: number;
+}
+
+/**
+ * Summarize a run of tool calls (e.g. "23 tool calls · 12 Bash · 8 Read · 3
+ * Grep"). Shared by both renderers so the HTML card and the Markdown export can
+ * never disagree about what a run contained.
+ */
+export function summarizeToolRun(events: Event[]): ToolRunSummary {
+  const counts = new Map<string, number>();
+  let failed = 0;
+  for (const e of events) {
+    const name = e.toolName ?? 'Tool';
+    counts.set(name, (counts.get(name) ?? 0) + 1);
+    if (e.isError) failed += 1;
+  }
+  const byTool = [...counts.entries()]
+    .map(([name, count]) => ({ name, count }))
+    .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
+  return { total: events.length, byTool, failed };
+}
+
+/**
+ * What makes one turn worth opening, for the collapsed row's markers.
+ *
+ * The report's reader is an educator scanning far more turns than they can read,
+ * so the row is a triage surface: it should stay quiet unless something happened
+ * that rewards a closer look. These are the things that do — the student's own
+ * judgement (a choice they made, a plan they sent back rather than waved
+ * through) and friction they worked through. Deliberately *not* included is
+ * anything measuring how much machinery ran: that says nothing about what the
+ * student understood, and putting a number on every row is what drowns the rare
+ * signals. A turn with no signals is a routine turn — that is the point.
+ */
+export interface TurnSignals {
+  decisions: number;
+  /** Plans the AI proposed that the student accepted (or that carry no verdict). */
+  plansProposed: number;
+  /** Plans the student sent back for revision — they pushed back on the AI. */
+  plansRevised: number;
+  failedTools: number;
+}
+
+export function turnSignals(turn: Turn): TurnSignals {
+  let plansRevised = 0;
+  let plansProposed = 0;
+  for (const p of turn.plans) {
+    if (p.tags?.includes(PLAN_REVISED_TAG)) plansRevised += 1;
+    else plansProposed += 1;
+  }
+  return {
+    decisions: turn.decisions.length,
+    plansProposed,
+    plansRevised,
+    failedTools: turn.toolCalls.filter((t) => t.isError).length,
+  };
+}
+
+/** True when a turn has anything worth flagging on its collapsed row. */
+export function hasSignals(s: TurnSignals): boolean {
+  return (
+    s.decisions > 0 || s.plansProposed > 0 || s.plansRevised > 0 || s.failedTools > 0
+  );
+}
+
+/**
+ * The duration above which a turn is worth flagging as unusually long, or
+ * undefined when nothing in this report qualifies.
+ *
+ * Relative to the report rather than a fixed cutoff: real sessions range from
+ * seconds to nearly an hour (the sample this was tuned against had a 2m32s
+ * median and a 52m maximum), so any absolute threshold either fires on half the
+ * rows or never. Takes a high percentile so only the tail is marked, with an
+ * absolute floor so a session where everything was quick flags nothing at all.
+ */
+export function longTurnThreshold(turns: Turn[]): number | undefined {
+  const FLOOR_MS = 60_000; // never call anything under a minute "long"
+  const PERCENTILE = 0.85; // the slowest ~15% of turns
+  const durations = turns
+    .map((t) => t.recap?.durationMs)
+    .filter((d): d is number => typeof d === 'number' && d > 0)
+    .sort((a, b) => a - b);
+  if (durations.length < 4) return undefined; // too few to have a meaningful tail
+  const cutoff = durations[Math.floor(durations.length * PERCENTILE)];
+  if (cutoff === undefined) return undefined;
+  return Math.max(cutoff, FLOOR_MS);
 }
 
 /** Distinct files touched across every turn (unique paths), for the summary line. */

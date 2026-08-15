@@ -116,7 +116,7 @@ describe('plan import + report', () => {
 
       const md = renderMarkdown(data);
       expect(md).toContain('📋 **Plan** · _approved_');
-      expect(md).toContain('1 plan(s)'); // summary line
+      expect(md).toContain('1 plan'); // summary line
 
       const html = renderHtml(data);
       expect(html).toContain('<details class="plan">');

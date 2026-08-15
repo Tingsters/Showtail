@@ -1,5 +1,43 @@
 :root {
   color-scheme: light dark;
+
+  /* Core palette. Defined once here and re-pointed in the dark block at the end
+     of this file, so a colour can never be updated in one mode and forgotten in
+     the other — which is how several elements previously kept light-mode hexes
+     on a near-black background. */
+  --st-text: #1b1b1f;
+  --st-muted: #6b6b76;
+  --st-faint: #8a8a94;
+  --st-surface: #fff;
+  --st-sunken: #f6f6f9;
+  --st-border: #e3e3e8;
+  --st-link: #3a3f6b;
+
+  /* Rails and fills. Most body blocks hang off a left border rather than
+     sitting in a tinted box: colour marks what a block *is*, weight is reserved
+     for what matters.
+
+     A fill is scarce, and marks content where a human's voice or judgement is
+     on the record — the student's prompt, the choice they made, the plan they
+     approved or sent back — plus real errors. Machine mechanism (AI narration,
+     tool calls, code diffs, the recap) is never filled. The prompt carries the
+     strongest of them: it is the student's own words, and once the collapsed
+     row truncates a long prompt it is the only place they can be read. */
+  --st-rail: #d5d5dd;
+  --st-rail-prompt: #5b6cf0;
+  --st-rail-decision: #d99a2b;
+  --st-rail-plan: #6b6fc7;
+  --st-rail-error: #c0392b;
+  --st-fill-prompt: #e9eefc;
+  --st-fill-decision: #fbf4e6;
+  --st-fill-plan: #f1f1fb;
+  --st-fill-error: #fbeceb;
+  --st-tag-prompt: #3a44b8;
+  /* Darkened from #a06a12, which read at only 4.2:1 on its own fill — under AA
+     for a label this small. */
+  --st-tag-decision: #8c5c0d;
+  --st-tag-plan: #4a4f9b;
+  --st-tag-error: #a03327;
 }
 body {
   font-family:
@@ -235,29 +273,36 @@ blockquote {
   background: #fff;
   overflow: hidden;
 }
+/* The row is a block, not a flex pair, so the meta can float and the prompt's
+   later lines wrap *beneath* it at full width. A two-column flex narrowed the
+   prompt on every line even though the markers only occupy the first one — and
+   the student's own words are the most worth reading thing on the page. */
 .turn > summary {
   cursor: pointer;
   padding: 0.4rem 0.9rem;
   line-height: 1.35;
   list-style: none;
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-start;
-  gap: 0.5rem;
+}
+.turn > summary::after {
+  content: '';
+  display: block;
+  clear: both;
 }
 .turn > summary::-webkit-details-marker {
   display: none;
 }
-.turn > summary::before {
-  content: '▸';
-  color: #9a9aa6;
-}
-.turn[open] > summary::before {
-  content: '▾';
-}
 .turn .prompt-text {
   font-weight: 600;
-  flex: 1 1 16rem;
+}
+/* The caret sits on the prompt (not the row) now that the row is a block, so it
+   stays glued to the first word instead of floating in the margin. */
+.turn .prompt-text::before {
+  content: '▸ ';
+  color: var(--st-faint);
+  font-weight: 400;
+}
+.turn[open] .prompt-text::before {
+  content: '▾ ';
 }
 .badge {
   font-size: 0.72rem;
@@ -307,30 +352,76 @@ blockquote {
   font-size: 0.78rem;
   color: #8a8a94;
 }
-/* Right-hand meta column: badge + time on top, the edit-count tucked directly
-   beneath them and right-aligned. Stacking it here means it shares the vertical
-   space a wrapped prompt already takes, so it only adds height when the prompt
-   is a single short line. */
+/* Floated right so a long prompt wraps under it. Kept narrow: on most rows it
+   holds only a time, because the tool/model badges are emitted solely when they
+   change and the markers only when something happened. */
 .turn .meta {
+  float: right;
   display: flex;
   flex-direction: column;
   align-items: flex-end;
   gap: 0.15rem;
-  flex: 0 0 auto;
-  margin-left: auto;
+  margin-left: 1rem;
+  max-width: 55%;
 }
 .turn .meta-top {
   display: flex;
   align-items: baseline;
+  justify-content: flex-end;
+  flex-wrap: wrap;
   gap: 0.5rem;
 }
-.turn .stat {
+/* A badge earns its place where it *changes*, so rows that repeat the row above
+   hide theirs. Which row that is depends on the order on screen, and the reader
+   can re-sort — so the badges are always in the markup and only these marks
+   move, recomputed by report-controls.js after every reorder. */
+.turn.is-repeat-tool .meta-top .badge:not(.badge--model):not(.badge--author),
+.turn.is-repeat-model .meta-top .badge--model {
+  display: none;
+}
+.turn .stats {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: baseline;
+  gap: 0.4rem;
   font-size: 0.78rem;
-  color: #8a8a94;
-  text-align: right;
+}
+.turn .stat {
+  color: var(--st-faint);
+}
+/* Markers. These are the row's whole point: an educator scanning far more turns
+   than they can read needs to know which ones repay opening. They only render
+   when the thing happened, so most rows carry none and a marked row genuinely
+   pulls the eye — which is exactly why nothing that appears on *every* row
+   (duration, tool counts, tokens) is allowed in here. */
+.turn .signal {
+  font-size: 0.75rem;
+  font-weight: 600;
+  white-space: nowrap;
+  color: var(--st-muted);
+}
+.turn .signal--decision {
+  color: var(--st-tag-decision);
+}
+.turn .signal--revised,
+.turn .signal--plan {
+  color: var(--st-tag-plan);
+}
+.turn .signal--failed {
+  color: var(--st-tag-error);
 }
 .turn-body {
   padding: 0 0.9rem 0.8rem;
+}
+/* Everything the collapsed row left out, for a reader who has already decided
+   to read this turn: tool, model, duration, the tool breakdown, tokens, branch. */
+.turn-detail {
+  font-size: 0.75rem;
+  color: var(--st-faint);
+  margin: 0 0 0.5rem;
+  padding-bottom: 0.4rem;
+  border-bottom: 1px solid var(--st-border);
 }
 .turn-body h4 {
   margin: 0.8rem 0 0.3rem;
@@ -434,10 +525,18 @@ blockquote {
   background: #e8eaf4;
   color: #2f3566;
 }
+/* The student's own words, in full. The loudest block in a turn body: it is
+   what the report exists to show, and since the collapsed row caps a long
+   prompt this is the only place to read the rest of it. */
 .prompt-block {
   margin: 0.3rem 0 0.6rem;
-  padding: 0.2rem 0 0.2rem 0.7rem;
-  border-left: 3px solid #c6cbf0;
+  padding: 0.35rem 0.6rem 0.35rem 0.7rem;
+  border-left: 3px solid var(--st-rail-prompt);
+  border-radius: 0 0.25rem 0.25rem 0;
+  background: var(--st-fill-prompt);
+}
+.prompt-block .role-tag {
+  color: var(--st-tag-prompt);
 }
 .role-tag {
   font-size: 0.68rem;
@@ -448,27 +547,33 @@ blockquote {
 .prompt-block .ai-text {
   margin: 0.1rem 0 0;
 }
-/* A decision the student made when the AI paused to ask — a warm accent so it
-   reads as distinct from a prompt (blue) or an AI reply (plain). */
+/* A decision the student made when the AI paused to ask — the student's own
+   judgement, so it is filled; a warm accent keeps it distinct from the prompt
+   (blue) and the plan (indigo). */
 .decision {
   margin: 0.4rem 0 0.6rem;
-  padding: 0.2rem 0 0.2rem 0.7rem;
-  border-left: 3px solid #d99a2b;
-  background: #fbf4e6;
+  padding: 0.35rem 0.6rem 0.35rem 0.7rem;
+  border-left: 3px solid var(--st-rail-decision);
+  border-radius: 0 0.25rem 0.25rem 0;
+  background: var(--st-fill-decision);
 }
 .decision-tag {
-  color: #a06a12;
+  color: var(--st-tag-decision);
 }
 .decision .ai-text {
   margin: 0.1rem 0 0;
 }
 /* A plan the AI proposed in plan mode — collapsible, with an indigo accent and an
    approval badge so a reviewer sees which plans were adopted before expanding. */
+/* Filled like a decision: a plan is a proposal the student explicitly approved
+   or sent back, so their judgement is on the record here too — which is the
+   line that separates a filled block from unfilled machinery. */
 .plan {
   margin: 0.4rem 0 0.6rem;
-  padding: 0.2rem 0 0.2rem 0.7rem;
-  border-left: 3px solid #6b6fc7;
-  background: #f1f1fb;
+  padding: 0.35rem 0.6rem 0.35rem 0.7rem;
+  border-left: 3px solid var(--st-rail-plan);
+  border-radius: 0 0.25rem 0.25rem 0;
+  background: var(--st-fill-plan);
 }
 .plan > summary {
   cursor: pointer;
@@ -479,13 +584,13 @@ blockquote {
 }
 .plan > summary::before {
   content: '▸ ';
-  color: #6b6fc7;
+  color: var(--st-rail-plan);
 }
 .plan[open] > summary::before {
   content: '▾ ';
 }
 .plan-tag {
-  color: #4a4f9b;
+  color: var(--st-tag-plan);
 }
 .plan-badge {
   font-size: 0.68rem;
@@ -521,46 +626,86 @@ blockquote {
   font-size: 0.8rem;
   font-weight: 500;
 }
-/* A tool call (Bash, Read, Grep, ...) the AI made — collapsible like a plan, with
-   a teal accent; an errored call tints red instead so it stands out at a glance. */
-.tool-call {
-  margin: 0.4rem 0 0.6rem;
-  padding: 0.2rem 0 0.2rem 0.7rem;
-  border-left: 3px solid #2b9a8f;
-  background: #eaf6f4;
+/* A run of tool calls (Bash, Read, Grep, ...), collapsed to one line.
+   The mechanism is the least important thing in a turn and the most numerous —
+   a single real turn produced 154 calls — so it gets the quietest treatment in
+   the document: no fill, a neutral rail, and one summary line until asked for.
+   Previously each call was its own tinted, bordered card, which buried both the
+   AI's reasoning and the student's own work underneath it. */
+.tools {
+  margin: 0.35rem 0 0.5rem;
+  padding-left: 0.7rem;
+  border-left: 2px solid var(--st-rail);
 }
-.tool-call > summary {
+.tools > summary {
+  cursor: pointer;
+  list-style: none;
+  font-size: 0.78rem;
+  color: var(--st-muted);
+}
+.tools > summary::-webkit-details-marker {
+  display: none;
+}
+.tools > summary::before {
+  content: '▸ ';
+  color: var(--st-faint);
+}
+.tools[open] > summary::before {
+  content: '▾ ';
+}
+.tools.has-error {
+  border-left-color: var(--st-rail-error);
+}
+.tool-run-tag {
+  color: var(--st-muted);
+  font-weight: 600;
+}
+.tool-run-breakdown {
+  color: var(--st-faint);
+}
+.tool-run-failed {
+  color: var(--st-tag-error);
+  font-weight: 600;
+}
+.tool-run-body {
+  margin: 0.25rem 0 0.15rem;
+}
+/* One call: name, then the invocation in mono. A row with no output is a plain
+   div rather than a disclosure that opens to nothing (same as .code-file). */
+.tool-row {
+  font-size: 0.78rem;
+  line-height: 1.5;
+  color: var(--st-muted);
+}
+.tool-row > summary {
   cursor: pointer;
   list-style: none;
 }
-.tool-call > summary::-webkit-details-marker {
+.tool-row > summary::-webkit-details-marker {
   display: none;
 }
-.tool-call > summary::before {
-  content: '▸ ';
-  color: #2b9a8f;
-}
-.tool-call[open] > summary::before {
-  content: '▾ ';
-}
-.tool-call-tag {
-  color: #1c6b62;
-}
-.tool-call.is-error {
-  border-left-color: #c0392b;
-  background: #fbeceb;
-}
-.tool-call.is-error .tool-call-tag {
-  color: #a03327;
-}
-.tool-call-badge {
-  font-size: 0.68rem;
+.tool-row-name {
   font-weight: 600;
-  color: #a03327;
-  margin-left: 0.3rem;
+  color: var(--st-link);
+  margin-right: 0.45rem;
 }
-.tool-call .ai-text {
-  margin: 0.3rem 0 0;
+.tool-row-cmd {
+  font-family:
+    ui-monospace,
+    SFMono-Regular,
+    'SF Mono',
+    Menlo,
+    Consolas,
+    monospace;
+  font-size: 0.95em;
+  color: var(--st-faint);
+}
+.tool-row.is-error .tool-row-name {
+  color: var(--st-tag-error);
+}
+.tool-row .ai-text {
+  margin: 0.15rem 0 0.4rem 0.7rem;
+  font-size: 0.95em;
 }
 /* The turn's end-of-turn recap — a quiet quoted note above the AI work, distinct
    from the prompt block it follows. */
@@ -771,9 +916,48 @@ pre.codeblock code {
   border-top-left-radius: 0;
 }
 @media (prefers-color-scheme: dark) {
+  /* Re-point the tokens once; everything built on them follows automatically.
+     This is what stops elements keeping a light-mode hex on a near-black
+     background — previously the case for the code links, several carets and the
+     prompt rail. */
+  :root {
+    --st-text: #e4e4ea;
+    --st-muted: #a0a0aa;
+    /* Lifted from #85858f, which sat exactly on the 4.5:1 AA line — too tight
+       for the small mono text the tool rows use. This clears it at 5.5:1. */
+    --st-faint: #95959f;
+    --st-surface: #1f1f23;
+    --st-sunken: #242429;
+    --st-border: #34343a;
+    --st-link: #aab0ff;
+    --st-rail: #44444c;
+    --st-rail-prompt: #7d8bff;
+    --st-rail-decision: #b9842a;
+    --st-rail-plan: #7b7fd0;
+    --st-rail-error: #d9584a;
+    --st-fill-prompt: #222944;
+    --st-fill-decision: #2b2519;
+    --st-fill-plan: #28223a;
+    --st-fill-error: #2c1917;
+    --st-tag-prompt: #9aa6ff;
+    --st-tag-decision: #e0b257;
+    --st-tag-plan: #aab0ff;
+    --st-tag-error: #e08277;
+  }
   body {
     color: #e4e4ea;
     background: #18181b;
+  }
+  /* Dark-mode fixes: these kept light-mode values and rendered dark-on-dark. */
+  .code > summary,
+  .code-file,
+  .file-link {
+    color: var(--st-link);
+  }
+  .st-btn:focus-visible,
+  .st-seg-btn:focus-visible,
+  .st-switch input:focus-visible + .st-switch-ui {
+    outline-color: #8a90ff;
   }
   .st-tzbar {
     background: #1f1f23;
@@ -932,37 +1116,6 @@ pre.codeblock code {
     background: #2c2c33;
     color: #e4e4ea;
   }
-  .decision {
-    background: #2b2519;
-    border-left-color: #b9842a;
-  }
-  .decision-tag {
-    color: #e0b257;
-  }
-  .plan {
-    background: #1f1f2b;
-    border-left-color: #7b7fd0;
-  }
-  .plan-tag {
-    color: #aab0ff;
-  }
-  .tool-call {
-    background: #14282a;
-    border-left-color: #3ab3a4;
-  }
-  .tool-call-tag {
-    color: #5cccbd;
-  }
-  .tool-call.is-error {
-    background: #2c1917;
-    border-left-color: #d9584a;
-  }
-  .tool-call.is-error .tool-call-tag {
-    color: #e08277;
-  }
-  .tool-call-badge {
-    color: #e08277;
-  }
   .recap {
     border-left-color: #44444c;
     color: #a0a0aa;
@@ -1043,5 +1196,23 @@ pre.codeblock code {
   }
   .plan-feedback {
     color: #d0d0d8;
+  }
+}
+
+/* Narrow screens: the floated meta would squeeze the prompt into a column a few
+   words wide, so drop it below instead. The report had no breakpoints at all. */
+@media (max-width: 40rem) {
+  body {
+    padding: 0 1rem 3rem;
+  }
+  .turn .meta {
+    float: none;
+    align-items: flex-start;
+    margin: 0.25rem 0 0;
+    max-width: 100%;
+  }
+  .turn .meta-top,
+  .turn .stats {
+    justify-content: flex-start;
   }
 }

@@ -6,14 +6,18 @@ import { escapeHtml, firstLine } from '../html.ts';
 import { highlightCode } from '../highlight.ts';
 import {
   formatDuration,
+  longTurnThreshold,
   modelLabel,
   nameBySlugMap,
   shouldShowAuthor,
+  summarizeToolRun,
   toolLabel,
   type TurnItem,
   turnModels,
   turnSegments,
+  turnSignals,
 } from './data.ts';
+import { pluralS } from '../text.ts';
 import { PLAN_APPROVED_TAG, PLAN_REVISED_TAG, splitPlanText } from '../plans.ts';
 import {
   type AiMode,
@@ -69,49 +73,206 @@ ${CONTROLS_JS}</script>
 `;
 }
 
-/** The collapsed `<summary>` for a turn: prompt line, author/tool badges, time, stat. */
-function renderTurnSummary(
-  turn: Turn,
-  showAuthor: boolean,
-  nameBySlug: Map<string, string>,
-): string {
+/** How much of a prompt the collapsed row shows before it is cut. */
+const PROMPT_PREVIEW_CHARS = 180;
+
+/** Context a row needs that depends on the rest of the report, not just the turn. */
+interface RowContext {
+  showAuthor: boolean;
+  nameBySlug: Map<string, string>;
+  /** Durations at or above this are worth flagging; undefined = flag none. */
+  longTurnMs?: number;
+}
+
+/**
+ * The collapsed `<summary>` for a turn — a triage row, not a stat line.
+ *
+ * Its reader is an educator scanning more turns than they can read, so it
+ * carries the student's own words, what those words produced, and *sparse*
+ * markers for the turns worth opening. Everything that would appear on every
+ * row (duration, tool counts, tokens, an unchanged tool/model badge) lives in
+ * the detail strip inside instead: a marker only guides the eye while most rows
+ * have none.
+ */
+function renderTurnSummary(turn: Turn, ctx: RowContext): string {
   const fileCount = turn.codeChanges.length;
   const lineCount = turn.codeChanges.reduce((n, c) => n + (c.diffLines ?? 0), 0);
-  // Surface what happened in this exchange as a compact stat under the date, so
-  // a reviewer can see edits and decisions without expanding the card. Each part
-  // appears only when it occurred; edits and decisions coexist (joined by " · ").
-  const statParts: string[] = [];
+  const parts: string[] = [];
+  // What the exchange produced — the outcome, and the one fact worth a number.
   if (fileCount > 0) {
-    statParts.push(`${fileCount} file(s)${lineCount ? `, ~${lineCount} line(s)` : ''}`);
+    const files = `${fileCount} file${pluralS(fileCount)}`;
+    const lines = lineCount ? ` · ~${lineCount} line${pluralS(lineCount)}` : '';
+    parts.push(`<span class="stat">${escapeHtml(files + lines)}</span>`);
   }
-  if (turn.decisions.length > 0) statParts.push(`${turn.decisions.length} decision(s)`);
-  if (turn.plans.length > 0) statParts.push(`${turn.plans.length} plan(s)`);
-  if (turn.toolCalls.length > 0) statParts.push(`${turn.toolCalls.length} tool call(s)`);
-  if (turn.recap?.durationMs) statParts.push(formatDuration(turn.recap.durationMs));
-  const stat = statParts.join(' · ');
-  const authorName = showAuthor ? (nameBySlug.get(turn.actorSlug) ?? turn.actorSlug) : '';
+  parts.push(...renderSignals(turn, ctx.longTurnMs));
+
+  const authorName = ctx.showAuthor
+    ? (ctx.nameBySlug.get(turn.actorSlug) ?? turn.actorSlug)
+    : '';
   const authorBadge = authorName
     ? `<span class="badge badge--author" data-author="${escapeHtml(turn.actorSlug)}">${escapeHtml(authorName)}</span>`
     : '';
-  // The model(s) this exchange used, as a secondary (outlined) badge next to the
-  // tool badge. Normally one; omitted entirely when no model was captured.
-  const modelBadges = turnModels(turn)
+  // Tool and model repeat identically on every row of a single-tool session, so
+  // a badge is only worth showing where it *changes* — which turns a switch into
+  // a real event. Both badges are always emitted and the repeats merely marked,
+  // because the reader can re-sort the rows: which row begins a run is a
+  // property of the order on screen, not of the order we rendered in, so the
+  // controls script recomputes these marks after every reorder.
+  const toolBadge = `<span class="badge badge--${escapeHtml(turn.tool)}">${escapeHtml(toolLabel(turn.tool))}</span>`;
+  const models = turnModels(turn);
+  const modelBadges = models
     .map((m) => `<span class="badge badge--model">${escapeHtml(modelLabel(m))}</span>`)
     .join('');
   return (
     '<summary>' +
-    `<span class="prompt-text">${escapeHtml(firstLine(turn.prompt.text))}</span>` +
+    // Floated first so the prompt's later lines wrap beneath it (see report.css).
     '<span class="meta">' +
     '<span class="meta-top">' +
     authorBadge +
-    `<span class="badge badge--${escapeHtml(turn.tool)}">${escapeHtml(toolLabel(turn.tool))}</span>` +
+    toolBadge +
     modelBadges +
     `<span class="time">${timeTag(turn.prompt.timestamp)}</span>` +
     '</span>' +
-    (stat ? `<span class="stat">${escapeHtml(stat)}</span>` : '') +
+    (parts.length > 0 ? `<span class="stats">${parts.join('')}</span>` : '') +
     '</span>' +
+    `<span class="prompt-text">${escapeHtml(truncate(turn.prompt.text.trim(), PROMPT_PREVIEW_CHARS))}</span>` +
     '</summary>'
   );
+}
+
+/**
+ * The row's markers: the student's judgement and the friction they worked
+ * through, each rendered only when it happened. Kept as short words rather than
+ * bare glyphs — they are rare enough to afford the width, and a professor
+ * should not have to learn a symbol key.
+ */
+function renderSignals(turn: Turn, longTurnMs?: number): string[] {
+  const s = turnSignals(turn);
+  const out: string[] = [];
+  const add = (cls: string, text: string, title: string) =>
+    out.push(
+      `<span class="signal signal--${cls}" title="${escapeHtml(title)}">${escapeHtml(text)}</span>`,
+    );
+  if (s.decisions > 0) {
+    add(
+      'decision',
+      s.decisions > 1 ? `🔀 ${s.decisions} decisions` : '🔀 decision',
+      'The student chose between options the AI offered',
+    );
+  }
+  if (s.plansRevised > 0) {
+    add(
+      'revised',
+      s.plansRevised > 1 ? `↩ ${s.plansRevised} plans revised` : '↩ plan revised',
+      'The student sent a plan back for changes rather than approving it',
+    );
+  }
+  if (s.plansProposed > 0) {
+    add(
+      'plan',
+      s.plansProposed > 1 ? `📋 ${s.plansProposed} plans` : '📋 plan',
+      'The AI proposed a plan in plan mode',
+    );
+  }
+  if (s.failedTools > 0) {
+    add(
+      'failed',
+      `⚠ ${s.failedTools} failed`,
+      'Commands that failed and were worked through',
+    );
+  }
+  const ms = turn.recap?.durationMs;
+  if (ms !== undefined && longTurnMs !== undefined && ms >= longTurnMs) {
+    add('long', `⏱ ${formatDuration(ms)}`, 'One of the longest turns in this session');
+  }
+  return out;
+}
+
+/**
+ * The dim strip at the top of an opened turn: everything the collapsed row
+ * deliberately left out. Nothing here is triage signal, but all of it is worth
+ * having once you have decided to read this turn — including the per-turn token
+ * usage and git branch, which are captured but were previously never displayed.
+ */
+function renderTurnDetail(turn: Turn): string {
+  const bits: string[] = [toolLabel(turn.tool)];
+  for (const m of turnModels(turn)) bits.push(modelLabel(m));
+  const recap = turn.recap;
+  if (recap?.durationMs) bits.push(formatDuration(recap.durationMs));
+  if (turn.toolCalls.length > 0) {
+    const { total, byTool, failed } = summarizeToolRun(turn.toolCalls);
+    const breakdown = byTool.map((t) => `${t.count} ${t.name}`).join(', ');
+    bits.push(
+      `${total} tool call${pluralS(total)}${breakdown ? ` (${breakdown})` : ''}` +
+        (failed > 0 ? ` · ${failed} failed` : ''),
+    );
+  }
+  const tokens =
+    (recap?.inputTokens ?? 0) +
+    (recap?.outputTokens ?? 0) +
+    (recap?.cacheReadTokens ?? 0) +
+    (recap?.cacheCreationTokens ?? 0);
+  if (tokens > 0) bits.push(`${formatTokens(tokens)} tokens`);
+  if (recap?.gitBranch) bits.push(recap.gitBranch);
+  return `<div class="turn-detail">${escapeHtml(bits.join(' · '))}</div>`;
+}
+
+/** Token counts compactly: `14.2k` past a thousand, plain below. */
+function formatTokens(n: number): string {
+  return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
+}
+
+/**
+ * A run of consecutive tool calls as one quiet group.
+ *
+ * The mechanism is the least important thing in a turn, so it collapses to a
+ * single line the way the AI pill does — a real session can fire well over a
+ * hundred calls in one turn, and rendering each as its own card buried
+ * everything the student actually did. Each call inside is a cheap row: name,
+ * invocation, and its output only if there was any.
+ */
+function renderToolRun(events: Event[]): string {
+  // A lone call needs no group around it — a "1 tool call" header over a single
+  // row is pure chrome.
+  if (events.length === 1) return renderToolRow(events[0]!);
+  const { total, byTool, failed } = summarizeToolRun(events);
+  const breakdown = byTool.map((t) => `${t.count} ${escapeHtml(t.name)}`).join(' · ');
+  const failedBadge =
+    failed > 0 ? ` <span class="tool-run-failed">⚠ ${failed} failed</span>` : '';
+  const rows = events.map((e) => renderToolRow(e)).join('\n');
+  return [
+    `<details class="tools${failed > 0 ? ' has-error' : ''}">`,
+    '<summary>' +
+      `<span class="role-tag tool-run-tag">🛠 ${total} tool call${pluralS(total)}</span>` +
+      (breakdown ? ` <span class="tool-run-breakdown">${breakdown}</span>` : '') +
+      failedBadge +
+      '</summary>',
+    `<div class="tool-run-body">\n${rows}\n</div>`,
+    '</details>',
+  ].join('\n');
+}
+
+/** One call in a run: a disclosure when it produced output, a plain row if not. */
+function renderToolRow(event: Event): string {
+  const name = escapeHtml(event.toolName ?? 'Tool');
+  const cls = event.isError ? 'tool-row is-error' : 'tool-row';
+  // `text` is the rendered invocation plus, when captured, a fenced result block.
+  // Split them so the invocation can be the summary and the output the body.
+  const text = event.text;
+  const split = text.indexOf('\n\n');
+  const head = (split === -1 ? text : text.slice(0, split)).trim();
+  const body = split === -1 ? '' : text.slice(split + 2).trim();
+  const label = `<span class="tool-row-name">${name}</span>`;
+  const invocation = `<span class="tool-row-cmd">${escapeHtml(truncate(head, 160))}</span>`;
+  if (!body) {
+    return `<div class="${cls}">${label}${invocation}</div>`;
+  }
+  return [
+    `<details class="${cls}">`,
+    `<summary>${label}${invocation}</summary>`,
+    `<div class="ai-text">${renderRichText(body)}</div>`,
+    '</details>',
+  ].join('\n');
 }
 
 /** One interleaved item (AI reply, decision, or code change) inside a turn body. */
@@ -161,20 +322,13 @@ function renderTimelineItem(item: TurnItem): string {
     ].join('\n');
   }
   if (item.kind === 'tool_call') {
-    const label = item.event.toolName ?? 'Tool';
-    const cls = item.event.isError ? 'tool-call is-error' : 'tool-call';
-    const badge = item.event.isError
-      ? ' <span class="tool-call-badge">⚠️ error</span>'
-      : '';
-    return [
-      `<details class="${cls}">`,
-      `<summary><span class="role-tag tool-call-tag">🛠️ ${escapeHtml(label)}</span>${badge}</summary>`,
-      `<div class="ai-text">${renderRichText(item.event.text)}</div>`,
-      '</details>',
-    ].join('\n');
+    // A lone tool call outside a run; runs go through `renderToolRun`.
+    return renderToolRow(item.event);
   }
   const code = item.change;
-  const stat = code.diffLines ? ` (~${code.diffLines} line(s))` : '';
+  const stat = code.diffLines
+    ? ` (~${code.diffLines} line${pluralS(code.diffLines)})`
+    : '';
   const fileLink =
     `<a class="file-link" href="${escapeHtml(fileHref(code.linkPath ?? code.path))}" ` +
     'target="_blank" rel="noopener" onclick="event.stopPropagation()">' +
@@ -275,21 +429,43 @@ function turnsHtml(data: ReportData, mode: AiMode): string {
   // On the combined team report, attribute each card to its author.
   const showAuthor = shouldShowAuthor(data);
   const nameBySlug = nameBySlugMap(data.contributors);
+  // What counts as a "long" turn is relative to this report: sessions range from
+  // seconds to the best part of an hour, so a fixed cutoff would either mark
+  // half the rows or none.
+  const longTurnMs = longTurnThreshold(data.turns);
   const out: string[] = [renderToolbar(mode), '<div id="st-exchanges">'];
-  for (const turn of data.turns) {
+  data.turns.forEach((turn, i) => {
     const segments = turnSegments(turn);
-    // data-* drive the toolbar's sort (by prompt time, or grouped by session).
+    // Which rows repeat the row above them, for the default (chronological)
+    // order. The controls script recomputes these the moment the reader sorts,
+    // since "repeats the previous row" depends on the order on screen; these
+    // classes are the correct answer for the order a no-JS reader sees.
+    const previous = data.turns[i - 1];
+    const toolLabelText = toolLabel(turn.tool);
+    const modelsText = turnModels(turn).map(modelLabel).join(', ');
+    const repeat: string[] = [];
+    if (previous && previous.tool === turn.tool) repeat.push('is-repeat-tool');
+    if (previous && turnModels(previous).map(modelLabel).join(', ') === modelsText) {
+      repeat.push('is-repeat-model');
+    }
+    // data-* drive the toolbar's sort (by prompt time, or grouped by session)
+    // and the badge-run recompute.
     out.push(
-      `<details class="turn" data-ts="${escapeHtml(turn.prompt.timestamp)}" ` +
+      `<details class="turn${repeat.length ? ' ' + repeat.join(' ') : ''}" ` +
+        `data-ts="${escapeHtml(turn.prompt.timestamp)}" ` +
         `data-session="${escapeHtml(turn.sessionId)}" ` +
-        `data-tool="${escapeHtml(turn.tool)}">`,
+        `data-tool="${escapeHtml(turn.tool)}" ` +
+        `data-tool-label="${escapeHtml(toolLabelText)}" ` +
+        `data-models="${escapeHtml(modelsText)}">`,
     );
-    out.push(renderTurnSummary(turn, showAuthor, nameBySlug));
+    out.push(renderTurnSummary(turn, { showAuthor, nameBySlug, longTurnMs }));
     out.push('<div class="turn-body">');
+    out.push(renderTurnDetail(turn));
 
-    // Show the full prompt only when it has more than the one line in the summary,
-    // marked distinctly so the student's words are clear from the AI's reply.
-    if (turn.prompt.text.trim() !== firstLine(turn.prompt.text)) {
+    // Show the full prompt only when the row's preview cut it short, marked
+    // distinctly so the student's words are clear from the AI's reply.
+    const prompt = turn.prompt.text.trim();
+    if (prompt !== truncate(prompt, PROMPT_PREVIEW_CHARS)) {
       out.push(
         `<div class="prompt-block"><span class="role-tag">Prompt</span>` +
           `<div class="ai-text">${renderRichText(turn.prompt.text)}</div></div>`,
@@ -301,11 +477,12 @@ function turnsHtml(data: ReportData, mode: AiMode): string {
           `<div class="ai-text">${renderRichText(turn.recap.text)}</div></div>`,
       );
     }
-    // One chronological stream: work items inline, each run of AI messages as a
-    // collapsed pill in the position it occurred. `--ai off` drops the AI pills,
-    // leaving only the student's work (prompt/decisions/plans/changes) in order.
+    // One chronological stream: work items inline, each run of AI messages or
+    // tool calls collapsed in the position it occurred. `--ai off` drops the AI
+    // pills, leaving only the student's work in order.
     for (const seg of segments) {
       if (seg.kind === 'work') out.push(renderTimelineItem(seg.item));
+      else if (seg.kind === 'tools') out.push(renderToolRun(seg.events));
       else if (mode !== 'off') out.push(renderAiProcess(seg.events, mode === 'full'));
     }
 
@@ -320,7 +497,7 @@ function turnsHtml(data: ReportData, mode: AiMode): string {
     );
 
     out.push('</details>');
-  }
+  });
   out.push('</div>'); // #st-exchanges
   return out.join('\n');
 }
