@@ -508,15 +508,13 @@ function turnsHtml(data: ReportData, mode: AiMode): string {
     // Full-width footer that collapses the card — a direct child of the card so
     // it spans edge to edge. Inline handler keeps the file self-contained
     // (degrades to a no-op if JS is disabled; the summary still toggles).
-    // Collapsing also scrolls the row back into view: by the time you have read
-    // down to this button the prompt it belongs to is far above the viewport,
-    // and closing without this drops you somewhere unrelated with no idea which
-    // exchange you were on. `nearest` only scrolls when the row is off-screen,
-    // so closing a short card still moves nothing.
+    // Where the reader ends up afterwards is not this button's business:
+    // report-controls.js watches every disclosure's `toggle` and puts the header
+    // back where it was opened from. Scrolling here as well would fire first and
+    // then be overridden by that, one collapse showing as two jumps.
     out.push(
       '<button type="button" class="turn-close" ' +
-        "onclick=\"var d=this.closest('details.turn');d.open=false;" +
-        "d.scrollIntoView({block:'nearest'})\">▲ Close</button>",
+        'onclick="this.closest(\'details.turn\').open=false">▲ Close</button>',
     );
 
     out.push('</details>');

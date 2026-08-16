@@ -216,17 +216,31 @@ describe('turns', () => {
       // Rows are adjacent — no empty (gray-gap) line is emitted between them.
       expect(html).toContain('</span><span class="dline');
       // A Close button collapses the card via an inline handler (no card script).
+      // It only shuts the card: where the reader lands is the toggle listener's
+      // job, and scrolling here too would show one collapse as two jumps.
       expect(html).toContain('class="turn-close"');
-      expect(html).toContain('open=false');
-      // Closing from the footer of a long card scrolls the prompt row back into
-      // view — otherwise the reader lands somewhere unrelated — and clears the
-      // sticky toolbar, whose real height the controls script publishes.
-      expect(html).toContain("d.scrollIntoView({block:'nearest'})");
+      expect(html).toContain('onclick="this.closest(\'details.turn\').open=false"');
+      expect(html).not.toContain("d.scrollIntoView({block:'nearest'})");
+      // Collapsing any disclosure — card, plan, diff, tool run — puts its header
+      // back where it was opened from. `toggle` does not bubble, so the one
+      // listener that does this for all of them has to capture.
+      expect(html).toContain("'toggle',");
+      expect(html).toContain("if (!d || d.tagName !== 'DETAILS') return;");
+      expect(html).toContain('d.stTop = d.getBoundingClientRect().top');
+      expect(html).toContain('window.scrollBy(0, now - Math.max(d.stTop, floor))');
+      // Tall inner cards get the same footer, since their only other way out is
+      // scrolling back up to the summary.
+      expect(html).toContain("btn.className = 'turn-close turn-close--nested'");
+      expect(html).toContain('.turn-close--nested {');
+      // Scrolled-back headers clear the sticky toolbar, whose real height the
+      // controls script publishes.
       expect(html).toContain('scroll-margin-top: calc(var(--st-bar-h');
       expect(html).toContain("setProperty('--st-bar-h'");
-      // Collapse all anchors on the exchange the reader was on; Show less holds
-      // its own button still rather than letting the page jump under the cursor.
+      // Collapse all anchors on the exchange the reader was on, and marks the
+      // cards it moves so they do not each restore themselves over that anchor.
       expect(html).toContain("if (anchor) anchor.scrollIntoView({ block: 'nearest' })");
+      expect(html).toContain('turns[i].stBulk = true');
+      // Show less holds its own button still rather than jumping under the cursor.
       expect(html).toContain(
         'window.scrollBy(0, btn.getBoundingClientRect().top - before)',
       );

@@ -272,10 +272,14 @@ blockquote {
   margin: 0.35rem 0;
   background: #fff;
   overflow: hidden;
-  /* Collapsing a long card scrolls its row back into view, and the exchanges
-     toolbar is sticky at the top — so the row has to clear the bar or it lands
-     underneath it. report-controls.js measures the real bar (it wraps on narrow
-     screens); the fallback covers a one-line bar for the inline Close handler. */
+}
+/* Collapsing a card scrolls its header back into view, and the exchanges
+   toolbar is sticky at the top — so the header has to clear the bar or it lands
+   underneath it. report-controls.js measures the real bar (it wraps on narrow
+   screens); the fallback covers a one-line bar. Every disclosure gets this, not
+   just the exchange card: a plan or a diff can be just as tall. */
+.turn,
+.turn details {
   scroll-margin-top: calc(var(--st-bar-h, 2.75rem) + 0.75rem);
 }
 /* The row is a block, not a flex pair, so the meta can float and the prompt's
@@ -529,6 +533,17 @@ blockquote {
 .turn-close:hover {
   background: #e8eaf4;
   color: #2f3566;
+}
+/* The same footer on a tall inner card — a plan, a diff, a long tool run.
+   report-controls.js adds it on first open when the card turns out to be taller
+   than the screen, so reading to the bottom of one never means hunting back up
+   to its summary to shut it. Inset and quieter than the exchange card's, since
+   it closes the block it sits in and not the card around it. */
+.turn-close--nested {
+  margin-top: 0.4rem;
+  padding: 0.4rem;
+  font-size: 0.75rem;
+  border-radius: 0 0 0.3rem 0.3rem;
 }
 /* The student's own words, in full. The loudest block in a turn body: it is
    what the report exists to show, and since the collapsed row caps a long

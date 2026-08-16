@@ -22,13 +22,18 @@
 
   // The bar is sticky at the top of the viewport, so anything scrolled into
   // view has to clear it. Publish its real height (it wraps on narrow screens)
-  // for the `scroll-margin-top` on .turn; the stylesheet carries a one-line
-  // fallback for the inline Close handler, which runs whether or not we do.
+  // for the `scroll-margin-top` the stylesheet puts on every disclosure; that
+  // rule carries a one-line fallback for a reader whose layout differs.
   function syncBarHeight() {
     document.documentElement.style.setProperty('--st-bar-h', bar.offsetHeight + 'px');
   }
   syncBarHeight();
   window.addEventListener('resize', syncBarHeight);
+
+  // The highest point anything may be scrolled to without hiding under the bar.
+  function safeTop() {
+    return bar.getBoundingClientRect().bottom + 12;
+  }
 
   // The exchange a reader is currently on: the first one still showing below
   // the sticky bar. Collapsing moves everything above the viewport, so this is
@@ -40,6 +45,64 @@
       if (turns[i].getBoundingClientRect().bottom > floor) return turns[i];
     }
     return null;
+  }
+
+  // --- Collapsing returns you to where you opened from ---
+  // Clicking a summary twice has always felt fine because the header does not
+  // move; every other way of closing should match, so a collapse puts the
+  // header back at the exact offset it held when it was opened. Without this,
+  // shutting a card taller than the screen leaves the reader stranded in an
+  // unrelated part of a very long report.
+  //
+  // `toggle` does not bubble, but a capture-phase listener still sees it on the
+  // way down — so one listener covers all five kinds of card (exchange, plan,
+  // diff, tool run, single tool call), including the ones nested two deep and
+  // any added later. The event is queued rather than dispatched synchronously,
+  // so by the time this runs the new layout has settled and the rects are real.
+  document.addEventListener(
+    'toggle',
+    function (e) {
+      var d = e.target;
+      if (!d || d.tagName !== 'DETAILS') return;
+      if (d.stBulk) {
+        // Expand all opened it, so there is no "where you opened from" to
+        // remember; forget any older one rather than restoring a stale spot.
+        d.stBulk = false;
+        if (d.open) d.stTop = undefined;
+        return;
+      }
+      if (d.open) {
+        d.stTop = d.getBoundingClientRect().top;
+        addCloseFooter(d);
+        return;
+      }
+      var floor = safeTop();
+      var now = d.getBoundingClientRect().top;
+      if (d.stTop !== undefined) window.scrollBy(0, now - Math.max(d.stTop, floor));
+      // No remembered spot (opened before this ran, or by Expand all): settle
+      // for not leaving the header off-screen above.
+      else if (now < floor) d.scrollIntoView({ block: 'nearest' });
+    },
+    true,
+  );
+
+  // Only the exchange card ships a Close button at its foot. A plan, a diff or
+  // a run of tool calls can each be several screens tall with nothing but their
+  // summary to shut them, so a reader who has read to the bottom of one has to
+  // hunt back up to get out. Give the tall ones the same footer on first open —
+  // measured then, because a closed <details> renders no content to measure.
+  function addCloseFooter(d) {
+    if (d.stFooter || d.classList.contains('turn')) return;
+    if (d.getBoundingClientRect().height < window.innerHeight * 1.2) return;
+    d.stFooter = true;
+    var btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'turn-close turn-close--nested';
+    btn.textContent = '▲ Close';
+    btn.addEventListener('click', function () {
+      d.open = false;
+    });
+    d.appendChild(btn);
   }
 
   // --- Long AI narration: clamp it, with the control *below* the text ---
@@ -106,7 +169,14 @@
       // it needs no anchor.
       var anchor = on ? null : topmostTurn();
       var turns = list.querySelectorAll('details.turn');
-      for (var i = 0; i < turns.length; i++) turns[i].open = on;
+      for (var i = 0; i < turns.length; i++) {
+        // Mark the ones that actually change, so the toggle listener lets this
+        // one anchor stand instead of several hundred cards each restoring
+        // themselves and the last one winning. Marking a card that does not
+        // move would swallow the reader's next real click on it.
+        if (turns[i].open !== on) turns[i].stBulk = true;
+        turns[i].open = on;
+      }
       expandBtn.setAttribute('aria-pressed', on ? 'true' : 'false');
       if (expandLabel) expandLabel.textContent = on ? 'Collapse all' : 'Expand all';
       if (anchor) anchor.scrollIntoView({ block: 'nearest' });
