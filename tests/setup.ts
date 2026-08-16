@@ -1,7 +1,7 @@
 import { afterEach } from 'bun:test';
 import { readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 
 /**
  * Per-process root for every pinned temp home below.
@@ -95,6 +95,22 @@ process.env.SHOWTAIL_IDENTITY_HOME ??= join(RUN_ROOT, 'identity');
 // Spawned CLIs inherit it through `spawnEnv()`'s `...process.env`; tests that pin
 // their own home via `envWithHome` override it per test.
 process.env.SHOWTAIL_HOME ??= join(RUN_ROOT, 'home');
+
+// ...but refuse to honor an external value pointing outside the temp dir. Unlike
+// the ceiling/GEMINI_HOME/CODEX_HOME pins above, `SHOWTAIL_HOME` is not merely
+// *read* by the suite: the afterEach below unconditionally deletes
+// `$SHOWTAIL_HOME/ledger` and `config.json`. So a developer or CI job that
+// exported their real `~/.showtail-cli` — to reproduce a bug, say — would have
+// the suite destroy their live ledger after every single test, silently and
+// unrecoverably. Fail loudly instead; the honor-external escape hatch is only
+// meant for pointing at *another temp dir*.
+if (!resolve(process.env.SHOWTAIL_HOME).startsWith(resolve(tmpdir()))) {
+  throw new Error(
+    `Refusing to run tests with SHOWTAIL_HOME=${process.env.SHOWTAIL_HOME}: it is ` +
+      `outside ${tmpdir()}, and the afterEach hook deletes the ledger under it. ` +
+      `Unset it, or point it at a directory under the OS temp dir.`,
+  );
+}
 
 // Clear the shared machine-global state after each test. The per-project `.showtail/`
 // is already isolated by its temp dir, but the ledger AND global config live under

@@ -233,13 +233,17 @@ function formatTokens(n: number): string {
  */
 function renderToolRun(events: Event[]): string {
   // A lone call needs no group around it — a "1 tool call" header over a single
-  // row is pure chrome.
-  if (events.length === 1) return renderToolRow(events[0]!);
+  // row is pure chrome. It stays clickable: a run break always has a non-tool
+  // item in between, so a lone row can never sit beside another clickable row.
+  if (events.length === 1) return renderToolRow(events[0]!, true);
   const { total, byTool, failed } = summarizeToolRun(events);
   const breakdown = byTool.map((t) => `${t.count} ${escapeHtml(t.name)}`).join(' · ');
   const failedBadge =
     failed > 0 ? ` <span class="tool-run-failed">⚠ ${failed} failed</span>` : '';
-  const rows = events.map((e) => renderToolRow(e)).join('\n');
+  // The group is the *only* click target in the run. Its rows are plain, so
+  // opening it reveals every command and its output in one go rather than
+  // handing back a stack of further disclosures to click through.
+  const rows = events.map((e) => renderToolRow(e, false)).join('\n');
   return [
     `<details class="tools${failed > 0 ? ' has-error' : ''}">`,
     '<summary>' +
@@ -252,12 +256,20 @@ function renderToolRun(events: Event[]): string {
   ].join('\n');
 }
 
-/** One call in a run: a disclosure when it produced output, a plain row if not. */
-function renderToolRow(event: Event): string {
+/**
+ * One call: its name, the invocation, and whatever it printed.
+ *
+ * `clickable` is true only for a call standing on its own, where the row itself
+ * must be the disclosure. Inside a group it is false — the group already is the
+ * click target, and nesting disclosures inside it meant reaching one command's
+ * output took two clicks past a stack of identical affordances. A row with no
+ * output is always plain: an expander that opens to nothing is worse than none.
+ */
+function renderToolRow(event: Event, clickable: boolean): string {
   const name = escapeHtml(event.toolName ?? 'Tool');
   const cls = event.isError ? 'tool-row is-error' : 'tool-row';
   // `text` is the rendered invocation plus, when captured, a fenced result block.
-  // Split them so the invocation can be the summary and the output the body.
+  // Split them so the invocation leads and the output follows.
   const text = event.text;
   const split = text.indexOf('\n\n');
   const head = (split === -1 ? text : text.slice(0, split)).trim();
@@ -267,10 +279,14 @@ function renderToolRow(event: Event): string {
   if (!body) {
     return `<div class="${cls}">${label}${invocation}</div>`;
   }
+  const output = `<div class="ai-text tool-row-out">${renderRichText(body)}</div>`;
+  if (!clickable) {
+    return `<div class="${cls}">${label}${invocation}${output}</div>`;
+  }
   return [
     `<details class="${cls}">`,
     `<summary>${label}${invocation}</summary>`,
-    `<div class="ai-text">${renderRichText(body)}</div>`,
+    output,
     '</details>',
   ].join('\n');
 }
@@ -323,7 +339,7 @@ function renderTimelineItem(item: TurnItem): string {
   }
   if (item.kind === 'tool_call') {
     // A lone tool call outside a run; runs go through `renderToolRun`.
-    return renderToolRow(item.event);
+    return renderToolRow(item.event, true);
   }
   const code = item.change;
   const stat = code.diffLines
@@ -349,33 +365,27 @@ function renderTimelineItem(item: TurnItem): string {
 }
 
 /**
- * The turn's sidelined AI narration, as one collapsed disclosure. The summary
- * carries the message count and a short preview of the first message, so a reader
- * knows what's inside — and how much — before deciding to expand. `open` reflects
- * the report's default AI mode; the header toggle flips every such group at once.
+ * The turn's AI narration: quiet railed prose, with no header of its own.
+ *
+ * It used to sit under a disclosure whose summary was an icon, a Show/Hide verb,
+ * a message count and a preview — but the preview *was* the body's first line,
+ * and the median run is ~107 characters against a 90-character preview, so the
+ * whole row existed to hide about 17 characters. Nothing announces the narration
+ * now because nothing needs to: every other block in a turn body is marked (the
+ * prompt is tinted and labelled, decisions amber, plans indigo, tool calls dim
+ * monospace, the recap italic), so unlabelled prose can only be the AI talking.
+ * The rail carries that signal from the margin, at no cost in height.
+ *
+ * The long tail — the top few percent run 15-40 lines — is clamped by
+ * `report-controls.js` with a "Show more" *below* the text, so a control appears
+ * only where it is needed and never above a message. That clamp is applied at
+ * runtime, so a reader without JavaScript sees every message in full.
  */
-function renderAiProcess(events: Event[], open: boolean): string {
-  const preview = escapeHtml(truncate(firstLine(events[0]!.text), 90));
-  const n = events.length;
-  const count = `${n} AI message${n === 1 ? '' : 's'}`;
+function renderAiBlock(events: Event[]): string {
   const bodies = events
     .map((e) => `<div class="ai-text">${renderRichText(e.text)}</div>`)
     .join('\n');
-  // A clearly-clickable pill: robot icon, a Show/Hide verb (swapped by CSS on
-  // [open]), the count, a collapsed-only preview, and a chevron that rotates open.
-  return [
-    `<details class="ai-process"${open ? ' open' : ''}>`,
-    '<summary class="ai-pill">' +
-      '<span class="ai-pill-icon" aria-hidden="true">🤖</span>' +
-      '<span class="ai-pill-verb"><span class="v-show">Show</span>' +
-      '<span class="v-hide">Hide</span></span> ' +
-      `<span class="ai-pill-count">${count}</span>` +
-      (preview ? ` <span class="ai-preview">${preview}</span>` : '') +
-      '<span class="ai-pill-chevron" aria-hidden="true">⌄</span>' +
-      '</summary>',
-    `<div class="ai-pill-body">\n${bodies}\n</div>`,
-    '</details>',
-  ].join('\n');
+  return `<div class="ai-block">\n${bodies}\n</div>`;
 }
 
 /** Trim to `max` characters on a word boundary, adding an ellipsis when cut. */
@@ -398,7 +408,9 @@ function renderToolbar(mode: AiMode): string {
     mode === 'off'
       ? ''
       : '<div class="st-exbar-grp"><label class="st-switch" title="Show or hide every AI message">' +
-        `<input type="checkbox" id="st-ai"${mode === 'full' ? ' checked' : ''}>` +
+        // Checked by default: narration is now shown, and the switch hides it
+        // rather than collapsing it.
+        '<input type="checkbox" id="st-ai" checked>' +
         '<span class="st-switch-ui"></span>' +
         '<span class="st-switch-label">AI messages</span></label></div>';
   return [
@@ -433,7 +445,12 @@ function turnsHtml(data: ReportData, mode: AiMode): string {
   // seconds to the best part of an hour, so a fixed cutoff would either mark
   // half the rows or none.
   const longTurnMs = longTurnThreshold(data.turns);
-  const out: string[] = [renderToolbar(mode), '<div id="st-exchanges">'];
+  // `data-ai-mode` tells the controls script whether to clamp long narration:
+  // `full` means the reader asked to see all of it, so it is left alone.
+  const out: string[] = [
+    renderToolbar(mode),
+    `<div id="st-exchanges" data-ai-mode="${escapeHtml(mode)}">`,
+  ];
   data.turns.forEach((turn, i) => {
     const segments = turnSegments(turn);
     // Which rows repeat the row above them, for the default (chronological)
@@ -483,7 +500,7 @@ function turnsHtml(data: ReportData, mode: AiMode): string {
     for (const seg of segments) {
       if (seg.kind === 'work') out.push(renderTimelineItem(seg.item));
       else if (seg.kind === 'tools') out.push(renderToolRun(seg.events));
-      else if (mode !== 'off') out.push(renderAiProcess(seg.events, mode === 'full'));
+      else if (mode !== 'off') out.push(renderAiBlock(seg.events));
     }
 
     out.push('</div>'); // end .turn-body

@@ -50,10 +50,23 @@ export function runCli(
   return { stdout: res.stdout ?? '', stderr: res.stderr ?? '', code: res.status ?? 0 };
 }
 
-/** Read the structured JSON report `showtail report --format json` wrote into `dir`. */
+/**
+ * Read the **newest** JSON report `showtail report --format json` wrote into
+ * `dir`.
+ *
+ * Newest, not "whichever the filesystem lists first": reports are never pruned,
+ * so a test that generates two of them leaves both on disk, and `readdirSync`
+ * returns hash order on APFS. Taking the first match meant a test asserting that
+ * a second report *differs* from the first could silently read the stale one —
+ * an intermittent failure in `catchUp.test.ts`. Report names embed an ISO stamp,
+ * so sorting lexicographically is sorting chronologically.
+ */
 export function readJsonReport(dir: string): any {
   const reportsDir = join(dir, '.showtail', 'reports');
-  const file = readdirSync(reportsDir).find((f) => f.endsWith('.json'));
+  const file = readdirSync(reportsDir)
+    .filter((f) => f.endsWith('.json'))
+    .sort()
+    .pop();
   if (!file) throw new Error(`No JSON report found in ${reportsDir}`);
   return JSON.parse(readFileSync(join(reportsDir, file), 'utf8'));
 }

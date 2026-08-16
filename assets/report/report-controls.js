@@ -20,15 +20,47 @@
     }
   }
 
-  // --- AI messages: show/hide every per-prompt pill at once ---
+  // --- Long AI narration: clamp it, with the control *below* the text ---
+  // Done here rather than in the markup so a reader without JavaScript sees
+  // every message in full — nothing is ever hidden from them. Heights are read
+  // for all blocks first and classes written afterwards, so ~600 elements cost
+  // one layout pass instead of one each.
+  if (list.getAttribute('data-ai-mode') !== 'full') {
+    var blocks = list.querySelectorAll('.ai-block');
+    var maxPx = 18 * 16; // matches .ai-block.is-clamped max-height
+    var overflowing = [];
+    for (var b = 0; b < blocks.length; b++) {
+      if (blocks[b].scrollHeight > maxPx + 24) overflowing.push(blocks[b]);
+    }
+    for (var c = 0; c < overflowing.length; c++) {
+      (function (block) {
+        block.classList.add('is-clamped');
+        var btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'ai-more';
+        btn.textContent = 'Show more';
+        btn.setAttribute('aria-expanded', 'false');
+        btn.addEventListener('click', function () {
+          var clamped = block.classList.toggle('is-clamped');
+          btn.textContent = clamped ? 'Show more' : 'Show less';
+          btn.setAttribute('aria-expanded', clamped ? 'false' : 'true');
+        });
+        block.parentNode.insertBefore(btn, block.nextSibling);
+      })(overflowing[c]);
+    }
+  }
+
+  // --- AI messages: show or hide the narration outright ---
   var ai = document.getElementById('st-ai');
   if (ai) {
-    var AI_KEY = 'showtail-show-ai';
+    // A new key on purpose: the old one's '0' meant "pills collapsed, preview
+    // still visible", and reading that as "hide narration" would hide content
+    // from returning readers who never asked for it.
+    var AI_KEY = 'showtail-ai-visible';
     var savedAi = load(AI_KEY);
     if (savedAi === '1' || savedAi === '0') ai.checked = savedAi === '1';
     var applyAi = function (on) {
-      var pills = document.querySelectorAll('details.ai-process');
-      for (var i = 0; i < pills.length; i++) pills[i].open = on;
+      list.classList.toggle('st-hide-ai', !on);
     };
     applyAi(ai.checked);
     ai.addEventListener('change', function () {

@@ -271,8 +271,10 @@ describe('turns', () => {
       });
 
       const html = renderHtml(buildReportData(paths));
-      // Two in-place AI pills — one before the edit, one after — not one bucket at the end.
-      expect((html.match(/class="ai-process"/g) || []).length).toBe(2);
+      // Two in-place AI blocks — one before the edit, one after — not one bucket
+      // at the end, and no header above either of them.
+      expect((html.match(/class="ai-block"/g) || []).length).toBe(2);
+      expect(html).not.toContain('ai-process');
       const at = (s: string) => html.indexOf(s);
       // Chronological: reasoning → edit → reasoning → decision, each in its place.
       expect(at('REASONING-BEFORE')).toBeGreaterThan(-1);
@@ -427,10 +429,10 @@ describe('turns', () => {
 
       const data = buildReportData(paths);
       const html = renderHtml(data, { ai: 'off' });
-      // AI narration is gone entirely — no reply text, no process disclosure
-      // element (the class still appears once in the inlined stylesheet).
+      // AI narration is gone entirely — no reply text, no narration block
+      // (the class still appears in the inlined stylesheet, hence the quotes).
       expect(html).not.toContain('Here is the hello function');
-      expect(html).not.toContain('class="ai-process"');
+      expect(html).not.toContain('class="ai-block"');
       expect(html).not.toContain('id="st-ai"'); // no toggle when there's no AI layer
       // The student's own work survives untouched.
       expect(html).toContain('add a hello function'); // prompt
@@ -448,7 +450,7 @@ describe('turns', () => {
     }
   });
 
-  test('--ai full expands the process disclosure and pre-checks the toggle', async () => {
+  test('--ai full renders narration unclamped and pre-checks the toggle', async () => {
     const dir = makeTempDir();
     try {
       await runInit({ cwd: dir });
@@ -486,8 +488,19 @@ describe('turns', () => {
       });
 
       const html = renderHtml(buildReportData(paths), { ai: 'full' });
-      expect(html).toContain('<details class="ai-process" open>');
+      // `full` tells the controls script not to clamp long narration.
+      expect(html).toContain('data-ai-mode="full"');
       expect(html).toContain('id="st-ai" checked');
+      // The narration itself is present, with no header above it.
+      expect(html).toContain('class="ai-block"');
+      expect(html).toContain('Let me check the layout.');
+      // The clamp and its control are added at runtime, never shipped in the
+      // markup, so a reader without JavaScript sees every message in full.
+      // Scoped to the rendered exchanges: the stylesheet and controls script are
+      // inlined into the same document and legitimately mention both names.
+      const body = html.split('id="st-exchanges"')[1]!.split('<script')[0]!;
+      expect(body).not.toContain('is-clamped');
+      expect(body).not.toContain('ai-more');
     } finally {
       cleanup(dir);
     }
@@ -638,6 +651,14 @@ describe('turns', () => {
       const html = renderHtml(buildReportData(paths));
       expect((html.match(/<details class="tools/g) || []).length).toBe(2);
       expect(html).toContain('2 tool calls');
+
+      // The group is the *only* click target in a run: its rows are plain, so
+      // two clickable commands can never end up stacked on each other.
+      expect(html).not.toContain('<details class="tool-row');
+      // Nothing is lost by flattening — every command is still there.
+      for (const cmd of ['cmd 1', 'cmd 2', 'cmd 4', 'cmd 5']) {
+        expect(html).toContain(cmd);
+      }
     } finally {
       cleanup(dir);
     }

@@ -1,7 +1,8 @@
 import { describe, expect, test } from 'bun:test';
-import { writeFileSync } from 'node:fs';
+import { mkdirSync, readdirSync, writeFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { runInit } from '../src/commands/init.ts';
+import { runReport } from '../src/commands/report.ts';
 import { addArtifact, importEditArtifact } from '../src/core/artifacts.ts';
 import { logEvent } from '../src/core/events.ts';
 import {
@@ -13,7 +14,7 @@ import {
 } from '../src/core/report.ts';
 import { startSession } from '../src/core/sessions.ts';
 import { pathsForRoot, readConfig } from '../src/core/storage.ts';
-import { authorFor, cleanup, makeTempDir } from './helpers.ts';
+import { authorFor, cleanup, makeTempDir, readJsonReport } from './helpers.ts';
 
 describe('report', () => {
   test('aggregates events and artifacts into structured data and markdown', async () => {
@@ -95,10 +96,9 @@ describe('report', () => {
       const md = renderMarkdown(buildReportData(paths));
       // The summary leads with what a reviewer scans for: tasks (prompts).
       expect(md).toMatch(/\*\*Summary:\*\* 1 task\b/);
-      // Two AI runs, each folded into its own collapsed <details>, around the edit.
-      expect(
-        (md.match(/<details><summary>🤖 1 AI message<\/summary>/g) || []).length,
-      ).toBe(2);
+      // The AI runs read as plain prose — no wrapper, no header, no label.
+      expect(md).not.toContain('AI message');
+      expect(md).not.toContain('_AI response:_');
       // The edit reads inline, chronologically between the two AI runs.
       const iFirst = md.indexOf('Reading the files first');
       const iEdit = md.indexOf('parser.ts');
@@ -505,6 +505,59 @@ describe('report', () => {
       const html = renderRichText('Run:\n```bash\npython game.py\n```');
       expect(html).toContain('class="codeblock"');
       expect(html).toContain('python game.py');
+    });
+  });
+
+  // Reports are never pruned, so a second run leaves the first on disk. Two
+  // guards keep a test from silently asserting against a stale artifact — the
+  // failure mode that made catchUp.test.ts intermittently fail.
+  describe('report files', () => {
+    test('keeps two reports generated in the same second as distinct files', async () => {
+      const dir = makeTempDir();
+      try {
+        await runInit({ cwd: dir, project: 'Stamp' });
+        const author = authorFor(pathsForRoot(dir));
+        startSession(author);
+        await logEvent(author, { type: 'prompt', text: 'first' });
+
+        await runReport({ cwd: dir, format: 'json', sync: false });
+        await logEvent(author, { type: 'prompt', text: 'second' });
+        await runReport({ cwd: dir, format: 'json', sync: false });
+
+        // Back-to-back in-process runs land in the same wall-clock second, so a
+        // second-precision stamp would collide and the second would overwrite
+        // the first.
+        const reports = readdirSync(join(dir, '.showtail', 'reports')).filter((f) =>
+          f.endsWith('.json'),
+        );
+        expect(reports).toHaveLength(2);
+        // ...and the helper must hand back the newer of the two.
+        expect(readJsonReport(dir).summary.events).toBe(2);
+      } finally {
+        cleanup(dir);
+      }
+    });
+
+    test('readJsonReport returns the newest report, not the first on disk', () => {
+      const dir = makeTempDir();
+      try {
+        // Hand-built so the assertion does not depend on readdir order, which is
+        // hash order on APFS: whichever file the filesystem lists first, the
+        // later ISO stamp must win.
+        const reportsDir = join(dir, '.showtail', 'reports');
+        mkdirSync(reportsDir, { recursive: true });
+        const write = (stamp: string, marker: string) =>
+          writeFileSync(
+            join(reportsDir, `report-tester-${stamp}.json`),
+            JSON.stringify({ marker }),
+          );
+        write('2026-01-02T000000000', 'newer');
+        write('2026-01-01T000000000', 'older');
+
+        expect(readJsonReport(dir).marker).toBe('newer');
+      } finally {
+        cleanup(dir);
+      }
     });
   });
 });

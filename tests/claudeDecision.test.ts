@@ -533,10 +533,10 @@ describe('turn timeline (chronological interleaving)', () => {
     expect(at('first.ts')).toBeLessThan(at('second reply'));
     expect(at('second reply')).toBeLessThan(at('second.ts'));
     expect(at('second.ts')).toBeLessThan(at('🔀 **Decision**'));
-    // The AI replies are collapsed into in-place pills (one run each), not one bucket.
-    expect((md.match(/<details><summary>🤖 1 AI message<\/summary>/g) || []).length).toBe(
-      2,
-    );
+    // Each reply reads in place as plain prose — no wrapper, no header.
+    expect(md).not.toContain('AI message');
+    expect((md.match(/first reply/g) || []).length).toBe(1);
+    expect((md.match(/second reply/g) || []).length).toBe(1);
     // The decision renders exactly once (no duplication into an AI section).
     expect((md.match(/🔀 \*\*Decision\*\*/g) || []).length).toBe(1);
   });

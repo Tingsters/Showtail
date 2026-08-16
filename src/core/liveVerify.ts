@@ -109,10 +109,12 @@ function makeShimBin(): string {
   return bin;
 }
 
-/** Identity + PATH env so a child tool's hooks run non-interactively. */
+/** Identity + PATH + isolated-ledger env so a child tool's hooks run non-interactively. */
 function childEnv(shimBin: string): NodeJS.ProcessEnv {
   const home = join(tmpdir(), 'showtail-live-identity');
   mkdirSync(home, { recursive: true });
+  const ledgerHome = join(tmpdir(), 'showtail-live-ledger');
+  mkdirSync(ledgerHome, { recursive: true });
   // Tools that need GitHub auth to run headlessly (Copilot CLI) read a token
   // from the env. We pass it straight through — it never reaches a command line
   // (driveArgs carries only the prompt), so it can't leak into logged argv.
@@ -123,6 +125,12 @@ function childEnv(shimBin: string): NodeJS.ProcessEnv {
     SHOWTAIL_IDENTITY_EMAIL: process.env.SHOWTAIL_IDENTITY_EMAIL ?? 'live@example.com',
     SHOWTAIL_IDENTITY_NAME: process.env.SHOWTAIL_IDENTITY_NAME ?? 'Live Verifier',
     SHOWTAIL_IDENTITY_HOME: process.env.SHOWTAIL_IDENTITY_HOME ?? home,
+    // Isolate the machine-global ledger too. The tools driven here fire real
+    // hooks, and in ledger-writer mode those write session records under
+    // SHOWTAIL_HOME — which, unset, is the maintainer's own `~/.showtail-cli`.
+    // Certification runs would then leave throwaway temp projects in the real
+    // inbox as `[target missing]` rows. Pin it the way tests/setup.ts does.
+    SHOWTAIL_HOME: process.env.SHOWTAIL_HOME ?? ledgerHome,
     ...(ghToken ? { GH_TOKEN: ghToken, GITHUB_TOKEN: ghToken } : {}),
   };
 }
@@ -139,12 +147,26 @@ function missingGithubToken(integration: string): boolean {
   );
 }
 
-/** Read the JSON report Showtail wrote into `dir`. */
+/**
+ * Read the JSON report Showtail wrote into `dir`.
+ *
+ * Takes the newest rather than the first `readdirSync` lists. Today that is
+ * belt-and-braces, not a bug fix: every caller hands us a dir made fresh by
+ * `mkdtempSync` per integration and runs `report` against it exactly once, so
+ * only one file is ever present. The guard is here because directory order is
+ * hash order on APFS, so if that invariant ever lapses — a second `readReport`
+ * call, a reused dir — an arbitrary pick would read a stale successful report
+ * and certify a broken build as passing. Filenames embed an ISO stamp, so
+ * sorting them lexicographically sorts them chronologically.
+ */
 function readReport(dir: string): any {
   showtail(dir, ['report', '--format', 'json']);
   const reportsDir = join(dir, '.showtail', 'reports');
   if (!existsSync(reportsDir)) throw new Error('no report produced');
-  const file = readdirSync(reportsDir).find((f) => f.endsWith('.json'));
+  const file = readdirSync(reportsDir)
+    .filter((f) => f.endsWith('.json'))
+    .sort()
+    .pop();
   if (!file) throw new Error('no JSON report');
   return JSON.parse(readFileSync(join(reportsDir, file), 'utf8'));
 }
@@ -167,11 +189,23 @@ interface DriveSpec {
 
 const LOCALAPPDATA = process.env.LOCALAPPDATA ?? join(homedir(), 'AppData', 'Local');
 
+/**
+ * Sort version-like directory names newest-first.
+ *
+ * Numeric collation, not a plain string sort: lexicographically `1.9.0` sorts
+ * after `1.10.0`, so `.sort().reverse()` picks the OLDER CLI once the minor
+ * version reaches double digits — and then certifies against it, stamping the
+ * wrong `toolVersion` into matrix-verification.json.
+ */
+export function byVersionDesc(a: string, b: string): number {
+  return b.localeCompare(a, undefined, { numeric: true });
+}
+
 /** Resolve the GitHub Copilot CLI exe (versioned dir), else fall back to PATH. */
 function resolveCopilotBin(): string {
   const cliDir = join(LOCALAPPDATA, 'github-copilot-sdk', 'cli');
   if (existsSync(cliDir)) {
-    for (const v of readdirSync(cliDir).sort().reverse()) {
+    for (const v of readdirSync(cliDir).sort(byVersionDesc)) {
       const p = join(cliDir, v, 'copilot.exe');
       if (existsSync(p)) return p;
     }
@@ -249,7 +283,14 @@ export function verifyToolLive(integration: string): LiveResult {
   const shim = makeShimBin();
   try {
     const env = childEnv(shim);
-    showtail(dir, ['init', '--project', 'Live'], env);
+    // `track` is what creates the trail (it is `runInit` under the hood). This
+    // used to call `init`, which was renamed to `track` in 853f2b0 — and because
+    // the result was discarded, every live run silently proceeded with no
+    // `.showtail`, so `report` threw NotInitializedError and certified nothing.
+    // Check the code like `connect` below does; a swallowed failure here is what
+    // let the harness sit broken.
+    const init = showtail(dir, ['track', '--project', 'Live'], env);
+    if (init.code !== 0) throw new Error(`track failed: ${init.stderr || init.stdout}`);
     const connect = showtail(dir, spec.connectArgs, env);
     if (connect.code !== 0)
       throw new Error(`connect failed: ${connect.stderr || connect.stdout}`);

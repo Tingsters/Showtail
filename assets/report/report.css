@@ -707,6 +707,19 @@ blockquote {
   margin: 0.15rem 0 0.4rem 0.7rem;
   font-size: 0.95em;
 }
+/* Inside a group the rows are plain, so nothing hides a chatty command's output
+   any more. Cap it and let it scroll instead of adding a click back: a
+   scrollable region is not a click target, so the group stays the only one,
+   and no single 4,000-character capture can bury the rest of the run. */
+.tool-run-body .tool-row-out {
+  max-height: 14rem;
+  overflow: auto;
+}
+/* The command line stays on its own line above that output. */
+.tool-run-body .tool-row-name,
+.tool-run-body .tool-row-cmd {
+  line-height: 1.6;
+}
 /* The turn's end-of-turn recap — a quiet quoted note above the AI work, distinct
    from the prompt block it follows. */
 .recap {
@@ -719,92 +732,71 @@ blockquote {
 .recap .ai-text {
   margin: 0.1rem 0 0;
 }
-/* The per-prompt AI layer: each run of AI messages collapses to a slim, quiet inline
-   marker — about the visual weight of a code row — so many of them, interleaved with
-   edits, read as one tidy list instead of a stack of boxes. Uniform in every turn:
-   discoverability comes from the icon + label + chevron + hover (and the toolbar's
-   AI switch), not a heavy box — the AI is the subordinate layer. */
-.ai-process {
-  margin: 0.2rem 0;
-}
-.ai-pill {
-  display: flex;
-  align-items: center;
-  gap: 0.35rem;
-  cursor: pointer;
-  list-style: none;
-  padding: 0.12rem 0.3rem;
-  border-radius: 0.3rem;
-  color: #6b6f8c;
-  font-size: 0.78rem;
-}
-.ai-pill::-webkit-details-marker {
-  display: none;
-}
-.ai-pill:hover {
-  background: #eef0f8;
-  color: #3a3f6b;
-}
-.ai-pill-icon {
-  font-size: 0.9em;
-}
-.ai-pill-verb {
-  font-weight: 600;
-  color: #5b5f86;
-}
-.ai-pill:hover .ai-pill-verb {
-  color: #3a3f9b;
-}
-.ai-pill-verb .v-hide {
-  display: none;
-}
-.ai-process[open] .ai-pill-verb .v-show {
-  display: none;
-}
-.ai-process[open] .ai-pill-verb .v-hide {
-  display: inline;
-}
-.ai-pill-count {
-  font-weight: 600;
-}
-/* A glimpse of the first message, shown only while collapsed. */
-.ai-preview {
-  flex: 1 1 auto;
-  min-width: 0;
-  font-style: italic;
-  font-weight: 400;
-  color: #9a9aa4;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.ai-process[open] .ai-preview {
-  display: none;
-}
-.ai-pill-chevron {
-  margin-left: auto;
-  font-size: 0.85em;
-  color: #a0a0aa;
-  transition: transform 0.15s;
-}
-.ai-process[open] .ai-pill-chevron {
-  transform: rotate(180deg);
-}
-/* The expanded transcript: a light left rule + indent (not a card), so a fully
-   expanded turn with many runs stays calm; messages separated faintly. */
-.ai-pill-body {
-  margin: 0.1rem 0 0.35rem 0.55rem;
+/* The AI's narration. No header of its own: every other block in a turn body is
+   marked (the prompt is tinted and labelled, decisions amber, plans indigo, tool
+   calls dim monospace, the recap italic), so unlabelled prose is the AI talking.
+   The rail says so from the margin, costing no height — where a header row cost a
+   full line to hide a median of ~107 characters. Subordination comes from weight
+   here, not from hiding: muted, smaller, indented behind a rule. */
+.ai-block {
+  margin: 0.2rem 0 0.5rem 0.55rem;
   padding-left: 0.7rem;
-  border-left: 2px solid #e3e3e8;
+  border-left: 2px solid var(--st-border);
 }
-.ai-pill-body .ai-text {
+.ai-block .ai-text {
   color: #55555f;
   font-size: 0.95em;
 }
-.ai-pill-body .ai-text + .ai-text {
+.ai-block .ai-text + .ai-text {
   margin-top: 0.5rem;
   padding-top: 0.5rem;
   border-top: 1px solid #ececf1;
+}
+/* The long tail — a few percent of runs run 15-40 lines — is clamped, with the
+   control *below* the text so nothing ever sits above a message. Applied by
+   report-controls.js at runtime, never by the server, so a reader without
+   JavaScript sees every message in full. */
+.ai-block.is-clamped {
+  max-height: 18rem;
+  overflow: hidden;
+  position: relative;
+}
+.ai-block.is-clamped::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 3.5rem;
+  background: linear-gradient(to bottom, transparent, var(--st-surface));
+  pointer-events: none;
+}
+/* A full-width bar, not a word-sized target: it sits directly under the passage
+   it expands, indented to the same rail, so the whole strip is clickable. */
+.ai-more {
+  display: block;
+  width: calc(100% - 1.25rem);
+  margin: 0 0 0.5rem 1.25rem;
+  padding: 0.35rem 0.6rem;
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 600;
+  text-align: left;
+  color: var(--st-link);
+  background: none;
+  border: 0;
+  border-top: 1px solid var(--st-border);
+  border-radius: 0 0 0.25rem 0.25rem;
+  cursor: pointer;
+}
+.ai-more:hover {
+  background: var(--st-sunken);
+}
+/* The toolbar switch hides narration outright, matching its label and what the
+   render-time `--ai off` flag already does. */
+.st-hide-ai .ai-block,
+.st-hide-ai .ai-more {
+  display: none;
 }
 .code {
   margin: 0.4rem 0;
@@ -1183,33 +1175,14 @@ pre.codeblock code {
     border-top-color: #3a3a42;
     color: #9a9aa4;
   }
-  .ai-pill {
-    color: #9a9fc0;
-  }
-  .ai-pill:hover {
-    background: #26262f;
-    color: #c6cbf0;
-  }
-  .ai-pill-verb {
-    color: #a2a7cc;
-  }
-  .ai-pill:hover .ai-pill-verb {
-    color: #c6cbf0;
-  }
-  .ai-preview {
-    color: #85858f;
-  }
-  .ai-pill-chevron {
-    color: #6a6a74;
-  }
-  .ai-pill-body {
-    border-left-color: #34343a;
-  }
-  .ai-pill-body .ai-text {
+  .ai-block .ai-text {
     color: #b0b0ba;
   }
-  .ai-pill-body .ai-text + .ai-text {
+  .ai-block .ai-text + .ai-text {
     border-top-color: #34343a;
+  }
+  .ai-more:hover {
+    background: #2a2a30;
   }
   .plan-badge.approved {
     background: #1c3a2c;

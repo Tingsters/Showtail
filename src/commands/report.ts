@@ -59,9 +59,16 @@ function aiMode(value: string | boolean | undefined): AiMode {
   return 'collapsed';
 }
 
-/** A filesystem-safe timestamp for report filenames, e.g. 2026-06-12T140300. */
+/**
+ * A filesystem-safe timestamp for report filenames, e.g. 2026-06-12T140300123.
+ *
+ * Milliseconds are kept so two reports generated in the same second are two
+ * files: at one-second precision the second run silently overwrote the first,
+ * which is surprising for a student who ran `report` twice and expected to keep
+ * both.
+ */
 function fileStamp(iso: string): string {
-  return iso.replace(/:/g, '').replace(/\..+$/, '');
+  return iso.replace(/[:.]/g, '').replace(/Z$/, '');
 }
 
 /** One report to generate: a filename key, a human label, and the builder scope. */

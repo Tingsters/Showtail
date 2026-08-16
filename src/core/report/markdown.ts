@@ -19,10 +19,11 @@ export const TURNS_PLACEHOLDER = 'SHOWTAIL_TURNS_PLACEHOLDER';
 
 /**
  * How much of the AI's play-by-play a report shows. The report foregrounds the
- * student's work and subordinates AI narration; this controls that subordinate
- * layer without ever touching what was captured:
- *  - `collapsed` (default) — AI process behind a collapsed disclosure, present.
- *  - `full` — the same, but expanded by default.
+ * student's work and subordinates AI narration — by visual weight now, not by
+ * hiding it — without ever touching what was captured:
+ *  - `collapsed` (default) — narration is shown as quiet railed prose; in HTML
+ *    the client clamps the few passages that run very long.
+ *  - `full` — the same, but nothing is clamped.
  *  - `off` — AI text omitted from the rendering entirely (prompts, decisions, and
  *    changes are untouched).
  */
@@ -287,20 +288,14 @@ function turnMarkdown(lines: string[], turn: Turn, ai: AiMode, author?: string):
     lines.push(`_Recap: ${turn.recap.text}_`, '');
   }
 
-  // One chronological stream: work items inline; each run of AI messages as one
-  // collapsed <details> in place (GitHub renders it). `--ai off` drops the AI runs.
+  // One chronological stream, in the order it happened. AI narration reads as
+  // plain prose with no wrapper or label: everything else here is marked (the
+  // prompt, 🔀 decisions, 📋 plans, 🛠 tool calls, code), so unlabelled text is
+  // the AI talking. `--ai off` drops it.
   for (const seg of turnSegments(turn)) {
     if (seg.kind === 'ai') {
       if (ai === 'off') continue;
-      const n = seg.events.length;
-      const open = ai === 'full' ? ' open' : '';
-      lines.push(
-        `<details${open}><summary>🤖 ${n} AI message${pluralS(n)}</summary>`,
-        '',
-        ...seg.events.map((e) => aiText(e.text)),
-        '</details>',
-        '',
-      );
+      for (const e of seg.events) lines.push(e.text, '');
       continue;
     }
     if (seg.kind === 'tools') {
@@ -365,9 +360,4 @@ function toolCallBlock(event: Event): string {
   const label = event.toolName ?? 'Tool';
   const badge = event.isError ? ' ⚠️ _error_' : '';
   return `**${label}**${badge}\n\n${event.text}\n`;
-}
-
-/** One AI message as a labelled Markdown block, with a trailing blank line. */
-function aiText(text: string): string {
-  return `_AI response:_\n\n${text}\n`;
 }
