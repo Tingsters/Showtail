@@ -272,6 +272,11 @@ blockquote {
   margin: 0.35rem 0;
   background: #fff;
   overflow: hidden;
+  /* Collapsing a long card scrolls its row back into view, and the exchanges
+     toolbar is sticky at the top — so the row has to clear the bar or it lands
+     underneath it. report-controls.js measures the real bar (it wraps on narrow
+     screens); the fallback covers a one-line bar for the inline Close handler. */
+  scroll-margin-top: calc(var(--st-bar-h, 2.75rem) + 0.75rem);
 }
 /* The row is a block, not a flex pair, so the meta can float and the prompt's
    later lines wrap *beneath* it at full width. A two-column flex narrowed the

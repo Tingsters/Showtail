@@ -218,6 +218,18 @@ describe('turns', () => {
       // A Close button collapses the card via an inline handler (no card script).
       expect(html).toContain('class="turn-close"');
       expect(html).toContain('open=false');
+      // Closing from the footer of a long card scrolls the prompt row back into
+      // view — otherwise the reader lands somewhere unrelated — and clears the
+      // sticky toolbar, whose real height the controls script publishes.
+      expect(html).toContain("d.scrollIntoView({block:'nearest'})");
+      expect(html).toContain('scroll-margin-top: calc(var(--st-bar-h');
+      expect(html).toContain("setProperty('--st-bar-h'");
+      // Collapse all anchors on the exchange the reader was on; Show less holds
+      // its own button still rather than letting the page jump under the cursor.
+      expect(html).toContain("if (anchor) anchor.scrollIntoView({ block: 'nearest' })");
+      expect(html).toContain(
+        'window.scrollBy(0, btn.getBoundingClientRect().top - before)',
+      );
       // The only script in the document is the trusted inline timezone helper;
       // rendering user content must never introduce another.
       expect(html.match(/<script\b/g)?.length ?? 0).toBe(1);

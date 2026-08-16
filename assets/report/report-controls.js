@@ -20,6 +20,28 @@
     }
   }
 
+  // The bar is sticky at the top of the viewport, so anything scrolled into
+  // view has to clear it. Publish its real height (it wraps on narrow screens)
+  // for the `scroll-margin-top` on .turn; the stylesheet carries a one-line
+  // fallback for the inline Close handler, which runs whether or not we do.
+  function syncBarHeight() {
+    document.documentElement.style.setProperty('--st-bar-h', bar.offsetHeight + 'px');
+  }
+  syncBarHeight();
+  window.addEventListener('resize', syncBarHeight);
+
+  // The exchange a reader is currently on: the first one still showing below
+  // the sticky bar. Collapsing moves everything above the viewport, so this is
+  // captured *before* the collapse and scrolled back to afterwards.
+  function topmostTurn() {
+    var turns = list.querySelectorAll('details.turn');
+    var floor = bar.getBoundingClientRect().bottom;
+    for (var i = 0; i < turns.length; i++) {
+      if (turns[i].getBoundingClientRect().bottom > floor) return turns[i];
+    }
+    return null;
+  }
+
   // --- Long AI narration: clamp it, with the control *below* the text ---
   // Done here rather than in the markup so a reader without JavaScript sees
   // every message in full — nothing is ever hidden from them. Heights are read
@@ -41,9 +63,14 @@
         btn.textContent = 'Show more';
         btn.setAttribute('aria-expanded', 'false');
         btn.addEventListener('click', function () {
+          // The button sits *below* the text it toggles, so clamping shrinks
+          // content above it and the page jumps out from under the cursor.
+          // Hold the button still instead: re-scroll by however far it moved.
+          var before = btn.getBoundingClientRect().top;
           var clamped = block.classList.toggle('is-clamped');
           btn.textContent = clamped ? 'Show more' : 'Show less';
           btn.setAttribute('aria-expanded', clamped ? 'false' : 'true');
+          window.scrollBy(0, btn.getBoundingClientRect().top - before);
         });
         block.parentNode.insertBefore(btn, block.nextSibling);
       })(overflowing[c]);
@@ -74,10 +101,15 @@
   if (expandBtn) {
     var expandLabel = expandBtn.querySelector('.st-btn-label');
     var setExpanded = function (on) {
+      // Collapsing pulls every card above you shut at once, which would strand a
+      // reader who is deep in the report. Expanding only pushes content down, so
+      // it needs no anchor.
+      var anchor = on ? null : topmostTurn();
       var turns = list.querySelectorAll('details.turn');
       for (var i = 0; i < turns.length; i++) turns[i].open = on;
       expandBtn.setAttribute('aria-pressed', on ? 'true' : 'false');
       if (expandLabel) expandLabel.textContent = on ? 'Collapse all' : 'Expand all';
+      if (anchor) anchor.scrollIntoView({ block: 'nearest' });
     };
     expandBtn.addEventListener('click', function () {
       setExpanded(expandBtn.getAttribute('aria-pressed') !== 'true');
