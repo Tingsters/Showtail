@@ -351,6 +351,140 @@ describe('report', () => {
       expect(html).toContain('<li>outer<ul><li>inner</li></ul></li>');
     });
 
+    test('keeps an indented continuation inside its list item', () => {
+      const html = renderRichText('1. Step one\n   more about step one\n2. Step two');
+      // One list — the continuation used to split it in two and strand the text.
+      expect((html.match(/<ol/g) || []).length).toBe(1);
+      expect(html).toContain('<li>Step one<p>more about step one</p></li>');
+      expect(html).toContain('<li>Step two</li>');
+    });
+
+    test('keeps a continuation paragraph after a blank line in its item', () => {
+      const html = renderRichText(
+        '- **Point one**\n\n  A second paragraph elaborating.\n\n- **Point two**',
+      );
+      expect((html.match(/<ul/g) || []).length).toBe(1);
+      expect(html).toContain(
+        '<li><strong>Point one</strong><p>A second paragraph elaborating.</p></li>',
+      );
+    });
+
+    test('an unindented paragraph after a list still ends the list', () => {
+      // The guard for the change above: a blank line no longer closes a list, so
+      // what follows has to decide, and unindented prose must still break out.
+      const html = renderRichText('- a\n- b\n\nA separate paragraph.');
+      expect(html).toBe('<ul><li>a</li><li>b</li></ul><p>A separate paragraph.</p>');
+    });
+
+    test('keeps a fenced block inside the blockquote that contains it', () => {
+      const html = renderRichText(
+        '> Run the installer first:\n> ```bash\n> npm install\n> ```\n> Then start the server.',
+      );
+      // One quote, not two with the code stranded between them.
+      expect((html.match(/<blockquote>/g) || []).length).toBe(1);
+      expect(html).toContain('<blockquote><p>Run the installer first:</p>');
+      expect(html).toContain('Then start the server.</p></blockquote>');
+      // The quote markers must not end up inside the code a reader copies.
+      expect(html).toContain('<code>npm install</code>');
+      expect(html).not.toContain('&gt; npm install');
+    });
+
+    test('attaches a fenced block to the list item it documents', () => {
+      const html = renderRichText(
+        '1. Install it:\n   ```bash\n   npm install\n   ```\n2. Then run it.',
+      );
+      // One list, and the code box lives inside the first item.
+      expect((html.match(/<ol/g) || []).length).toBe(1);
+      expect(html).toContain('<li>Install it:<div class="code-lang">bash</div>');
+      expect(html).toContain('</pre></li><li>Then run it.</li>');
+      // The indent that merely positioned it under the bullet is not shown.
+      expect(html).toContain('<code>npm install</code>');
+    });
+
+    test('a longer fence can contain a shorter one', () => {
+      const html = renderRichText('````\n```js\nconst x = 1;\n```\n````');
+      // One box, with the inner fence kept as content rather than closing it.
+      // Compared on text, since the highlighter wraps tokens in spans.
+      expect((html.match(/<pre class="codeblock">/g) || []).length).toBe(1);
+      const text = html.replace(/<[^>]+>/g, '');
+      expect(text).toContain('```js');
+      expect(text).toContain('const x = 1;');
+    });
+
+    test('an unclosed fence still renders as code rather than vanishing', () => {
+      const html = renderRichText('Here:\n```py\nprint(1)');
+      expect(html).toContain('<pre class="codeblock">');
+      expect(html.replace(/<[^>]+>/g, '')).toContain('print(1)');
+    });
+
+    test('renders a table as a real table, not raw pipes', () => {
+      const html = renderRichText(
+        '| View | Shown |\n|---|---|\n| Time ascending | 6 / 183 |\n| Session | 42 / 183 |',
+      );
+      expect(html).toContain('<div class="md-table-wrap"><table class="md-table">');
+      expect(html).toContain('<th>View</th>');
+      expect(html).toContain('<th>Shown</th>');
+      expect(html).toContain('<td>Time ascending</td>');
+      expect(html).toContain('<td>42 / 183</td>');
+      expect((html.match(/<tr>/g) || []).length).toBe(3); // header + 2 body rows
+      // None of the source markup survives as text.
+      expect(html).not.toContain('|---');
+      expect(html).not.toContain('| View');
+    });
+
+    test('honours column alignment from the separator row', () => {
+      const html = renderRichText('| L | C | R |\n|:--|:-:|--:|\n| a | b | c |');
+      expect(html).toContain('<th style="text-align:left">L</th>');
+      expect(html).toContain('<th style="text-align:center">C</th>');
+      expect(html).toContain('<th style="text-align:right">R</th>');
+      expect(html).toContain('<td style="text-align:right">c</td>');
+    });
+
+    test('formats inline markup inside cells and escapes their content', () => {
+      const html = renderRichText('| What | Note |\n|---|---|\n| **bold** | `code` |');
+      expect(html).toContain('<td><strong>bold</strong></td>');
+      expect(html).toContain('<td><code>code</code></td>');
+
+      // A cell is escaped like everything else — no raw HTML gets through.
+      const evil = renderRichText('| x |\n|---|\n| <b>hi</b> |');
+      expect(evil).toContain('&lt;b&gt;hi&lt;/b&gt;');
+      expect(evil).not.toContain('<b>hi</b>');
+    });
+
+    test('pads a ragged row instead of emitting broken markup', () => {
+      const html = renderRichText('| a | b | c |\n|---|---|---|\n| only one |');
+      // Three columns in every row, so the table stays well-formed.
+      expect((html.match(/<td/g) || []).length).toBe(3);
+      expect(html).toContain('<td>only one</td>');
+    });
+
+    test('leaves pipes alone when there is no separator row', () => {
+      // The regression guard: a shell pipeline must never become a table.
+      const html = renderRichText('Run `grep foo | wc -l` to count.\na | b | c');
+      expect(html).not.toContain('<table');
+      expect(html).toContain('a | b | c');
+    });
+
+    test('keeps a table inside a fenced code block literal', () => {
+      const html = renderRichText('```\n| a | b |\n|---|---|\n```');
+      expect(html).not.toContain('<table');
+      expect(html).toContain('<pre class="codeblock">');
+      expect(html).toContain('| a | b |');
+    });
+
+    test('renders a table inside a blockquote', () => {
+      const html = renderRichText('> | a | b |\n> |---|---|\n> | 1 | 2 |');
+      expect(html).toContain('<blockquote>');
+      expect(html).toContain('<table class="md-table">');
+      expect(html).toContain('<td>1</td>');
+    });
+
+    test('treats an escaped pipe as cell content, not a column break', () => {
+      const html = renderRichText('| cmd |\n|---|\n| a \\| b |');
+      expect((html.match(/<td/g) || []).length).toBe(1);
+      expect(html).toContain('<td>a | b</td>');
+    });
+
     test('shows a non-http link as its label, dropping the dead target', () => {
       const html = renderRichText(
         '[game.py](file:///C:/Users/me/.gemini/scratch/game.py)',

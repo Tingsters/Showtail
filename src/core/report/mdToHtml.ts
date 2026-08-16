@@ -40,23 +40,19 @@ function codeBox(code: string, lang: string): string {
 
 /**
  * Render prompt/AI text (Markdown) for a turn card: fenced code becomes a real
- * monospace code box, and the prose between fences is rendered as a small
- * Markdown subset (headings, lists, quotes, rules, bold/italic/code/links).
+ * monospace code box, and the prose around it is rendered as a small Markdown
+ * subset (headings, lists, tables, quotes, rules, bold/italic/code/links).
  * Everything is escaped before formatting, so no script can slip through, and
  * only http/https links become anchors.
+ *
+ * Fences are handled by the block parser rather than split out of the text
+ * first. Pre-splitting tore a fenced block out of whatever contained it: a
+ * quoted code sample became two blockquotes with the box stranded between them
+ * *and* kept its `>` markers inside the code, and a fenced block under a list
+ * item split the list in two and left the code at top level.
  */
 export function renderRichText(text: string): string {
-  const out: string[] = [];
-  const fence = /```([\w+#.-]*)[ \t]*\r?\n?([\s\S]*?)```/g;
-  let last = 0;
-  let m: RegExpExecArray | null;
-  while ((m = fence.exec(text)) !== null) {
-    out.push(renderBlocks(text.slice(last, m.index)));
-    out.push(codeBox(m[2] ?? '', m[1] ?? ''));
-    last = fence.lastIndex;
-  }
-  out.push(renderBlocks(text.slice(last)));
-  return out.join('');
+  return renderBlocks(text);
 }
 
 /** GitHub-style callout markers (`> [!NOTE]`) → the label shown on the box. */
@@ -87,6 +83,97 @@ function renderBlocks(md: string): string {
   return blocksToHtml(md.split('\n'));
 }
 
+/** Which way a table column's cells are aligned, per its separator row. */
+type ColumnAlign = 'left' | 'center' | 'right' | null;
+
+/**
+ * Drop up to `n` leading spaces, so code fenced inside a list item is not shown
+ * with the indentation that merely positioned it under its bullet.
+ */
+function stripIndent(line: string, n: number): string {
+  let i = 0;
+  while (i < n && line[i] === ' ') i++;
+  return line.slice(i);
+}
+
+/** A line that could be a table row: pipe-delimited, outer pipes required. */
+function isTableRow(line: string | undefined): boolean {
+  return line !== undefined && /^\s*\|.*\|\s*$/.test(line);
+}
+
+/**
+ * The `|---|:--:|` line under a table's header. Requiring it is what makes table
+ * detection safe: without it, any prose containing pipes would become a table.
+ */
+function isTableSeparator(line: string | undefined): boolean {
+  if (!isTableRow(line)) return false;
+  return splitRow(line!).every((cell) => /^:?-{1,}:?$/.test(cell.trim()));
+}
+
+/** Column alignments from a separator row: `:--` left, `--:` right, `:--:` centre. */
+function parseAlignments(separator: string): ColumnAlign[] {
+  return splitRow(separator).map((cell) => {
+    const c = cell.trim();
+    const left = c.startsWith(':');
+    const right = c.endsWith(':');
+    if (left && right) return 'center';
+    if (right) return 'right';
+    if (left) return 'left';
+    return null;
+  });
+}
+
+/**
+ * Split a row into cells on unescaped pipes, dropping the empties the outer
+ * pipes produce. `\|` is a literal pipe in a cell, so it must not split.
+ */
+function splitRow(line: string): string[] {
+  const cells: string[] = [];
+  let cell = '';
+  const body = line.trim();
+  for (let i = 0; i < body.length; i++) {
+    const ch = body[i];
+    if (ch === '\\' && body[i + 1] === '|') {
+      cell += '|'; // escaped pipe: keep it, don't split here
+      i++;
+    } else if (ch === '|') {
+      cells.push(cell);
+      cell = '';
+    } else {
+      cell += ch;
+    }
+  }
+  cells.push(cell);
+  // The leading and trailing pipes each yield an empty cell; drop just those.
+  if (cells.length && cells[0]!.trim() === '') cells.shift();
+  if (cells.length && cells[cells.length - 1]!.trim() === '') cells.pop();
+  return cells;
+}
+
+/**
+ * Render a parsed table. Rows are padded or truncated to the header's width so
+ * ragged input degrades into a valid table instead of broken markup, and every
+ * cell goes through `inlineMarkdown`, which escapes it and applies the same
+ * bold/code/link rules as the rest of the document.
+ */
+function tableHtml(header: string[], body: string[][], aligns: ColumnAlign[]): string {
+  const columns = header.length;
+  const cell = (tag: 'th' | 'td', text: string, i: number): string => {
+    const align = aligns[i];
+    const style = align ? ` style="text-align:${align}"` : '';
+    return `<${tag}${style}>${inlineMarkdown(text.trim(), true)}</${tag}>`;
+  };
+  const row = (cells: string[], tag: 'th' | 'td'): string => {
+    const padded = Array.from({ length: columns }, (_, i) => cells[i] ?? '');
+    return `<tr>${padded.map((c, i) => cell(tag, c, i)).join('')}</tr>`;
+  };
+  const head = `<thead>${row(header, 'th')}</thead>`;
+  const rows = body.map((r) => row(r, 'td')).join('');
+  const bodyHtml = rows ? `<tbody>${rows}</tbody>` : '';
+  // The wrapper scrolls a wide table instead of letting it burst the card.
+  return `<div class="md-table-wrap"><table class="md-table">${head}${bodyHtml}</table></div>`;
+}
+
 /**
  * The block parser shared by {@link renderBlocks} and (recursively) blockquote
  * bodies — so a list or callout *inside* a quote renders as real structure, not
@@ -106,6 +193,28 @@ function blocksToHtml(lines: string[]): string {
         : '';
     return `<${l.tag}${startAttr}>${l.items.join('')}</${l.tag}>`;
   };
+  // Text indented under the current list item — a continuation of that item
+  // rather than a new block. Buffered so consecutive lines become one paragraph.
+  let itemPara: string[] = [];
+
+  /** Tuck `html` inside the list's most recent `<li>`, before its closing tag. */
+  const appendToItem = (l: OpenList, html: string) => {
+    const last = l.items.length - 1;
+    if (last < 0) return;
+    l.items[last] = l.items[last]!.replace(/<\/li>$/, `${html}</li>`);
+  };
+  // Close off any continuation text into the item it belongs to. Must run before
+  // a list closes or a new item opens, or the text lands in the wrong place.
+  const flushItemPara = () => {
+    const top = stack[stack.length - 1];
+    if (itemPara.length && top) {
+      appendToItem(
+        top,
+        `<p>${itemPara.map((l) => inlineMarkdown(l, true)).join('<br>')}</p>`,
+      );
+    }
+    itemPara = [];
+  };
   // Close the innermost list, nesting its HTML inside the parent's last <li> (or
   // emitting it at top level when it's the outermost list).
   const closeTopList = () => {
@@ -114,13 +223,13 @@ function blocksToHtml(lines: string[]): string {
     const html = renderList(l);
     const parent = stack[stack.length - 1];
     if (parent) {
-      const last = parent.items.length - 1;
-      parent.items[last] = parent.items[last]!.replace(/<\/li>$/, `${html}</li>`);
+      appendToItem(parent, html);
     } else {
       out.push(html);
     }
   };
   const flushLists = () => {
+    flushItemPara();
     while (stack.length) closeTopList();
   };
   const flushPara = () => {
@@ -131,6 +240,7 @@ function blocksToHtml(lines: string[]): string {
   };
   // Add a list item at `indent`, opening/closing nested lists as the depth shifts.
   const addItem = (tag: 'ul' | 'ol', indent: number, html: string, num?: number) => {
+    flushItemPara();
     flushPara();
     while (stack.length && stack[stack.length - 1]!.indent > indent) closeTopList();
     const top = stack[stack.length - 1];
@@ -149,7 +259,11 @@ function blocksToHtml(lines: string[]): string {
     let mm: RegExpMatchArray | null;
 
     if (trimmed === '') {
-      flushLists();
+      // A blank line ends a paragraph but does *not* end an open list: a list
+      // item may continue after one ("loose" lists), and whether it does is
+      // decided by what comes next — an indented line continues the item, an
+      // unindented one closes the list.
+      flushItemPara();
       flushPara();
     } else if (/^\s*>/.test(line)) {
       // Coalesce the whole run of `>` lines into one quote, strip the markers, and
@@ -177,10 +291,55 @@ function blocksToHtml(lines: string[]): string {
       } else {
         out.push(`<blockquote>${blocksToHtml(inner)}</blockquote>`);
       }
+    } else if ((mm = line.match(/^(\s*)(`{3,})([\w+#.-]*)\s*$/))) {
+      // A fenced code block. Handled here, inside the block parser, so it stays
+      // where it was written — inside its blockquote, or attached to the list
+      // item it documents. The closing fence must be at least as long as the
+      // opening one, so a ```` block can contain ``` lines (a Markdown sample).
+      const indent = mm[1]!.length;
+      const lang = mm[3] ?? '';
+      const closer = new RegExp('^\\s*`{' + mm[2]!.length + ',}\\s*$');
+      const body: string[] = [];
+      i++;
+      while (i < lines.length && !closer.test(lines[i] ?? '')) {
+        body.push(stripIndent(lines[i] ?? '', indent));
+        i++;
+      }
+      // `i` now sits on the closing fence, or past the end if it was never
+      // closed — either way the block is emitted rather than dropped.
+      const box = codeBox(body.join('\n'), lang);
+      const top = stack[stack.length - 1];
+      if (top && indent > top.indent && top.items.length > 0) {
+        // Indented past the list marker, so it belongs to the open item — after
+        // whatever prose already continued that item.
+        flushPara();
+        flushItemPara();
+        appendToItem(top, box);
+      } else {
+        flushLists();
+        flushPara();
+        out.push(box);
+      }
     } else if ((mm = line.match(/^(#{1,6})\s+(.*)$/))) {
       flushLists();
       flushPara();
       out.push(`<div class="md-h">${inlineMarkdown(mm[2]!, true)}</div>`);
+    } else if (isTableRow(line) && isTableSeparator(lines[i + 1])) {
+      // A GitHub table. The separator row is required, which is what keeps a
+      // shell pipeline (`grep foo | wc -l`) or a sentence containing a pipe
+      // from being swallowed as a table.
+      flushLists();
+      flushPara();
+      const aligns = parseAlignments(lines[i + 1]!);
+      const header = splitRow(line);
+      const body: string[][] = [];
+      i += 2; // past the header and the separator
+      while (i < lines.length && isTableRow(lines[i])) {
+        body.push(splitRow(lines[i]!));
+        i++;
+      }
+      i--; // the for-loop will re-increment past the last row
+      out.push(tableHtml(header, body, aligns));
     } else if (/^(-{3,}|\*{3,}|_{3,})$/.test(trimmed)) {
       flushLists();
       flushPara();
@@ -190,8 +349,17 @@ function blocksToHtml(lines: string[]): string {
     } else if ((mm = line.match(/^(\s*)(\d+)\.\s+(.*)$/))) {
       addItem('ol', mm[1]!.length, inlineMarkdown(mm[3]!, true), parseInt(mm[2]!, 10));
     } else {
-      flushLists();
-      para.push(line);
+      const top = stack[stack.length - 1];
+      const indent = line.length - line.trimStart().length;
+      if (top && top.items.length > 0 && indent > top.indent) {
+        // Indented past the marker of the open item, so it continues that item
+        // instead of ending the list — which is what used to happen, splitting
+        // one list into two with the text stranded between them.
+        itemPara.push(trimmed);
+      } else {
+        flushLists();
+        para.push(line);
+      }
     }
   }
   flushLists();

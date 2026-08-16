@@ -880,6 +880,31 @@ pre.diff {
 .tok-fn {
   color: #8250df;
 }
+/* Tables in captured content. Built entirely from tokens, so dark mode follows
+   without a second set of rules. The wrapper scrolls a table wider than the
+   52rem content column rather than letting it burst out of the turn card. */
+.md-table-wrap {
+  margin: 0.5rem 0 0.7rem;
+  overflow-x: auto;
+}
+.md-table {
+  border-collapse: collapse;
+  font-size: 0.85rem;
+  line-height: 1.45;
+}
+.md-table th,
+.md-table td {
+  border: 1px solid var(--st-border);
+  padding: 0.3rem 0.55rem;
+  text-align: left;
+  vertical-align: top;
+}
+.md-table th {
+  background: var(--st-sunken);
+  font-weight: 600;
+  color: var(--st-muted);
+  white-space: nowrap;
+}
 /* Code boxes inside an AI response / prompt (a code box with a code font). */
 pre.codeblock {
   margin: 0.4rem 0 0.6rem;
