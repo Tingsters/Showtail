@@ -25,7 +25,7 @@
  *   C — names and directory shape. Never evidence. Used only to ORDER candidates
  *       so the decisive files are examined first.
  */
-import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { basename, join, resolve, sep } from 'node:path';
 import { commitExists } from './git.ts';
 import { sha256OfFile } from './hash.ts';
@@ -169,22 +169,29 @@ function commitsOf(records: LedgerRecord[]): string[] {
 }
 
 /**
- * Hashes recorded by *other* ledger sessions for the same absolute paths. A
- * student who kept working at the old location across several sessions built up a
- * hash history there; any one of those hashes still identifies the file after it
- * moves, which widens the exact-match net well beyond this session's own snapshot.
+ * Every sha256 the ledger has recorded, keyed by the path it was recorded for.
+ *
+ * A student who kept working at the old location across several sessions built up
+ * a hash history there, and any one of those hashes still identifies the file
+ * after it moves — which widens the exact-match net well beyond one session's own
+ * snapshot.
+ *
+ * Built ONCE per sweep and cached on the candidate index, because it costs a full
+ * pass over every session's records: `showtail track` tests many sessions against
+ * one folder, so building it per session re-parsed the entire ledger each time
+ * (measured on a real machine: 118 sessions, ~2.9k records, 3.6 MB). Session-
+ * independent by design — callers subtract their own hashes — which is precisely
+ * what makes it safe to share.
  */
-function historicalHashesForPaths(
-  paths: Set<string>,
-  exceptSessionId: string,
-): Set<string> {
-  const keys = new Set([...paths].map((p) => pathKey(p)));
-  const out = new Set<string>();
-  for (const other of allLedgerSessions()) {
-    if (other.id === exceptSessionId) continue;
-    for (const rec of readLedgerRecords(other.id)) {
+function ledgerHashIndex(): Map<string, Set<string>> {
+  const out = new Map<string, Set<string>>();
+  for (const s of allLedgerSessions()) {
+    for (const rec of readLedgerRecords(s.id)) {
       if (rec.kind !== 'edit' || !rec.file || !rec.sha256) continue;
-      if (keys.has(pathKey(rec.file))) out.add(rec.sha256);
+      const key = pathKey(rec.file);
+      const set = out.get(key);
+      if (set) set.add(rec.sha256);
+      else out.set(key, new Set([rec.sha256]));
     }
   }
   return out;
@@ -210,6 +217,8 @@ export interface CandidateIndex {
   hashes: Map<string, string>;
   /** abs → text (null when binary/unreadable), filled on demand. */
   texts: Map<string, string | null>;
+  /** Ledger-wide `path → hashes`, built at most once per sweep. */
+  ledgerHashes?: Map<string, Set<string>>;
 }
 
 /** Walk `root` once and return a reusable index for {@link matchSessionToRoot}. */
@@ -364,6 +373,41 @@ export function deriveRebase(oldAbs: string, newAbs: string): PathRebase | undef
 }
 
 /**
+ * Derive a rebase for an already-proven match by locating one of the session's
+ * recorded files under `root` on disk.
+ *
+ * Needed because a Tier A git-commit match proves the folder without ever pairing
+ * a file — and the projection still needs an old-root → new-root mapping, or every
+ * relocated path renders as a `../../..` escape from the new root. That is the
+ * commonest relocation of all (a moved repo with its history intact), so without
+ * this the strongest evidence produced the worst paths.
+ *
+ * This probes `existsSync` on progressively shorter trailing segments of the
+ * recorded path (`game/main.py`, then `main.py`) — a filesystem lookup, not a
+ * name-similarity vote. Whether the session belongs here is already settled by
+ * other evidence; this only computes the path translation, so it does not weaken
+ * the rule that names are never evidence. Longest suffix wins, being the least
+ * ambiguous.
+ */
+export function deriveRebaseAgainstRoot(
+  editPaths: string[],
+  root: string,
+): PathRebase | undefined {
+  const base = resolve(root);
+  for (const p of editPaths) {
+    const segs = resolve(p).split(sep);
+    for (let take = segs.length - 1; take >= 1; take -= 1) {
+      const candidate = join(base, ...segs.slice(segs.length - take));
+      if (existsSync(candidate)) {
+        const rebase = deriveRebase(p, candidate);
+        if (rebase) return rebase;
+      }
+    }
+  }
+  return undefined;
+}
+
+/**
  * Re-point a stale absolute path through a rebase, or return undefined when the
  * path doesn't sit under the mapping's old root.
  */
@@ -399,6 +443,8 @@ export async function matchSessionToRoot(
   const evidence = editEvidenceOf(records);
 
   // --- Tier A.1: git-commit containment. Cheapest and strongest; needs no walk.
+  // It proves the folder without pairing a file, so the rebase is derived by
+  // locating a recorded file under the root (see `deriveRebaseAgainstRoot`).
   for (const sha of commitsOf(records)) {
     if (await commitExists(root, sha)) {
       return {
@@ -406,6 +452,10 @@ export async function matchSessionToRoot(
         tier: 'A',
         score: 1,
         detail: `captured commit ${sha.slice(0, 8)} is in this folder's history`,
+        rebase: deriveRebaseAgainstRoot(
+          evidence.map((e) => e.file),
+          root,
+        ),
       };
     }
   }
@@ -441,10 +491,14 @@ export async function matchSessionToRoot(
   const own = await hashHit(ownHashes);
   if (own) return exactMatch(root, evidence, own, ownHashes, 'content hash');
 
-  const historical = historicalHashesForPaths(
-    new Set(evidence.map((e) => e.file)),
-    session.id,
-  );
+  // Widen to hashes any session ever recorded for these same paths, minus the ones
+  // we just tried. The ledger-wide index is built at most once and shared.
+  idx.ledgerHashes ??= ledgerHashIndex();
+  const historical = new Set<string>();
+  for (const e of evidence) {
+    const seen = idx.ledgerHashes.get(pathKey(e.file));
+    if (seen) for (const h of seen) historical.add(h);
+  }
   for (const h of ownHashes) historical.delete(h);
   const past = await hashHit(historical);
   if (past) {
@@ -478,7 +532,12 @@ export async function matchSessionToRoot(
           tier: 'B',
           score: 0.95,
           detail: `a distinctive ${p.block.split('\n').length}-line captured block appears verbatim in ${basename(c.abs)}`,
-          rebase: deriveRebase(p.e.file, c.abs),
+          rebase:
+            deriveRebase(p.e.file, c.abs) ??
+            deriveRebaseAgainstRoot(
+              evidence.map((e) => e.file),
+              root,
+            ),
         };
       }
       if (p.shingles.size < MIN_SHINGLES) continue;
@@ -489,7 +548,12 @@ export async function matchSessionToRoot(
           tier: 'B',
           score,
           detail: `${Math.round(score * 100)}% of captured content still present in ${basename(c.abs)}`,
-          rebase: deriveRebase(p.e.file, c.abs),
+          rebase:
+            deriveRebase(p.e.file, c.abs) ??
+            deriveRebaseAgainstRoot(
+              evidence.map((e) => e.file),
+              root,
+            ),
         };
       }
     }
@@ -512,11 +576,19 @@ function exactMatch(
     (e) => basename(e.file).toLowerCase() === basename(hit.abs).toLowerCase(),
   );
   const source = byHash ?? byName ?? evidence[0];
+  const paired = source ? deriveRebase(source.file, hit.abs) : undefined;
   return {
     root,
     tier: 'A',
     score: 1,
     detail: `${label} of ${basename(hit.abs)} matches captured work exactly`,
-    rebase: source ? deriveRebase(source.file, hit.abs) : undefined,
+    // A renamed-as-well-as-moved file shares no trailing segments, so fall back to
+    // locating any other recorded file under the root.
+    rebase:
+      paired ??
+      deriveRebaseAgainstRoot(
+        evidence.map((e) => e.file),
+        root,
+      ),
   };
 }

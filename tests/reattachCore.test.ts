@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { resolve } from 'node:path';
-import { reattachLedgerSession, runReattach } from '../src/commands/reattach.ts';
+import { reattachLedgerSession } from '../src/commands/reattach.ts';
+import { runMove } from '../src/commands/move.ts';
 import { readAllEvents } from '../src/core/events.ts';
 import {
   appendLedgerRecord,
@@ -71,12 +72,14 @@ describe('reattachLedgerSession core (place + move)', () => {
     }
   });
 
-  test('runReattach rejects an unknown session id with a helpful error', async () => {
+  // `runMove` backs both `showtail move` and its `reattach` alias — there is no
+  // separate reattach entry point (it was dead code and was removed).
+  test('move rejects an unknown session id with a helpful error', async () => {
     const home = makeTempDir();
     const dir = makeTempDir();
     try {
       process.env.SHOWTAIL_HOME = home;
-      await expect(runReattach('led_does_not_exist', { to: dir })).rejects.toThrow(
+      await expect(runMove('led_does_not_exist', { to: dir })).rejects.toThrow(
         /No ledger session/,
       );
     } finally {

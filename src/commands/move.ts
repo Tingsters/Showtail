@@ -17,7 +17,8 @@ import {
   type LedgerSession,
   type LedgerSessionView,
 } from '../core/ledger.ts';
-import { reattachLedgerSession } from './reattach.ts';
+import { prepareCandidateIndex, type CandidateIndex } from '../core/relocate.ts';
+import { placeLedgerSession, stubNote } from './reattach.ts';
 import { ask, pickSessions, relativeTime, summarize } from './sessionPicker.ts';
 
 /** A one-line status/location label for a session. */
@@ -58,13 +59,27 @@ function toJson(s: LedgerSessionView): Record<string, unknown> {
   };
 }
 
-/** Move one session to `toPath`, printing the outcome. */
-async function moveOne(session: LedgerSession, toPath: string): Promise<void> {
-  const { root, projected, movedFrom } = await reattachLedgerSession(session, toPath);
+/**
+ * Move one session to `toPath`, printing the outcome. Goes through
+ * {@link placeLedgerSession} so a session whose files moved gets its edit paths
+ * rebased — this is the command the inbox/track output tells students to run after
+ * a move, so it is exactly the path that must not produce `../../..` paths.
+ */
+async function moveOne(
+  session: LedgerSession,
+  toPath: string,
+  index?: CandidateIndex,
+): Promise<void> {
+  const { root, projected, movedFrom, stubs } = await placeLedgerSession(
+    session,
+    toPath,
+    index,
+  );
   if (movedFrom.length > 0) {
     console.log(`Moved ${session.id} off ${movedFrom.join(', ')}.`);
   }
   console.log(`Placed ${session.id} into ${root} — ${projected} record(s) projected.`);
+  stubNote(stubs);
 }
 
 /** CLI entry point for `showtail move`. */
@@ -116,7 +131,9 @@ export async function runMove(
     return;
   }
   const toPath = await ask('Move into which project path?', opts.cwd ?? process.cwd());
-  for (const s of chosen) await moveOne(s, toPath);
+  // One destination for the whole batch, so walk and hash it once.
+  const index = prepareCandidateIndex(toPath);
+  for (const s of chosen) await moveOne(s, toPath, index);
   console.log('');
   console.log('Run `showtail report` there to see them alongside your other work.');
 }

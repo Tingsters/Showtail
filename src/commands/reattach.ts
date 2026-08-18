@@ -1,10 +1,14 @@
 /**
- * `showtail reattach <sessionId> --to <path>` — place an unplaced (inbox) session
- * into a project, or correct a misattributed one by moving it. It (re-)materializes
- * the ledger session into the chosen repo and, when the session was previously
- * projected into a *different* trail, removes that stale projection so the work
- * ends up in exactly one place. Idempotent: re-running into the same repo projects
- * nothing new (the projection dedupes by source id).
+ * The placement core behind `showtail move` (and its `reattach` alias): put an
+ * unplaced (inbox) session into a project, or correct a misattributed one. It
+ * (re-)materializes the ledger session into the chosen repo and, when the session
+ * was previously projected into a *different* trail, removes that stale projection
+ * so the work ends up in exactly one place. Idempotent: re-running into the same
+ * repo projects nothing new (the projection dedupes by source id).
+ *
+ * There is no `runReattach` CLI entry — `src/cli.ts` routes both `move` and the
+ * `reattach` alias to `runMove`, so a second entry point here was dead code whose
+ * output (notably the stub note) never reached a user.
  */
 import { existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -18,7 +22,11 @@ import {
   unlinkPlacement,
   type LedgerSession,
 } from '../core/ledger.ts';
-import type { PathRebase } from '../core/relocate.ts';
+import {
+  matchSessionToRoot,
+  type CandidateIndex,
+  type PathRebase,
+} from '../core/relocate.ts';
 import { ensureTrailId, pathsForRoot } from '../core/storage.ts';
 import { ensureInitialized } from './init.ts';
 
@@ -83,35 +91,41 @@ export async function reattachLedgerSession(
   return { root, projected, movedFrom, stubs };
 }
 
-/** CLI entry point for `showtail reattach`. */
-export async function runReattach(
-  sessionId: string,
-  opts: { to?: string; cwd?: string },
-): Promise<void> {
-  const session = resolveLedgerSessionId(sessionId);
-  if (!session) {
-    throw new Error(
-      `No ledger session matching "${sessionId}". ` +
-        'Run `showtail inbox` to see unplaced sessions.',
-    );
+/**
+ * Place a session, first deriving a relocation rebase when its recorded paths no
+ * longer resolve. **Every user-facing placement path should call this** rather than
+ * {@link reattachLedgerSession} directly: without the rebase, a student who moved
+ * their files gets edit paths projected as `../../..` escapes out of their own
+ * project (and, for edits with no captured diff, a content-free stub as well).
+ *
+ * Note the match is consulted *only* for the path mapping here — never to decide
+ * whether the session belongs in this folder. The user named the folder explicitly,
+ * so even Tier-B evidence is fine to take a rebase from; the "confirm before
+ * attributing" rule applies to automatic backfill, not to an explicit instruction.
+ *
+ * Pass `index` when placing several sessions into one folder so it is walked and
+ * hashed once.
+ */
+export async function placeLedgerSession(
+  session: LedgerSession,
+  toPath: string,
+  index?: CandidateIndex,
+): Promise<ReattachResult> {
+  let rebase: PathRebase | undefined;
+  try {
+    const match = await matchSessionToRoot(session, resolve(toPath), {}, index);
+    rebase = match?.rebase;
+  } catch {
+    // Path-quality optimization only — never let it block the placement itself.
   }
-  const toPath = opts.to ?? opts.cwd ?? process.cwd();
-  const { root, projected, movedFrom, stubs } = await reattachLedgerSession(
-    session,
-    toPath,
-  );
+  return reattachLedgerSession(session, toPath, { rebase });
+}
 
-  if (movedFrom.length > 0) {
-    console.log(`Moved session ${session.id} off ${movedFrom.join(', ')}.`);
-  }
+/** The "some edits kept only their name" note, shared by every placement caller. */
+export function stubNote(stubs: number): void {
+  if (stubs <= 0) return;
   console.log(
-    `Placed session ${session.id} into ${root} — ${projected} record(s) projected.`,
+    `  Note: ${stubs} edit(s) are recorded by name only — no content was captured ` +
+      'for them and the file is no longer readable here.',
   );
-  if (stubs > 0) {
-    console.log(
-      `  Note: ${stubs} edit(s) are recorded by name only — no content was captured ` +
-        'for them and the file is no longer readable here.',
-    );
-  }
-  console.log('Run `showtail report` there to see it alongside your other work.');
 }

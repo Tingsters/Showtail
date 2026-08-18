@@ -36,8 +36,11 @@ import { materializeLedgerSession } from '../src/core/materialize.ts';
 import {
   applyRebase,
   deriveRebase,
+  deriveRebaseAgainstRoot,
   matchSessionToRoot,
 } from '../src/core/relocate.ts';
+import { runMove } from '../src/commands/move.ts';
+import { verifyProject } from '../src/commands/verify.ts';
 import { pathsForRoot } from '../src/core/storage.ts';
 import { readObject } from '../src/core/objects.ts';
 
@@ -213,7 +216,11 @@ describe('relocation: content-lineage matching', () => {
       const moved = join(to, 'game', 'main.py');
       renameSync(file, moved);
       // The student kept working after moving, so the hash no longer matches.
-      writeFileSync(moved, GAME_SOURCE + '\n\n    def solve(self):\n        pass\n', 'utf8');
+      writeFileSync(
+        moved,
+        GAME_SOURCE + '\n\n    def solve(self):\n        pass\n',
+        'utf8',
+      );
 
       const match = await matchSessionToRoot(s, to);
       expect(match?.tier).toBe('B');
@@ -303,7 +310,134 @@ describe('relocation: rebase derivation', () => {
   });
 
   test('deriveRebase returns undefined when nothing is shared', () => {
-    expect(deriveRebase(join('C:', 'a', 'one.py'), join('C:', 'b', 'two.py'))).toBeUndefined();
+    expect(
+      deriveRebase(join('C:', 'a', 'one.py'), join('C:', 'b', 'two.py')),
+    ).toBeUndefined();
+  });
+
+  test('deriveRebaseAgainstRoot locates a recorded file with no matched pair', () => {
+    // What a git-commit match needs: the folder is already proven, but no file pair
+    // was ever formed, so the mapping has to come from finding a recorded file.
+    const from = makeTempDir();
+    const to = makeTempDir();
+    const unrelated = makeTempDir();
+    try {
+      const file = seedProjectFile(from, GAME_SOURCE);
+      mkdirSync(join(to, 'game'), { recursive: true });
+      renameSync(file, join(to, 'game', 'main.py'));
+
+      const rebase = deriveRebaseAgainstRoot([file], to);
+      expect(rebase?.fromRoot).toBe(from);
+      expect(rebase?.toRoot).toBe(to);
+      expect(deriveRebaseAgainstRoot([file], unrelated)).toBeUndefined();
+    } finally {
+      cleanup(from);
+      cleanup(to);
+      cleanup(unrelated);
+    }
+  });
+});
+
+describe('relocation: every placement path rebases', () => {
+  test('a git-commit-only Tier A match still carries a rebase', async () => {
+    const repo = makeTempDir();
+    const from = makeTempDir();
+    try {
+      const git = (...args: string[]) =>
+        spawnSync('git', args, { cwd: repo, encoding: 'utf8' });
+      if (git('init').status !== 0) return;
+      git('config', 'user.email', 'tester@example.com');
+      git('config', 'user.name', 'Test Student');
+      writeFileSync(join(repo, 'notes.md'), 'first\n', 'utf8');
+      git('add', '-A');
+      if (git('commit', '-m', 'initial').status !== 0) return;
+      const sha = git('rev-parse', 'HEAD').stdout.trim();
+      if (!sha) return;
+
+      // Captured at the old location, then the whole project moved into the repo.
+      const file = seedProjectFile(from, GAME_SOURCE);
+      const s = captureSession('s-commit-rebase', file, GAME_SOURCE, { gitCommit: sha });
+      mkdirSync(join(repo, 'game'), { recursive: true });
+      renameSync(file, join(repo, 'game', 'main.py'));
+
+      const match = await matchSessionToRoot(s, repo);
+      expect(match?.tier).toBe('A');
+      // The regression: a commit match used to return no mapping at all, so the
+      // commonest relocation of all still projected `../../..` paths.
+      expect(match?.rebase?.fromRoot).toBe(from);
+      expect(match?.rebase?.toRoot).toBe(repo);
+    } finally {
+      cleanup(repo);
+      cleanup(from);
+    }
+  });
+
+  test('`showtail move --to` projects a clean path, not a ../.. escape', async () => {
+    // The exact flow the CLI advertises for candidates it declines to auto-place.
+    const from = makeTempDir();
+    const to = makeTempDir();
+    try {
+      const file = seedProjectFile(from, GAME_SOURCE);
+      const s = captureSession('s-move-cli', file, GAME_SOURCE);
+      mkdirSync(join(to, 'game'), { recursive: true });
+      renameSync(file, join(to, 'game', 'main.py'));
+
+      await runInit({ cwd: to });
+      await runMove(s.id, { to });
+
+      const author = authorFor(pathsForRoot(to));
+      const artifacts = readArtifacts(author);
+      expect(artifacts.length).toBe(1);
+      expect(artifacts[0]!.path).toBe('game/main.py');
+      expect(artifacts[0]!.path).not.toContain('..');
+    } finally {
+      cleanup(from);
+      cleanup(to);
+    }
+  });
+});
+
+describe('relocation: verify tolerates content-free stubs', () => {
+  test('a hash-less stub does not fail verify', async () => {
+    // `hook.ts` deliberately omits the hash for a DELETED file, so a shell-driven
+    // delete with no captured diff projects a hash-less stub. That used to trip the
+    // journal check and fail an honest trail with exit code 3.
+    const dir = makeTempDir();
+    const gone = makeTempDir();
+    try {
+      await runInit({ cwd: dir });
+      const missing = join(gone, 'nested', 'shell-deleted.py');
+      const s = ensureLedgerSession({
+        tool: 'claude-code',
+        nativeSessionId: 's-stub-verify',
+        cwd: dirname(missing),
+      });
+      appendLedgerRecord(s.id, {
+        kind: 'prompt',
+        tool: 'claude-code',
+        text: 'delete it',
+      });
+      // No diff AND no sha256 — exactly what a deleted file records.
+      appendLedgerRecord(s.id, {
+        kind: 'edit',
+        tool: 'claude-code',
+        file: missing,
+        deleted: true,
+      });
+      cleanup(gone);
+
+      const paths = pathsForRoot(dir);
+      const author = authorFor(paths);
+      const result = await materializeLedgerSession(s, author);
+      expect(result.stubs).toBe(1);
+
+      const verified = await verifyProject(paths);
+      const journal = verified.checks.find((c) => c.name === 'journal entries are valid');
+      expect(journal?.ok).toBe(true);
+    } finally {
+      cleanup(dir);
+      if (existsSync(gone)) cleanup(gone);
+    }
   });
 });
 
@@ -350,7 +484,11 @@ describe('relocation: track recovers moved work', () => {
       mkdirSync(join(to, 'game'), { recursive: true });
       const moved = join(to, 'game', 'main.py');
       renameSync(file, moved);
-      writeFileSync(moved, GAME_SOURCE + '\n\n    def solve(self):\n        pass\n', 'utf8');
+      writeFileSync(
+        moved,
+        GAME_SOURCE + '\n\n    def solve(self):\n        pass\n',
+        'utf8',
+      );
 
       await runInit({ cwd: to });
 

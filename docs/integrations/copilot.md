@@ -49,10 +49,12 @@ differently:
   project; if its work doesn't belong to any tracked project, it's parked in your
   **inbox** (not dumped into a machine-wide catch-all). You can also back-fill past
   chats anytime with `showtail import copilot`.
-- **Folderless chats wait in the inbox.** Run `showtail inbox` to see captured Copilot
-  work that isn't tied to a project yet, then place it — `showtail track <folder>` to
-  make a folder a project and pull its work in, or `showtail move <id> --to <path>` for
-  one session. (See the inbox commands in the [CLI reference](../reference/cli.md).)
+- **Unplaced chats wait in the inbox.** Run `showtail inbox` to see captured Copilot
+  work that isn't sitting in a project — either not tied to one yet, or in a folder
+  that has since moved — then place it: `showtail track <folder>` to make a folder a
+  project and pull its work in, or `showtail move <id> --to <path>` for one session.
+  (See the inbox commands and [Moving a project](../reference/cli.md#moving-a-project)
+  in the CLI reference.)
 - **File edits are captured automatically.** When a folder is open, the extension also
   snapshots every file you save as an artifact, so edits made outside chat are never
   lost. These snapshots record the *resulting code*, not how it was produced — so code

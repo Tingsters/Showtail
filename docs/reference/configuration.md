@@ -10,8 +10,9 @@ tree.
 
 ```json
 {
-  "version": 1,
+  "version": 4,
   "name": "Week 5 Parser",
+  "trailId": "trl_k3f9x2",
   "anchor": "/abs/path/to/project",
   "anchorKind": "git",
   "settings": {
@@ -27,9 +28,10 @@ tree.
 
 | Key | Meaning |
 | --- | ------- |
-| `version` | Showtail config schema version. |
+| `version` | Showtail config schema version (currently `4`). Older trails are upgraded in place the first time you use them. |
 | `name` | Project name shown in report titles. Set with `showtail track --project <name>`. |
-| `anchor` | Absolute path the trail is rooted at. |
+| `trailId` | Stable id identifying this trail wherever it lives. It travels with the folder, so a [moved project](cli.md#moving-a-project) is recognized rather than treated as deleted. Never changes; don't edit it. |
+| `anchor` | Absolute path the trail is rooted at, for reference only — nothing resolves the project through it, and it is refreshed automatically if the folder moves. |
 | `anchorKind` | Whether `anchor` was chosen from the git repo root (`git`) or the working dir (`cwd`). |
 | `settings.git` | Try to capture the git commit hash on each event. |
 | `settings.captureAiOutput` | Capture AI text responses (Stop hook / imports). Default on. |

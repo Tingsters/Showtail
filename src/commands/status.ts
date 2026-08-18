@@ -74,6 +74,14 @@ export async function runStatus(options: StatusOptions = {}): Promise<void> {
         : null,
       hooksActive: claudeHooks,
       autoInit,
+      // Agents read `status --json` (see assets/**/*.showtail.md), so the move has
+      // to be visible here too — not only in the human output.
+      relocated: relocated?.moved
+        ? {
+            previousPath: relocated.previousPath ?? null,
+            duplicated: relocated.duplicated,
+          }
+        : null,
       // Sessions captured globally (folderless/scratch tools) not yet placed in a project.
       inbox,
       nextAction: events.length > 0 ? 'report' : 'work',

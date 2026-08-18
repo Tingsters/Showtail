@@ -22,7 +22,7 @@ install later is captured too. You never run a getting-started command — just 
 | Command | What it does |
 | ------- | ------------ |
 | `setup` | Manage automatic tracking (it turns on by itself after install). `--off` turns it off; re-run to turn it back on. Flags: `--off`, `--yes`, `--json`. |
-| `track [path]` | Set up one project by hand: name it (`-p, --project <name>`), declare a non-code folder (like a book) as a project, and pull its already-captured work out of the inbox. Projects otherwise initialize automatically. Flags: `-p, --project <name>`, `--json`. |
+| `track [path]` | Set up one project by hand: name it (`-p, --project <name>`), declare a non-code folder (like a book) as a project, and pull its already-captured work in — including work whose files have since **moved** (see [Moving a project](#moving-a-project)). Projects otherwise initialize automatically. Safe to re-run: a second run in an already-tracked folder still pulls in newly-orphaned work. Flags: `-p, --project <name>`, `--json` (emits `backfilled` and `candidates`). |
 | `redact` | Scrub a secret the write-time rules missed out of an already-captured trail, instead of deleting `.showtail/`. `--rescan` re-runs the project's current rules (including a `settings.redact.custom` added since capture) over every stored object, preview, and plan file; `--pattern <regex>` scrubs one specific value — a **preview until you pass `--yes`**. Rewrites the content to its new address, repoints the journal, deletes the old object, re-links the hash chain, and records a dated redaction marker `verify` reports. Flags: `--rescan`, `--pattern <regex>`, `--dry-run`, `-y, --yes`, `--json`. See [Privacy &amp; redaction](../concepts/privacy.md#if-something-leaked-anyway). |
 
 !!! note "Hidden lifecycle commands"
@@ -42,10 +42,10 @@ install later is captured too. You never run a getting-started command — just 
 
 | Command | What it does |
 | ------- | ------------ |
-| `status` | Your current session and connected tools at a glance. Flags: `--json`. |
+| `status` | Your current session and connected tools at a glance. Also notices when this project has **moved** since it was last seen and updates its recorded location (and warns if the folder looks *copied* rather than moved — two folders sharing one trail id). Flags: `--json`. |
 | `sessions` | List your work sessions. Flags: `--all` (every contributor's), `--json`. |
 | `capabilities` | Report this folder's tracking state and what to do next (for AI agents). Flags: `--json`. |
-| `report` | Generate a shareable report. A combined **team** report is written only when the project has **two or more** contributors; a solo project gets a single report. After writing, an interactive menu offers to open the report (**once / always / never**, Esc to skip); *always*/*never* is remembered in `~/.showtail-cli/config.json`. Flags: `--format <html\|md\|json>` (default `html`), `--ai <collapsed\|full\|off>` (how much AI narration to show; `--no-ai` = off), `--open` (open without asking), `--no-open` (don't open or prompt), `--ask` (show the menu, ignoring a remembered choice), `--author <slug>`, `--team`, `--title <text>`, `--json`, `--no-sync`. Before rendering, `report` re-reads your AI tool's own transcript to fold in anything the live hooks couldn't see — a host writes its transcript asynchronously and appends each turn's recap minutes later, so a session's final exchange has no hook left to capture it. The sweep only adds what's missing (repeat runs change nothing); `--no-sync` skips it. |
+| `report` | Generate a shareable report. Like `status`, it refreshes this project's recorded location if it has moved. A combined **team** report is written only when the project has **two or more** contributors; a solo project gets a single report. After writing, an interactive menu offers to open the report (**once / always / never**, Esc to skip); *always*/*never* is remembered in `~/.showtail-cli/config.json`. Flags: `--format <html\|md\|json>` (default `html`), `--ai <collapsed\|full\|off>` (how much AI narration to show; `--no-ai` = off), `--open` (open without asking), `--no-open` (don't open or prompt), `--ask` (show the menu, ignoring a remembered choice), `--author <slug>`, `--team`, `--title <text>`, `--json`, `--no-sync`. Before rendering, `report` re-reads your AI tool's own transcript to fold in anything the live hooks couldn't see — a host writes its transcript asynchronously and appends each turn's recap minutes later, so a session's final exchange has no hook left to capture it. The sweep only adds what's missing (repeat runs change nothing); `--no-sync` skips it. |
 | `verify` | Run integrity checks on your trail: config, journal entry validity, the journal **hash chain**, stored content vs. its content address, file snapshots, path portability, and report generation. Exits `3` if a check fails. Flags: `--json`. |
 | `trace <file>` | Show every snapshot and related event for a file. Flags: `--format <text\|json>` (default `text`). |
 
@@ -56,13 +56,50 @@ install later is captured too. You never run a getting-started command — just 
 
 ## Manage the inbox
 
-Work Showtail captured but couldn't place in a project (folderless / scratch sessions) waits in the **inbox**. By default only real-project, signal-bearing work shows; the rest is kept aside (recoverable).
+Work Showtail captured that isn't currently sitting in a project waits in the
+**inbox** — either because it had no project to go to (folderless / scratch
+sessions), or because the folder it *was* in has since moved or been deleted. By
+default the inbox shows work worth acting on; low-signal and scratch work is kept
+aside and revealed with `--all`.
 
 | Command | What it does |
 | ------- | ------------ |
-| `inbox` | List real-project sessions awaiting placement; pick to place them, or dismiss (`d1,3` / `dismiss all`). Flags: `--all` (also show scratch kept aside, tagged with why), `--json`. |
-| `ignore [path]` | Mark a folder as scratch so its sessions never surface in `inbox` (still under `--all`). No path lists ignored folders. Flags: `--remove`, `--list`, `--json`. |
-| `move [sessionId]` (alias `reattach`) | Move any captured session to another project folder. With no id, lists every session to pick from. Flags: `--to <path>`, `--json`. |
+| `inbox` | List sessions awaiting placement; pick to place them, or dismiss (`d1,3` / `dismiss all`). Flags: `--all` (also show scratch kept aside, tagged with why), `--json` (each session carries `pathGone`). |
+| `ignore [path]` | Mark a folder as scratch so its sessions stay out of the default `inbox` (still under `--all`). No path lists ignored folders. Flags: `--remove`, `--list`, `--json`. |
+| `move [sessionId]` (alias `reattach`) | Move any captured session to another project folder. With no id, lists every session to pick from. If the session's files moved, its recorded paths are re-pointed at the new folder. Flags: `--to <path>`, `--json`. |
+
+Sessions are tagged with why they appear:
+
+| Tag | Meaning |
+| --- | ------- |
+| `[target missing]` | It *was* placed in a project, but that folder is gone. |
+| `[files moved or deleted]` | The folder its files were captured in no longer exists. Shown in the default view, because it's actionable — see below. |
+| `[scratch: not in a project]` | Captured somewhere that isn't a project folder. `--all` only. |
+| `[scratch: low-signal]` | Too little in it to be worth placing. `--all` only. |
+| `[scratch: ignored path]` | Under a folder you marked with `ignore`. `--all` only. |
+| `[dismissed]` | You dismissed it. Reversible; `--all` only. |
+
+### Moving a project
+
+Moving or renaming a project folder — yourself, or by asking your AI tool to do
+it — does not lose anything. The trail inside `.showtail/` travels with the folder,
+and everything captured is also held in a machine-local ledger.
+
+To pick the work back up at the new location:
+
+```text
+showtail track <new folder>
+```
+
+Showtail recognizes the work by its **content** (a matching file, or a captured
+commit in the folder's history), not by the old path — so it still finds it after a
+move. When the evidence is conclusive it places the work for you; when it's only a
+strong resemblance it lists the sessions and leaves them alone, so nothing is ever
+attributed to the wrong project on a guess. Place one of those yourself with:
+
+```text
+showtail move <session-id> --to .
+```
 
 ## Connect your tools
 

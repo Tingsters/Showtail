@@ -396,10 +396,16 @@ export async function verifyProject(paths: ShowtailPaths): Promise<VerifyResult>
         continue;
       }
       if (entry.kind === 'artifact') {
-        if (!entry.path || !entry.sha256) {
+        // Only the path is required. A hash is genuinely optional: an imported or
+        // projected edit records a diff the tool supplied without ever reading the
+        // file, and the hook deliberately omits the hash for a deleted file. The
+        // artifact-hash check already says so — it skips hash-less artifacts because
+        // there is "nothing to verify against" — so requiring one here contradicted
+        // it and failed honest trails with exit code 3.
+        if (!entry.path) {
           eventsCheck.ok = false;
           eventsCheck.details.push(
-            `${journal.slug} entry ${i} (${entry.id}): artifact missing path/sha256.`,
+            `${journal.slug} entry ${i} (${entry.id}): artifact missing path.`,
           );
         }
         continue;

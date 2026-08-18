@@ -19,7 +19,8 @@ import {
   type HiddenReason,
   type LedgerSession,
 } from '../core/ledger.ts';
-import { reattachLedgerSession } from './reattach.ts';
+import { prepareCandidateIndex } from '../core/relocate.ts';
+import { placeLedgerSession, stubNote } from './reattach.ts';
 import { ask, pickSessionsWithAction, relativeTime, summarize } from './sessionPicker.ts';
 
 type Unplaced = LedgerSession & { targetMissing?: boolean; pathGone?: boolean };
@@ -173,9 +174,12 @@ export async function runInbox(
   }
 
   const toPath = await ask('Place into which project path?', opts.cwd ?? process.cwd());
+  // One destination for the whole batch, so the folder is walked and hashed once.
+  const index = prepareCandidateIndex(toPath);
   for (const session of result.items) {
-    const { root, projected } = await reattachLedgerSession(session, toPath);
+    const { root, projected, stubs } = await placeLedgerSession(session, toPath, index);
     console.log(`  ${session.id} → ${root} — ${projected} record(s) projected.`);
+    stubNote(stubs);
   }
   console.log('');
   console.log('Run `showtail report` there to see them alongside your other work.');

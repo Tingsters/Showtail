@@ -43,6 +43,26 @@ showtail sessions               # list your work sessions  (--all for the whole 
 showtail trace src/parser.ts    # the full trail for one file
 ```
 
+## If you move your project
+
+Moving or renaming your project folder is fine — drag it somewhere else, or ask
+your AI tool to move it. The trail lives inside the folder and travels with it, and
+everything captured is also kept in a machine-local ledger.
+
+If work does get separated from its folder, it waits in the inbox tagged
+`[files moved or deleted]`. Pick it back up with:
+
+```bash
+showtail inbox                  # see anything waiting to be placed
+showtail track <new folder>     # find that work by content and pull it in
+```
+
+Showtail matches on what your files *contain*, not where they used to be, so a move
+doesn't break the trail. If it's confident it places the work for you; if it's only
+fairly sure it will list the sessions and let you confirm with
+`showtail move <id> --to .` — it will never file your work under the wrong project
+on a guess.
+
 ## Generate a report
 
 ```bash

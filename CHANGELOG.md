@@ -1,5 +1,41 @@
 # Changelog
 
+## 0.14.0 — Moving your project keeps its trail
+
+### What changed
+- **Moving or renaming a project no longer loses its work.** Showtail recorded
+  where your files were, not what was in them, so moving a folder — or asking your
+  AI tool to move it — quietly orphaned everything captured there. It now
+  recognizes work by its **content**: a file that still matches, or a captured git
+  commit present in the folder's history. `showtail track <new folder>` picks the
+  work back up at its new home.
+- **Moved work stays visible.** A session whose folder has vanished now shows in
+  `showtail inbox` tagged **`[files moved or deleted]`**, instead of being filed
+  away as scratch where you'd never look for it. (Trivial sessions are still kept
+  aside, so the inbox doesn't fill up with noise.) `showtail inbox --json` gained a
+  `pathGone` flag.
+- **Nothing is attributed on a guess.** Only conclusive evidence places work
+  automatically. A mere resemblance is listed for you to confirm with
+  `showtail move <id> --to .` — filenames are never treated as evidence, because
+  every student has a dozen `main.py` files.
+- **`showtail track` is safe to re-run.** Re-running it in a folder that already
+  has a `.showtail/` now still pulls in orphaned work — exactly the case you hit
+  after moving a project that was already being tracked. `--json` reports
+  `backfilled` and `candidates`.
+- **`showtail status` and `showtail report` notice a move** and update the
+  project's recorded location, so past sessions stop showing as missing without
+  waiting for your next AI session. `status` also warns if a folder looks *copied*
+  rather than moved, since two copies sharing one trail id will fight over it.
+- **Edits whose content was never captured are no longer dropped.** They're
+  recorded by name, and the command tells you the content is unrecoverable rather
+  than silently omitting the change.
+
+### Notes
+- `showtail verify` no longer fails a trail merely because an edit has no recorded
+  hash — a legitimate case for imported edits and deleted files.
+- Nothing to run and no format change: this is all recognition, not new capture, so
+  it works on sessions already sitting in your ledger.
+
 ## 0.13.2
 
 ### Fixed

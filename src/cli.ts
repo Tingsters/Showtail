@@ -249,7 +249,11 @@ Managing your inbox:
                                      ignored/dismissed), tagged with why
   showtail track <folder>            make a folder a project and pull its captured work in
   showtail ignore <folder>           keep a folder's work out of the inbox
-  showtail move <id> --to <folder>   place one specific session by id`,
+  showtail move <id> --to <folder>   place one specific session by id
+
+Moved or renamed your project?
+  Work tagged [files moved or deleted] is still here — run 'showtail track <new
+  folder>'. Showtail finds it by content, not by its old path.`,
   )
   .action(
     action(async (opts: { json?: boolean; all?: boolean }) =>
@@ -599,7 +603,7 @@ program
 program
   .command('track [path]')
   .description(
-    'Set up one project by hand: name it, declare a non-code folder as a project, and pull its already-captured work out of the inbox. (Projects otherwise initialize automatically.)',
+    'Set up one project by hand: name it, declare a non-code folder as a project, and pull its already-captured work in — including work whose files have since moved. Safe to re-run. (Projects otherwise initialize automatically.)',
   )
   .helpGroup(G_MANAGE)
   .option(
