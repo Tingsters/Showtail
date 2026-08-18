@@ -22,7 +22,7 @@ import {
 import { reattachLedgerSession } from './reattach.ts';
 import { ask, pickSessionsWithAction, relativeTime, summarize } from './sessionPicker.ts';
 
-type Unplaced = LedgerSession & { targetMissing?: boolean };
+type Unplaced = LedgerSession & { targetMissing?: boolean; pathGone?: boolean };
 
 /**
  * One calm pointer to `--help` — the single home for the flag/command docs. We do NOT
@@ -48,6 +48,9 @@ function groupKey(session: Unplaced): string {
 /** The trailing tag for a session in the `--all` listing (missing target, or hide reason). */
 function tagFor(session: Unplaced, showHidden: boolean): string {
   if (session.targetMissing) return '  [target missing]';
+  // Shown in the DEFAULT view, not just under --all: the files having moved is the
+  // actionable part, and `showtail track <new folder>` is what fixes it.
+  if (session.pathGone) return '  [files moved or deleted]';
   if (!showHidden) return '';
   const reason = hiddenReason(session);
   return reason ? `  ${REASON_TAG[reason]}` : '';
@@ -77,6 +80,7 @@ function toJson(session: Unplaced): Record<string, unknown> {
     lastSeenAt: session.lastSeenAt,
     status: session.targetMissing ? 'target-missing' : 'inbox',
     hiddenReason: session.targetMissing ? null : hiddenReason(session),
+    pathGone: session.pathGone ?? false,
     prompts,
     edits,
     firstPrompt: firstPrompt ?? null,

@@ -14,6 +14,7 @@ import {
 } from '../core/authors.ts';
 import { catchUpFromTranscripts } from '../core/catchUp.ts';
 import { emitJson } from '../core/output.ts';
+import { noteTrailAt } from '../core/ledger.ts';
 import { authorPaths, requirePaths, writeJson } from '../core/storage.ts';
 import { fileLink, openInDefaultApp } from '../core/terminal.ts';
 import { readAutoOpenReport, setAutoOpenReport } from '../core/globalConfig.ts';
@@ -139,6 +140,10 @@ export async function runReport(options: ReportOptions): Promise<void> {
   // the student's real identity (gh/git/env) now and re-attribute the work, so the report
   // is under their real name even if they never made a git commit. Best-effort, silent.
   await upgradeIdentityIfProvisional(paths, { cwd: options.cwd ?? process.cwd() });
+  // Generating a report is often the first thing a student does after moving their
+  // project, so repoint the ledger index here too — the move then gets noticed
+  // without waiting for another AI session (see `noteTrailLocation`).
+  noteTrailAt(paths.root);
   // Complete the trail before reading it: hosts write their transcripts
   // asynchronously and append the end-of-turn recap after every hook has run, so
   // the last exchange of a session only becomes visible on a later re-read.

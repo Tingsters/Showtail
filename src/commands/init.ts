@@ -8,6 +8,12 @@ import { sessionTouchesPath, unplacedSessions } from '../core/ledger.ts';
 import { emitJson } from '../core/output.ts';
 import { makeId } from '../core/ids.ts';
 import {
+  matchSessionToRoot,
+  prepareCandidateIndex,
+  type CandidateIndex,
+  type PathRebase,
+} from '../core/relocate.ts';
+import {
   CONFIG_VERSION,
   ensureTrailId,
   pathsForRoot,
@@ -158,29 +164,94 @@ export async function ensureInitialized(
   return { created: true, paths };
 }
 
+/** What a backfill sweep placed, and what it found but declined to place. */
+export interface BackfillResult {
+  placed: number;
+  /**
+   * Sessions whose work matched only on content *similarity* (Tier B). Reported so
+   * the student can confirm with `showtail move`, never auto-attributed: in a
+   * provenance tool a wrong placement is worse than a missed one.
+   */
+  candidates: Array<{ id: string; detail: string }>;
+}
+
 /**
- * Pull every inbox session whose captured work lives under `root` into this freshly
- * created trail. This is what makes `showtail track <folder>` rescue work Showtail
- * had parked in the inbox before the folder was a project (e.g. book exercises).
- * Best-effort per session; a failure leaves that session in the inbox. Identity is
+ * Pull every unplaced session whose captured work belongs under `root` into this
+ * trail. This is what makes `showtail track <folder>` rescue work Showtail had
+ * parked in the inbox before the folder was a project (e.g. book exercises).
+ *
+ * Two ways a session can belong here. First the recorded-path test, which is the
+ * common case and the original behavior. Failing that — because the student moved
+ * the files, or had the AI move them, so every recorded absolute path is now stale
+ * — we fall back to content-lineage matching (see `relocate.ts`; never filenames).
+ * Deterministic Tier-A evidence places the session; weaker Tier-B evidence is only
+ * reported, so attribution never shifts on a guess.
+ *
+ * Target-missing sessions are considered too, not just `inbox` ones: a trail whose
+ * folder moved leaves its sessions `placed` against a path that no longer exists,
+ * and those are exactly the ones needing rescue.
+ *
+ * Best-effort per session; a failure leaves that session where it was. Identity is
  * already established by the caller, so `reattach` resolves the author without
  * prompting. `reattach` is dynamically imported to avoid an init↔reattach cycle.
  */
-async function backfillInboxUnder(root: string): Promise<number> {
+async function backfillInboxUnder(root: string): Promise<BackfillResult> {
   const { reattachLedgerSession } = await import('./reattach.ts');
-  const sessions = unplacedSessions({ includeHidden: true }).filter(
-    (s) => s.status === 'inbox' && sessionTouchesPath(s, root),
-  );
-  let placed = 0;
+  const result: BackfillResult = { placed: 0, candidates: [] };
+  const sessions = unplacedSessions({ includeHidden: true });
+  if (sessions.length === 0) return result;
+
+  // Walked and hashed once, then shared across every session tested against it.
+  let index: CandidateIndex | undefined;
+
   for (const session of sessions) {
+    let why: string | null = sessionTouchesPath(session, root)
+      ? 'captured under this folder'
+      : null;
+    let rebase: PathRebase | undefined;
+
+    if (!why) {
+      index ??= prepareCandidateIndex(root);
+      const match = await matchSessionToRoot(session, root, {}, index);
+      if (match?.tier === 'A') {
+        why = match.detail;
+        rebase = match.rebase;
+      } else if (match) {
+        result.candidates.push({ id: session.id, detail: match.detail });
+        continue;
+      }
+    }
+    if (!why) continue;
+
     try {
-      await reattachLedgerSession(session, root);
-      placed += 1;
+      await reattachLedgerSession(session, root, { rebase });
+      result.placed += 1;
     } catch {
-      /* best-effort — a failed session simply stays in the inbox */
+      /* best-effort — a failed session simply stays where it was */
     }
   }
-  return placed;
+  return result;
+}
+
+/** Print what a backfill did, including near-misses the student can confirm. */
+function reportBackfill(result: BackfillResult): void {
+  if (result.placed > 0) {
+    console.log(
+      `Pulled ${result.placed} already-captured session(s) here from your inbox.`,
+    );
+    console.log('');
+  }
+  if (result.candidates.length > 0) {
+    console.log(
+      `${result.candidates.length} more session(s) look like they belong here, but the match`,
+    );
+    console.log("isn't certain, so they were left alone:");
+    for (const c of result.candidates) {
+      console.log(`  ${c.id} — ${c.detail}`);
+    }
+    console.log('  Place one with: showtail move <id> --to .');
+    console.log('');
+  }
 }
 
 /**
@@ -210,13 +281,26 @@ export async function runInit(options: InitOptions = {}): Promise<void> {
       projectUpdated = options.project;
     }
 
+    // A re-run still backfills. This matters for the student who MOVED an already
+    // tracked project: `.showtail/` travelled with the folder, so `init`/`track`
+    // takes this branch — and returning early here is exactly what used to leave
+    // their orphaned sessions stranded in the ledger.
     if (options.json) {
       const cfg = readConfig(paths);
+      const jsonAuthor = await establishIdentity(paths, {
+        cwd: root,
+        allowPrompt: false,
+      });
+      const back = jsonAuthor
+        ? await backfillInboxUnder(root)
+        : { placed: 0, candidates: [] as BackfillResult['candidates'] };
       emitJson({
         created: false,
         root,
         anchorKind: cfg.anchorKind ?? null,
         project: cfg.project ?? null,
+        backfilled: back.placed,
+        candidates: back.candidates,
       });
       return;
     }
@@ -226,6 +310,7 @@ export async function runInit(options: InitOptions = {}): Promise<void> {
     // cloned the repo runs `init` to register themselves without re-creating it.
     const author = await establishIdentity(paths, { cwd: root, allowPrompt: true });
     if (author) console.log(`You're tracked as ${author.slug}.`);
+    if (author) reportBackfill(await backfillInboxUnder(root));
     console.log('Just start working with your AI tool — capture happens automatically.');
     return;
   }
@@ -234,12 +319,15 @@ export async function runInit(options: InitOptions = {}): Promise<void> {
     await ensureInitialized(root, { project: options.project });
     // Register the local student silently when possible (no prompt in JSON mode).
     const jsonAuthor = await establishIdentity(paths, { cwd: root, allowPrompt: false });
-    const backfilled = jsonAuthor ? await backfillInboxUnder(root) : 0;
+    const back = jsonAuthor
+      ? await backfillInboxUnder(root)
+      : { placed: 0, candidates: [] as BackfillResult['candidates'] };
     emitJson({
       created: true,
       root,
       anchorKind: readConfig(paths).anchorKind ?? null,
-      backfilled,
+      backfilled: back.placed,
+      candidates: back.candidates,
     });
     return;
   }
@@ -292,14 +380,6 @@ export async function runInit(options: InitOptions = {}): Promise<void> {
     );
   }
   console.log('');
-  if (author) {
-    const backfilled = await backfillInboxUnder(root);
-    if (backfilled > 0) {
-      console.log(
-        `Pulled ${backfilled} already-captured session(s) here from your inbox.`,
-      );
-      console.log('');
-    }
-  }
+  if (author) reportBackfill(await backfillInboxUnder(root));
   console.log('Next: just start working with your AI tool — capture is automatic.');
 }

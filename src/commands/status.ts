@@ -3,7 +3,7 @@ import { activeAuthorPaths, upgradeIdentityIfProvisional } from '../core/authors
 import { autoInitEnabled } from '../core/globalConfig.ts';
 import { currentSession } from '../core/sessions.ts';
 import { readSessionEvents } from '../core/events.ts';
-import { unplacedSessions } from '../core/ledger.ts';
+import { noteTrailAt, unplacedSessions } from '../core/ledger.ts';
 import { connectedToolsLines, toolStatuses } from '../core/tools.ts';
 import { emitJson } from '../core/output.ts';
 import { pluralS } from '../core/text.ts';
@@ -38,6 +38,10 @@ export async function runStatus(options: StatusOptions = {}): Promise<void> {
     cwd: options.cwd ?? process.cwd(),
     allowGh: false,
   });
+  // If this trail has moved since it was last placed, repoint the ledger index now
+  // rather than leaving every past session flagged target-missing until the student
+  // happens to run an AI session here again.
+  const relocated = noteTrailAt(paths.root);
   const author = activeAuthorPaths(paths);
   const session = author ? currentSession(author) : null;
   const events = author && session ? readSessionEvents(author, session.id) : [];
@@ -83,6 +87,22 @@ export async function runStatus(options: StatusOptions = {}): Promise<void> {
       'Note: this trail was written by a newer Showtail — some sessions may not be ' +
         'visible. Upgrade Showtail to see everything.',
     );
+    console.log('');
+  }
+
+  if (relocated?.moved) {
+    if (relocated.duplicated) {
+      console.log(
+        'Warning: this trail also still exists at ' +
+          `${relocated.previousPath} — it looks copied, not moved.`,
+      );
+      console.log(
+        '  Two folders now share one trail id, so new work may be recorded against',
+      );
+      console.log('  the other copy. Delete the copy you are not using.');
+    } else {
+      console.log(`This project moved here from ${relocated.previousPath} — updated.`);
+    }
     console.log('');
   }
 

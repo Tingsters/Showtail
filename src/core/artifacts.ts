@@ -269,6 +269,44 @@ export function importEditArtifact(
 }
 
 /**
+ * Record *that* a file changed when its content was never captured — a path-only
+ * artifact stub, carrying the hash/commit we do know but no diff object.
+ *
+ * Projection needs this for an edit the tool reported as a bare path with no diff
+ * (a shell-driven write, or a tool Showtail parses generically). Such a record used
+ * to be dropped outright when the file could no longer be read at the target root,
+ * which silently lost real provenance: the fact that a student's file changed is
+ * worth keeping even when the bytes are gone for good.
+ *
+ * Unlike {@link importEditArtifact} this writes no object and is never gated on
+ * `captureCode` — there is no content here to withhold.
+ */
+export function importEditStub(
+  author: AuthorPaths,
+  input: Omit<ImportEditArtifactInput, 'diff'>,
+): boolean {
+  const entry: JournalEntry = {
+    v: JOURNAL_ENTRY_VERSION,
+    kind: 'artifact',
+    id: makeId('art'),
+    ts: input.timestamp ?? new Date().toISOString(),
+    type: 'artifact',
+    conv: input.sessionId,
+    actorSlug: author.slug,
+    path: input.path,
+  };
+  if (input.sha256) entry.sha256 = input.sha256;
+  if (input.gitCommit) entry.gitCommit = input.gitCommit;
+  if (input.tool) entry.tool = input.tool;
+  if (input.turnId) entry.turn = input.turnId;
+  if (input.sourceId) entry.sourceId = input.sourceId;
+  if (input.batchId) entry.batch = input.batchId;
+
+  appendJournal(author, entry);
+  return true;
+}
+
+/**
  * Check recorded artifacts against the files currently on disk, across every
  * author. For each path, the *latest* recorded hash (project-wide) is compared
  * to the live file.

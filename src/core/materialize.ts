@@ -19,10 +19,12 @@
 import {
   addArtifact,
   importEditArtifact,
+  importEditStub,
   importedArtifactSourceIds,
 } from './artifacts.ts';
 import { importedSourceIds, logEvent, readSessionEvents } from './events.ts';
 import { materializePlan, PLAN_APPROVED_TAG, PLAN_REVISED_TAG } from './plans.ts';
+import { applyRebase, type PathRebase } from './relocate.ts';
 import { sessionForNativeSession } from './sessions.ts';
 import { readConfig, toRepoRelative, type AuthorPaths } from './storage.ts';
 import { readLedgerRecords, type LedgerSession } from './ledger.ts';
@@ -48,10 +50,26 @@ export interface MaterializeResult {
   toolCalls: number;
   recaps: number;
   edits: number;
+  /**
+   * Edits recorded as content-free stubs because no diff was captured and the file
+   * couldn't be read at this root. Counted (not silently dropped) so callers can
+   * tell the student their content is unrecoverable for those.
+   */
+  stubs: number;
   /** The repo session the records were projected into. */
   sessionId: string;
   /** The most recent prompt event id projected (for the user-prompt hook trace). */
   lastPromptId?: string;
+}
+
+export interface MaterializeOptions {
+  /**
+   * Old-root → new-root mapping for a session whose files moved, from
+   * `relocate.ts`. Without it a relocated edit's stale absolute path relativizes
+   * into a `../../..` escape from the target root; with it the projected path is
+   * the clean repo-relative one the trail format expects.
+   */
+  rebase?: PathRebase;
 }
 
 /**
@@ -63,6 +81,7 @@ export interface MaterializeResult {
 export async function materializeLedgerSession(
   session: LedgerSession,
   author: AuthorPaths,
+  options: MaterializeOptions = {},
 ): Promise<MaterializeResult> {
   const repoSession = sessionForNativeSession(
     author,
@@ -94,6 +113,7 @@ export async function materializeLedgerSession(
     toolCalls: 0,
     recaps: 0,
     edits: 0,
+    stubs: 0,
     sessionId: repoSession.id,
   };
   // Tool calls obey the target project's own setting, same as the direct-write
@@ -214,7 +234,11 @@ export async function materializeLedgerSession(
       out.recaps += 1;
     } else if (rec.kind === 'edit') {
       if (!rec.file || seenArtifacts.has(sourceId)) continue;
-      const path = toRepoRelative(author.shared.root, rec.file);
+      // A relocated session's recorded paths are stale; re-point them through the
+      // move mapping first so both the display path and the on-disk lookup below
+      // refer to where the file actually lives now.
+      const abs = (options.rebase && applyRebase(options.rebase, rec.file)) ?? rec.file;
+      const path = toRepoRelative(author.shared.root, abs);
       if (rec.diff) {
         const wrote = importEditArtifact(author, {
           path,
@@ -236,19 +260,46 @@ export async function materializeLedgerSession(
       } else {
         // No captured diff — snapshot the file if it still exists at this root.
         // (Best-effort: hash-deduped by addArtifact, so a re-materialize is safe.)
+        let snapshotted = false;
         try {
           const res = await addArtifact(author, {
-            filePath: rec.file,
+            filePath: abs,
             tool: rec.tool,
             turnId,
             sessionId: repoSession.id,
           });
+          snapshotted = true;
           if (res.created) {
             out.projected += 1;
             out.edits += 1;
           }
         } catch {
-          // File isn't present at the target root — nothing to snapshot. Skip.
+          // Not readable at this root — the file moved away, was deleted, or never
+          // travelled. Fall through to a stub.
+        }
+        if (!snapshotted) {
+          // Record that this file changed rather than dropping the record on the
+          // floor. The content is unrecoverable (nothing captured it, and the file
+          // is gone), but the edit itself is real provenance and is counted so the
+          // caller can say so out loud.
+          if (
+            importEditStub(author, {
+              path,
+              tool: rec.tool,
+              turnId,
+              timestamp: rec.ts,
+              sessionId: repoSession.id,
+              sourceId,
+              batchId,
+              sha256: rec.sha256,
+              gitCommit: rec.gitCommit,
+            })
+          ) {
+            seenArtifacts.add(sourceId);
+            out.projected += 1;
+            out.edits += 1;
+            out.stubs += 1;
+          }
         }
       }
     }

@@ -343,9 +343,17 @@ export function writeConfig(paths: ShowtailPaths, config: Config): void {
  */
 export function ensureTrailId(paths: ShowtailPaths): string {
   const config = readConfig(paths);
-  if (config.trailId) return config.trailId;
-  const trailId = makeId('trl');
+  // Keep `anchor` honest while we're here. It is informational only — `findRoot`
+  // drives resolution — but a path frozen at init silently becomes wrong the moment
+  // the student moves their project, and a stale absolute path left in the config is
+  // a trap for the next reader (and for `status`/`ensure`, which surface it).
+  const anchor = resolve(paths.root);
+  const anchorStale =
+    config.anchor !== undefined && pathKey(config.anchor) !== pathKey(anchor);
+  if (config.trailId && !anchorStale) return config.trailId;
+  const trailId = config.trailId ?? makeId('trl');
   config.trailId = trailId;
+  if (anchorStale) config.anchor = anchor;
   if (config.version < CONFIG_VERSION) config.version = CONFIG_VERSION;
   writeConfig(paths, config);
   return trailId;

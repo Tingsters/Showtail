@@ -18,6 +18,7 @@ import {
   unlinkPlacement,
   type LedgerSession,
 } from '../core/ledger.ts';
+import type { PathRebase } from '../core/relocate.ts';
 import { ensureTrailId, pathsForRoot } from '../core/storage.ts';
 import { ensureInitialized } from './init.ts';
 
@@ -29,6 +30,17 @@ export interface ReattachResult {
   projected: number;
   /** Repos a prior, now-removed projection was lifted out of. */
   movedFrom: string[];
+  /** Edits projected as content-free stubs (nothing captured, file unreadable). */
+  stubs: number;
+}
+
+export interface ReattachOptions {
+  /**
+   * Old-root → new-root mapping when this placement is a *relocation* (the student
+   * moved their files), so projected edit paths are rebased instead of rendering as
+   * `../../..`. Supplied by the relocation matcher; absent for a normal placement.
+   */
+  rebase?: PathRebase;
 }
 
 /**
@@ -39,6 +51,7 @@ export interface ReattachResult {
 export async function reattachLedgerSession(
   session: LedgerSession,
   toPath: string,
+  options: ReattachOptions = {},
 ): Promise<ReattachResult> {
   const root = resolve(toPath);
   const { paths } = await ensureInitialized(root);
@@ -63,9 +76,11 @@ export async function reattachLedgerSession(
     unlinkPlacement(session.id, target.trailId);
   }
 
-  const { projected } = await materializeLedgerSession(session, author);
+  const { projected, stubs } = await materializeLedgerSession(session, author, {
+    rebase: options.rebase,
+  });
   markPlaced(session.id, trailId, root);
-  return { root, projected, movedFrom };
+  return { root, projected, movedFrom, stubs };
 }
 
 /** CLI entry point for `showtail reattach`. */
@@ -81,7 +96,10 @@ export async function runReattach(
     );
   }
   const toPath = opts.to ?? opts.cwd ?? process.cwd();
-  const { root, projected, movedFrom } = await reattachLedgerSession(session, toPath);
+  const { root, projected, movedFrom, stubs } = await reattachLedgerSession(
+    session,
+    toPath,
+  );
 
   if (movedFrom.length > 0) {
     console.log(`Moved session ${session.id} off ${movedFrom.join(', ')}.`);
@@ -89,5 +107,11 @@ export async function runReattach(
   console.log(
     `Placed session ${session.id} into ${root} — ${projected} record(s) projected.`,
   );
+  if (stubs > 0) {
+    console.log(
+      `  Note: ${stubs} edit(s) are recorded by name only — no content was captured ` +
+        'for them and the file is no longer readable here.',
+    );
+  }
   console.log('Run `showtail report` there to see it alongside your other work.');
 }

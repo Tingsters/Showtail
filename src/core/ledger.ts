@@ -23,7 +23,7 @@
  * rest of the codebase uses. No lock is needed — materialize is idempotent.
  */
 import { existsSync, mkdirSync, readdirSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import type { Tool } from '../types.ts';
 import { ledgerDir, readInboxMinSignal, readScratchPaths } from './globalConfig.ts';
 import { makeId } from './ids.ts';
@@ -31,6 +31,7 @@ import {
   appendJsonl,
   eligibleProjectRoot,
   isPathUnder,
+  pathKey,
   readJson,
   readJsonl,
   writeJson,
@@ -417,26 +418,68 @@ export function sessionWorkRoots(session: LedgerSession): string[] {
  * list and `track`'s backfill.
  */
 export function sessionTouchesPath(session: LedgerSession, folder: string): boolean {
-  const { editPaths } = sessionFacts(session.id);
-  const targets = editPaths.length ? editPaths : session.cwd ? [session.cwd] : [];
+  const targets = recordedPaths(sessionFacts(session.id), session.cwd);
   return targets.some((p) => isPathUnder(p, folder));
+}
+
+/**
+ * The recorded locations of a session's work: its edited files, or its `cwd` when
+ * it made no edits. These are absolute and machine-local (see the module note), so
+ * they are exactly what goes stale when the student moves their files.
+ */
+function recordedPaths(facts: { editPaths: string[] }, cwd?: string): string[] {
+  return facts.editPaths.length ? facts.editPaths : cwd ? [cwd] : [];
+}
+
+/**
+ * Whether every path this session recorded has vanished from disk — the signature
+ * of moved (or deleted) work, as opposed to work that simply never sat in a
+ * project. Worth distinguishing because the two need opposite treatment: a folder
+ * that isn't a project is genuinely scratch, while work whose files moved is real
+ * work that must stay visible so it can be recovered (see {@link hiddenReason}).
+ */
+export function sessionPathsGone(session: LedgerSession): boolean {
+  const { editPaths } = sessionFacts(session.id);
+  if (editPaths.length > 0) {
+    if (editPaths.some((p) => existsSync(p))) return false;
+    // The *location* has to be gone, not merely the file. A missing file inside a
+    // directory that still exists is a deletion, and that directory can still be
+    // judged on its own merits (it may simply never have been a project) — whereas a
+    // missing containing directory is the signature of the whole folder having been
+    // moved or renamed, which is the case we must keep visible.
+    return editPaths.some((p) => !existsSync(dirname(p)));
+  }
+  // An edit-less session records only its `cwd`, and that directory IS the location
+  // — so its own absence is the signal (checking its parent would ask about the
+  // wrong folder entirely).
+  return session.cwd !== undefined && !existsSync(session.cwd);
 }
 
 /** Why a session is hidden from the default inbox, or null when it surfaces. */
 export type HiddenReason = 'dismissed' | 'not-in-project' | 'low-signal' | 'ignored-path';
 
-/** The reason a never-placed session is hidden (see {@link isSurfaced}), or null. */
+/**
+ * The reason a never-placed session is hidden (see {@link isSurfaced}), or null.
+ *
+ * Note the deliberate asymmetry fix: when a session's recorded paths have all
+ * vanished, `workRootsFrom` cannot resolve a root and would report
+ * `'not-in-project'` — hiding moved work in the one view the student is told to
+ * check. Gone paths therefore skip that verdict and fall through to the ordinary
+ * signal/scratch filters, mirroring the guarantee `unplacedSessions` already gives
+ * target-missing sessions. Trivial gone-path sessions still stay hidden as
+ * `'low-signal'`, so the default inbox doesn't fill up with noise.
+ */
 export function hiddenReason(session: LedgerSession): HiddenReason | null {
   if (session.dismissedAt) return 'dismissed';
   const facts = sessionFacts(session.id);
-  if (workRootsFrom(facts.editPaths, session.cwd).length === 0) return 'not-in-project';
+  if (
+    workRootsFrom(facts.editPaths, session.cwd).length === 0 &&
+    !sessionPathsGone(session)
+  )
+    return 'not-in-project';
   const min = readInboxMinSignal();
   if (!(facts.edits >= min.edits || facts.prompts >= min.prompts)) return 'low-signal';
-  const targets = facts.editPaths.length
-    ? facts.editPaths
-    : session.cwd
-      ? [session.cwd]
-      : [];
+  const targets = recordedPaths(facts, session.cwd);
   const scratch = readScratchPaths();
   if (scratch.some((s) => targets.some((p) => isPathUnder(p, s)))) return 'ignored-path';
   return null;
@@ -459,11 +502,16 @@ export function isSurfaced(session: LedgerSession): boolean {
  */
 export function unplacedSessions(
   opts: { includeHidden?: boolean } = {},
-): Array<LedgerSession & { targetMissing?: boolean }> {
-  const out: Array<LedgerSession & { targetMissing?: boolean }> = [];
+): Array<LedgerSession & { targetMissing?: boolean; pathGone?: boolean }> {
+  const out: Array<LedgerSession & { targetMissing?: boolean; pathGone?: boolean }> = [];
   for (const session of allLedgerSessions()) {
     if (session.status === 'inbox') {
-      if (opts.includeHidden || isSurfaced(session)) out.push(session);
+      if (opts.includeHidden || isSurfaced(session)) {
+        // Flagged so the listing can say "moved or deleted" instead of leaving the
+        // student to wonder why a session points at a folder that isn't there.
+        const pathGone = sessionPathsGone(session);
+        out.push(pathGone ? { ...session, pathGone } : session);
+      }
       continue;
     }
     // Placed: surface it only if every recorded target is now missing. The
@@ -636,6 +684,68 @@ export function markPlaced(sessionId: string, trailId: string, path: string): vo
     if (!list.includes(trailId)) list.push(trailId);
     idx.sessions[sessionId] = list;
   });
+}
+
+/** What {@link noteTrailLocation} observed about a trail's current whereabouts. */
+export interface TrailLocationUpdate {
+  /** True when the index was repointed because the trail is somewhere new. */
+  moved: boolean;
+  /** Where the index previously believed the trail lived. */
+  previousPath?: string;
+  /**
+   * A live trail with the same id ALSO still sits at the previous path — so the
+   * folder was COPIED, not moved, and two roots now claim one trailId. Callers
+   * should warn: `targetAlive` finds the old path alive and never repoints, so
+   * placements silently keep favouring the original.
+   */
+  duplicated: boolean;
+}
+
+/**
+ * Record that trail `trailId` is currently at `path`, closing the "target missing"
+ * window without waiting for the next AI session.
+ *
+ * Why this is needed: {@link markPlaced} is otherwise the ONLY writer of the
+ * trailId→path index, and it runs only from a live hook or an explicit
+ * `move`/`reattach`. So a student who moved their project and then simply ran
+ * `showtail report` kept seeing every past session flagged target-missing, with
+ * nothing to repair it. Any command that resolves a real trail can call this.
+ * Because the index is keyed by trailId — which travels inside the folder, in
+ * `.showtail/config.json` — one call repoints every historical session on that
+ * trail at once.
+ *
+ * Safe by construction: it writes only after confirming a trail with that exact id
+ * really is at `path`, so it can never point the index at an unrelated folder.
+ */
+export function noteTrailLocation(trailId: string, path: string): TrailLocationUpdate {
+  const resolved = resolve(path);
+  const known = knownTrailPath(trailId);
+  const stillAtOld = known !== undefined && trailIdAt(known) === trailId;
+  if (known !== undefined && pathKey(known) === pathKey(resolved)) {
+    return { moved: false, previousPath: known, duplicated: false };
+  }
+  if (trailIdAt(resolved) !== trailId) {
+    return { moved: false, previousPath: known, duplicated: false };
+  }
+  updateLedgerIndex((idx) => {
+    idx.trails[trailId] = { path: resolved, lastSeenAt: new Date().toISOString() };
+  });
+  return { moved: true, previousPath: known, duplicated: stillAtOld };
+}
+
+/**
+ * Convenience for commands: repoint the index for whatever trail lives at `root`.
+ * Returns null when there is no trail there (or it predates trail ids). Best-effort
+ * bookkeeping — callers may ignore the result entirely.
+ */
+export function noteTrailAt(root: string): TrailLocationUpdate | null {
+  const trailId = trailIdAt(root);
+  if (!trailId) return null;
+  try {
+    return noteTrailLocation(trailId, root);
+  } catch {
+    return null; // index bookkeeping must never break a read-only command
+  }
 }
 
 /** Mark a session as awaiting placement (root-less scratch / no eligible anchor). */

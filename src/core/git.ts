@@ -320,6 +320,20 @@ export async function currentCommit(cwd: string): Promise<string | undefined> {
 }
 
 /**
+ * Whether `sha` names a commit that exists in the repo at `cwd`. Used by
+ * relocation matching: a ledger record captured `gitCommit` at the time of the
+ * edit, so finding that commit in a candidate folder's history proves the folder
+ * holds the same project — the strongest and cheapest relocation signal we have.
+ * False when git is missing, `cwd` isn't a repo, or the commit isn't present.
+ */
+export async function commitExists(cwd: string, sha: string): Promise<boolean> {
+  if (!/^[0-9a-f]{7,40}$/i.test(sha)) return false;
+  // `<sha>^{commit}` fails for a non-commit object, so this never matches a blob.
+  const out = await runGit(['cat-file', '-e', `${sha}^{commit}`], cwd);
+  return out !== undefined;
+}
+
+/**
  * Convenience: only resolve a commit hash when `enabled` is true.
  * Used so config can turn git capture off entirely.
  */
