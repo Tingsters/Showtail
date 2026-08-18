@@ -22,7 +22,7 @@
  * `index.json` use the atomic temp+rename + re-read-before-write tolerance the
  * rest of the codebase uses. No lock is needed — materialize is idempotent.
  */
-import { existsSync, mkdirSync, readdirSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, realpathSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import type { Tool } from '../types.ts';
 import { ledgerDir, readInboxMinSignal, readScratchPaths } from './globalConfig.ts';
@@ -686,6 +686,24 @@ export function markPlaced(sessionId: string, trailId: string, path: string): vo
   });
 }
 
+/**
+ * Whether two paths name the same directory on disk, even when spelled differently.
+ *
+ * A plain string compare is not enough: macOS resolves `/var` to `/private/var` (so
+ * `process.cwd()` and a caller-supplied path disagree about the same folder), and
+ * symlinks, junctions, and substituted drives do the same elsewhere. Falls back to
+ * the string compare when either path can't be resolved — a missing directory is
+ * exactly the case where they are legitimately different.
+ */
+function sameDirectory(a: string, b: string): boolean {
+  if (pathKey(a) === pathKey(b)) return true;
+  try {
+    return pathKey(realpathSync(a)) === pathKey(realpathSync(b));
+  } catch {
+    return false;
+  }
+}
+
 /** What {@link noteTrailLocation} observed about a trail's current whereabouts. */
 export interface TrailLocationUpdate {
   /** True when the index was repointed because the trail is somewhere new. */
@@ -720,17 +738,24 @@ export interface TrailLocationUpdate {
 export function noteTrailLocation(trailId: string, path: string): TrailLocationUpdate {
   const resolved = resolve(path);
   const known = knownTrailPath(trailId);
-  const stillAtOld = known !== undefined && trailIdAt(known) === trailId;
-  if (known !== undefined && pathKey(known) === pathKey(resolved)) {
+  if (known !== undefined && sameDirectory(known, resolved)) {
+    // Same place, possibly spelled differently — not a move. This matters: on macOS
+    // `process.cwd()` reports a directory's realpath (`/private/var/…`) when the
+    // caller passed `/var/…`, and symlinked or substituted paths do the same.
+    // Treating that as a relocation would rewrite a perfectly correct recorded path
+    // into a different spelling and break every equality check against it.
     return { moved: false, previousPath: known, duplicated: false };
   }
   if (trailIdAt(resolved) !== trailId) {
     return { moved: false, previousPath: known, duplicated: false };
   }
+  // A live trail with this id at the OLD path too means the folder was copied rather
+  // than moved — only meaningful now that we know the two paths are different places.
+  const duplicated = known !== undefined && trailIdAt(known) === trailId;
   updateLedgerIndex((idx) => {
     idx.trails[trailId] = { path: resolved, lastSeenAt: new Date().toISOString() };
   });
-  return { moved: true, previousPath: known, duplicated: stillAtOld };
+  return { moved: true, previousPath: known, duplicated };
 }
 
 /**

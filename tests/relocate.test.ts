@@ -16,8 +16,15 @@
  */
 import { describe, expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
-import { basename, dirname, join } from 'node:path';
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
+import { basename, dirname, join, resolve } from 'node:path';
 import { authorFor, cleanup, makeTempDir } from './helpers.ts';
 import { runInit } from '../src/commands/init.ts';
 import { readArtifacts } from '../src/core/artifacts.ts';
@@ -27,6 +34,9 @@ import {
   ensureLedgerSession,
   hiddenReason,
   isSurfaced,
+  knownTrailPath,
+  markPlaced,
+  noteTrailAt,
   readLedgerSession,
   sessionPathsGone,
   unplacedSessions,
@@ -41,7 +51,7 @@ import {
 } from '../src/core/relocate.ts';
 import { runMove } from '../src/commands/move.ts';
 import { verifyProject } from '../src/commands/verify.ts';
-import { pathsForRoot } from '../src/core/storage.ts';
+import { pathsForRoot, readConfig } from '../src/core/storage.ts';
 import { readObject } from '../src/core/objects.ts';
 
 /** A substantial, distinctive file body — the kind of thing a student actually writes. */
@@ -296,22 +306,28 @@ describe('relocation: content-lineage matching', () => {
 
 describe('relocation: rebase derivation', () => {
   test('deriveRebase strips the shared tail and applyRebase re-points siblings', () => {
-    const oldAbs = join('C:', 'app', 'bin', 'game', 'main.py');
-    const newAbs = join('C:', 'users', 'kid', 'Documents', 'game', 'main.py');
+    // Built from the filesystem root so these literals are absolute on every
+    // platform (`/app/bin/…` on POSIX, `C:\app\bin\…` on Windows). Hard-coding `C:`
+    // made them *relative* on Linux/macOS, which `resolve()` then prefixed with the
+    // cwd — green on Windows, red everywhere else.
+    const root = resolve('/');
+    const oldAbs = join(root, 'app', 'bin', 'game', 'main.py');
+    const newAbs = join(root, 'users', 'kid', 'Documents', 'game', 'main.py');
     const rebase = deriveRebase(oldAbs, newAbs);
-    expect(rebase?.fromRoot).toBe(join('C:', 'app', 'bin'));
-    expect(rebase?.toRoot).toBe(join('C:', 'users', 'kid', 'Documents'));
+    expect(rebase?.fromRoot).toBe(join(root, 'app', 'bin'));
+    expect(rebase?.toRoot).toBe(join(root, 'users', 'kid', 'Documents'));
     // A different file under the same old root follows the same mapping.
-    expect(applyRebase(rebase!, join('C:', 'app', 'bin', 'game', 'sprites.py'))).toBe(
-      join('C:', 'users', 'kid', 'Documents', 'game', 'sprites.py'),
+    expect(applyRebase(rebase!, join(root, 'app', 'bin', 'game', 'sprites.py'))).toBe(
+      join(root, 'users', 'kid', 'Documents', 'game', 'sprites.py'),
     );
     // A path outside the old root is left alone.
-    expect(applyRebase(rebase!, join('C:', 'elsewhere', 'x.py'))).toBeUndefined();
+    expect(applyRebase(rebase!, join(root, 'elsewhere', 'x.py'))).toBeUndefined();
   });
 
   test('deriveRebase returns undefined when nothing is shared', () => {
+    const root = resolve('/');
     expect(
-      deriveRebase(join('C:', 'a', 'one.py'), join('C:', 'b', 'two.py')),
+      deriveRebase(join(root, 'a', 'one.py'), join(root, 'b', 'two.py')),
     ).toBeUndefined();
   });
 
@@ -334,6 +350,42 @@ describe('relocation: rebase derivation', () => {
       cleanup(from);
       cleanup(to);
       cleanup(unrelated);
+    }
+  });
+});
+
+describe('relocation: a different spelling is not a move', () => {
+  test('reaching a trail through a symlink does not repoint its recorded path', async () => {
+    // The macOS failure this guards: `process.cwd()` reports a directory's realpath
+    // (`/private/var/…`) when the caller passed `/var/…`, so `status`/`report` saw
+    // "the project moved" and rewrote a perfectly correct recorded path into a
+    // different spelling of the same folder — breaking every later path comparison.
+    const parent = makeTempDir();
+    try {
+      const real = join(parent, 'project');
+      mkdirSync(real, { recursive: true });
+      await runInit({ cwd: real });
+
+      const link = join(parent, 'link-to-project');
+      try {
+        symlinkSync(real, link, 'junction');
+      } catch {
+        return; // symlinks need privileges on some Windows setups — nothing to assert
+      }
+
+      const paths = pathsForRoot(real);
+      const trailId = readConfig(paths).trailId!;
+      // Seed the index with the real path, as a placement would.
+      markPlaced('led_spelling_probe', trailId, real);
+      expect(knownTrailPath(trailId)).toBe(real);
+
+      // Now "arrive" via the symlink — same directory, different spelling.
+      const update = noteTrailAt(link);
+      expect(update?.moved).toBe(false);
+      // The recorded path must be untouched.
+      expect(knownTrailPath(trailId)).toBe(real);
+    } finally {
+      cleanup(parent);
     }
   });
 });
