@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.14.1
+
+### Fixed
+
+- **0.14.0 reported itself as `0.13.2`, and upgrading to it didn't refresh your
+  capture hooks.** The version lives in two places that have to move together —
+  `package.json` and `src/core/version.ts` (a compiled binary can't read
+  `package.json`, so that constant is the only version it knows) — and only the
+  first was bumped. Beyond `showtail --version` printing the wrong number, the
+  auto-connect sweep re-wires a tool's hooks only when the running version differs
+  from the one that last wrote them, so anyone upgrading to 0.14.0 silently kept
+  their old wiring. Both now agree, and a test asserts they always will.
+
 ## 0.14.0 — Moving your project keeps its trail
 
 ### What changed
