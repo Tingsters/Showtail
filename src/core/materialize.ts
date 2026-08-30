@@ -23,6 +23,11 @@ import {
   importedArtifactSourceIds,
 } from './artifacts.ts';
 import { importedSourceIds, logEvent, readSessionEvents } from './events.ts';
+import {
+  conversationEventEnabled,
+  importedConversationSourceIds,
+  logConversationEvent,
+} from './conversationEvents.ts';
 import { materializePlan, PLAN_APPROVED_TAG, PLAN_REVISED_TAG } from './plans.ts';
 import { applyRebase, type PathRebase } from './relocate.ts';
 import { sessionForNativeSession } from './sessions.ts';
@@ -50,6 +55,8 @@ export interface MaterializeResult {
   toolCalls: number;
   recaps: number;
   edits: number;
+  /** Structured conversation events projected into the machine-readable stream. */
+  conversationEvents: number;
   /**
    * Edits recorded as content-free stubs because no diff was captured and the file
    * couldn't be read at this root. Counted (not silently dropped) so callers can
@@ -113,14 +120,26 @@ export async function materializeLedgerSession(
     toolCalls: 0,
     recaps: 0,
     edits: 0,
+    conversationEvents: 0,
     stubs: 0,
     sessionId: repoSession.id,
   };
   // Tool calls obey the target project's own setting, same as the direct-write
   // reconcile path; recaps (turn stats) are captured regardless, like decisions/plans.
-  const captureTools = readConfig(author.shared).settings.captureToolCalls !== false;
+  const settings = readConfig(author.shared).settings;
+  const captureTools = settings.captureToolCalls !== false;
+  const seenConversation = importedConversationSourceIds(author);
+  const records = readLedgerRecords(session.id);
+  const conversationToolNames = new Map(
+    records.flatMap((record) => {
+      const event = record.conversationEvent;
+      return event?.type === 'tool_use' && event.toolUseId && event.toolName
+        ? [[event.toolUseId, event.toolName] as const]
+        : [];
+    }),
+  );
 
-  for (const rec of readLedgerRecords(session.id)) {
+  for (const rec of records) {
     const sourceId = rec.sourceId ?? recordSourceId(session.id, rec.id);
     const turnId = rec.turnKey ? turnMap.get(rec.turnKey) : undefined;
 
@@ -232,6 +251,23 @@ export async function materializeLedgerSession(
       seen.add(sourceId);
       out.projected += 1;
       out.recaps += 1;
+    } else if (rec.kind === 'conversation_event') {
+      if (!rec.conversationEvent || seenConversation.has(sourceId) || !turnId) continue;
+      if (
+        !conversationEventEnabled(rec.conversationEvent, conversationToolNames, settings)
+      ) {
+        continue;
+      }
+      logConversationEvent(author, {
+        event: { ...rec.conversationEvent, sourceId },
+        tool: rec.tool,
+        turnId,
+        sessionId: repoSession.id,
+        batchId,
+      });
+      seenConversation.add(sourceId);
+      out.projected += 1;
+      out.conversationEvents += 1;
     } else if (rec.kind === 'edit') {
       if (!rec.file || seenArtifacts.has(sourceId)) continue;
       // A relocated session's recorded paths are stale; re-point them through the

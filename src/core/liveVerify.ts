@@ -243,6 +243,9 @@ const SPECS: Record<string, DriveSpec> = {
       '--skip-git-repo-check',
       '--sandbox',
       'workspace-write',
+      // Project hooks are freshly generated in a throwaway directory, so there
+      // is no persisted trust decision for this non-interactive certification run.
+      '--dangerously-bypass-hook-trust',
       prompt,
     ],
   },

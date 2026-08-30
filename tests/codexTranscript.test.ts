@@ -181,6 +181,37 @@ describe('parseCodexTranscript', () => {
       expect(plan.text).toContain('[x] Read notes.txt');
       expect(plan.text).toContain('[→] Rewrite the contents');
       expect(plan.text).toContain('[ ] Verify the change');
+      expect(
+        parsed.events.some(
+          (event) =>
+            event.type === 'tool_use' &&
+            event.toolUseId === 'call_plan1' &&
+            event.toolName === 'update_plan',
+        ),
+      ).toBe(true);
+      expect(
+        parsed.events.some(
+          (event) =>
+            event.type === 'tool_result' &&
+            event.toolUseId === 'call_plan1' &&
+            event.content === 'Plan updated',
+        ),
+      ).toBe(true);
+      expect(
+        parsed.events.some(
+          (event) =>
+            event.type === 'plan_snapshot' &&
+            event.plan?.includes('Rewrite the contents'),
+        ),
+      ).toBe(true);
+      expect(
+        parsed.events.some(
+          (event) =>
+            event.type === 'tool_use' &&
+            event.toolUseId === 'call_abc' &&
+            event.toolName === 'apply_patch',
+        ),
+      ).toBe(true);
 
       // Timestamps preserved for back-dating.
       expect(parsed.messages[0]!.timestamp).toBe('2026-06-22T23:57:04.000Z');

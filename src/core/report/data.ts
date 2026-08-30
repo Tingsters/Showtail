@@ -12,6 +12,7 @@ import type {
   Turn,
   TurnCodeChange,
 } from '../../types.ts';
+import type { ConversationEvent } from '../../types.ts';
 import { labelForModel, labelForTool } from '../../plugins/registry.ts';
 import { PLAN_APPROVED_TAG, PLAN_REVISED_TAG, splitPlanText } from '../plans.ts';
 import { readAllArtifacts } from '../artifacts.ts';
@@ -21,6 +22,10 @@ import { authorSlugs, readAllAuthors } from '../authors.ts';
 import { readAllEventsWithSession, type EventWithSession } from '../events.ts';
 import { readObject } from '../objects.ts';
 import { isSyntheticPrompt } from '../syntheticPrompt.ts';
+import {
+  readAllConversationEventsWithSession,
+  type ConversationEventWithSession,
+} from '../conversationEvents.ts';
 
 /** The tool an event flowed through (defaults to "cli" for older/manual events). */
 export function toolOf(event: Event): Tool {
@@ -94,6 +99,9 @@ export function buildReportData(
   const artifacts = readAllArtifacts(paths).filter(
     (a) => !onlySlug || a.actorSlug === onlySlug,
   );
+  const conversationEvents = readAllConversationEventsWithSession(paths).filter(
+    (event) => !onlySlug || event.actorSlug === onlySlug,
+  );
 
   const tools = buildToolUsage(events);
   const models = buildModelUsage(events);
@@ -121,9 +129,10 @@ export function buildReportData(
 
   // Built before the summary: session stats are derived from each turn's chosen
   // recap, so a turn that captured more than one never double-counts.
-  const turns = buildTurns(withSession, artifacts, paths);
+  const turns = buildTurns(withSession, artifacts, paths, conversationEvents);
 
   return {
+    schemaVersion: 2,
     project: config.project ?? null,
     displayName,
     generatedAt: new Date().toISOString(),
@@ -225,6 +234,7 @@ export function buildTurns(
   withSession: EventWithSession[],
   artifacts: Artifact[],
   paths: ShowtailPaths,
+  conversationEvents: ConversationEventWithSession[] = [],
 ): Turn[] {
   // Only genuine student prompts open turns. Older trails captured harness-injected
   // user-role envelopes (`<task-notification>` subagent results, `<system-reminder>`)
@@ -241,6 +251,7 @@ export function buildTurns(
     decisions: [],
     plans: [],
     toolCalls: [],
+    events: [],
     tool: toolOf(event),
     actorSlug: event.actorSlug,
     sessionId,
@@ -359,7 +370,119 @@ export function buildTurns(
     });
   }
 
+  for (const item of conversationEvents) {
+    const turn =
+      (item.turnId ? turnByPrompt.get(item.turnId) : undefined) ??
+      fallback(item.event.timestamp ?? '', item.actorSlug, item.sessionId);
+    if (turn) turn.events.push(item.event);
+  }
+
+  for (const turn of turns) {
+    const captured =
+      turn.events.length > 0 ? turn.events : synthesizeConversationEvents(turn);
+    const events = captured.some((event) => event.type === 'user_text')
+      ? captured
+      : [
+          {
+            sequence: -1,
+            type: 'user_text' as const,
+            text: turn.prompt.text,
+            timestamp: turn.prompt.timestamp,
+            sourceId: turn.prompt.sourceId ?? turn.prompt.id,
+          },
+          ...captured,
+        ];
+    turn.events = [...events]
+      .sort(
+        (left, right) =>
+          left.sequence - right.sequence ||
+          (left.timestamp ?? '').localeCompare(right.timestamp ?? '') ||
+          (left.sourceId ?? '').localeCompare(right.sourceId ?? ''),
+      )
+      .map((event, sequence) => ({ ...event, sequence }));
+  }
+
   return turns;
+}
+
+/** Best-effort schema-v2 projection for a trail captured before structured events existed. */
+function synthesizeConversationEvents(turn: Turn): ConversationEvent[] {
+  const out: ConversationEvent[] = [
+    {
+      sequence: 0,
+      type: 'user_text',
+      text: turn.prompt.text,
+      timestamp: turn.prompt.timestamp,
+      sourceId: turn.prompt.sourceId ?? turn.prompt.id,
+    },
+  ];
+  for (const item of turnTimeline(turn)) {
+    if (item.kind === 'code') continue;
+    const event = item.event;
+    const sourceId = event.sourceId ?? event.id;
+    if (item.kind === 'ai') {
+      out.push({
+        sequence: out.length,
+        type: 'assistant_text',
+        text: event.text,
+        timestamp: event.timestamp,
+        sourceId,
+      });
+    } else if (item.kind === 'decision') {
+      out.push({
+        sequence: out.length,
+        type: 'tool_use',
+        toolUseId: sourceId,
+        toolName: 'AskUserQuestion',
+        timestamp: event.timestamp,
+        sourceId: `${sourceId}:use`,
+      });
+      out.push({
+        sequence: out.length,
+        type: 'tool_result',
+        toolUseId: sourceId,
+        content: event.text,
+        timestamp: event.timestamp,
+        sourceId: `${sourceId}:result`,
+      });
+    } else if (item.kind === 'plan') {
+      const { plan } = splitPlanText(event.text);
+      out.push({
+        sequence: out.length,
+        type: 'plan_snapshot',
+        plan,
+        timestamp: event.timestamp,
+        sourceId: `${sourceId}:snapshot`,
+      });
+      if (event.tags?.includes(PLAN_APPROVED_TAG)) {
+        out.push({
+          sequence: out.length,
+          type: 'plan_approved',
+          timestamp: event.timestamp,
+          sourceId: `${sourceId}:approved`,
+        });
+      }
+    } else if (item.kind === 'tool_call') {
+      out.push({
+        sequence: out.length,
+        type: 'tool_use',
+        toolUseId: sourceId,
+        toolName: event.toolName,
+        timestamp: event.timestamp,
+        sourceId: `${sourceId}:use`,
+      });
+      out.push({
+        sequence: out.length,
+        type: 'tool_result',
+        toolUseId: sourceId,
+        content: event.text,
+        isError: event.isError,
+        timestamp: event.timestamp,
+        sourceId: `${sourceId}:result`,
+      });
+    }
+  }
+  return out;
 }
 
 /** One rendered item inside a turn, tagged for the renderer. */

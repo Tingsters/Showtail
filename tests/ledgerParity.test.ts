@@ -12,6 +12,7 @@ import {
   readLedgerRecords,
 } from '../src/core/ledger.ts';
 import { materializeLedgerSession } from '../src/core/materialize.ts';
+import { buildReportData } from '../src/core/report.ts';
 import { pathsForRoot } from '../src/core/storage.ts';
 import {
   authorFor,
@@ -139,6 +140,69 @@ describe('projection parity foundation (gitCommit + sha256)', () => {
 });
 
 describe('tool_call/recap projection parity', () => {
+  test('materialize projects structured conversation records idempotently', async () => {
+    const home = makeTempDir();
+    const dir = makeTempDir();
+    try {
+      process.env.SHOWTAIL_HOME = home;
+      await runInit({ cwd: dir });
+      const paths = pathsForRoot(dir);
+      const author = authorFor(paths);
+      const session = ensureLedgerSession({
+        tool: 'claude-code',
+        nativeSessionId: 'structured-1',
+        cwd: dir,
+      });
+      const prompt = appendLedgerRecord(session.id, {
+        kind: 'prompt',
+        tool: 'claude-code',
+        text: 'run it',
+        sourceId: 'user-1',
+      });
+      for (const conversationEvent of [
+        { sequence: 0, type: 'user_text' as const, sourceId: 'user-1', text: 'run it' },
+        {
+          sequence: 1,
+          type: 'tool_use' as const,
+          sourceId: 'bash-1:use',
+          toolUseId: 'bash-1',
+          toolName: 'Bash',
+          input: { command: 'python3 main.py' },
+        },
+        {
+          sequence: 2,
+          type: 'tool_result' as const,
+          sourceId: 'bash-1:result',
+          toolUseId: 'bash-1',
+          stdout: 'ok\n',
+          stderr: '',
+          exitCode: 0,
+        },
+      ]) {
+        appendLedgerRecord(session.id, {
+          kind: 'conversation_event',
+          tool: 'claude-code',
+          turnKey: prompt.id,
+          sourceId: `conversation:${conversationEvent.sourceId}`,
+          conversationEvent,
+        });
+      }
+
+      await materializeLedgerSession(session, author);
+      await materializeLedgerSession(session, author);
+      const events = buildReportData(paths).turns[0]!.events;
+      expect(events.map((event) => event.type)).toEqual([
+        'user_text',
+        'tool_use',
+        'tool_result',
+      ]);
+      expect(events[2]).toMatchObject({ stdout: 'ok\n', stderr: '', exitCode: 0 });
+    } finally {
+      cleanup(dir);
+      cleanup(home);
+    }
+  });
+
   test('materialize projects a tool_call record with its tool name + error flag', async () => {
     const home = makeTempDir();
     const dir = makeTempDir();

@@ -23,7 +23,12 @@ import {
   type AntigravityIdeTranscriptInfo,
 } from '../core/antigravityIdeTranscript.ts';
 import { importEditArtifact, importedArtifactSourceIds } from '../core/artifacts.ts';
-import { importedSourceIds, logEvent } from '../core/events.ts';
+import { importedPromptIds, importedSourceIds, logEvent } from '../core/events.ts';
+import {
+  conversationEventEnabled,
+  importedConversationSourceIds,
+  logConversationEvent,
+} from '../core/conversationEvents.ts';
 import { PLAN_APPROVED_TAG, PLAN_REVISED_TAG } from '../core/plans.ts';
 import { makeId } from '../core/ids.ts';
 import { readMachineIdentity } from '../core/identity.ts';
@@ -44,6 +49,7 @@ import {
   findRoot,
   isHomedirCatchAll,
   pathsForRoot,
+  readConfig,
   requirePaths,
   type AuthorPaths,
 } from '../core/storage.ts';
@@ -178,6 +184,7 @@ export async function importAntigravityIdeTranscript(
   };
   // A user prompt opens a turn; the reply/plan that follow link back via this id.
   let currentTurnId: string | undefined;
+  const promptBySourceId = importedPromptIds(author);
   const stamp = (ts?: string): void => {
     if (!ts) return;
     if (!result.first || ts < result.first) result.first = ts;
@@ -218,12 +225,50 @@ export async function importAntigravityIdeTranscript(
       tags,
       turnId: msg.role === 'user' ? undefined : currentTurnId,
     });
-    if (msg.role === 'user') currentTurnId = event.id;
+    if (msg.role === 'user') {
+      currentTurnId = event.id;
+      promptBySourceId.set(msg.sourceId, event.id);
+    }
 
     if (type === 'prompt') result.prompts += 1;
     else if (type === 'ai_output') result.responses += 1;
     else result.plans += 1;
     stamp(msg.timestamp);
+  }
+
+  const seenConversation = importedConversationSourceIds(author);
+  const events = transcript.events ?? [];
+  const toolNames = new Map(
+    events.flatMap((event) =>
+      event.type === 'tool_use' && event.toolUseId && event.toolName
+        ? [[event.toolUseId, event.toolName] as const]
+        : [],
+    ),
+  );
+  const settings = readConfig(author.shared).settings;
+  let conversationTurnId: string | undefined;
+  for (const raw of events) {
+    if (raw.type === 'user_text') {
+      conversationTurnId = promptBySourceId.get(raw.sourceId);
+    }
+    if (!conversationTurnId) continue;
+    if (
+      !conversationEventEnabled(raw, toolNames, settings, {
+        includeResponses: options.withResponses !== false,
+      })
+    ) {
+      continue;
+    }
+    const sourceId = `conversation:${raw.sourceId}`;
+    if (seenConversation.has(sourceId)) continue;
+    logConversationEvent(author, {
+      event: { ...raw, sourceId },
+      tool: 'antigravity-ide',
+      turnId: conversationTurnId,
+      sessionId: options.sessionId,
+      batchId: options.batchId,
+    });
+    seenConversation.add(sourceId);
   }
 
   return result;

@@ -69,3 +69,49 @@ On a group project, the combined **team** report adds a **Contributors** section
 listing each student and how much they contributed, and the timeline shows who
 did what. If any secrets or personal details were scrubbed before storage, the
 report notes how many.
+
+## Machine-readable conversation events
+
+`showtail report --format json` writes schema version 2. It retains the same
+summary fields used by the HTML and Markdown reports and adds an ordered `events`
+array to every turn. The event stream is deliberately provider-neutral:
+
+```json
+{
+  "schemaVersion": 2,
+  "turns": [
+    {
+      "prompt": { "text": "Build the demo." },
+      "events": [
+        { "sequence": 0, "type": "user_text", "text": "Build the demo." },
+        {
+          "sequence": 1,
+          "type": "tool_use",
+          "toolUseId": "call-1",
+          "toolName": "Bash",
+          "input": { "command": "python3 main.py" }
+        },
+        {
+          "sequence": 2,
+          "type": "tool_result",
+          "toolUseId": "call-1",
+          "stdout": "ok\n",
+          "stderr": "",
+          "exitCode": 0
+        }
+      ]
+    }
+  ]
+}
+```
+
+Supported event types are `user_text`, `assistant_text`, `tool_use`,
+`tool_result`, `plan_snapshot`, and `plan_approved`. Tool inputs and results are
+preserved as JSON when the host records them. Showtail does not infer missing
+answers, approvals, output channels, or exit codes. Older trails receive a
+best-effort event projection from their existing report data, so consumers can
+read mixed old and new work without a separate report format.
+
+Structured payloads follow the same capture settings and redaction rules as the
+human report. They are stored in the content-addressed object store and covered
+by the journal hash chain, but do not change educator-facing event counts.

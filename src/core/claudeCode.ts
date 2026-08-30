@@ -22,7 +22,12 @@ import {
   statSync,
 } from 'node:fs';
 import { join } from 'node:path';
-import { importedSourceIds, logEvent } from './events.ts';
+import { importedPromptIds, importedSourceIds, logEvent } from './events.ts';
+import {
+  conversationEventEnabled,
+  importedConversationSourceIds,
+  logConversationEvent,
+} from './conversationEvents.ts';
 import { hostHome } from './hostHome.ts';
 import { isSyntheticPrompt } from './syntheticPrompt.ts';
 import {
@@ -34,7 +39,7 @@ import {
   prop,
   type ToolResult,
 } from './parse.ts';
-import { toRepoRelative, type AuthorPaths } from './storage.ts';
+import { readConfig, toRepoRelative, type AuthorPaths } from './storage.ts';
 import {
   collectDecisionAnswers,
   parseDecisionQuestions,
@@ -57,6 +62,8 @@ import {
   renderToolCallInput,
   renderToolCallText,
 } from './toolCalls.ts';
+import type { JsonValue } from '../types.ts';
+import type { HookTranscriptEvent } from '../plugins/types.ts';
 
 // The decision types are part of this module's public surface (they appear on
 // ClaudeMessage); re-export them so any importer keeps its existing path.
@@ -111,6 +118,7 @@ export interface ClaudeTranscript {
   sessionId?: string;
   title: string;
   messages: ClaudeMessage[];
+  events: HookTranscriptEvent[];
 }
 
 /** A transcript file found on disk for a given project. */
@@ -379,6 +387,61 @@ interface PendingDuration {
   timestamp?: string;
 }
 
+function jsonValue(value: unknown): JsonValue | undefined {
+  if (value === undefined) return undefined;
+  try {
+    return JSON.parse(JSON.stringify(value)) as JsonValue;
+  } catch {
+    return undefined;
+  }
+}
+
+function resultNumber(value: unknown, ...keys: string[]): number | undefined {
+  for (const key of keys) {
+    const found = asNumber(prop(value, key));
+    if (found !== undefined && Number.isInteger(found)) return found;
+  }
+  return undefined;
+}
+
+/** Preserve one Claude tool_result block without flattening its provider data. */
+function rawToolResult(
+  line: unknown,
+  part: unknown,
+  sequence: number,
+  timestamp: string | undefined,
+): HookTranscriptEvent | undefined {
+  const toolUseId = asString(prop(part, 'tool_use_id'));
+  if (!toolUseId) return undefined;
+  const structured = prop(line, 'toolUseResult');
+  const answers = prop(structured, 'answers');
+  const annotations = prop(structured, 'annotations');
+  const structuredAnswer = isObject(answers)
+    ? { answers, ...(isObject(annotations) ? { annotations } : {}) }
+    : undefined;
+  const content = jsonValue(
+    structuredAnswer ?? (isObject(structured) ? structured : prop(part, 'content')),
+  );
+  const stdout = asString(prop(structured, 'stdout')) ?? asString(prop(part, 'stdout'));
+  const stderr = asString(prop(structured, 'stderr')) ?? asString(prop(part, 'stderr'));
+  const exitCode =
+    resultNumber(structured, 'exitCode', 'exit_code', 'code') ??
+    resultNumber(part, 'exitCode', 'exit_code', 'code');
+  const isError = prop(part, 'is_error') ?? prop(structured, 'isError');
+  return {
+    sequence,
+    type: 'tool_result',
+    sourceId: `${toolUseId}:result`,
+    timestamp,
+    toolUseId,
+    ...(content === undefined ? {} : { content }),
+    ...(typeof isError === 'boolean' ? { isError } : {}),
+    ...(stdout === undefined ? {} : { stdout }),
+    ...(stderr === undefined ? {} : { stderr }),
+    ...(exitCode === undefined ? {} : { exitCode }),
+  };
+}
+
 /**
  * Parse a Claude Code JSONL transcript into normalized messages. Edits are
  * reported relative to `root` (and edits outside the repo, or to internal
@@ -386,6 +449,8 @@ interface PendingDuration {
  */
 export function parseClaudeTranscript(content: string, root: string): ClaudeTranscript {
   const messages: ClaudeMessage[] = [];
+  const events: HookTranscriptEvent[] = [];
+  let eventSequence = 0;
   let sessionId: string | undefined;
   // The student's answers to AskUserQuestion arrive on *later* user lines, keyed
   // by the question's `tool_use` id. Collect them as we go, then resolve each
@@ -413,6 +478,7 @@ export function parseClaudeTranscript(content: string, root: string): ClaudeTran
   // pending total rather than each flushing its own (empty) recap, so a turn
   // that spans several cycles still produces exactly one `recap` event.
   let pendingDuration: PendingDuration | undefined;
+  const planToolIds = new Set<string>();
 
   const flushPendingDuration = (): void => {
     if (!pendingDuration) return;
@@ -461,6 +527,42 @@ export function parseClaudeTranscript(content: string, root: string): ClaudeTran
     if (type === 'user') {
       collectDecisionAnswers(obj, answersByToolId);
       collectToolResults(obj, toolResultsByToolId);
+      const timestamp = asString(prop(obj, 'timestamp'));
+      for (const part of asArray(prop(prop(obj, 'message'), 'content')) ?? []) {
+        if (prop(part, 'type') !== 'tool_result') continue;
+        const raw = rawToolResult(obj, part, eventSequence++, timestamp);
+        if (!raw) continue;
+        events.push(raw);
+        if (raw.toolUseId && planToolIds.has(raw.toolUseId)) {
+          const blob = asString(prop(part, 'content'));
+          if (resolvePlanResult(blob).approved) {
+            events.push({
+              sequence: eventSequence++,
+              type: 'plan_approved',
+              sourceId: `${raw.toolUseId}:approved`,
+              timestamp,
+            });
+          }
+        }
+      }
+      const notificationContent = asString(prop(prop(obj, 'message'), 'content'));
+      const notification = notificationContent
+        ? parseTaskNotification(notificationContent)
+        : null;
+      if (notification) {
+        const sourceId =
+          asString(prop(obj, 'uuid')) ??
+          `cc:task-result:${notification.toolUseId ?? eventSequence}`;
+        events.push({
+          sequence: eventSequence++,
+          type: 'tool_result',
+          sourceId,
+          timestamp,
+          ...(notification.toolUseId ? { toolUseId: notification.toolUseId } : {}),
+          content: notification.summary,
+          ...(notification.status === 'failed' ? { isError: true } : {}),
+        });
+      }
       // Work this turn started in the background (a backgrounded command, a
       // subagent) reports its outcome on a tooling-injected user line. It is
       // mid-turn, not a boundary: pushed directly, so it neither opens a turn
@@ -476,8 +578,61 @@ export function parseClaudeTranscript(content: string, root: string): ClaudeTran
         turnTokens = { input: 0, output: 0, cacheRead: 0, cacheCreation: 0 };
         countedMessageIds = new Set();
         messages.push(msg);
+        events.push({
+          sequence: eventSequence++,
+          type: 'user_text',
+          sourceId: msg.sourceId,
+          timestamp: msg.timestamp,
+          text: msg.text,
+        });
       }
     } else if (type === 'assistant') {
+      const message = prop(obj, 'message');
+      const timestamp = asString(prop(obj, 'timestamp'));
+      const uuid = asString(prop(obj, 'uuid')) ?? 'assistant';
+      const parts = asArray(prop(message, 'content')) ?? [];
+      parts.forEach((part, index) => {
+        const partType = prop(part, 'type');
+        if (partType === 'text') {
+          const text = asString(prop(part, 'text'));
+          if (text?.trim()) {
+            events.push({
+              sequence: eventSequence++,
+              type: 'assistant_text',
+              sourceId: `${uuid}:text:${index}`,
+              timestamp,
+              text,
+            });
+          }
+          return;
+        }
+        if (partType !== 'tool_use') return;
+        const toolUseId = asString(prop(part, 'id')) ?? `${uuid}:tool:${index}`;
+        const toolName = asString(prop(part, 'name'));
+        const input = jsonValue(prop(part, 'input'));
+        events.push({
+          sequence: eventSequence++,
+          type: 'tool_use',
+          sourceId: `${toolUseId}:use`,
+          timestamp,
+          toolUseId,
+          ...(toolName ? { toolName } : {}),
+          ...(input === undefined ? {} : { input }),
+        });
+        if (toolName === 'ExitPlanMode') {
+          planToolIds.add(toolUseId);
+          const plan = parsePlanInput(prop(part, 'input'));
+          if (plan) {
+            events.push({
+              sequence: eventSequence++,
+              type: 'plan_snapshot',
+              sourceId: `${toolUseId}:plan`,
+              timestamp,
+              plan,
+            });
+          }
+        }
+      });
       messages.push(...handleAssistant(obj, root));
       accumulateUsage(turnTokens, prop(obj, 'message'), countedMessageIds);
     } else if (type === 'system') {
@@ -554,6 +709,7 @@ export function parseClaudeTranscript(content: string, root: string): ClaudeTran
       ? `Claude Code session ${sessionId.slice(0, 8)}`
       : 'Claude Code session',
     messages,
+    events,
   };
 }
 
@@ -809,6 +965,7 @@ export async function importClaudeTranscript(
   // A user prompt opens a turn; the assistant reply and edits that follow it
   // link back via this id, so the report groups the imported exchange.
   let currentTurnId: string | undefined;
+  const promptBySourceId = importedPromptIds(author);
 
   for (const msg of transcript.messages) {
     // Tool calls are Claude's own actions during the exchange, same as its text
@@ -869,7 +1026,10 @@ export async function importClaudeTranscript(
       cacheReadTokens: msg.cacheReadTokens,
       cacheCreationTokens: msg.cacheCreationTokens,
     });
-    if (msg.role === 'user') currentTurnId = event.id;
+    if (msg.role === 'user') {
+      currentTurnId = event.id;
+      promptBySourceId.set(msg.sourceId, event.id);
+    }
 
     if (msg.role === 'user') result.prompts += 1;
     else if (msg.role === 'assistant') result.responses += 1;
@@ -883,6 +1043,40 @@ export async function importClaudeTranscript(
       if (!result.first || msg.timestamp < result.first) result.first = msg.timestamp;
       if (!result.last || msg.timestamp > result.last) result.last = msg.timestamp;
     }
+  }
+
+  const seenConversation = importedConversationSourceIds(author);
+  const toolNames = new Map(
+    transcript.events.flatMap((event) =>
+      event.type === 'tool_use' && event.toolUseId && event.toolName
+        ? [[event.toolUseId, event.toolName] as const]
+        : [],
+    ),
+  );
+  const settings = readConfig(author.shared).settings;
+  let conversationTurnId: string | undefined;
+  for (const raw of transcript.events) {
+    if (raw.type === 'user_text') {
+      conversationTurnId = promptBySourceId.get(raw.sourceId);
+    }
+    if (!conversationTurnId) continue;
+    if (
+      !conversationEventEnabled(raw, toolNames, settings, {
+        includeResponses: options.withResponses === true,
+      })
+    ) {
+      continue;
+    }
+    const sourceId = `conversation:${raw.sourceId}`;
+    if (seenConversation.has(sourceId)) continue;
+    logConversationEvent(author, {
+      event: { ...raw, sourceId },
+      tool: 'claude-code',
+      turnId: conversationTurnId,
+      sessionId: options.sessionId,
+      batchId: options.batchId,
+    });
+    seenConversation.add(sourceId);
   }
 
   return result;

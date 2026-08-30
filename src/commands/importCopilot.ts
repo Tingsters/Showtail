@@ -390,6 +390,7 @@ function captureCopilotConversationToInbox(
   const convo: HookTranscript = {
     sessionId: parsed.sessionId,
     messages: parsed.messages.filter((m) => m.role !== 'edit'),
+    events: parsed.events,
   };
   // Watch-forward: don't resurrect a chat that finished before Showtail began
   // capturing here. Establish the set-once watermark (only once tracking is on;

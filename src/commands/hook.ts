@@ -63,6 +63,11 @@ import {
   type LedgerSession,
 } from '../core/ledger.ts';
 import { captureTranscriptToLedger } from '../core/ledgerCapture.ts';
+import {
+  conversationEventEnabled,
+  importedConversationSourceIds,
+  logConversationEvent,
+} from '../core/conversationEvents.ts';
 import { materializeLedgerSession } from '../core/materialize.ts';
 import { recordHookTrace, recordRawPayload, type HookTrace } from '../core/hookTrace.ts';
 import { connectPlugins, getPluginById } from '../plugins/registry.ts';
@@ -1013,6 +1018,7 @@ async function reconcileTranscript(
       }
       currentTurn = ref.promptId;
       currentTurnSession = ref.sessionId;
+      if (msg.sourceId) bySourceId.set(msg.sourceId, ref);
     } else if (msg.role === 'assistant') {
       // A reply only belongs to the trail if it follows an in-window prompt.
       if (!captureAi || !currentTurn || seen.has(msg.sourceId)) continue;
@@ -1137,6 +1143,36 @@ async function reconcileTranscript(
       seen.add(msg.sourceId);
       summary.recaps += 1;
     }
+  }
+
+  const seenConversation = importedConversationSourceIds(author);
+  const conversationToolNames = new Map(
+    (transcript.events ?? []).flatMap((event) =>
+      event.type === 'tool_use' && event.toolUseId && event.toolName
+        ? [[event.toolUseId, event.toolName] as const]
+        : [],
+    ),
+  );
+  let conversationTurn: PromptRef | undefined;
+  for (const event of transcript.events ?? []) {
+    if (event.type === 'user_text') {
+      conversationTurn = bySourceId.get(event.sourceId);
+    }
+    if (
+      !conversationTurn ||
+      !conversationEventEnabled(event, conversationToolNames, config.settings)
+    ) {
+      continue;
+    }
+    const sourceId = `conversation:${event.sourceId}`;
+    if (seenConversation.has(sourceId)) continue;
+    logConversationEvent(author, {
+      event: { ...event, sourceId },
+      tool,
+      turnId: conversationTurn.promptId,
+      sessionId: conversationTurn.sessionId,
+    });
+    seenConversation.add(sourceId);
   }
   return summary;
 }
