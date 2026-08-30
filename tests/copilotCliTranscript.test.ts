@@ -95,6 +95,19 @@ function makeEvents(dir: string, sessionId: string): string {
       timestamp: '2026-06-22T19:23:01.000Z',
       parentId: 'evt-3',
     },
+    {
+      type: 'tool.execution_complete',
+      data: {
+        toolCallId: 'call_edit',
+        result: { changed: true },
+        stdout: 'updated\n',
+        stderr: '',
+        exitCode: 0,
+      },
+      id: 'evt-5b',
+      timestamp: '2026-06-22T19:23:01.250Z',
+      parentId: 'evt-5',
+    },
     // An edit to an internal .copilot file — dropped.
     {
       type: 'tool.execution_start',
@@ -154,6 +167,23 @@ describe('parseCopilotCliSession', () => {
       const reply = parsed.messages.find((m) => m.role === 'assistant')!;
       expect(reply.sourceId).toBe('copilot:asst:msg-reply');
       expect(reply.text).toContain('banana-copilot');
+      expect(
+        parsed.events.some(
+          (event) =>
+            event.type === 'tool_use' &&
+            event.toolUseId === 'call_edit' &&
+            event.toolName === 'str_replace',
+        ),
+      ).toBe(true);
+      expect(
+        parsed.events.find(
+          (event) => event.type === 'tool_result' && event.toolUseId === 'call_edit',
+        ),
+      ).toMatchObject({
+        stdout: 'updated\n',
+        stderr: '',
+        exitCode: 0,
+      });
 
       // Timestamps preserved for back-dating.
       expect(parsed.messages[0]!.timestamp).toBe('2026-06-22T19:22:59.478Z');

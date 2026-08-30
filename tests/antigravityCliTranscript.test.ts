@@ -158,6 +158,21 @@ describe('parseAntigravityCliTranscript', () => {
 
       // Timestamps preserved for back-dating.
       expect(user.timestamp).toBe('2026-06-23T03:42:50Z');
+      expect(
+        t.events?.some(
+          (event) => event.type === 'tool_use' && event.toolName === 'create_plan',
+        ),
+      ).toBe(true);
+      expect(t.events?.filter((event) => event.type === 'plan_snapshot')).toHaveLength(2);
+      expect(t.events?.some((event) => event.type === 'plan_approved')).toBe(false);
+      expect(
+        t.events?.some(
+          (event) =>
+            event.type === 'tool_result' &&
+            event.content &&
+            typeof event.content === 'object',
+        ),
+      ).toBe(true);
     } finally {
       cleanup(dir);
     }

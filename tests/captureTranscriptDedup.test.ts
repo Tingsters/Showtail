@@ -101,4 +101,79 @@ describe('captureTranscriptToLedger: prompt back-fill is race-safe', () => {
       cleanup(home);
     }
   });
+
+  test('structured backlog events are not attached to the current live turn', () => {
+    const home = makeTempDir();
+    try {
+      process.env.SHOWTAIL_HOME = home;
+      const session = ensureLedgerSession({
+        tool: 'claude-code',
+        nativeSessionId: 'backlog',
+      });
+      appendLedgerRecord(session.id, {
+        kind: 'prompt',
+        tool: 'claude-code',
+        text: 'Current prompt',
+      });
+      const transcript: HookTranscript = {
+        sessionId: 'backlog',
+        messages: [
+          {
+            role: 'user',
+            text: 'Old prompt',
+            sourceId: 'old-user',
+            timestamp: '2020-01-01T00:00:00Z',
+          },
+          {
+            role: 'assistant',
+            text: 'Old answer',
+            sourceId: 'old-answer',
+            timestamp: '2020-01-01T00:00:01Z',
+          },
+          {
+            role: 'user',
+            text: 'Current prompt',
+            sourceId: 'new-user',
+            timestamp: new Date().toISOString(),
+          },
+          {
+            role: 'assistant',
+            text: 'Current answer',
+            sourceId: 'new-answer',
+            timestamp: new Date().toISOString(),
+          },
+        ],
+        events: [
+          { sequence: 0, type: 'user_text', sourceId: 'old-user', text: 'Old prompt' },
+          {
+            sequence: 1,
+            type: 'assistant_text',
+            sourceId: 'old-answer',
+            text: 'Old answer',
+          },
+          {
+            sequence: 2,
+            type: 'user_text',
+            sourceId: 'new-user',
+            text: 'Current prompt',
+          },
+          {
+            sequence: 3,
+            type: 'assistant_text',
+            sourceId: 'new-answer',
+            text: 'Current answer',
+          },
+        ],
+      };
+
+      captureTranscriptToLedger(session, transcript, 'claude-code');
+
+      const raw = readLedgerRecords(session.id)
+        .filter((record) => record.kind === 'conversation_event')
+        .map((record) => record.conversationEvent?.text);
+      expect(raw).toEqual(['Current prompt', 'Current answer']);
+    } finally {
+      cleanup(home);
+    }
+  });
 });

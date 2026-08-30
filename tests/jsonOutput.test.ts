@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { cleanup, makeTempDir, runCli } from './helpers.ts';
 
@@ -33,6 +33,11 @@ describe('--json output for the agent-driven loop', () => {
       expect(out.format).toBe('json');
       expect(out.reportPath).toContain('.json');
       expect(out.markdownPath).toBeNull();
+      const report = JSON.parse(readFileSync(out.reportPath, 'utf8'));
+      expect(report.schemaVersion).toBe(2);
+      expect(report.turns[0].events.map((event: { type: string }) => event.type)).toEqual(
+        ['user_text'],
+      );
 
       out = JSON.parse(run(dir, ['end', '--json']).stdout);
       expect(out.closed).toBe(true);

@@ -43,8 +43,10 @@ import { asArray, asString, isObject, prop } from './parse.ts';
 import type {
   DiscoveredPlanFile,
   HookTranscript,
+  HookTranscriptEvent,
   HookTranscriptMessage,
 } from '../plugins/types.ts';
+import type { JsonValue } from '../types.ts';
 
 /** A transcript file found on disk for an Antigravity conversation. */
 export interface AntigravityCliTranscriptInfo {
@@ -388,6 +390,8 @@ export function parseAntigravityCliTranscript(
   sessionId?: string,
 ): HookTranscript {
   const messages: HookTranscriptMessage[] = [];
+  const events: HookTranscriptEvent[] = [];
+  let eventSequence = 0;
   const sid = sessionId ?? '?';
   // Stable, monotonic counters keyed by step_index when present (Antigravity's
   // own per-turn index), else a running fallback, so re-reads of the same
@@ -426,11 +430,19 @@ export function parseAntigravityCliTranscript(
       if (m) currentModel = m[1]!.trim();
       const text = cleanUserContent(raw);
       if (!text) continue;
+      const sourceId = `agy:user:${sid}:${idx}`;
       messages.push({
         role: 'user',
         text,
         timestamp,
-        sourceId: `agy:user:${sid}:${idx}`,
+        sourceId,
+      });
+      events.push({
+        sequence: eventSequence++,
+        type: 'user_text',
+        sourceId,
+        timestamp,
+        text,
       });
       continue;
     }
@@ -450,6 +462,22 @@ export function parseAntigravityCliTranscript(
         approved,
         model: currentModel,
       });
+      const planSourceId = `agy:plan:${sid}:${idx}:snapshot`;
+      events.push({
+        sequence: eventSequence++,
+        type: 'plan_snapshot',
+        sourceId: planSourceId,
+        timestamp,
+        plan: text,
+      });
+      if (status === 'APPROVED' || status === 'ACCEPTED') {
+        events.push({
+          sequence: eventSequence++,
+          type: 'plan_approved',
+          sourceId: `agy:plan:${sid}:${idx}:approved`,
+          timestamp,
+        });
+      }
       continue;
     }
 
@@ -473,6 +501,30 @@ export function parseAntigravityCliTranscript(
     if (type === 'PLANNER_RESPONSE') {
       const calls = asArray(prop(obj, 'tool_calls')) ?? [];
 
+      calls.forEach((call, callIndex) => {
+        const name = asString(prop(call, 'name'));
+        const toolUseId =
+          asString(prop(call, 'id')) ??
+          asString(prop(call, 'tool_call_id')) ??
+          `agy:${sid}:${idx}:tool:${callIndex}`;
+        const args = prop(call, 'args');
+        let input: JsonValue | undefined;
+        try {
+          input = JSON.parse(JSON.stringify(args)) as JsonValue;
+        } catch {
+          input = undefined;
+        }
+        events.push({
+          sequence: eventSequence++,
+          type: 'tool_use',
+          sourceId: `${toolUseId}:use`,
+          timestamp,
+          toolUseId,
+          ...(name ? { toolName: name } : {}),
+          ...(input === undefined ? {} : { input }),
+        });
+      });
+
       // A plan-producing tool call → a 'plan' message (Antigravity's signature).
       // Either a dedicated plan tool (CLI) or a write to the plan artifact file
       // (IDE: `write_to_file` → implementation_plan.md).
@@ -492,24 +544,81 @@ export function parseAntigravityCliTranscript(
           approved: true, // a recorded plan call is one the run proceeded on
           model: currentModel,
         });
+        events.push({
+          sequence: eventSequence++,
+          type: 'plan_snapshot',
+          sourceId: `agy:plan:${sid}:${idx}:${i}:snapshot`,
+          timestamp,
+          plan: text,
+        });
         emittedPlan = true;
       }
-      if (emittedPlan) continue;
 
       // Otherwise: a text reply (content present, not a tool-only turn). Strip any
       // dead link to the plan artifact file — the plan is captured separately above.
       const text = asString(prop(obj, 'content'))?.trim();
       if (text) {
-        messages.push({
-          role: 'assistant',
-          text: sanitizePlanFileLinks(text),
+        const assistantText = sanitizePlanFileLinks(text);
+        if (!emittedPlan) {
+          messages.push({
+            role: 'assistant',
+            text: assistantText,
+            timestamp,
+            sourceId: `agy:asst:${sid}:${idx}`,
+            model: currentModel,
+          });
+        }
+        events.push({
+          sequence: eventSequence++,
+          type: 'assistant_text',
+          sourceId: `agy:asst:${sid}:${idx}:text`,
           timestamp,
-          sourceId: `agy:asst:${sid}:${idx}`,
-          model: currentModel,
+          text: assistantText,
         });
       }
       // tool-only PLANNER_RESPONSE turns (edits/reads/commands) carry no reply
       // text; the edits are handled via CODE_ACTION lines, so nothing to emit.
+      continue;
+    }
+
+    if (
+      type === 'VIEW_FILE' ||
+      type === 'LIST_DIRECTORY' ||
+      type === 'RUN_COMMAND' ||
+      type === 'CODE_ACTION' ||
+      type === 'ERROR_MESSAGE'
+    ) {
+      const toolUseId =
+        asString(prop(obj, 'tool_call_id')) ??
+        asString(prop(obj, 'toolUseId')) ??
+        asString(prop(obj, 'id'));
+      let result: JsonValue | undefined;
+      try {
+        result = JSON.parse(JSON.stringify(obj)) as JsonValue;
+      } catch {
+        result = undefined;
+      }
+      const status = asString(prop(obj, 'status'));
+      const stdout = asString(prop(obj, 'stdout'));
+      const stderr = asString(prop(obj, 'stderr'));
+      const exitCode =
+        typeof prop(obj, 'exit_code') === 'number'
+          ? (prop(obj, 'exit_code') as number)
+          : typeof prop(obj, 'exitCode') === 'number'
+            ? (prop(obj, 'exitCode') as number)
+            : undefined;
+      events.push({
+        sequence: eventSequence++,
+        type: 'tool_result',
+        sourceId: `agy:${sid}:${idx}:result`,
+        timestamp,
+        ...(toolUseId ? { toolUseId } : {}),
+        ...(result === undefined ? {} : { content: result }),
+        ...(type === 'ERROR_MESSAGE' || status === 'FAILED' ? { isError: true } : {}),
+        ...(stdout === undefined ? {} : { stdout }),
+        ...(stderr === undefined ? {} : { stderr }),
+        ...(exitCode === undefined ? {} : { exitCode }),
+      });
       continue;
     }
 
@@ -522,7 +631,7 @@ export function parseAntigravityCliTranscript(
   // parseCodexRollout.
   const kept = messages.filter((m) => m.role !== 'edit');
   void root; // root is accepted for signature parity (edits use it); reserved.
-  return { sessionId, messages: kept };
+  return { sessionId, messages: kept, events };
 }
 
 /** Read a transcript file from disk and parse it. */

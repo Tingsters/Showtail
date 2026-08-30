@@ -44,6 +44,44 @@ export type ActorSlug = string;
  */
 export type Tool = string;
 
+/** JSON-compatible data preserved from a host tool's transcript. */
+export type JsonValue =
+  | null
+  | boolean
+  | number
+  | string
+  | JsonValue[]
+  | { [key: string]: JsonValue };
+
+/**
+ * One visible, ordered event from an AI conversation. This is the provider-neutral
+ * machine-readable stream exported in schema-v2 JSON reports; the existing
+ * educator-facing Event model remains the human-readable projection.
+ */
+export interface ConversationEvent {
+  sequence: number;
+  timestamp?: string;
+  type:
+    | 'assistant_text'
+    | 'user_text'
+    | 'tool_use'
+    | 'tool_result'
+    | 'plan_snapshot'
+    | 'plan_approved';
+  /** Stable provider id used to dedupe repeated transcript reconciliation. */
+  sourceId?: string;
+  text?: string;
+  toolUseId?: string;
+  toolName?: string;
+  input?: JsonValue;
+  content?: JsonValue;
+  isError?: boolean;
+  stdout?: string;
+  stderr?: string;
+  exitCode?: number;
+  plan?: string;
+}
+
 /** A single recorded event in a work session. One JSONL line = one Event. */
 export interface Event {
   /** Short unique id, e.g. "evt_lqz3k8_a1b2". */
@@ -332,6 +370,8 @@ export interface Contributor {
 
 /** The structured (JSON) form of a generated report. */
 export interface ReportData {
+  /** Structured JSON export contract. Existing summary fields remain backward compatible. */
+  schemaVersion: 2;
   /** The *configured* project name (from `config.project`), or null if unset. */
   project: string | null;
   /**
@@ -430,6 +470,8 @@ export interface Turn {
   toolCalls: Event[];
   /** The turn's end-of-turn recap + duration/token/branch stats, if captured. */
   recap?: Event;
+  /** Ordered, provider-neutral conversation stream used by machine consumers. */
+  events: ConversationEvent[];
   tool: Tool;
   /** Which author this exchange belongs to — used to attribute/color turns. */
   actorSlug: ActorSlug;
@@ -450,16 +492,17 @@ export interface JournalEntry {
   /**
    * Which record this is: a logged "event" (prompt, ai_output, even an
    * artifact-type note), an "artifact" file snapshot, or a "redaction" audit
-   * marker left by `showtail redact`. Distinct from `type` so an artifact-*type*
-   * event is not confused with a snapshot. Defaults to "event" when absent.
+   * marker left by `showtail redact`, or a structured `conversation` event.
+   * Distinct from `type` so an artifact-*type* event is not confused with a
+   * snapshot. Defaults to "event" when absent.
    */
-  kind?: 'event' | 'artifact' | 'redaction';
+  kind?: 'event' | 'artifact' | 'conversation' | 'redaction';
   /** Event/Artifact id. */
   id: string;
   /** ISO-8601 timestamp. */
   ts: string;
   /** Event type, "artifact" for a file snapshot, or "redaction" for a marker. */
-  type: EventType | 'artifact' | 'redaction';
+  type: EventType | 'artifact' | 'conversation' | 'redaction';
   tool?: Tool;
   /** Conversation/session id this entry belongs to. */
   conv?: string;
@@ -496,6 +539,8 @@ export interface JournalEntry {
   tags?: string[];
   gitCommit?: string;
   sourceId?: string;
+  /** Original provider ordering for a structured conversation event. */
+  sequence?: number;
   /** The AI model that produced this event (raw id). See {@link Event.model}. */
   model?: string;
   /** For a `plan` event: trail-relative path of the saved plan file (`plans/<id>.md`). */

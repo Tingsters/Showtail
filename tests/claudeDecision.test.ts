@@ -454,6 +454,7 @@ describe('turn timeline (chronological interleaving)', () => {
     ],
     plans: [],
     toolCalls: [],
+    events: [],
     tool: 'claude-code',
     actorSlug: 'x',
     sessionId: 'sess',
@@ -481,6 +482,7 @@ describe('turn timeline (chronological interleaving)', () => {
       decisions: [ev('d', t, 'decision', 'q')],
       plans: [],
       toolCalls: [],
+      events: [],
       tool: 'claude-code',
       actorSlug: 'x',
       sessionId: 'sess',
@@ -507,11 +509,13 @@ describe('turn timeline (chronological interleaving)', () => {
       ],
       plans: [],
       toolCalls: [],
+      events: [],
       tool: 'claude-code',
       actorSlug: 'x',
       sessionId: 'sess',
     };
     const data: ReportData = {
+      schemaVersion: 2,
       project: 'P',
       displayName: 'P',
       generatedAt: '2026-01-01T00:00:06.000Z',
@@ -543,6 +547,7 @@ describe('turn timeline (chronological interleaving)', () => {
 
   test('a worktree code change links from linkPath but shows the clean path', () => {
     const data: ReportData = {
+      schemaVersion: 2,
       project: 'P',
       displayName: 'P',
       generatedAt: '2026-01-01T00:00:06.000Z',
@@ -567,6 +572,7 @@ describe('turn timeline (chronological interleaving)', () => {
           decisions: [],
           plans: [],
           toolCalls: [],
+          events: [],
           tool: 'claude-code',
           actorSlug: 'x',
           sessionId: 'sess',

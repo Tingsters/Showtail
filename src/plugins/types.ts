@@ -16,7 +16,7 @@
  * Most plugins have one; Claude Code has both.
  */
 import type { EditedFile } from '../core/hookInput.ts';
-import type { Tool } from '../types.ts';
+import type { ConversationEvent, Tool } from '../types.ts';
 
 export type { EditedFile };
 
@@ -185,10 +185,17 @@ export interface HookTranscriptMessage {
   cacheCreationTokens?: number;
 }
 
+/** A normalized raw transcript event with a stable provider id. */
+export interface HookTranscriptEvent extends ConversationEvent {
+  sourceId: string;
+}
+
 /** A normalized conversation transcript, in order. */
 export interface HookTranscript {
   sessionId?: string;
   messages: HookTranscriptMessage[];
+  /** Lossless visible conversation events. Absent only for legacy/text-only adapters. */
+  events?: HookTranscriptEvent[];
 }
 
 /**

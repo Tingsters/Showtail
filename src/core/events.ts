@@ -303,6 +303,16 @@ export function importedSourceIds(author: AuthorPaths): Set<string> {
   return ids;
 }
 
+/** Existing prompt source ids mapped to their trail event ids for incremental imports. */
+export function importedPromptIds(author: AuthorPaths): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const entry of eventEntries(author)) {
+    if (!entry.sourceId || entry.type !== 'prompt') continue;
+    out.set(entry.sourceId, entry.id);
+  }
+  return out;
+}
+
 /**
  * The id of this author's most recent import batch, in write order. This is "the
  * import you just did", which is what `showtail import undo` removes.

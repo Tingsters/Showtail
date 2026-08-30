@@ -260,7 +260,11 @@ export function readJournalShards(author: AuthorPaths): JournalShard[] {
  * testing `kind !== 'artifact'`, which would sweep markers in too.
  */
 export function isEventEntry(entry: JournalEntry): boolean {
-  return entry.kind !== 'artifact' && entry.kind !== 'redaction';
+  return (
+    entry.kind !== 'artifact' &&
+    entry.kind !== 'conversation' &&
+    entry.kind !== 'redaction'
+  );
 }
 
 /** Read every journal entry for one author across all segments, in write order. */

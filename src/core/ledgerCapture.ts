@@ -77,6 +77,7 @@ export function captureTranscriptToLedger(
     .filter((f) => !f.nativeSessionId || f.nativeSessionId === transcript.sessionId)
     .at(-1);
   const seen = new Set<string>();
+  const seenConversation = new Set<string>();
   const promptBySourceId = new Map<string, string>();
   const promptByText = new Map<string, string[]>();
   // Fold records into the dedup indexes, skipping any already folded in (so a
@@ -87,6 +88,7 @@ export function captureTranscriptToLedger(
       if (indexedIds.has(r.id)) continue;
       indexedIds.add(r.id);
       if (r.sourceId) seen.add(r.sourceId);
+      if (r.kind === 'conversation_event' && r.sourceId) seenConversation.add(r.sourceId);
       if (r.kind !== 'prompt') continue;
       if (r.sourceId) promptBySourceId.set(r.sourceId, r.id);
       if (r.text !== undefined) {
@@ -134,6 +136,7 @@ export function captureTranscriptToLedger(
       }
       currentTurnKey = recId;
       lastPromptKey = recId;
+      promptBySourceId.set(msg.sourceId, recId);
     } else if (
       msg.role === 'assistant' ||
       msg.role === 'decision' ||
@@ -183,6 +186,28 @@ export function captureTranscriptToLedger(
         seen.add(editSourceId);
       }
     }
+  }
+
+  // The structured stream is stored independently from the human-readable
+  // messages above. This keeps report fidelity without changing educator-facing
+  // event counts or rendering.
+  let conversationTurnKey: string | undefined;
+  for (const event of transcript.events ?? []) {
+    if (event.type === 'user_text') {
+      conversationTurnKey = promptBySourceId.get(event.sourceId);
+    }
+    if (!conversationTurnKey) continue;
+    const sourceId = `conversation:${event.sourceId}`;
+    if (seenConversation.has(sourceId)) continue;
+    appendLedgerRecord(session.id, {
+      kind: 'conversation_event',
+      tool,
+      ts: event.timestamp,
+      turnKey: conversationTurnKey,
+      sourceId,
+      conversationEvent: event,
+    });
+    seenConversation.add(sourceId);
   }
   if (lastPromptKey && lastPromptKey !== session.currentTurnKey) {
     setLedgerTurn(session.id, lastPromptKey);

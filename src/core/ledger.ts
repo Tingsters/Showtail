@@ -24,7 +24,7 @@
  */
 import { existsSync, mkdirSync, readdirSync, realpathSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
-import type { Tool } from '../types.ts';
+import type { ConversationEvent, Tool } from '../types.ts';
 import { ledgerDir, readInboxMinSignal, readScratchPaths } from './globalConfig.ts';
 import { makeId } from './ids.ts';
 import {
@@ -98,7 +98,8 @@ export type LedgerRecordKind =
   | 'plan'
   | 'edit'
   | 'tool_call'
-  | 'recap';
+  | 'recap'
+  | 'conversation_event';
 
 /** One append-only capture line in a session's `records.jsonl`. */
 export interface LedgerRecord {
@@ -137,6 +138,8 @@ export interface LedgerRecord {
   sha256?: string;
   /** Upstream source id (e.g. a transcript message id), when one exists. */
   sourceId?: string;
+  /** Provider-neutral structured event for a `conversation_event` record. */
+  conversationEvent?: ConversationEvent;
   /** For a `tool_call` record: the tool's name (e.g. `Bash`, `Read`, `Grep`). */
   toolName?: string;
   /** For a `tool_call` record: whether its result was an error. */
@@ -562,7 +565,9 @@ export function appendLedgerRecord(id: string, input: NewLedgerRecord): LedgerRe
     diff = diff.slice(0, MAX_DIFF_BYTES) + '\n… (diff truncated)';
   }
   const record: LedgerRecord = {
-    id: makeId(input.kind === 'edit' ? 'art' : 'evt'),
+    id: makeId(
+      input.kind === 'edit' ? 'art' : input.kind === 'conversation_event' ? 'raw' : 'evt',
+    ),
     ts: input.ts ?? new Date().toISOString(),
     kind: input.kind,
     tool: input.tool,
@@ -578,6 +583,7 @@ export function appendLedgerRecord(id: string, input: NewLedgerRecord): LedgerRe
   if (input.gitCommit) record.gitCommit = input.gitCommit;
   if (input.sha256) record.sha256 = input.sha256;
   if (input.sourceId) record.sourceId = input.sourceId;
+  if (input.conversationEvent) record.conversationEvent = input.conversationEvent;
   if (input.toolName) record.toolName = input.toolName;
   if (input.isError) record.isError = input.isError;
   if (input.durationMs !== undefined) record.durationMs = input.durationMs;

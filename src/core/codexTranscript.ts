@@ -54,10 +54,17 @@ import {
   type DecisionQuestion,
 } from './decisions.ts';
 import { editsFromEnvelope, type EditedFile } from './hookInput.ts';
-import { importedSourceIds } from './events.ts';
-import { asArray, asString, prop } from './parse.ts';
-import { toRepoRelative, type AuthorPaths } from './storage.ts';
+import { importedPromptIds, importedSourceIds } from './events.ts';
+import {
+  conversationEventEnabled,
+  importedConversationSourceIds,
+  logConversationEvent,
+} from './conversationEvents.ts';
+import { asArray, asNumber, asString, prop } from './parse.ts';
+import { readConfig, toRepoRelative, type AuthorPaths } from './storage.ts';
 import type { HookTranscript, HookTranscriptMessage } from '../plugins/types.ts';
+import type { HookTranscriptEvent } from '../plugins/types.ts';
+import type { JsonValue } from '../types.ts';
 
 /** A normalized message recovered from a Codex rollout. */
 export interface CodexMessage {
@@ -91,6 +98,7 @@ export interface CodexTranscript {
   sessionId?: string;
   title: string;
   messages: CodexMessage[];
+  events: HookTranscriptEvent[];
 }
 
 /** A rollout file found on disk. */
@@ -245,16 +253,18 @@ export function readRolloutFile(path: string, root: string): CodexTranscript {
  */
 export function parseCodexTranscript(content: string, root: string): CodexTranscript {
   const messages: CodexMessage[] = [];
+  const events: HookTranscriptEvent[] = [];
+  let eventSequence = 0;
   let sessionId: string | undefined;
   // Stable, monotonic counters so messages without a natural id still dedupe
   // deterministically across re-imports of the same (append-only) rollout.
   let userSeq = 0;
   let asstSeq = 0;
   let planSeq = 0;
+  let toolSeq = 0;
   // The latest captured content (clean `+ ` lines) per file, so a later Delete
   // can render the removed code as `- ` lines — like Claude shows a deletion.
   const lastAdded = new Map<string, string>();
-  let decisionSeq = 0;
   // The model in effect, updated by each `turn_context` line (Codex records it
   // per turn, not per message), so replies are stamped with the model that was
   // active when they were produced — correct even across a mid-session switch.
@@ -280,7 +290,8 @@ export function parseCodexTranscript(content: string, root: string): CodexTransc
     const payload = prop(obj, 'payload');
     if (
       prop(obj, 'type') === 'response_item' &&
-      prop(payload, 'type') === 'function_call_output'
+      (prop(payload, 'type') === 'function_call_output' ||
+        prop(payload, 'type') === 'custom_tool_call_output')
     ) {
       const cid = asString(prop(payload, 'call_id'));
       const out = asString(prop(payload, 'output'));
@@ -316,21 +327,37 @@ export function parseCodexTranscript(content: string, root: string): CodexTransc
     if (type === 'event_msg' && pType === 'user_message') {
       const text = asString(prop(payload, 'message'))?.trim();
       if (!text) continue;
+      const sourceId = `codex:user:${sessionId ?? '?'}:${userSeq++}`;
       messages.push({
         role: 'user',
         text,
         timestamp,
-        sourceId: `codex:user:${sessionId ?? '?'}:${userSeq++}`,
+        sourceId,
+      });
+      events.push({
+        sequence: eventSequence++,
+        type: 'user_text',
+        sourceId,
+        timestamp,
+        text,
       });
     } else if (type === 'event_msg' && pType === 'agent_message') {
       const text = asString(prop(payload, 'message'))?.trim();
       if (!text) continue;
+      const sourceId = `codex:asst:${sessionId ?? '?'}:${asstSeq++}`;
       messages.push({
         role: 'assistant',
         text,
         timestamp,
-        sourceId: `codex:asst:${sessionId ?? '?'}:${asstSeq++}`,
+        sourceId,
         model: currentModel,
+      });
+      events.push({
+        sequence: eventSequence++,
+        type: 'assistant_text',
+        sourceId,
+        timestamp,
+        text,
       });
     } else if (type === 'event_msg' && pType === 'item_completed') {
       // Codex's other plan shape: a completed `Plan` item carrying the full plan
@@ -349,10 +376,28 @@ export function parseCodexTranscript(content: string, root: string): CodexTransc
           ? `codex:plan:${itemId}`
           : `codex:plan:${sessionId ?? '?'}:${planSeq}`,
       });
+      events.push({
+        sequence: eventSequence++,
+        type: 'plan_snapshot',
+        sourceId: `codex:plan-event:${itemId ?? planSeq}`,
+        timestamp,
+        plan: text,
+      });
       planSeq += 1;
     } else if (type === 'response_item' && pType === 'custom_tool_call') {
-      if (prop(payload, 'name') !== 'apply_patch') continue;
+      const toolName = asString(prop(payload, 'name'));
+      const callId = asString(prop(payload, 'call_id')) ?? `custom:${toolSeq++}`;
       const envelope = asString(prop(payload, 'input'));
+      events.push({
+        sequence: eventSequence++,
+        type: 'tool_use',
+        sourceId: `codex:tool:${callId}:use`,
+        timestamp,
+        toolUseId: callId,
+        ...(toolName ? { toolName } : {}),
+        ...(envelope === undefined ? {} : { input: envelope }),
+      });
+      if (toolName !== 'apply_patch') continue;
       if (!envelope) continue;
       // Per-file CLEAN diffs (matches the live-hook formatting), keeping edits
       // inside the repo and out of bookkeeping dirs. A Delete carries no body, so
@@ -376,20 +421,35 @@ export function parseCodexTranscript(content: string, root: string): CodexTransc
       }
       if (edits.length === 0) continue;
       const files = edits.map((e) => e.file);
-      const callId = asString(prop(payload, 'call_id'));
       messages.push({
         role: 'edit',
         text: `Codex edited ${files.join(', ')}`,
         files,
         edits,
         timestamp,
-        sourceId: callId
-          ? `codex:edit:${callId}`
-          : `codex:edit:${sessionId ?? '?'}:${messages.length}`,
+        sourceId: `codex:edit:${callId}`,
       });
     } else if (type === 'response_item' && pType === 'function_call') {
-      const name = prop(payload, 'name');
-      const callId = asString(prop(payload, 'call_id'));
+      const name = asString(prop(payload, 'name'));
+      const callId = asString(prop(payload, 'call_id')) ?? `function:${toolSeq++}`;
+      const rawArguments = asString(prop(payload, 'arguments'));
+      let input: JsonValue | undefined = rawArguments;
+      if (rawArguments) {
+        try {
+          input = JSON.parse(rawArguments) as JsonValue;
+        } catch {
+          // Keep the provider's raw argument string.
+        }
+      }
+      events.push({
+        sequence: eventSequence++,
+        type: 'tool_use',
+        sourceId: `codex:tool:${callId}:use`,
+        timestamp,
+        toolUseId: callId,
+        ...(name ? { toolName: name } : {}),
+        ...(input === undefined ? {} : { input }),
+      });
       if (name === 'update_plan') {
         // Codex's plan/todo list. `arguments` is a JSON *string*: the steps live
         // under `plan: [{ step, status }]`, with an optional `explanation`. There's
@@ -402,9 +462,14 @@ export function parseCodexTranscript(content: string, root: string): CodexTransc
           role: 'plan',
           text,
           timestamp,
-          sourceId: callId
-            ? `codex:plan:${callId}`
-            : `codex:plan:${sessionId ?? '?'}:${planSeq}`,
+          sourceId: `codex:plan:${callId}`,
+        });
+        events.push({
+          sequence: eventSequence++,
+          type: 'plan_snapshot',
+          sourceId: `codex:plan:${callId}:snapshot`,
+          timestamp,
+          plan: text,
         });
         planSeq += 1;
       } else if (name === 'request_user_input') {
@@ -412,19 +477,58 @@ export function parseCodexTranscript(content: string, root: string): CodexTransc
         // pick is on the matching `function_call_output` (indexed above by call_id).
         const questions = parseCodexDecision(
           asString(prop(payload, 'arguments')),
-          callId ? outputByCallId.get(callId) : undefined,
+          outputByCallId.get(callId),
         );
         if (questions.length === 0) continue;
         messages.push({
           role: 'decision',
           text: renderDecisionText(questions, 'Codex'),
           timestamp,
-          sourceId: callId
-            ? `codex:decision:${callId}`
-            : `codex:decision:${sessionId ?? '?'}:${decisionSeq}`,
+          sourceId: `codex:decision:${callId}`,
         });
-        decisionSeq += 1;
       }
+    } else if (
+      type === 'response_item' &&
+      (pType === 'function_call_output' || pType === 'custom_tool_call_output')
+    ) {
+      const callId = asString(prop(payload, 'call_id'));
+      if (!callId) continue;
+      const rawOutput = asString(prop(payload, 'output'));
+      let output: JsonValue | undefined = rawOutput;
+      if (rawOutput) {
+        try {
+          output = JSON.parse(rawOutput) as JsonValue;
+        } catch {
+          // Keep the raw provider output when it is not JSON.
+        }
+      }
+      const metadata = prop(output, 'metadata');
+      const stdout =
+        asString(prop(output, 'stdout')) ?? asString(prop(metadata, 'stdout'));
+      const stderr =
+        asString(prop(output, 'stderr')) ?? asString(prop(metadata, 'stderr'));
+      const exitCode =
+        asNumber(prop(output, 'exitCode')) ??
+        asNumber(prop(output, 'exit_code')) ??
+        asNumber(prop(metadata, 'exitCode')) ??
+        asNumber(prop(metadata, 'exit_code'));
+      const isError =
+        prop(output, 'isError') === true ||
+        prop(output, 'is_error') === true ||
+        prop(metadata, 'isError') === true ||
+        prop(metadata, 'is_error') === true;
+      events.push({
+        sequence: eventSequence++,
+        type: 'tool_result',
+        sourceId: `codex:tool:${callId}:result`,
+        timestamp,
+        toolUseId: callId,
+        ...(output === undefined ? {} : { content: output }),
+        ...(isError ? { isError: true } : {}),
+        ...(stdout === undefined ? {} : { stdout }),
+        ...(stderr === undefined ? {} : { stderr }),
+        ...(exitCode === undefined ? {} : { exitCode }),
+      });
     }
   }
 
@@ -432,6 +536,7 @@ export function parseCodexTranscript(content: string, root: string): CodexTransc
     sessionId,
     title: sessionId ? `Codex session ${sessionId.slice(0, 8)}` : 'Codex session',
     messages,
+    events,
   };
 }
 
@@ -546,7 +651,7 @@ export function parseCodexRollout(content: string, root: string): HookTranscript
       ...(m.role === 'edit' ? { edits: m.edits } : {}),
     });
   }
-  return { sessionId: parsed.sessionId, messages };
+  return { sessionId: parsed.sessionId, messages, events: parsed.events };
 }
 
 // --- Summaries (for the import picker) -------------------------------------
@@ -678,6 +783,7 @@ export async function importCodexTranscript(
 
   // A user prompt opens a turn; the reply/edits that follow link back via this id.
   let currentTurnId: string | undefined;
+  const promptBySourceId = importedPromptIds(author);
 
   for (const msg of transcript.messages) {
     if (msg.role === 'assistant' && !options.withResponses) continue;
@@ -739,7 +845,10 @@ export async function importCodexTranscript(
       tags: ['imported'],
       turnId: msg.role === 'user' ? undefined : currentTurnId,
     });
-    if (msg.role === 'user') currentTurnId = event.id;
+    if (msg.role === 'user') {
+      currentTurnId = event.id;
+      promptBySourceId.set(msg.sourceId, event.id);
+    }
 
     if (msg.role === 'user') result.prompts += 1;
     else if (msg.role === 'assistant') result.responses += 1;
@@ -747,6 +856,40 @@ export async function importCodexTranscript(
     else if (msg.role === 'decision') result.decisions += 1;
 
     stampSpan(msg.timestamp);
+  }
+
+  const seenConversation = importedConversationSourceIds(author);
+  const toolNames = new Map(
+    transcript.events.flatMap((event) =>
+      event.type === 'tool_use' && event.toolUseId && event.toolName
+        ? [[event.toolUseId, event.toolName] as const]
+        : [],
+    ),
+  );
+  const settings = readConfig(author.shared).settings;
+  let conversationTurnId: string | undefined;
+  for (const raw of transcript.events) {
+    if (raw.type === 'user_text') {
+      conversationTurnId = promptBySourceId.get(raw.sourceId);
+    }
+    if (!conversationTurnId) continue;
+    if (
+      !conversationEventEnabled(raw, toolNames, settings, {
+        includeResponses: options.withResponses === true,
+      })
+    ) {
+      continue;
+    }
+    const sourceId = `conversation:${raw.sourceId}`;
+    if (seenConversation.has(sourceId)) continue;
+    logConversationEvent(author, {
+      event: { ...raw, sourceId },
+      tool: 'codex',
+      turnId: conversationTurnId,
+      sessionId: options.sessionId,
+      batchId: options.batchId,
+    });
+    seenConversation.add(sourceId);
   }
 
   return result;

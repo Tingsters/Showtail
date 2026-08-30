@@ -54,10 +54,17 @@ import {
   renderDecisionText,
   type DecisionQuestion,
 } from './decisions.ts';
-import { importedSourceIds } from './events.ts';
+import { importedPromptIds, importedSourceIds } from './events.ts';
+import {
+  conversationEventEnabled,
+  importedConversationSourceIds,
+  logConversationEvent,
+} from './conversationEvents.ts';
 import { asArray, asNumber, asString, isObject, prop } from './parse.ts';
-import { toRepoRelative, type AuthorPaths } from './storage.ts';
+import { readConfig, toRepoRelative, type AuthorPaths } from './storage.ts';
 import type { EditedFile } from './hookInput.ts';
+import type { HookTranscriptEvent } from '../plugins/types.ts';
+import type { JsonValue } from '../types.ts';
 
 /** A normalized message recovered from a Copilot Chat session. */
 export interface CopilotMessage {
@@ -83,6 +90,7 @@ export interface CopilotTranscript {
   sessionId?: string;
   title: string;
   messages: CopilotMessage[];
+  events: HookTranscriptEvent[];
 }
 
 /** A chat-session file found on disk. */
@@ -562,6 +570,8 @@ export function parseCopilotSession(session: unknown, root: string): CopilotTran
   const sessionId = asString(prop(session, 'sessionId'));
   const requests = asArray(prop(session, 'requests')) ?? [];
   const messages: CopilotMessage[] = [];
+  const events: HookTranscriptEvent[] = [];
+  let eventSequence = 0;
   const sid = sessionId ?? '?';
 
   requests.forEach((request, i) => {
@@ -583,12 +593,65 @@ export function parseCopilotSession(session: unknown, root: string): CopilotTran
 
     const promptText = asString(prop(prop(request, 'message'), 'text'))?.trim();
     if (promptText) {
+      const sourceId = `copilot:user:${sid}:${requestId}`;
       messages.push({
         role: 'user',
         text: promptText,
         timestamp: tsAt(0),
-        sourceId: `copilot:user:${sid}:${requestId}`,
+        sourceId,
       });
+      events.push({
+        sequence: eventSequence++,
+        type: 'user_text',
+        sourceId,
+        timestamp: tsAt(0),
+        text: promptText,
+      });
+    }
+
+    const metadata = prop(prop(request, 'result'), 'metadata');
+    const results = prop(metadata, 'toolCallResults');
+    for (const round of asArray(prop(metadata, 'toolCallRounds')) ?? []) {
+      for (const call of asArray(prop(round, 'toolCalls')) ?? []) {
+        const callId = asString(prop(call, 'id'));
+        if (!callId) continue;
+        const toolName = asString(prop(call, 'name'));
+        const rawArguments = asString(prop(call, 'arguments'));
+        let input: JsonValue | undefined = rawArguments;
+        if (rawArguments) {
+          try {
+            input = JSON.parse(rawArguments) as JsonValue;
+          } catch {
+            // Preserve a non-JSON argument string as supplied by the host.
+          }
+        }
+        events.push({
+          sequence: eventSequence++,
+          type: 'tool_use',
+          sourceId: `copilot:tool:${sid}:${callId}:use`,
+          timestamp: tsAt(1),
+          toolUseId: callId,
+          ...(toolName ? { toolName } : {}),
+          ...(input === undefined ? {} : { input }),
+        });
+        const result = prop(results, callId);
+        if (result !== undefined) {
+          let content: JsonValue | undefined;
+          try {
+            content = JSON.parse(JSON.stringify(result)) as JsonValue;
+          } catch {
+            content = undefined;
+          }
+          events.push({
+            sequence: eventSequence++,
+            type: 'tool_result',
+            sourceId: `copilot:tool:${sid}:${callId}:result`,
+            timestamp: tsAt(2),
+            toolUseId: callId,
+            ...(content === undefined ? {} : { content }),
+          });
+        }
+      }
     }
 
     // Decisions (vscode_askQuestions) are answered mid-turn, BEFORE Copilot's final
@@ -605,11 +668,19 @@ export function parseCopilotSession(session: unknown, root: string): CopilotTran
 
     const reply = assistantText(request);
     if (reply) {
+      const sourceId = `copilot:asst:${sid}:${requestId}`;
       messages.push({
         role: 'assistant',
         text: reply,
         timestamp: tsAt(1 + decisions.length),
-        sourceId: `copilot:asst:${sid}:${requestId}`,
+        sourceId,
+      });
+      events.push({
+        sequence: eventSequence++,
+        type: 'assistant_text',
+        sourceId,
+        timestamp: tsAt(1 + decisions.length),
+        text: reply,
       });
     }
 
@@ -621,6 +692,13 @@ export function parseCopilotSession(session: unknown, root: string): CopilotTran
         text: plan,
         timestamp: tsAt(2 + decisions.length),
         sourceId: `copilot:plan:${sid}:${requestId}`,
+      });
+      events.push({
+        sequence: eventSequence++,
+        type: 'plan_snapshot',
+        sourceId: `copilot:plan:${sid}:${requestId}:snapshot`,
+        timestamp: tsAt(2 + decisions.length),
+        plan,
       });
     }
 
@@ -644,6 +722,7 @@ export function parseCopilotSession(session: unknown, root: string): CopilotTran
       ? `Copilot Chat session ${sessionId.slice(0, 8)}`
       : 'Copilot Chat session',
     messages,
+    events,
   };
 }
 
@@ -814,6 +893,7 @@ export async function importCopilotMessages(
 
   // A user prompt opens a turn; the reply/plan/decision link back via this id.
   let currentTurnId: string | undefined;
+  const promptBySourceId = importedPromptIds(author);
 
   for (const msg of transcript.messages) {
     if (msg.role === 'edit') continue; // edits are imported separately
@@ -849,6 +929,7 @@ export async function importCopilotMessages(
     });
     if (msg.role === 'user') {
       currentTurnId = event.id;
+      promptBySourceId.set(msg.sourceId, event.id);
       result.turnIds.set(requestIdOf(msg.sourceId), event.id);
       result.prompts += 1;
     } else if (msg.role === 'assistant') {
@@ -859,6 +940,40 @@ export async function importCopilotMessages(
       result.decisions += 1;
     }
     stamp(msg.timestamp);
+  }
+
+  const seenConversation = importedConversationSourceIds(author);
+  const toolNames = new Map(
+    transcript.events.flatMap((event) =>
+      event.type === 'tool_use' && event.toolUseId && event.toolName
+        ? [[event.toolUseId, event.toolName] as const]
+        : [],
+    ),
+  );
+  const settings = readConfig(author.shared).settings;
+  let conversationTurnId: string | undefined;
+  for (const raw of transcript.events) {
+    if (raw.type === 'user_text') {
+      conversationTurnId = promptBySourceId.get(raw.sourceId);
+    }
+    if (!conversationTurnId) continue;
+    if (
+      !conversationEventEnabled(raw, toolNames, settings, {
+        includeResponses: options.withResponses === true,
+      })
+    ) {
+      continue;
+    }
+    const sourceId = `conversation:${raw.sourceId}`;
+    if (seenConversation.has(sourceId)) continue;
+    logConversationEvent(author, {
+      event: { ...raw, sourceId },
+      tool: 'github-copilot',
+      turnId: conversationTurnId,
+      sessionId: options.sessionId,
+      batchId: options.batchId,
+    });
+    seenConversation.add(sourceId);
   }
   return result;
 }

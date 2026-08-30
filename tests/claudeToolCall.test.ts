@@ -547,7 +547,7 @@ describe('parseClaudeTranscript — background task completions', () => {
   test('captures the completion notice as its own tool call', () => {
     const dir = makeTempDir();
     try {
-      const { messages } = parseClaudeTranscript(
+      const { messages, events } = parseClaudeTranscript(
         backgroundTranscript('completed', COMPLETED),
         dir,
       );
@@ -562,6 +562,11 @@ describe('parseClaudeTranscript — background task completions', () => {
       const order = messages.map((m) => m.sourceId);
       expect(order.indexOf('toolu_bg1')).toBeLessThan(order.indexOf('u3'));
       expect(order.indexOf('u3')).toBeLessThan(order.indexOf('a2'));
+      expect(events.find((event) => event.sourceId === 'u3')).toMatchObject({
+        type: 'tool_result',
+        toolUseId: 'toolu_bg1',
+        content: COMPLETED,
+      });
     } finally {
       cleanup(dir);
     }

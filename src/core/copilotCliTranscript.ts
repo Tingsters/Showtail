@@ -42,7 +42,12 @@ import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { hostHome } from './hostHome.ts';
 import { asString, prop } from './parse.ts';
-import type { HookTranscript, HookTranscriptMessage } from '../plugins/types.ts';
+import type {
+  HookTranscript,
+  HookTranscriptEvent,
+  HookTranscriptMessage,
+} from '../plugins/types.ts';
+import type { JsonValue } from '../types.ts';
 
 /** A normalized message recovered from a Copilot CLI event log. */
 export interface CopilotCliMessage {
@@ -64,6 +69,7 @@ export interface CopilotCliTranscript {
   sessionId?: string;
   title: string;
   messages: CopilotCliMessage[];
+  events: HookTranscriptEvent[];
 }
 
 /** A Copilot CLI session event log found on disk. */
@@ -199,11 +205,14 @@ export function parseCopilotCliSession(
   root: string,
 ): CopilotCliTranscript {
   const messages: CopilotCliMessage[] = [];
+  const events: HookTranscriptEvent[] = [];
+  let eventSequence = 0;
   let sessionId: string | undefined;
   // Stable, monotonic counters so messages without a natural id still dedupe
   // deterministically across re-reads of the same (append-only) log.
   let userSeq = 0;
   let asstSeq = 0;
+  let toolSeq = 0;
 
   for (const rawLine of content.split(/\r?\n/)) {
     const line = rawLine.trim();
@@ -229,11 +238,19 @@ export function parseCopilotCliSession(
     if (type === 'user.message') {
       const text = asString(prop(data, 'content'))?.trim();
       if (!text) continue;
+      const sourceId = `copilot:user:${sessionId ?? '?'}:${userSeq++}`;
       messages.push({
         role: 'user',
         text,
         timestamp,
-        sourceId: `copilot:user:${sessionId ?? '?'}:${userSeq++}`,
+        sourceId,
+      });
+      events.push({
+        sequence: eventSequence++,
+        type: 'user_text',
+        sourceId,
+        timestamp,
+        text,
       });
     } else if (type === 'assistant.message') {
       const text = asString(prop(data, 'content'))?.trim();
@@ -241,29 +258,89 @@ export function parseCopilotCliSession(
       if (!text) continue;
       // Prefer the model's own messageId for a stable id; else a sequence.
       const messageId = asString(prop(data, 'messageId'));
+      const sourceId = messageId
+        ? `copilot:asst:${messageId}`
+        : `copilot:asst:${sessionId ?? '?'}:${asstSeq++}`;
       messages.push({
         role: 'assistant',
         text,
         timestamp,
-        sourceId: messageId
-          ? `copilot:asst:${messageId}`
-          : `copilot:asst:${sessionId ?? '?'}:${asstSeq++}`,
+        sourceId,
         model: asString(prop(data, 'model')),
       });
+      events.push({
+        sequence: eventSequence++,
+        type: 'assistant_text',
+        sourceId,
+        timestamp,
+        text,
+      });
     } else if (type === 'tool.execution_start') {
+      const callId = asString(prop(data, 'toolCallId')) ?? `copilot:tool:${toolSeq++}`;
+      const toolName = asString(prop(data, 'toolName')) ?? asString(prop(data, 'name'));
+      const rawArguments = prop(data, 'arguments');
+      let input: JsonValue | undefined;
+      try {
+        input =
+          typeof rawArguments === 'string'
+            ? (JSON.parse(rawArguments) as JsonValue)
+            : (JSON.parse(JSON.stringify(rawArguments)) as JsonValue);
+      } catch {
+        input = typeof rawArguments === 'string' ? rawArguments : undefined;
+      }
+      events.push({
+        sequence: eventSequence++,
+        type: 'tool_use',
+        sourceId: `${callId}:use`,
+        timestamp,
+        toolUseId: callId,
+        ...(toolName ? { toolName } : {}),
+        ...(input === undefined ? {} : { input }),
+      });
       const file = editedFile(prop(data, 'arguments'));
       if (!file) continue; // Not a file edit (e.g. rename_session, shell).
       const rel = toRel(file, root);
       if (rel.startsWith('..') || isInternalPath(rel)) continue;
-      const callId = asString(prop(data, 'toolCallId'));
       messages.push({
         role: 'edit',
         text: `Copilot edited ${rel}`,
         files: [rel],
         timestamp,
-        sourceId: callId
-          ? `copilot:edit:${callId}`
-          : `copilot:edit:${sessionId ?? '?'}:${messages.length}`,
+        sourceId: `copilot:edit:${callId}`,
+      });
+    } else if (
+      type === 'tool.execution_complete' ||
+      type === 'tool.execution_end' ||
+      type === 'tool.execution_error'
+    ) {
+      const callId = asString(prop(data, 'toolCallId')) ?? asString(prop(data, 'id'));
+      if (!callId) continue;
+      const rawResult = prop(data, 'result') ?? prop(data, 'output');
+      let result: JsonValue | undefined;
+      try {
+        result = JSON.parse(JSON.stringify(rawResult)) as JsonValue;
+      } catch {
+        result = undefined;
+      }
+      const stdout = asString(prop(data, 'stdout'));
+      const stderr = asString(prop(data, 'stderr'));
+      const exitCode =
+        typeof prop(data, 'exitCode') === 'number'
+          ? (prop(data, 'exitCode') as number)
+          : typeof prop(data, 'exit_code') === 'number'
+            ? (prop(data, 'exit_code') as number)
+            : undefined;
+      events.push({
+        sequence: eventSequence++,
+        type: 'tool_result',
+        sourceId: `${callId}:result`,
+        timestamp,
+        toolUseId: callId,
+        ...(result === undefined ? {} : { content: result }),
+        ...(type === 'tool.execution_error' ? { isError: true } : {}),
+        ...(stdout === undefined ? {} : { stdout }),
+        ...(stderr === undefined ? {} : { stderr }),
+        ...(exitCode === undefined ? {} : { exitCode }),
       });
     }
   }
@@ -274,6 +351,7 @@ export function parseCopilotCliSession(
       ? `Copilot CLI session ${sessionId.slice(0, 8)}`
       : 'Copilot CLI session',
     messages,
+    events,
   };
 }
 
@@ -297,5 +375,5 @@ export function parseCopilotCliTranscript(content: string, root: string): HookTr
       model: m.model,
     });
   }
-  return { sessionId: parsed.sessionId, messages };
+  return { sessionId: parsed.sessionId, messages, events: parsed.events };
 }
