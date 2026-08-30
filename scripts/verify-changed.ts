@@ -92,6 +92,10 @@ function checkStaleness(): number {
       continue;
     }
     const sources = SOURCES[claim.integration] ?? [];
+    // An integration without a change map cannot be evaluated here. Passing an
+    // empty path list to `git rev-list --` means "all files", which falsely marks
+    // the certification stale after every unrelated commit.
+    if (sources.length === 0) continue;
     // Stale iff a commit *after* the certified one touched the sources. (We only
     // gate on committed history here — uncommitted local edits are handled by the
     // default re-run mode, which diffs the working tree.)
