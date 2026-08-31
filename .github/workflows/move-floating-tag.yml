@@ -1,0 +1,34 @@
+name: Move floating tag
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Floating tag to move (e.g. v0)'
+        required: true
+        default: 'v0'
+      target:
+        description: 'Target tag whose commit the floating tag should point at (e.g. v0.15.0)'
+        required: true
+        default: 'v0.15.0'
+
+permissions:
+  contents: write
+
+jobs:
+  move-tag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-tags: true
+
+      - name: Move floating tag
+        run: |
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+          release_commit=$(git rev-list -n 1 "${{ inputs.target }}")
+          echo "Moving ${{ inputs.tag }} → ${release_commit} (from ${{ inputs.target }})"
+          git tag -fa "${{ inputs.tag }}" "${release_commit}" \
+            -m "Moving major tag: latest 0.x release (currently ${{ inputs.target }})"
+          git push origin "refs/tags/${{ inputs.tag }}" --force
