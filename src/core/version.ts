@@ -10,7 +10,7 @@
  * so upgraders kept their old capture wiring) — the bump is easy to forget and
  * nothing caught it.
  */
-export const SHOWTAIL_VERSION = '0.14.1';
+export const SHOWTAIL_VERSION = '0.15.0';
 
 /** Generation of transcript detail stored in project trails. */
 export const HISTORY_GENERATION = 2;

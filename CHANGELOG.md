@@ -2,8 +2,16 @@
 
 ## Unreleased
 
+## 0.15.0 — Recover and export complete AI work
+
 ### Added
 
+- **JSON reports now include provider-neutral structured conversation events.**
+  Schema v2 preserves visible text, tool calls and correlated results, questions
+  and answers, plans and approvals, shell channels, edits, agents, and background
+  completions across transcript-backed integrations. Existing human reports and
+  counts stay unchanged, and legacy trails receive deterministic best-effort
+  events without fabricated tool data.
 - **Older trails can recover the transcript detail newer Showtail versions know
   how to capture.** `showtail migrate` matches existing sessions to local Claude
   Code, Codex, Antigravity CLI/IDE, Copilot CLI, and Copilot Chat transcripts,
@@ -22,6 +30,22 @@
   while append-only enrichment records disclose when recovery occurred and
   identify the source by provider session id and transcript digest—never by a
   committed absolute path.
+- **Maintainers can test Showtail in an isolated Docker environment.** The image
+  builds the current checkout with Claude Code and Codex, while the manual runner
+  keeps agent state and scratch projects in private volumes. A non-quota preflight
+  and an opt-in live regression exercise real prompt and artifact capture without
+  exposing host settings or credentials to the build context.
+
+### Fixed
+
+- **Failed Claude shell commands retain their numeric exit code in structured
+  exports.** When Claude records `Exit code N` only in the result text, Showtail
+  now recovers the number while preserving the original content and error flag,
+  so report consumers can replay the command deterministically.
+- **Windows can install the Showtail extension through VS Code and Antigravity
+  launchers.** Batch-based `code` and `antigravity-ide` commands now run through
+  `cmd.exe`, covering both absolute `.cmd` paths and bare commands resolved by
+  `PATHEXT` while leaving POSIX launches unchanged.
 
 ## 0.14.1
 
