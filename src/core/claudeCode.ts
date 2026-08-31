@@ -404,6 +404,16 @@ function resultNumber(value: unknown, ...keys: string[]): number | undefined {
   return undefined;
 }
 
+/** Claude sometimes encodes a failed shell status only in the result text. */
+function resultTextExitCode(value: unknown): number | undefined {
+  const text = asString(value);
+  if (!text) return undefined;
+  const match = /^Exit code (-?\d+)(?:\r?\n|$)/.exec(text);
+  if (!match) return undefined;
+  const code = Number(match[1]);
+  return Number.isInteger(code) ? code : undefined;
+}
+
 /** Preserve one Claude tool_result block without flattening its provider data. */
 function rawToolResult(
   line: unknown,
@@ -426,7 +436,8 @@ function rawToolResult(
   const stderr = asString(prop(structured, 'stderr')) ?? asString(prop(part, 'stderr'));
   const exitCode =
     resultNumber(structured, 'exitCode', 'exit_code', 'code') ??
-    resultNumber(part, 'exitCode', 'exit_code', 'code');
+    resultNumber(part, 'exitCode', 'exit_code', 'code') ??
+    resultTextExitCode(prop(part, 'content'));
   const isError = prop(part, 'is_error') ?? prop(structured, 'isError');
   return {
     sequence,

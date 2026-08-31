@@ -60,7 +60,7 @@ function makeToolCallTranscript(): string {
           {
             type: 'tool_result',
             tool_use_id: 'tb1',
-            content: "ModuleNotFoundError: No module named 'pygame'",
+            content: "Exit code 1\nModuleNotFoundError: No module named 'pygame'",
             is_error: true,
           },
         ],
@@ -148,12 +148,17 @@ describe('parseClaudeTranscript — tool calls', () => {
   test('marks a failed Bash call as an error and includes its output', () => {
     const dir = makeTempDir();
     try {
-      const { messages } = parseClaudeTranscript(makeToolCallTranscript(), dir);
+      const { messages, events } = parseClaudeTranscript(makeToolCallTranscript(), dir);
       const call = messages.find((m) => m.sourceId === 'tb1');
       expect(call).toBeDefined();
       expect(call!.isError).toBe(true);
       expect(call!.text).toContain('**Error:**');
       expect(call!.text).toContain("ModuleNotFoundError: No module named 'pygame'");
+
+      const result = events.find(
+        (event) => event.type === 'tool_result' && event.toolUseId === 'tb1',
+      );
+      expect(result).toMatchObject({ exitCode: 1, isError: true });
     } finally {
       cleanup(dir);
     }
