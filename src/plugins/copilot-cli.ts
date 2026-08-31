@@ -22,8 +22,10 @@ import {
   writeCopilotCliInstructions,
 } from '../core/copilotCli.ts';
 import {
+  findCopilotCliSessions,
   findCopilotCliSession,
   parseCopilotCliTranscript,
+  readCopilotCliSessionFile,
 } from '../core/copilotCliTranscript.ts';
 import { commandOnPath, homeDirExists } from '../core/detect.ts';
 import {
@@ -142,6 +144,18 @@ export const copilotCliPlugin: EnvironmentPlugin = {
       // records no plan/decision construct in its event log, so only assistant
       // replies (and prompts) are reconciled — see copilotCliTranscript.ts.
       getTranscript: copilotCliGetTranscript,
+    },
+  },
+
+  migration: {
+    discover: () =>
+      findCopilotCliSessions().map((info) => ({
+        path: info.path,
+        providerSessionId: info.sessionId,
+        mtimeMs: info.mtimeMs,
+      })),
+    read(candidate, root) {
+      return readCopilotCliSessionFile(candidate.path, root);
     },
   },
 };

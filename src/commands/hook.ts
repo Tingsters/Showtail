@@ -26,7 +26,7 @@ import {
 import { redact } from '../core/redact.ts';
 import { isSyntheticPrompt } from '../core/syntheticPrompt.ts';
 import { asString, prop } from '../core/parse.ts';
-import { autoInitEnabled } from '../core/globalConfig.ts';
+import { autoInitEnabled, noteKnownProject } from '../core/globalConfig.ts';
 import { autoConnectNewlyDetected } from '../core/autoConnectSweep.ts';
 import { ensureFirstRunSetup, autoTrackingNotice } from './setup.ts';
 import {
@@ -400,6 +400,7 @@ export async function runHook(
     recordRawPayload(paths, event, tool, payload);
     if (!existsSync(paths.config)) return; // Not initialized.
     const config = readConfig(paths);
+    noteKnownProject(paths.root, config.trailId);
 
     // Record where this session was placed: its stable trailId and the trail's
     // current location. Minting the trailId here also upgrades an older trail

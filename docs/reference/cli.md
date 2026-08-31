@@ -23,7 +23,22 @@ install later is captured too. You never run a getting-started command — just 
 | ------- | ------------ |
 | `setup` | Manage automatic tracking (it turns on by itself after install). `--off` turns it off; re-run to turn it back on. Flags: `--off`, `--yes`, `--json`. |
 | `track [path]` | Set up one project by hand: name it (`-p, --project <name>`), declare a non-code folder (like a book) as a project, and pull its already-captured work in — including work whose files have since **moved** (see [Moving a project](#moving-a-project)). Projects otherwise initialize automatically. Safe to re-run: a second run in an already-tracked folder still pulls in newly-orphaned work. Flags: `-p, --project <name>`, `--json` (emits `backfilled` and `candidates`). |
+| `migrate [tool]` | Enrich older trails from the AI tools' retained local transcripts. Recovers missing replies, edits, plans, decisions, tool calls/results, models, and recap statistics without rewriting existing journal lines. With no tool, checks every supported local provider. Flags: `-s, --session <id>`, `--file <path>` (requires a tool), `--dry-run`, `-y, --yes`, `--json`, `--resume <run-id>`. `showtail migrate undo [batch-id]` removes a migration batch and records the declared rewrite for `verify`. |
 | `redact` | Scrub a secret the write-time rules missed out of an already-captured trail, instead of deleting `.showtail/`. `--rescan` re-runs the project's current rules (including a `settings.redact.custom` added since capture) over every stored object, preview, and plan file; `--pattern <regex>` scrubs one specific value — a **preview until you pass `--yes`**. Rewrites the content to its new address, repoints the journal, deletes the old object, re-links the hash chain, and records a dated redaction marker `verify` reports. Flags: `--rescan`, `--pattern <regex>`, `--dry-run`, `-y, --yes`, `--json`. See [Privacy &amp; redaction](../concepts/privacy.md#if-something-leaked-anyway). |
+
+### Migrating older trails
+
+On the first interactive run after a history-generation upgrade, Showtail offers
+once to scan your home directory for existing project trails. If accepted, it
+shows a project/session preview, migrates every conclusive match after one final
+confirmation, and asks separately about ambiguous transcript matches. Declining
+the offer dismisses it permanently; migrate an individual missed project later by
+running `showtail migrate` inside it.
+
+Migration is append-only. Recovered events keep the provider's original time and
+ordering, while a separate audit record says when the recovery happened and which
+transcript digest supplied it. Absolute transcript paths are not committed. The
+current project capture and redaction settings still apply.
 
 !!! note "Hidden lifecycle commands"
     Tracking is automatic, so `ensure` (init + open a session), `start` (begin a

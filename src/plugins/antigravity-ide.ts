@@ -24,6 +24,7 @@ import {
 import { installAntigravityIdeExtension } from '../core/antigravityIdeExtension.ts';
 import {
   antigravityIdePlanFiles,
+  findAntigravityIdeTranscripts,
   locateAntigravityIdeTranscript,
   readAntigravityIdeTranscript,
 } from '../core/antigravityIdeTranscript.ts';
@@ -177,5 +178,26 @@ export const antigravityIdePlugin: EnvironmentPlugin = {
         cwd: opts.cwd,
         auto: opts.auto,
       }),
+  },
+
+  migration: {
+    discover: () =>
+      findAntigravityIdeTranscripts().map((info) => ({
+        path: info.path,
+        providerSessionId: info.sessionId,
+        mtimeMs: info.mtimeMs,
+      })),
+    read(candidate, root) {
+      return readAntigravityIdeTranscript(
+        {
+          path: candidate.path,
+          sessionId: candidate.providerSessionId,
+          mtimeMs: candidate.mtimeMs,
+        },
+        root,
+        { includeEdits: true },
+      );
+    },
+    planFiles: (candidate) => antigravityIdePlanFiles(candidate.providerSessionId),
   },
 };

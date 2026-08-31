@@ -34,6 +34,7 @@ export interface EnvironmentPlugin {
   label: string;
   connect?: ConnectCapability;
   import?: ImportCapability;
+  migration?: MigrationCapability;
 }
 
 // --- Connect (live capture) -----------------------------------------------
@@ -167,6 +168,8 @@ export interface HookTranscriptMessage {
    * hook payload carries the file but not the diff.
    */
   edits?: EditedFile[];
+  /** For an edit whose provider retained only the touched paths. */
+  files?: string[];
   /** For a 'tool_call' message: the tool's name (e.g. `Bash`, `Read`, `Grep`). */
   toolName?: string;
   /** For a 'tool_call' message: whether its result was an error. */
@@ -196,6 +199,26 @@ export interface HookTranscript {
   messages: HookTranscriptMessage[];
   /** Lossless visible conversation events. Absent only for legacy/text-only adapters. */
   events?: HookTranscriptEvent[];
+}
+
+// --- Legacy transcript migration -----------------------------------------
+
+/** One local provider transcript that may enrich an existing Showtail session. */
+export interface MigrationTranscriptCandidate {
+  path: string;
+  providerSessionId: string;
+  mtimeMs: number;
+  /** Provider-recorded workspace, when the transcript format carries one. */
+  cwd?: string;
+}
+
+export interface MigrationCapability {
+  /** Discover every local transcript for this provider, newest first. */
+  discover(): MigrationTranscriptCandidate[];
+  /** Parse one candidate into the provider-neutral transcript model. */
+  read(candidate: MigrationTranscriptCandidate, root: string): HookTranscript;
+  /** Provider-owned plan files tied to this session, when available. */
+  planFiles?(candidate: MigrationTranscriptCandidate): DiscoveredPlanFile[];
 }
 
 /**

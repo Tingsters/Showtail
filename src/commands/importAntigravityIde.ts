@@ -146,7 +146,7 @@ export function extractTranscriptEdits(
     const content = typeof obj.content === 'string' ? obj.content : '';
     const idx = typeof obj.step_index === 'number' ? String(obj.step_index) : `n${seq++}`;
     const timestamp = typeof obj.created_at === 'string' ? obj.created_at : undefined;
-    for (const m of content.matchAll(/file:\/\/\/?([^\s)'"]+)/g)) {
+    for (const m of content.matchAll(/file:\/\/([^\s)'"]+)/g)) {
       const p = fileUriToPath(m[1]!);
       if (!p) continue;
       // Skip the IDE's own generated state (task logs, etc. under

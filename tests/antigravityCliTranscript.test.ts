@@ -310,6 +310,25 @@ describe('parseAntigravityCliTranscript', () => {
       cleanup(dir);
     }
   });
+
+  test('migration mode retains CODE_ACTION file edits while live reconcile drops them', () => {
+    const root = '/work/project';
+    const raw = JSON.stringify({
+      step_index: 1,
+      type: 'CODE_ACTION',
+      created_at: '2026-06-23T03:42:55Z',
+      content: 'Created file file:///work/project/src/retry.ts with requested content.',
+    });
+    expect(parseAntigravityCliTranscript(raw, root, 'agy-1').messages).toEqual([]);
+    expect(
+      parseAntigravityCliTranscript(raw, root, 'agy-1', { includeEdits: true })
+        .messages[0],
+    ).toMatchObject({
+      role: 'edit',
+      files: ['src/retry.ts'],
+      edits: [{ file: 'src/retry.ts' }],
+    });
+  });
 });
 
 describe('antigravity transcript discovery', () => {

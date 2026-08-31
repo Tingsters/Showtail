@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { writeFileSync } from 'node:fs';
 import {
   autoInitEnabled,
+  detectHistoryUpgrade,
   globalConfigPath,
   readGlobalConfig,
   showtailHome,
@@ -55,5 +56,23 @@ describe('global config (~/.showtail-cli)', () => {
   test('SHOWTAIL_HOME overrides the location', () => {
     const home = withTempHome();
     expect(showtailHome()).toBe(home);
+  });
+
+  test('an existing generation-1 install gets one pending generation-2 offer', () => {
+    withTempHome();
+    writeGlobalConfig({ version: 1, autoInit: true });
+    const offer = detectHistoryUpgrade(2, '2026-08-30T12:00:00.000Z');
+    expect(offer).toEqual({
+      generation: 2,
+      status: 'pending',
+      detectedAt: '2026-08-30T12:00:00.000Z',
+    });
+    expect(detectHistoryUpgrade(2)).toEqual(offer);
+  });
+
+  test('a machine with no prior global config is a fresh install, not an upgrade', () => {
+    withTempHome();
+    expect(detectHistoryUpgrade(2)).toBeUndefined();
+    expect(readGlobalConfig()).toEqual({ version: 1 });
   });
 });

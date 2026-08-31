@@ -18,6 +18,7 @@ import {
 import {
   findRollouts,
   parseCodexRollout,
+  rolloutCwdFromFile,
   type CodexRolloutInfo,
 } from '../core/codexTranscript.ts';
 import { commandOnPath, homeDirExists } from '../core/detect.ts';
@@ -184,5 +185,18 @@ export const codexPlugin: EnvironmentPlugin = {
         session: opts.session,
         cwd: opts.cwd,
       }),
+  },
+
+  migration: {
+    discover: () =>
+      findRollouts().map((info) => ({
+        path: info.path,
+        providerSessionId: info.sessionId,
+        mtimeMs: info.mtimeMs,
+        cwd: rolloutCwdFromFile(info.path),
+      })),
+    read(candidate, root) {
+      return parseCodexRollout(readFileSync(candidate.path, 'utf8'), root);
+    },
   },
 };

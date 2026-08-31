@@ -15,7 +15,7 @@ import {
   writeSkill,
 } from '../core/skill.ts';
 import { commandOnPath, homeDirExists } from '../core/detect.ts';
-import { readTranscriptFile } from '../core/claudeCode.ts';
+import { findTranscripts, readTranscriptFile } from '../core/claudeCode.ts';
 import {
   extractEditedFiles,
   extractPrompt,
@@ -153,5 +153,16 @@ export const claudeCodePlugin: EnvironmentPlugin = {
         session: opts.session,
         cwd: opts.cwd,
       }),
+  },
+
+  migration: {
+    discover: () =>
+      findTranscripts().map((info) => ({
+        path: info.path,
+        providerSessionId: info.sessionId,
+        mtimeMs: info.mtimeMs,
+        cwd: info.cwd,
+      })),
+    read: (candidate, root) => readTranscriptFile(candidate.path, root),
   },
 };

@@ -23,6 +23,7 @@ import {
 import { existsSync, readFileSync } from 'node:fs';
 import {
   antigravityCliPlanFiles,
+  findAntigravityCliTranscripts,
   locateAntigravityCliTranscript,
   parseAntigravityCliTranscript,
   readAntigravityCliTranscript,
@@ -169,5 +170,26 @@ export const antigravityCliPlugin: EnvironmentPlugin = {
         return antigravityCliPlanFiles(extractAgySessionId(p) ?? extractSessionId(p));
       },
     },
+  },
+
+  migration: {
+    discover: () =>
+      findAntigravityCliTranscripts().map((info) => ({
+        path: info.path,
+        providerSessionId: info.sessionId,
+        mtimeMs: info.mtimeMs,
+      })),
+    read(candidate, root) {
+      return readAntigravityCliTranscript(
+        {
+          path: candidate.path,
+          sessionId: candidate.providerSessionId,
+          mtimeMs: candidate.mtimeMs,
+        },
+        root,
+        { includeEdits: true },
+      );
+    },
+    planFiles: (candidate) => antigravityCliPlanFiles(candidate.providerSessionId),
   },
 };

@@ -48,6 +48,8 @@ describe('first-run bootstrap ("just works" on install)', () => {
       const out = JSON.parse(r.stdout);
       expect(out.ran).toBe(true);
       expect(out.autoInit).toBe(true);
+      expect(globalConfig(ghome).historyGeneration).toBe(2);
+      expect(globalConfig(ghome).migrationOffer).toBeUndefined();
       // Never-miss: PATH is empty (nothing detected) yet Claude's user-scope capture
       // hooks were pre-seeded, so a later `claude` install captures from session one.
       expect(existsSync(join(home, '.claude', 'settings.json'))).toBe(true);

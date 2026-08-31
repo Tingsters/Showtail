@@ -37,7 +37,7 @@
  */
 
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
-import { join } from 'node:path';
+import { isAbsolute, join, relative } from 'node:path';
 import { hostHome } from './hostHome.ts';
 import { asArray, asString, isObject, prop } from './parse.ts';
 import type {
@@ -388,6 +388,7 @@ export function parseAntigravityCliTranscript(
   content: string,
   root: string,
   sessionId?: string,
+  options: { includeEdits?: boolean } = {},
 ): HookTranscript {
   const messages: HookTranscriptMessage[] = [];
   const events: HookTranscriptEvent[] = [];
@@ -487,14 +488,27 @@ export function parseAntigravityCliTranscript(
     }
 
     if (type === 'CODE_ACTION') {
-      // An edit. The PostToolUse hook already snapshots these live, so the
-      // reconcile drops role:'edit'; we emit it for parity with the Codex reader.
-      messages.push({
-        role: 'edit',
-        text: 'Antigravity edited a file',
-        timestamp,
-        sourceId: `agy:edit:${sid}:${idx}`,
-      });
+      // Live reconciliation drops these because PostToolUse already snapshots
+      // them. Legacy migration opts in: the transcript description carries a
+      // file:// URI even when the original file no longer exists.
+      if (options.includeEdits) {
+        const contentText = asString(prop(obj, 'content')) ?? '';
+        let editIndex = 0;
+        for (const match of contentText.matchAll(/file:\/\/([^\s)'\"]+)/g)) {
+          const decoded = decodeFileUri(match[1]!);
+          if (!decoded || decoded.includes('/.system_generated/')) continue;
+          const path = displayEditPath(decoded, root);
+          if (path.startsWith('..') || isInternalPath(path)) continue;
+          messages.push({
+            role: 'edit',
+            text: contentText.trim() || `Antigravity edited ${path}`,
+            timestamp,
+            sourceId: `agy:edit:${sid}:${idx}:${editIndex++}`,
+            files: [path],
+            edits: [{ file: path, diff: contentText.trim() || undefined }],
+          });
+        }
+      }
       continue;
     }
 
@@ -629,8 +643,9 @@ export function parseAntigravityCliTranscript(
   // Drop 'edit' messages: the post-edit hook already records those, and the
   // generic reconcile ignores them. Keeping the transcript lean mirrors
   // parseCodexRollout.
-  const kept = messages.filter((m) => m.role !== 'edit');
-  void root; // root is accepted for signature parity (edits use it); reserved.
+  const kept = options.includeEdits
+    ? messages
+    : messages.filter((message) => message.role !== 'edit');
   return { sessionId, messages: kept, events };
 }
 
@@ -638,6 +653,7 @@ export function parseAntigravityCliTranscript(
 export function readAntigravityCliTranscript(
   info: AntigravityCliTranscriptInfo,
   root: string,
+  options: { includeEdits?: boolean } = {},
 ): HookTranscript {
   if (!existsSync(info.path)) {
     throw new Error(`Antigravity transcript not found: ${info.path}`);
@@ -646,5 +662,26 @@ export function readAntigravityCliTranscript(
     readFileSync(info.path, 'utf8'),
     root,
     info.sessionId,
+    options,
   );
+}
+
+function decodeFileUri(uri: string): string | null {
+  try {
+    let path = decodeURIComponent(uri);
+    if (/^\/[A-Za-z]:/.test(path)) path = path.slice(1);
+    return path.replace(/\\/g, '/') || null;
+  } catch {
+    return null;
+  }
+}
+
+function displayEditPath(path: string, root: string): string {
+  if (!isAbsolute(path)) return path.replace(/\\/g, '/');
+  const rel = relative(root, path).replace(/\\/g, '/');
+  return rel || path.replace(/\\/g, '/');
+}
+
+function isInternalPath(path: string): boolean {
+  return /(^|[\\/])\.(showtail|gemini|agents)([\\/]|$)/.test(path);
 }

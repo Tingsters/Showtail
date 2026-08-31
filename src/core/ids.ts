@@ -8,9 +8,18 @@ import { randomBytes } from 'node:crypto';
  *    `led` ledger sessions (the global durable store), `trl` trail ids (the
  *    stable per-repo identifier stamped into `.showtail/config.json`),
  *    `red` after-the-fact redaction passes (`showtail redact`), and `raw`
- *    structured provider conversation events.
+ *    structured provider conversation events, and `mig` migration batches/audits.
  */
-export type IdPrefix = 'evt' | 'ses' | 'art' | 'imp' | 'led' | 'trl' | 'red' | 'raw';
+export type IdPrefix =
+  | 'evt'
+  | 'ses'
+  | 'art'
+  | 'imp'
+  | 'led'
+  | 'trl'
+  | 'red'
+  | 'raw'
+  | 'mig';
 
 /**
  * Generate a short, sortable-ish, collision-resistant id with a type prefix,

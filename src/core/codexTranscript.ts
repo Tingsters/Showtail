@@ -44,7 +44,15 @@
  * Everything is local and best-effort: malformed lines are skipped, never thrown.
  */
 
-import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
+import {
+  closeSync,
+  existsSync,
+  openSync,
+  readFileSync,
+  readSync,
+  readdirSync,
+  statSync,
+} from 'node:fs';
 import { join } from 'node:path';
 import { importEditArtifact, importedArtifactSourceIds } from './artifacts.ts';
 import { hostHome } from './hostHome.ts';
@@ -107,6 +115,7 @@ export interface CodexRolloutInfo {
   /** The Codex session id (from the session_meta line, or parsed from the name). */
   sessionId: string;
   mtimeMs: number;
+  cwd?: string;
 }
 
 /** An at-a-glance summary of one rollout, for the import picker / `--list`. */
@@ -185,7 +194,11 @@ export function findRollouts(): CodexRolloutInfo[] {
         continue;
       }
       if (!st.isFile()) continue;
-      out.push({ path: full, sessionId: sessionIdFromName(entry), mtimeMs: st.mtimeMs });
+      out.push({
+        path: full,
+        sessionId: sessionIdFromName(entry),
+        mtimeMs: st.mtimeMs,
+      });
     }
   };
   walk(root, 0);
@@ -213,6 +226,22 @@ function rolloutCwd(content: string): string | null {
   return null;
 }
 
+/** Read only the rollout head and return its recorded workspace. */
+export function rolloutCwdFromFile(path: string): string | undefined {
+  try {
+    const fd = openSync(path, 'r');
+    try {
+      const buffer = Buffer.alloc(131072);
+      const bytes = readSync(fd, buffer, 0, buffer.length, 0);
+      return rolloutCwd(buffer.toString('utf8', 0, bytes)) ?? undefined;
+    } finally {
+      closeSync(fd);
+    }
+  } catch {
+    return undefined;
+  }
+}
+
 /** Normalize two absolute paths for comparison (separators + win32 case). */
 function normPath(p: string): string {
   const s = p.replace(/[\\/]+/g, '/').replace(/\/+$/, '');
@@ -224,15 +253,9 @@ function normPath(p: string): string {
  * head of each file (the `session_meta` line is first) to keep this cheap.
  */
 export function findProjectRollouts(root: string): CodexRolloutInfo[] {
-  return findRollouts().filter((info) => {
-    let cwd: string | null = null;
-    try {
-      cwd = rolloutCwd(readFileSync(info.path, 'utf8'));
-    } catch {
-      return false;
-    }
-    return cwd !== null && normPath(cwd) === normPath(root);
-  });
+  return findRollouts()
+    .map((info) => ({ ...info, cwd: rolloutCwdFromFile(info.path) }))
+    .filter((info) => info.cwd !== undefined && normPath(info.cwd) === normPath(root));
 }
 
 // --- Parsing ---------------------------------------------------------------

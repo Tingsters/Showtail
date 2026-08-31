@@ -1,6 +1,6 @@
-import { requirePaths, trailIsNewerThanBinary } from '../core/storage.ts';
+import { readConfig, requirePaths, trailIsNewerThanBinary } from '../core/storage.ts';
 import { activeAuthorPaths, upgradeIdentityIfProvisional } from '../core/authors.ts';
-import { autoInitEnabled } from '../core/globalConfig.ts';
+import { autoInitEnabled, noteKnownProject } from '../core/globalConfig.ts';
 import { currentSession } from '../core/sessions.ts';
 import { readSessionEvents } from '../core/events.ts';
 import { noteTrailAt, unplacedSessions } from '../core/ledger.ts';
@@ -31,6 +31,7 @@ export interface StatusOptions {
  */
 export async function runStatus(options: StatusOptions = {}): Promise<void> {
   const paths = requirePaths(options.cwd);
+  noteKnownProject(paths.root, readConfig(paths).trailId);
   // If capture has been under a computer-derived placeholder, adopt a real identity that
   // has since appeared (cheap sources only — no gh network call — so `status --json` stays
   // fast for the skill). Best-effort, silent.

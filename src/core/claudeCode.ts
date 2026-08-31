@@ -127,6 +127,7 @@ export interface TranscriptInfo {
   /** The Claude Code session id (the file name without `.jsonl`). */
   sessionId: string;
   mtimeMs: number;
+  cwd?: string;
 }
 
 /**
@@ -235,7 +236,7 @@ function cwdOf(head: string): string | null {
  * the encoded directory name (Claude Code rewrites `/ \ : .` to `-`, and that
  * encoding has shifted across versions). Reading the embedded cwd is exact.
  */
-export function findProjectTranscripts(root: string): TranscriptInfo[] {
+export function findTranscripts(): TranscriptInfo[] {
   const dir = claudeProjectsDir();
   if (!existsSync(dir)) return [];
   const out: TranscriptInfo[] = [];
@@ -260,18 +261,23 @@ export function findProjectTranscripts(root: string): TranscriptInfo[] {
       } catch {
         continue;
       }
-      if (!cwd || !samePath(cwd, root)) continue;
+      if (!cwd) continue;
 
       out.push({
         path: fp,
         sessionId: file.replace(/\.jsonl$/, ''),
         mtimeMs: st.mtimeMs,
+        cwd,
       });
     }
   }
 
   out.sort((a, b) => b.mtimeMs - a.mtimeMs);
   return out;
+}
+
+export function findProjectTranscripts(root: string): TranscriptInfo[] {
+  return findTranscripts().filter((info) => info.cwd && samePath(info.cwd, root));
 }
 
 /**

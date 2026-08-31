@@ -25,6 +25,7 @@ import { authorSlugs } from './authors.ts';
 import { closeSession, makeSession } from './sessions.ts';
 import { validateEvent } from './schema.ts';
 import { oneLine } from './text.ts';
+import { eventEnrichmentOverlays } from './enrichments.ts';
 
 /** Fields a caller provides when logging a new event. */
 export interface NewEventInput {
@@ -211,7 +212,19 @@ export function eventFromEntry(
  * snapshots, and not the `redaction` markers `showtail redact` leaves behind.
  */
 function eventEntries(author: AuthorPaths): JournalEntry[] {
-  return readJournal(author).filter(isEventEntry);
+  const overlays = eventEnrichmentOverlays(author);
+  return readJournal(author)
+    .filter(isEventEntry)
+    .map((entry) => {
+      const overlay = overlays.get(entry.id);
+      if (!overlay) return entry;
+      return {
+        ...entry,
+        ...(overlay.sourceId ? { sourceId: overlay.sourceId } : {}),
+        ...(overlay.model ? { model: overlay.model } : {}),
+        ...(overlay.turnId ? { turn: overlay.turnId } : {}),
+      };
+    });
 }
 
 /**
@@ -318,9 +331,16 @@ export function importedPromptIds(author: AuthorPaths): Map<string, string> {
  * import you just did", which is what `showtail import undo` removes.
  */
 export function latestBatchId(author: AuthorPaths): string | undefined {
+  const migrationBatches = new Set(
+    readJournal(author)
+      .filter((entry) => entry.kind === 'enrichment' && entry.batch)
+      .map((entry) => entry.batch!),
+  );
   let latest: string | undefined;
   for (const e of readJournal(author)) {
-    if (e.batch) latest = e.batch;
+    if (e.batch && !e.batch.startsWith('mig_') && !migrationBatches.has(e.batch)) {
+      latest = e.batch;
+    }
   }
   return latest;
 }
@@ -338,10 +358,18 @@ export function latestBatchId(author: AuthorPaths): string | undefined {
  * rewrite. Without it, undoing an import — a supported, innocent operation —
  * would look exactly like doctoring the record.
  */
-export function removeEventsByBatch(author: AuthorPaths, batchId: string): number {
+export function removeJournalBatch(
+  author: AuthorPaths,
+  batchId: string,
+  reason: 'import-undo' | 'migration-undo',
+): number {
   const removed = rewriteJournal(author, (e) => e.batch !== batchId);
-  if (removed > 0) recordUndoMarker(author, batchId, removed);
+  if (removed > 0) recordUndoMarker(author, batchId, removed, reason);
   return removed;
+}
+
+export function removeEventsByBatch(author: AuthorPaths, batchId: string): number {
+  return removeJournalBatch(author, batchId, 'import-undo');
 }
 
 /**
@@ -350,7 +378,12 @@ export function removeEventsByBatch(author: AuthorPaths, batchId: string): numbe
  * machineId, so nothing can be appended) must not turn an undo into an error —
  * the rewrite is then simply undeclared, which `verify` reports.
  */
-function recordUndoMarker(author: AuthorPaths, batchId: string, removed: number): void {
+function recordUndoMarker(
+  author: AuthorPaths,
+  batchId: string,
+  removed: number,
+  reason: 'import-undo' | 'migration-undo',
+): void {
   if (!author.machineId) return;
   const marker: JournalEntry = {
     v: JOURNAL_ENTRY_VERSION,
@@ -360,7 +393,7 @@ function recordUndoMarker(author: AuthorPaths, batchId: string, removed: number)
     type: 'redaction',
     actorSlug: author.slug,
     redaction: {
-      reason: 'import-undo',
+      reason,
       entries: removed,
       values: 0,
       labels: [],

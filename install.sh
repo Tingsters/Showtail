@@ -85,7 +85,14 @@ fi
 # idempotent (a re-install never fights a `setup --off`/`disconnect`). Best-effort —
 # a bootstrap hiccup must never fail the install.
 echo ""
-if ! "$target" setup --first-run 2>/dev/null; then
+if [ -t 1 ] && [ -r /dev/tty ]; then
+  setup_ok=0
+  "$target" setup --first-run --offer-migration </dev/tty 2>/dev/null || setup_ok=$?
+else
+  setup_ok=0
+  "$target" setup --first-run --offer-migration 2>/dev/null || setup_ok=$?
+fi
+if [ "$setup_ok" -ne 0 ]; then
   echo "Showtail is installed. Tracking will turn on the first time you use it."
 fi
 

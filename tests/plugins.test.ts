@@ -9,6 +9,7 @@ import {
   getPluginById,
   importPlugins,
   labelForTool,
+  migrationPlugins,
 } from '../src/plugins/registry.ts';
 import { resolveTarget } from '../src/core/skill.ts';
 import { resolveCopilotTarget } from '../src/core/copilot.ts';
@@ -67,6 +68,23 @@ describe('plugin registry', () => {
     );
     // The deprecated Gemini CLI plugin is gone.
     expect(names).not.toContain('gemini-cli');
+  });
+
+  test('local coding tools expose transcript migration', () => {
+    expect(
+      migrationPlugins()
+        .map((plugin) => plugin.id)
+        .sort(),
+    ).toEqual(
+      [
+        'antigravity-cli',
+        'antigravity-ide',
+        'claude-code',
+        'codex',
+        'copilot-cli',
+        'github-copilot',
+      ].sort(),
+    );
   });
 
   test('connectPluginOrThrow resolves known tools and rejects unknown ones', () => {
