@@ -1,0 +1,1 @@
+Setup a local docker test environment for testing showtail work. Model it after the work done for the aifirstcli here: ~/src/github.com/aifirstprogramming/aifirstcli/scripts

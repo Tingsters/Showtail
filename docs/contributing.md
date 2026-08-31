@@ -15,6 +15,75 @@ bun run dev -- --help
 bun run build       # Compile a standalone binary to dist/showtail
 ```
 
+## Local Docker test environment
+
+Build and run the current checkout in an isolated Linux sandbox with the
+standalone Showtail binary, Claude Code, and Codex installed:
+
+```bash
+./scripts/docker-test.sh --version
+./scripts/docker-test.sh shell
+```
+
+The runner rebuilds the image on each invocation. Agent configuration and login
+state persist in the named volume `showtail-test-home`; scratch projects and
+their `.showtail/` trails persist in `showtail-test-workspace`. Enter `shell` to
+exercise a complete workflow without touching this checkout:
+
+```bash
+./scripts/docker-test.sh shell
+mkdir demo && cd demo
+showtail track --project "Docker Test"
+claude                    # or: codex
+showtail report --no-open
+showtail verify
+```
+
+On first use, the runner copies only recognized host authentication files into
+the private Docker home when they exist: `.claude.json`,
+`.claude/.credentials.json`, and `.codex/auth.json`. It does not copy Claude's
+`settings.json`, Codex's `config.toml`, transcripts, hooks, custom providers, or
+wrappers. Authenticate inside the persistent sandbox when no reusable credential
+is available:
+
+```bash
+./scripts/docker-test.sh login claude
+./scripts/docker-test.sh login codex       # device-code login
+# Or, after exporting OPENAI_API_KEY from your secret manager:
+./scripts/docker-test.sh login codex       # API-key login when the variable is set
+```
+
+The API key is piped to `codex login` over stdin rather than placed in the
+container command line. Remove both volumes, including their copied login state,
+when you want a completely clean machine:
+
+```bash
+./scripts/docker-test.sh clean
+```
+
+Override the image, volumes, or deterministic test identity with
+`SHOWTAIL_DOCKER_IMAGE`, `SHOWTAIL_DOCKER_HOME_VOLUME`,
+`SHOWTAIL_DOCKER_WORKSPACE_VOLUME`, `SHOWTAIL_DOCKER_IDENTITY_NAME`, and
+`SHOWTAIL_DOCKER_IDENTITY_EMAIL`.
+
+The live runner drives the real Claude Code and Codex CLIs through the existing
+capture harness. Check installation and authentication without using model quota:
+
+```bash
+./scripts/docker-live-test.sh --check
+```
+
+Run the actual live regression only when consuming Claude and Codex quota is
+intentional:
+
+```bash
+./scripts/docker-live-test.sh
+```
+
+The live run uses throwaway projects and does not update
+`matrix-verification.json`; run the normal maintainer certification command when
+the verification ledger itself needs to be refreshed.
+
 ## Working on the docs site
 
 The documentation site is built with [MkDocs](https://www.mkdocs.org/) and

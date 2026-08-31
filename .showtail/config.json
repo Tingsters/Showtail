@@ -1,0 +1,18 @@
+{
+  "version": 4,
+  "createdAt": "2026-08-31T12:57:12.807Z",
+  "anchor": "/home/steve/src/github.com/Showtail",
+  "anchorKind": "git",
+  "trailId": "trl_mth8tffr_13e496",
+  "settings": {
+    "git": true,
+    "captureAiOutput": true,
+    "captureCode": true,
+    "captureToolCalls": true,
+    "redact": {
+      "enabled": true,
+      "secrets": true,
+      "pii": true
+    }
+  }
+}
