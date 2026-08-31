@@ -6,6 +6,7 @@ import {
   installVsCodeExtension,
   VSCODE_EXTENSION_ID,
 } from '../src/core/vscodeExtension.ts';
+import { extensionCliInvocation } from '../src/core/extensionCli.ts';
 import { cleanup, makeTempDir, stubCli, stubCliScript } from './helpers.ts';
 
 // `stubCli` stands in for the `code` CLI: a `#!/bin/sh` script on POSIX, a `.cmd`
@@ -124,5 +125,26 @@ describe('stubCli script shape (both platforms, asserted everywhere)', () => {
     } finally {
       cleanup(dir);
     }
+  });
+});
+
+describe('extension CLI process invocation', () => {
+  const args = ['--install-extension', 'C:\\tmp\\Showtail Extension.vsix', '--force'];
+
+  test('routes every Windows launcher through cmd.exe', () => {
+    const commandProcessor = 'C:\\Windows\\System32\\cmd.exe';
+    for (const cli of ['code', 'C:\\Program Files\\Microsoft VS Code\\bin\\code.cmd']) {
+      expect(extensionCliInvocation(cli, args, 'win32', commandProcessor)).toEqual({
+        command: commandProcessor,
+        args: ['/d', '/c', cli, ...args],
+      });
+    }
+  });
+
+  test('executes POSIX launchers directly', () => {
+    expect(extensionCliInvocation('/usr/bin/code', args, 'linux')).toEqual({
+      command: '/usr/bin/code',
+      args,
+    });
   });
 });

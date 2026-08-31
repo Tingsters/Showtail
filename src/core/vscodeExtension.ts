@@ -11,11 +11,11 @@
  * Everything is best-effort: if VS Code or the VSIX isn't found we return a reason and the
  * caller can fall back to guidance — we never throw.
  */
-import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { homedir, platform } from 'node:os';
 import { join } from 'node:path';
 import { commandOnPath } from './detect.ts';
+import { runExtensionCli } from './extensionCli.ts';
 import {
   bundledVsixPath,
   type ExtensionInstallResult,
@@ -85,9 +85,7 @@ export function installVsCodeExtension(): ExtensionInstallResult {
   // (e.g. a bun/from-source dev run, where there's no VSIX beside the interpreter).
   const payload = bundledVsixPath() ?? VSCODE_EXTENSION_ID;
 
-  const res = spawnSync(cli, ['--install-extension', payload, '--force'], {
-    encoding: 'utf8',
-  });
+  const res = runExtensionCli(cli, ['--install-extension', payload, '--force']);
   if (res.status === 0) return { installed: true, cli, vsix: payload };
   return {
     installed: false,
