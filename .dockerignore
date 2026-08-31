@@ -1,0 +1,15 @@
+.git
+.showtail
+.claude
+.codex
+.github
+node_modules
+dist
+site
+integrations/vscode/node_modules
+*.vsix
+.env
+.env.*
+*.key
+*.pem
+*.log

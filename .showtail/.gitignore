@@ -1,0 +1,6 @@
+state.json
+reports/
+diag/
+
+# Keep journal segments committable even when the project ignores *.log.
+!authors/**/journal/**/*.log
