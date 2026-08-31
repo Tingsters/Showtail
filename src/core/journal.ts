@@ -263,6 +263,7 @@ export function isEventEntry(entry: JournalEntry): boolean {
   return (
     entry.kind !== 'artifact' &&
     entry.kind !== 'conversation' &&
+    entry.kind !== 'enrichment' &&
     entry.kind !== 'redaction'
   );
 }

@@ -1,5 +1,28 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **Older trails can recover the transcript detail newer Showtail versions know
+  how to capture.** `showtail migrate` matches existing sessions to local Claude
+  Code, Codex, Antigravity CLI/IDE, Copilot CLI, and Copilot Chat transcripts,
+  then append-only recovers missing replies, edits, plans, decisions, models,
+  tool calls/results, and recap statistics. `--dry-run` previews, `--json`
+  supports automation, and `showtail migrate undo` removes a batch with a
+  declared verification marker.
+- **A one-time upgrade offer can migrate every eligible project.** Existing
+  generation-1 installs are offered a consented home scan, one bulk preview, and
+  one confirmation. Fresh installs are not prompted; noninteractive upgrades
+  defer the offer until the next terminal command. Bulk progress stays local in
+  `~/.showtail-cli/migrations/`, and missed repositories remain available to the
+  project-local command.
+- **Migration preserves the old trail.** Existing journal bytes are never
+  rewritten during recovery. Provider timestamps reconstruct historical order,
+  while append-only enrichment records disclose when recovery occurred and
+  identify the source by provider session id and transcript digest—never by a
+  committed absolute path.
+
 ## 0.14.1
 
 ### Fixed

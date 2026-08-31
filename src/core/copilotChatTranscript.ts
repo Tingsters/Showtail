@@ -99,6 +99,7 @@ export interface CopilotSessionInfo {
   /** The Copilot chat session id (the file's basename, sans extension). */
   sessionId: string;
   mtimeMs: number;
+  cwd?: string;
 }
 
 /** An at-a-glance summary of one session, for the import picker / `--list`. */
@@ -220,14 +221,13 @@ function normPath(p: string): string {
  * first. Reads each `workspace.json` (cheap) to map storage hash → folder, then
  * lists that storage's `chatSessions/*.{json,jsonl}`.
  */
-export function findProjectChatSessions(root: string): CopilotSessionInfo[] {
-  const want = normPath(root);
+export function findChatSessions(): CopilotSessionInfo[] {
   const out: CopilotSessionInfo[] = [];
   for (const base of copilotWorkspaceStorageDirs()) {
     for (const hash of safeReaddir(base)) {
       const storageDir = join(base, hash);
       const folder = workspaceFolder(storageDir);
-      if (!folder || normPath(folder) !== want) continue;
+      if (!folder) continue;
       const chatDir = join(storageDir, 'chatSessions');
       for (const entry of safeReaddir(chatDir)) {
         if (!isChatSessionFile(entry)) continue;
@@ -243,12 +243,20 @@ export function findProjectChatSessions(root: string): CopilotSessionInfo[] {
           path: full,
           sessionId: entry.replace(/\.jsonl?$/, ''),
           mtimeMs: st.mtimeMs,
+          cwd: folder,
         });
       }
     }
   }
   out.sort((a, b) => b.mtimeMs - a.mtimeMs);
   return out;
+}
+
+export function findProjectChatSessions(root: string): CopilotSessionInfo[] {
+  const want = normPath(root);
+  return findChatSessions().filter(
+    (info) => info.cwd !== undefined && normPath(info.cwd) === want,
+  );
 }
 
 // --- Reconstructing the session (format detect + delta replay) -------------

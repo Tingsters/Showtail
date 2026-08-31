@@ -11,3 +11,6 @@
  * nothing caught it.
  */
 export const SHOWTAIL_VERSION = '0.14.1';
+
+/** Generation of transcript detail stored in project trails. */
+export const HISTORY_GENERATION = 2;

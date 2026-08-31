@@ -15,9 +15,13 @@ import {
 import { catchUpFromTranscripts } from '../core/catchUp.ts';
 import { emitJson } from '../core/output.ts';
 import { noteTrailAt } from '../core/ledger.ts';
-import { authorPaths, requirePaths, writeJson } from '../core/storage.ts';
+import { authorPaths, readConfig, requirePaths, writeJson } from '../core/storage.ts';
 import { fileLink, openInDefaultApp } from '../core/terminal.ts';
-import { readAutoOpenReport, setAutoOpenReport } from '../core/globalConfig.ts';
+import {
+  noteKnownProject,
+  readAutoOpenReport,
+  setAutoOpenReport,
+} from '../core/globalConfig.ts';
 import { type OpenableReport, promptOpenReport } from '../core/prompt.ts';
 import { writeFileSync, mkdirSync } from 'node:fs';
 import type { ReportData } from '../types.ts';
@@ -136,6 +140,7 @@ export function reportTargets(
  */
 export async function runReport(options: ReportOptions): Promise<void> {
   const paths = requirePaths(options.cwd);
+  noteKnownProject(paths.root, readConfig(paths).trailId);
   // Turn-in checkpoint: if capture has been under a computer-derived placeholder, adopt
   // the student's real identity (gh/git/env) now and re-attribute the work, so the report
   // is under their real name even if they never made a git commit. Best-effort, silent.

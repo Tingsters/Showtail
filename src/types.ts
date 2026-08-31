@@ -247,7 +247,7 @@ export interface RedactionRecord {
    * `import undo` recorded one, which were all redaction passes — read a missing
    * value as `redact`.
    */
-  reason?: 'redact' | 'import-undo';
+  reason?: 'redact' | 'import-undo' | 'migration-undo';
   /**
    * For a `redact` pass: `rescan` re-ran the configured rules, `pattern`
    * scrubbed one given regex. Absent for other reasons.
@@ -263,6 +263,44 @@ export interface RedactionRecord {
   objects?: number;
   /** For `import-undo`: the import batch that was removed. */
   batch?: string;
+}
+
+/** Metadata recovered for an existing event without rewriting its journal line. */
+export interface EventEnrichmentOverlay {
+  /** The existing journal event this overlay augments. */
+  targetEventId: string;
+  /** Stable provider id used for future transcript deduplication. */
+  sourceId?: string;
+  /** Provider-reported model that produced the event. */
+  model?: string;
+  /** Exact prompt event that opened this event's turn. */
+  turnId?: string;
+}
+
+/** How a provider transcript was matched to an existing Showtail session. */
+export type MigrationMatchMethod =
+  | 'native-session-id'
+  | 'prompt-sequence'
+  | 'user-confirmed'
+  | 'explicit-file';
+
+/** Append-only audit payload for one transcript enrichment pass. */
+export interface EnrichmentRecord {
+  version: 1;
+  batchId: string;
+  migratedAt: string;
+  provider: Tool;
+  providerSessionId: string;
+  /** SHA-256 of the raw provider transcript; no local source path is committed. */
+  transcriptSha256: string;
+  showtailSessionId: string;
+  matchMethod: MigrationMatchMethod;
+  matchConfidence: 'exact' | 'high' | 'confirmed';
+  added: Record<string, number>;
+  overlaid: number;
+  skipped: Record<string, number>;
+  redacted: number;
+  overlays?: EventEnrichmentOverlay[];
 }
 
 /** The project-level configuration written at `init` time. */
@@ -496,13 +534,13 @@ export interface JournalEntry {
    * Distinct from `type` so an artifact-*type* event is not confused with a
    * snapshot. Defaults to "event" when absent.
    */
-  kind?: 'event' | 'artifact' | 'conversation' | 'redaction';
+  kind?: 'event' | 'artifact' | 'conversation' | 'redaction' | 'enrichment';
   /** Event/Artifact id. */
   id: string;
   /** ISO-8601 timestamp. */
   ts: string;
   /** Event type, "artifact" for a file snapshot, or "redaction" for a marker. */
-  type: EventType | 'artifact' | 'conversation' | 'redaction';
+  type: EventType | 'artifact' | 'conversation' | 'redaction' | 'enrichment';
   tool?: Tool;
   /** Conversation/session id this entry belongs to. */
   conv?: string;
@@ -535,6 +573,8 @@ export interface JournalEntry {
   redacted?: number;
   /** For a `redaction` marker (`kind: 'redaction'`): what that pass did. */
   redaction?: RedactionRecord;
+  /** For an append-only transcript migration audit/metadata overlay. */
+  enrichment?: EnrichmentRecord;
   files?: string[];
   tags?: string[];
   gitCommit?: string;

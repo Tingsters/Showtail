@@ -124,8 +124,9 @@ interface JournalRewrite {
 /** One-line description of a marker the trail uses to declare a rewrite. */
 function describeMarker(entry: JournalEntry): string {
   const r = entry.redaction;
-  if (r?.reason === 'import-undo') {
-    return `import undo at ${entry.ts} (${r.entries} entr${r.entries === 1 ? 'y' : 'ies'} removed)`;
+  if (r?.reason === 'import-undo' || r?.reason === 'migration-undo') {
+    const label = r.reason === 'migration-undo' ? 'migration undo' : 'import undo';
+    return `${label} at ${entry.ts} (${r.entries} entr${r.entries === 1 ? 'y' : 'ies'} removed)`;
   }
   return (
     `redaction pass at ${entry.ts} (${r?.mode ?? 'unknown'}: ` +
@@ -283,7 +284,8 @@ async function checkJournalHistory(
   }
 
   // Reconcile against what the trail says it did to itself. `showtail redact`
-  // and `showtail import undo` legitimately rewrite lines, and each records a
+  // and the supported import/migration undo commands legitimately rewrite lines,
+  // and each records a
   // dated marker; one marker accounts for one rewrite, oldest first, so the
   // rewrites left over are the ones nothing declares.
   const declared = journals
@@ -320,7 +322,7 @@ async function checkJournalHistory(
   check.details.push(
     `${unexplained.length} of ${rewrites.length} rewrite(s) unexplained: the trail ` +
       `declares ${declared.length} deliberate rewrite(s) (\`showtail redact\`, ` +
-      '`showtail import undo`), which does not account for them.',
+      '`showtail import undo`, `showtail migrate undo`), which does not account for them.',
   );
   check.details.push(
     'This says the recorded history was rewritten, not that anyone cheated. A ' +
@@ -410,6 +412,33 @@ export async function verifyProject(paths: ShowtailPaths): Promise<VerifyResult>
         }
         continue;
       }
+      if (entry.kind === 'conversation') {
+        if (!entry.refs?.[0] || !entry.sourceId || entry.sequence === undefined) {
+          eventsCheck.ok = false;
+          eventsCheck.details.push(
+            `${journal.slug} entry ${i} (${entry.id}): structured conversation event is malformed.`,
+          );
+        }
+        continue;
+      }
+      if (entry.kind === 'enrichment') {
+        const record = entry.enrichment;
+        if (
+          !record ||
+          record.version !== 1 ||
+          !record.batchId ||
+          !record.provider ||
+          !record.providerSessionId ||
+          !record.transcriptSha256 ||
+          !record.showtailSessionId
+        ) {
+          eventsCheck.ok = false;
+          eventsCheck.details.push(
+            `${journal.slug} entry ${i} (${entry.id}): migration enrichment is malformed.`,
+          );
+        }
+        continue;
+      }
       const issues = validateEvent(eventFromEntry(paths, entry, journal.slug));
       if (issues.length > 0) {
         eventsCheck.ok = false;
@@ -449,8 +478,12 @@ export async function verifyProject(paths: ShowtailPaths): Promise<VerifyResult>
       unchained += legacy;
       for (const entry of shard.entries) {
         if (entry.kind !== 'redaction') continue;
-        if (entry.redaction?.reason === 'import-undo') undos.push(entry);
-        else passes.push(entry);
+        if (
+          entry.redaction?.reason === 'import-undo' ||
+          entry.redaction?.reason === 'migration-undo'
+        ) {
+          undos.push(entry);
+        } else passes.push(entry);
       }
       for (const b of breaks) {
         chainCheck.ok = false;
@@ -501,11 +534,11 @@ export async function verifyProject(paths: ShowtailPaths): Promise<VerifyResult>
     }
   }
   if (undos.length > 0) {
-    // The other declared rewrite: `showtail import undo` drops a batch and
+    // The other declared rewrites: import/migration undo drop a batch and
     // re-chains, so like a redaction pass it leaves no break and has to say so.
     chainCheck.details.push(
-      `${undos.length} recorded import undo${undos.length === 1 ? '' : 's'} ` +
-        '(`showtail import undo` removed an imported batch and re-linked the chain):',
+      `${undos.length} recorded batch undo${undos.length === 1 ? '' : 's'} ` +
+        '(`showtail import undo` / `showtail migrate undo` removed a batch and re-linked the chain):',
     );
     for (const entry of undos) {
       const r = entry.redaction;

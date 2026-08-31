@@ -11,6 +11,7 @@
 import { runCopilotInstall, runCopilotUninstall } from '../commands/copilot.ts';
 import { runImportCopilot } from '../commands/importCopilot.ts';
 import { copilotState, resolveCopilotTarget } from '../core/copilot.ts';
+import { findChatSessions, readChatSessionFile } from '../core/copilotChatTranscript.ts';
 import { findVsCodeCli, installVsCodeExtension } from '../core/vscodeExtension.ts';
 import type { EnvironmentPlugin } from './types.ts';
 
@@ -94,5 +95,16 @@ export const copilotPlugin: EnvironmentPlugin = {
         auto: opts.auto,
         cwd: opts.cwd,
       }),
+  },
+
+  migration: {
+    discover: () =>
+      findChatSessions().map((info) => ({
+        path: info.path,
+        providerSessionId: info.sessionId,
+        mtimeMs: info.mtimeMs,
+        cwd: info.cwd,
+      })),
+    read: (candidate, root) => readChatSessionFile(candidate.path, root),
   },
 };

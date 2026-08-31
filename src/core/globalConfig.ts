@@ -68,6 +68,18 @@ export interface GlobalConfig {
    * run). Set when the user picks "always"/"never" in that menu.
    */
   autoOpenReport?: 'always' | 'never' | 'ask';
+  /** Transcript-history generation this installation has acknowledged. */
+  historyGeneration?: number;
+  /** One-time v1→v2 migration offer state. */
+  migrationOffer?: {
+    generation: number;
+    status: 'pending' | 'running' | 'completed' | 'declined';
+    detectedAt: string;
+    decidedAt?: string;
+    bulkRunId?: string;
+  };
+  /** Machine-local paths of trails Showtail has seen, for future bulk maintenance. */
+  knownProjects?: Array<{ trailId?: string; path: string; lastSeenAt: string }>;
 }
 
 /** Default signal floor for surfacing an inbox session (see {@link GlobalConfig.inboxMinSignal}). */
@@ -82,6 +94,11 @@ export function showtailHome(): string {
 /** Absolute path to the global config file. */
 export function globalConfigPath(): string {
   return join(showtailHome(), 'config.json');
+}
+
+/** Whether this machine already had Showtail global state before the current run. */
+export function globalConfigExists(): boolean {
+  return existsSync(globalConfigPath());
 }
 
 /**
@@ -116,6 +133,59 @@ export function readGlobalConfig(): GlobalConfig {
 /** Persist the global config (atomic write; creates `~/.showtail-cli/` as needed). */
 export function writeGlobalConfig(config: GlobalConfig): void {
   writeJson(globalConfigPath(), config);
+}
+
+/** Record a project location in machine-local state, de-duplicated by trail id/path. */
+export function noteKnownProject(path: string, trailId?: string): void {
+  try {
+    const resolved = resolve(path);
+    const cfg = readGlobalConfig();
+    const now = new Date().toISOString();
+    const projects = [...(cfg.knownProjects ?? [])];
+    const index = projects.findIndex(
+      (project) =>
+        (trailId && project.trailId === trailId) || resolve(project.path) === resolved,
+    );
+    if (index >= 0) {
+      const lastSeen = Date.parse(projects[index]!.lastSeenAt);
+      if (Number.isFinite(lastSeen) && Date.now() - lastSeen < 5 * 60_000) return;
+    }
+    const entry = { ...(trailId ? { trailId } : {}), path: resolved, lastSeenAt: now };
+    if (index === -1) projects.push(entry);
+    else projects[index] = entry;
+    writeGlobalConfig({ ...cfg, knownProjects: projects });
+  } catch {
+    // Registry maintenance must never disrupt capture or a project command.
+  }
+}
+
+/** Detect an existing installation crossing into the current history generation. */
+export function detectHistoryUpgrade(
+  generation: number,
+  now: string = new Date().toISOString(),
+): GlobalConfig['migrationOffer'] {
+  if (process.env.SHOWTAIL_DISABLE_FIRST_RUN || !globalConfigExists()) return undefined;
+  const cfg = readGlobalConfig();
+  if ((cfg.historyGeneration ?? 1) >= generation) return cfg.migrationOffer;
+  const migrationOffer = {
+    generation,
+    status: 'pending' as const,
+    detectedAt: now,
+  };
+  writeGlobalConfig({ ...cfg, historyGeneration: generation, migrationOffer });
+  return migrationOffer;
+}
+
+/** Update the one-time history migration offer without disturbing other config. */
+export function setMigrationOffer(
+  migrationOffer: NonNullable<GlobalConfig['migrationOffer']>,
+): void {
+  const cfg = readGlobalConfig();
+  writeGlobalConfig({
+    ...cfg,
+    historyGeneration: migrationOffer.generation,
+    migrationOffer,
+  });
 }
 
 /** Whether automatic tracking (silent auto-init on first AI use) is enabled. */

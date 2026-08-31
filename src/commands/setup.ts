@@ -1,8 +1,11 @@
 import {
   autoInitEnabled,
+  detectHistoryUpgrade,
   readGlobalConfig,
   writeGlobalConfig,
 } from '../core/globalConfig.ts';
+import { HISTORY_GENERATION } from '../core/version.ts';
+import { maybeOfferHistoryMigration } from './upgrade.ts';
 import { emitJson } from '../core/output.ts';
 import { connectPlugins } from '../plugins/registry.ts';
 import {
@@ -52,6 +55,8 @@ export interface SetupOptions {
   firstRun?: boolean;
   json?: boolean;
   cwd?: string;
+  /** Installer-only: present the one-time history migration offer when upgrading. */
+  offerMigration?: boolean;
 }
 
 interface ConnectedTool {
@@ -76,6 +81,7 @@ function markAutoTrackingOn(): string {
     autoInit: true,
     setupCompletedAt,
     captureSince: existing.captureSince ?? setupCompletedAt,
+    historyGeneration: HISTORY_GENERATION,
   });
   return setupCompletedAt;
 }
@@ -104,6 +110,7 @@ export function ensureFirstRunSetup(options: { cwd?: string } = {}): FirstRunRes
     // Escape hatch (also how the test suite keeps CLI runs hermetic): never bootstrap
     // when this is set. Lets an environment opt out of auto-on entirely.
     if (process.env.SHOWTAIL_DISABLE_FIRST_RUN) return noop;
+    detectHistoryUpgrade(HISTORY_GENERATION);
 
     // Only bootstrap when tracking has never been decided. `autoInit` set either way
     // (`setup` turned it on, `setup --off` turned it off) or a completion stamp means
@@ -171,6 +178,7 @@ export function autoTrackingNotice(
  * guidance to print (`setupGuidance`, e.g. Copilot's VS Code extension).
  */
 export async function runSetup(options: SetupOptions = {}): Promise<void> {
+  detectHistoryUpgrade(HISTORY_GENERATION);
   if (options.off) {
     writeGlobalConfig({ ...readGlobalConfig(), version: 1, autoInit: false });
     if (options.json) {
@@ -246,6 +254,7 @@ export async function runSetup(options: SetupOptions = {}): Promise<void> {
     } else {
       console.log('Showtail automatic tracking is already set up and current.');
     }
+    if (options.offerMigration) await maybeOfferHistoryMigration({ cwd: options.cwd });
     return;
   }
 

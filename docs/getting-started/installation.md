@@ -38,6 +38,20 @@ ARM64 Linux is a first-class target, so the one-line installer works on a
 Raspberry Pi (64-bit Raspberry Pi OS), an ARM Chromebook's Linux container, and
 ARM cloud instances — no from-source build needed.
 
+### Upgrading older trails
+
+When an upgrade introduces richer transcript history, an existing installation
+gets one migration offer. Pressing Enter accepts: Showtail scans your home folder
+for existing `.showtail/` projects, previews the eligible repositories and
+sessions, then asks once before adding recovered details. The scan starts only
+after you opt in and nothing is uploaded.
+
+The macOS/Linux installer reads this prompt from the controlling terminal even
+though the installer itself is piped through `bash`. If an upgrade has no terminal
+(for example a source build updated in the background), the offer waits for the
+next interactive Showtail command. Choosing no dismisses it; you can always run
+`showtail migrate` later inside a project.
+
 ## Option 2: Install with Bun
 
 If you already use [Bun](https://bun.sh), you can run Showtail from source:

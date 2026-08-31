@@ -20,6 +20,7 @@ what lets two students merge their trails through git without a conflict.
         <machineId>.json         # so one student on two machines never merge-conflicts
       journal/                   # their append-only log of events + file snapshots (JSONL segments)
         <machineId>/             # one shard per machine; each line carries `prev`, hash-chaining the shard
+                                  # also carries append-only migration audits/metadata overlays
   objects/                       # shared, content-addressed store: prompt/response text & code diffs, deduped
   plans/                         # plan documents a tool wrote, materialized by id
   reports/                       # generated reports (git-ignored — regenerate with `showtail report`)
@@ -44,12 +45,14 @@ sessions the ledger has placed there.
 
 ```text
 ~/.showtail-cli/               # override with SHOWTAIL_HOME
-  config.json                  # machine-wide settings (auto-tracking, ignored folders)
+  config.json                  # machine-wide settings, known project paths, upgrade state
   ledger/
     index.json                 # trailId → where that trail currently lives, and what's placed where
     sessions/<led_id>/
       session.json             # which tool, which folder, when
       records.jsonl            # the prompts, replies, and edits themselves
+  migrations/
+    <run-id>.json              # local progress/results for a bulk upgrade migration
 ```
 
 This is what stops work being lost when there's no project to put it in — a chat
@@ -62,6 +65,19 @@ with a project folder. So each trail also carries a stable `trailId` in its
 `config.json`: the id is what identifies a project, not its path, which is how a
 [moved project](../reference/cli.md#moving-a-project) is recognized at its new
 location rather than being mistaken for a deleted one.
+
+## Transcript migration records
+
+`showtail migrate` never edits an older journal entry to add fields it did not
+originally contain. It appends recovered events plus an `enrichment` audit entry.
+That entry records the provider session id, a SHA-256 digest of the source
+transcript, the Showtail session it matched, recovered counts, and metadata
+overlays such as a missing model or provider source id. Report readers apply the
+overlays in memory; the original line remains byte-for-byte intact.
+
+The machine-local bulk manifest may contain project paths so an interrupted
+upgrade can resume. The committed project audit deliberately omits absolute
+transcript paths and never stores the source transcript itself.
 
 ## Identity
 

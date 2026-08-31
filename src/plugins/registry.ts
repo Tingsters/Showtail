@@ -7,7 +7,12 @@
  * environment = add its module to {@link PLUGINS}.
  */
 import type { Tool } from '../types.ts';
-import type { ConnectCapability, EnvironmentPlugin, ImportCapability } from './types.ts';
+import type {
+  ConnectCapability,
+  EnvironmentPlugin,
+  ImportCapability,
+  MigrationCapability,
+} from './types.ts';
 import { claudeCodePlugin } from './claude-code.ts';
 import { copilotPlugin } from './copilot.ts';
 import { copilotCliPlugin } from './copilot-cli.ts';
@@ -33,6 +38,8 @@ export const PLUGINS: EnvironmentPlugin[] = [
 export type ConnectPlugin = EnvironmentPlugin & { connect: ConnectCapability };
 /** A plugin guaranteed to expose an import capability. */
 export type ImportPlugin = EnvironmentPlugin & { import: ImportCapability };
+/** A plugin guaranteed to expose local transcript migration. */
+export type MigrationPlugin = EnvironmentPlugin & { migration: MigrationCapability };
 
 /** Look a plugin up by its cliName, id, or any alias (case-insensitive). */
 export function getPlugin(raw: string): EnvironmentPlugin | undefined {
@@ -58,6 +65,11 @@ export function connectPlugins(): ConnectPlugin[] {
 /** All plugins that can import a transcript, in display order. */
 export function importPlugins(): ImportPlugin[] {
   return PLUGINS.filter((p): p is ImportPlugin => Boolean(p.import));
+}
+
+/** All plugins whose local transcripts can enrich legacy trails. */
+export function migrationPlugins(): MigrationPlugin[] {
+  return PLUGINS.filter((p): p is MigrationPlugin => Boolean(p.migration));
 }
 
 /**

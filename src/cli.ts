@@ -20,6 +20,7 @@ import { runMove } from './commands/move.ts';
 import { runHook, type HookEvent } from './commands/hook.ts';
 import { runImportUndo } from './commands/import.ts';
 import { runRedact } from './commands/redact.ts';
+import { runMigrate, runMigrateUndo } from './commands/migrate.ts';
 import { eventTypeList } from './core/schema.ts';
 import { ShowtailError } from './core/errors.ts';
 import { NotInitializedError } from './core/storage.ts';
@@ -34,6 +35,7 @@ import { SHOWTAIL_VERSION } from './core/version.ts';
 import { ensureFirstRunSetup, autoTrackingNotice } from './commands/setup.ts';
 import { autoConnectNewlyDetected } from './core/autoConnectSweep.ts';
 import { autoInitEnabled } from './core/globalConfig.ts';
+import { maybeOfferHistoryMigration } from './commands/upgrade.ts';
 
 const VERSION = SHOWTAIL_VERSION;
 
@@ -93,7 +95,7 @@ program
 // The notice goes to stderr so it never pollutes a command's `--json` stdout. Once-only
 // and best-effort.
 const NO_BOOTSTRAP = new Set(['hook', 'setup', 'connect', 'disconnect', 'capabilities']);
-program.hook('preAction', (_thisCommand, actionCommand) => {
+program.hook('preAction', async (_thisCommand, actionCommand) => {
   if (NO_BOOTSTRAP.has(actionCommand.name())) return;
   const boot = ensureFirstRunSetup();
   if (boot.ran) {
@@ -108,22 +110,32 @@ program.hook('preAction', (_thisCommand, actionCommand) => {
   // newer Showtail reaches already-installed hooks the next time ANY showtail command
   // runs (the AI skill's `showtail status`, a `showtail report`, …). Cheap: the sweep
   // fast-paths when the wiring is already current. Best-effort — never break a command.
-  if (!autoInitEnabled()) return;
-  try {
-    const { connected, refreshed } = autoConnectNewlyDetected(undefined, undefined, {
-      connectAll: true,
-    });
-    if (connected.length > 0) {
-      for (const line of autoTrackingNotice(connected)) process.stderr.write(line + '\n');
-      process.stderr.write('\n');
+  if (autoInitEnabled()) {
+    try {
+      const { connected, refreshed } = autoConnectNewlyDetected(undefined, undefined, {
+        connectAll: true,
+      });
+      if (connected.length > 0) {
+        for (const line of autoTrackingNotice(connected)) {
+          process.stderr.write(line + '\n');
+        }
+        process.stderr.write('\n');
+      }
+      if (refreshed.length > 0) {
+        process.stderr.write(
+          `Showtail updated its capture integration for: ${refreshed.join(', ')}.\n\n`,
+        );
+      }
+    } catch {
+      /* a refresh/connect failure must never break the command */
     }
-    if (refreshed.length > 0) {
-      process.stderr.write(
-        `Showtail updated its capture integration for: ${refreshed.join(', ')}.\n\n`,
-      );
-    }
-  } catch {
-    /* a refresh/connect failure must never break the command */
+  }
+  if (
+    actionCommand.name() !== 'migrate' &&
+    actionCommand.parent?.name() !== 'migrate' &&
+    actionCommand.opts().json !== true
+  ) {
+    await maybeOfferHistoryMigration();
   }
 });
 
@@ -566,6 +578,60 @@ importCmd
   .description('Undo the most recent import (permanently removes that batch of events).')
   .action(action(async () => runImportUndo()));
 
+const migrateCmd = program
+  .command('migrate')
+  .description(
+    'Recover missing tool calls and other details from local AI-tool transcripts.',
+  )
+  .helpGroup(G_MANAGE)
+  .argument('[tool]', 'limit recovery to one tool')
+  .argument('[batch-id]', 'batch id when the first argument is undo')
+  .option('-s, --session <id>', 'limit recovery to one Showtail session')
+  .option('--file <path>', 'read one explicit transcript (requires a tool)')
+  .option('--dry-run', 'preview recoverable details without writing')
+  .option('-y, --yes', 'apply conclusive matches without confirmation')
+  .option('--json', 'output machine-readable JSON and never prompt')
+  .option('--resume <run-id>', 'resume an accepted interrupted bulk migration')
+  .action(
+    action(
+      async (
+        tool: string | undefined,
+        batchId: string | undefined,
+        opts: {
+          session?: string;
+          file?: string;
+          dryRun?: boolean;
+          yes?: boolean;
+          json?: boolean;
+          resume?: string;
+        },
+      ) => {
+        if (tool === 'undo') {
+          if (opts.session || opts.file || opts.dryRun || opts.resume) {
+            throw new Error(
+              '`showtail migrate undo` accepts only [batch-id], --yes, and --json.',
+            );
+          }
+          await runMigrateUndo({ batchId, yes: opts.yes, json: opts.json });
+          return;
+        }
+        if (batchId) throw new Error(`Unexpected argument "${batchId}".`);
+        if (opts.resume && tool) {
+          throw new Error('--resume cannot be combined with a provider name.');
+        }
+        await runMigrate({
+          tool,
+          session: opts.session,
+          file: opts.file,
+          dryRun: opts.dryRun,
+          yes: opts.yes,
+          json: opts.json,
+          resume: opts.resume,
+        });
+      },
+    ),
+  );
+
 // --- Manage tracking (optional) -------------------------------------------
 //
 // Tracking turns on by itself after install, so these are the rare manual controls:
@@ -583,6 +649,12 @@ program
   // tool (installed or not) so a later install never loses work.
   .addOption(new Option('--first-run', 'automatic install bootstrap').hideHelp())
   .option('--json', 'output machine-readable JSON')
+  .addOption(
+    new Option(
+      '--offer-migration',
+      'offer the one-time v1 to v2 history migration',
+    ).hideHelp(),
+  )
   .action(
     action(
       async (opts: {
@@ -590,12 +662,14 @@ program
         yes?: boolean;
         firstRun?: boolean;
         json?: boolean;
+        offerMigration?: boolean;
       }) =>
         runSetup({
           off: opts.off,
           yes: opts.yes,
           firstRun: opts.firstRun,
           json: opts.json,
+          offerMigration: opts.offerMigration,
         }),
     ),
   );

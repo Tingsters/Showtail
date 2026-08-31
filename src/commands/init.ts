@@ -7,6 +7,7 @@ import { gitToplevel } from '../core/git.ts';
 import { sessionTouchesPath, unplacedSessions } from '../core/ledger.ts';
 import { emitJson } from '../core/output.ts';
 import { makeId } from '../core/ids.ts';
+import { noteKnownProject } from '../core/globalConfig.ts';
 import {
   matchSessionToRoot,
   prepareCandidateIndex,
@@ -122,6 +123,7 @@ export async function ensureInitialized(
     // keeping out of git. Trails created before that negation existed are the
     // ones actually affected, and they only get fixed on a path like this one.
     ensureJournalUnignored(paths);
+    noteKnownProject(root, readConfig(paths).trailId);
     return { created: false, paths };
   }
 
@@ -155,6 +157,7 @@ export async function ensureInitialized(
   if (options.project) config.project = options.project;
 
   writeConfig(paths, config);
+  noteKnownProject(root, config.trailId);
   if (!existsSync(paths.state)) {
     writeState(paths, { currentSessionId: null, currentPromptId: null });
   }
