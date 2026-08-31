@@ -1,0 +1,1 @@
+Ok, fix this first: Do not tag yet. Current upstream/main has a failing Windows CI leg in the VS Code/Antigravity extension launcher tests. The release workflow runs the same Windows test gate, so it would stop before publishing any artifacts.

@@ -11,10 +11,10 @@
  * VSIX isn't found we return a reason and the caller prints guidance — we never
  * throw, so `connect` still completes (instructions are written regardless).
  */
-import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { homedir, platform } from 'node:os';
 import { dirname, join } from 'node:path';
+import { runExtensionCli } from './extensionCli.ts';
 
 /** The OpenVSX/Marketplace id, for manual installs and uninstall guidance. */
 export const ANTIGRAVITY_EXTENSION_ID = 'tingsters.showtail';
@@ -89,9 +89,7 @@ export function installAntigravityIdeExtension(): ExtensionInstallResult {
   const vsix = bundledVsixPath();
   if (!vsix) return { installed: false, cli, reason: 'vsix-not-bundled' };
 
-  const res = spawnSync(cli, ['--install-extension', vsix, '--force'], {
-    encoding: 'utf8',
-  });
+  const res = runExtensionCli(cli, ['--install-extension', vsix, '--force']);
   if (res.status === 0) return { installed: true, cli, vsix };
   return {
     installed: false,
