@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Added
+
+- **Installed copies can update themselves with `showtail upgrade`.** The command
+  resolves the current platform's latest GitHub Release asset, verifies the new
+  binary before replacing anything, updates the bundled editor extension, and
+  refreshes capture integrations. It safely declines Bun/source-managed copies;
+  Windows finishes a locked executable swap just after the command exits.
+
 ## 0.15.0 — Recover and export complete AI work
 
 ### Added

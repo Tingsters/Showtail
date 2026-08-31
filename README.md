@@ -60,6 +60,12 @@ curl -fsSL https://raw.githubusercontent.com/Tingsters/Showtail/main/install.sh 
 irm https://raw.githubusercontent.com/Tingsters/Showtail/main/install.ps1 | iex
 ```
 
+After the first install, update Showtail in place—no installer command to find again:
+
+```bash
+showtail upgrade
+```
+
 Prefer Bun or building from source? See [Installation](https://tingsters.github.io/Showtail/getting-started/installation/).
 
 ## Contributing

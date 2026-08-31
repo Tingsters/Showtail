@@ -71,7 +71,7 @@ Attribution is automatic and never blocks capture:
 ## Keeping capture working
 
 - **If an AI tool update ever breaks capture**, the fix ships in a newer Showtail. Have
-  students re-run the install command to upgrade — Showtail re-applies its integration to
+  students run `showtail upgrade` — Showtail re-applies its integration to
   the updated tool on upgrade (and again the next time any `showtail` command runs), so the
   fix lands without students touching anything tool-specific.
 - **`showtail` must be on PATH** for the AI tools to invoke it. The installer sets this up
