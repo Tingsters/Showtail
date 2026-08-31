@@ -46,6 +46,12 @@ current project capture and redaction settings still apply.
     still work — the editor extension calls `ensure` on project open, and `start`/`end`
     give power users manual session control — but you never need them.
 
+## Maintain Showtail
+
+| Command | What it does |
+| ------- | ------------ |
+| `upgrade` | Upgrade a standalone installer build to the latest GitHub Release without re-running the installer. Downloads and verifies the matching binary, updates the bundled editor extension, and refreshes capture integrations. Bun/source-managed copies are left untouched and must be updated through their original workflow. Flags: `--json`. |
+
 ## Capture your work
 
 | Command | What it does |

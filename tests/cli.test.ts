@@ -161,6 +161,7 @@ describe('cli (end-to-end acceptance sequence)', () => {
         'Capture your work:',
         'Review your trail:',
         'Connect your tools:',
+        'Maintain Showtail:',
         // Tracking is automatic now, so there is no "Get started" step; the manual
         // setup/track commands live under this optional group instead.
         'Manage tracking (optional):',
@@ -172,9 +173,21 @@ describe('cli (end-to-end acceptance sequence)', () => {
       // The unified integration verbs replace the old per-tool groups.
       expect(r.stdout).toContain('connect');
       expect(r.stdout).toContain('disconnect');
+      expect(r.stdout).toContain('upgrade');
       // `matrix` is a maintainer/informational command — hidden from help, still runnable.
       expect(r.stdout).not.toMatch(/^\s+matrix\b/m);
       expect(run(dir, ['matrix', '--json']).code).toBe(0);
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('upgrade refuses a Bun/source invocation before making a network request', () => {
+    const dir = makeTempDir();
+    try {
+      const r = run(dir, ['upgrade']);
+      expect(r.code).not.toBe(0);
+      expect(r.stderr).toContain('updates standalone installs only');
     } finally {
       cleanup(dir);
     }

@@ -38,6 +38,26 @@ ARM64 Linux is a first-class target, so the one-line installer works on a
 Raspberry Pi (64-bit Raspberry Pi OS), an ARM Chromebook's Linux container, and
 ARM cloud instances — no from-source build needed.
 
+### Upgrade an installed copy
+
+Once Showtail was installed with either one-line installer, future updates are a
+single command:
+
+```bash
+showtail upgrade
+```
+
+Showtail checks the latest GitHub Release, downloads the binary for the current
+OS and CPU, verifies that it runs and reports the expected version, then replaces
+the installed executable and bundled editor extension. Existing trails and
+settings are untouched. Capture integrations are refreshed as part of the
+upgrade; on Windows, the final file swap completes just after the running command
+exits.
+
+`showtail upgrade` deliberately refuses Bun and source-checkout invocations so it
+cannot overwrite the Bun runtime or a developer checkout. Update those installs
+with the same package or git workflow used to install them.
+
 ### Upgrading older trails
 
 When an upgrade introduces richer transcript history, an existing installation

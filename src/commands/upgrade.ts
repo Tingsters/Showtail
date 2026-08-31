@@ -6,8 +6,48 @@ import {
   setMigrationOffer,
 } from '../core/globalConfig.ts';
 import { HISTORY_GENERATION } from '../core/version.ts';
+import { selfUpgrade } from '../core/selfUpgrade.ts';
+import { emitJson } from '../core/output.ts';
 import { askYesNo } from './migrate.ts';
 import { runBulkMigration } from './migrateAll.ts';
+
+export interface UpgradeOptions {
+  json?: boolean;
+}
+
+/** Upgrade a standalone installer build to the latest GitHub Release. */
+export async function runUpgrade(options: UpgradeOptions = {}): Promise<void> {
+  const result = await selfUpgrade();
+  if (options.json) {
+    emitJson(result);
+    return;
+  }
+
+  if (result.status === 'current') {
+    console.log(`Showtail ${result.currentVersion} is already up to date.`);
+    return;
+  }
+  if (result.status === 'newer') {
+    console.log(
+      `Showtail ${result.currentVersion} is newer than the latest release ` +
+        `${result.latestVersion}; no changes made.`,
+    );
+    return;
+  }
+  if (result.status === 'pending') {
+    console.log(
+      `Downloaded Showtail ${result.latestVersion}. The Windows upgrade will finish ` +
+        'after this command exits.',
+    );
+    return;
+  }
+
+  console.log(`Upgraded Showtail ${result.currentVersion} -> ${result.latestVersion}.`);
+  console.log(`Installed at: ${result.targetPath}`);
+  if (!result.integrationsRefreshed) {
+    console.log('Capture integrations will refresh the next time Showtail runs.');
+  }
+}
 
 export interface UpgradeOfferOptions {
   cwd?: string;

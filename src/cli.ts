@@ -35,7 +35,7 @@ import { SHOWTAIL_VERSION } from './core/version.ts';
 import { ensureFirstRunSetup, autoTrackingNotice } from './commands/setup.ts';
 import { autoConnectNewlyDetected } from './core/autoConnectSweep.ts';
 import { autoInitEnabled } from './core/globalConfig.ts';
-import { maybeOfferHistoryMigration } from './commands/upgrade.ts';
+import { maybeOfferHistoryMigration, runUpgrade } from './commands/upgrade.ts';
 
 const VERSION = SHOWTAIL_VERSION;
 
@@ -43,6 +43,7 @@ const VERSION = SHOWTAIL_VERSION;
 const G_CAPTURE = 'Capture your work:';
 const G_REVIEW = 'Review your trail:';
 const G_CONNECT = 'Connect your tools:';
+const G_MAINTAIN = 'Maintain Showtail:';
 // Automatic tracking means there's no "get started" step; these are the occasional
 // manual/repair commands, shown last and below the everyday workflow.
 const G_MANAGE = 'Manage tracking (optional):';
@@ -94,7 +95,14 @@ program
 //     do — it must stay side-effect-free and honestly report "not set up yet").
 // The notice goes to stderr so it never pollutes a command's `--json` stdout. Once-only
 // and best-effort.
-const NO_BOOTSTRAP = new Set(['hook', 'setup', 'connect', 'disconnect', 'capabilities']);
+const NO_BOOTSTRAP = new Set([
+  'hook',
+  'setup',
+  'upgrade',
+  'connect',
+  'disconnect',
+  'capabilities',
+]);
 program.hook('preAction', async (_thisCommand, actionCommand) => {
   if (NO_BOOTSTRAP.has(actionCommand.name())) return;
   const boot = ensureFirstRunSetup();
@@ -636,6 +644,13 @@ const migrateCmd = program
 //
 // Tracking turns on by itself after install, so these are the rare manual controls:
 // turn tracking off, or wire up a single project/name by hand.
+
+program
+  .command('upgrade')
+  .description('Upgrade a standalone Showtail install to the latest release.')
+  .helpGroup(G_MAINTAIN)
+  .option('--json', 'output machine-readable JSON')
+  .action(action(async (opts: { json?: boolean }) => runUpgrade({ json: opts.json })));
 
 program
   .command('setup')
