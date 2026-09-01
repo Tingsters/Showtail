@@ -41,6 +41,8 @@ of the repository.
 - Add topics for `education`, `ai`, `provenance`, `academic-integrity`, `cli`,
   and `typescript`.
 - Enable secret scanning and push protection.
+- Enable Dependency Graph, then set repository variable
+  `DEPENDENCY_REVIEW_ENABLED=true` so dependency-review checks become mandatory.
 - Enable private vulnerability reporting so `SECURITY.md` reports can use GitHub
   security advisories.
 - Protect `main`: require pull requests, one code-owner approval, dismissal of
