@@ -8,6 +8,8 @@ permissions:
 
 jobs:
   review:
+    # The action hard-fails when Dependency Graph is disabled, so repository
+    # owners activate both together after merging this preparation work.
     if: vars.DEPENDENCY_REVIEW_ENABLED == 'true'
     runs-on: ubuntu-latest
     steps:
