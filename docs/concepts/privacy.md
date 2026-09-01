@@ -4,7 +4,15 @@ Showtail is privacy-first by design:
 
 - **Everything is local.** All data lives in the `.showtail/` folder in your
   project.
-- **No telemetry, no analytics, no external API calls.** Ever.
+- **No telemetry, analytics, or automatic upload of your trail.** Captured
+  prompts, edits, reports, and project data are not sent to Showtail's
+  maintainers or to a Showtail service.
+- **Network access is tied to an operation you initiate.** The installers and
+  `showtail upgrade` download releases from GitHub; importing a ChatGPT or Gemini
+  share link fetches that link; first-run identity discovery may invoke your
+  authenticated GitHub CLI; and extension installation may contact the editor's
+  marketplace when no bundled VSIX is available. These operations are not
+  telemetry and do not upload a `.showtail/` trail.
 - **You control what is recorded.** Showtail only logs what you explicitly run,
   unless you enable one of the optional capture integrations.
 - **Secrets are scrubbed before storage.** Showtail makes a best-effort pass to
@@ -97,3 +105,21 @@ while capture is on.
 
 If a project is sensitive, you can add `.showtail/` to your project-root
 `.gitignore` and share reports another way.
+
+## External services
+
+Showtail does not operate a cloud service. User-initiated features may interact
+with services operated by third parties, subject to their privacy policies:
+
+- [GitHub](https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement)
+  for installation, upgrades, releases, and optional identity lookup through
+  GitHub CLI.
+- [OpenAI](https://openai.com/policies/privacy-policy/) when you import a
+  user-supplied ChatGPT shared conversation.
+- [Google](https://policies.google.com/privacy) when you import a user-supplied
+  Gemini shared conversation or install into Antigravity.
+- [Microsoft](https://privacy.microsoft.com/privacystatement) when an editor
+  contacts the Visual Studio Marketplace to install the Showtail extension.
+
+Showtail reads local configuration and transcripts created by supported AI tools,
+but it does not make model API requests on their behalf.

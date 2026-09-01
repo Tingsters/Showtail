@@ -1,0 +1,13 @@
+# Every change requires review by a Showtail maintainer.
+* @Tingsters @steveonjava
+
+# Release trust boundary.
+/.github/workflows/ @Tingsters @steveonjava
+/.github/release-preamble.md @Tingsters @steveonjava
+/.github/SIGNPATH_APPLICATION_CHECKLIST.md @Tingsters @steveonjava
+/.signpath/ @Tingsters @steveonjava
+/scripts/build-all.sh @Tingsters @steveonjava
+/scripts/build-non-windows.sh @Tingsters @steveonjava
+/scripts/build-windows.ps1 @Tingsters @steveonjava
+/install.ps1 @Tingsters @steveonjava
+/install.sh @Tingsters @steveonjava

@@ -8,6 +8,7 @@
 #   $env:SHOWTAIL_REPO     "owner/repo"        (default: Tingsters/Showtail)
 #   $env:SHOWTAIL_VERSION  "v0.1.0" or "latest" (default: latest)
 #   $env:SHOWTAIL_BIN_DIR  install directory    (default: %LOCALAPPDATA%\Showtail\bin)
+#   $env:SHOWTAIL_DISABLE_FIRST_RUN=1 downloads only; skips capture/tool setup
 
 $ErrorActionPreference = 'Stop'
 
@@ -26,6 +27,14 @@ if ($version -eq 'latest') {
 }
 
 Write-Host "Installing showtail ($asset) from $repo..."
+Write-Host "  Files: $binDir (executable and bundled editor extension)"
+Write-Host '  System: adds that directory to your user PATH'
+if (-not $env:SHOWTAIL_DISABLE_FIRST_RUN) {
+  Write-Host '  Setup: enables local capture and may configure detected AI tools'
+} else {
+  Write-Host '  Setup: skipped because SHOWTAIL_DISABLE_FIRST_RUN is set'
+}
+Write-Host '  Removal: https://tingsters.github.io/Showtail/getting-started/uninstallation/'
 
 New-Item -ItemType Directory -Force -Path $binDir | Out-Null
 $target = Join-Path $binDir 'showtail.exe'

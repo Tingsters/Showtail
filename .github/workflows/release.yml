@@ -1,20 +1,49 @@
 name: Release
 
-# Build standalone binaries for every platform and attach them to the GitHub
-# Release when a version tag (e.g. v0.1.0) is pushed.
-
 on:
   push:
     tags:
-      - 'v*'
+      - "v*"
 
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
-  # Gate the release on the same three-OS matrix CI uses, not a single Linux leg:
-  # we ship a Windows binary and install.ps1, so a Windows-only regression must
-  # block the tag rather than sail out in a release.
+  validate:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Check out the tagged source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+
+      - name: Validate tag, source version, and main ancestry
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Release tag must match vMAJOR.MINOR.PATCH." >&2
+            exit 1
+          fi
+
+          package_version="$(node -p "require('./package.json').version")"
+          source_version="$(sed -n "s/^export const SHOWTAIL_VERSION = '\([^']*\)';$/\1/p" src/core/version.ts)"
+          version="${GITHUB_REF_NAME#v}"
+          test "$version" = "$package_version"
+          test "$version" = "$source_version"
+
+          git fetch --no-tags origin main
+          tag_commit="$(git rev-list -n 1 "$GITHUB_REF_NAME")"
+          git merge-base --is-ancestor "$tag_commit" origin/main
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
   test:
     strategy:
       fail-fast: false
@@ -22,57 +51,211 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Set up Bun
-        uses: oven-sh/setup-bun@v2
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
-          bun-version: latest
+          bun-version: 1.4.0
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
+
+      - name: Typecheck
+        if: matrix.os == 'ubuntu-latest'
+        run: bun run typecheck
+
+      - name: Check formatting
+        if: matrix.os == 'ubuntu-latest'
+        run: bun run format:check
+
+      - name: Check distributed licenses
+        if: matrix.os == 'ubuntu-latest'
+        run: bun run license:check
 
       - name: Run tests
         run: bun test
 
-  build:
-    needs: test
+  build-non-windows:
+    needs: [validate, test]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Set up Bun
-        uses: oven-sh/setup-bun@v2
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
-          bun-version: latest
+          bun-version: 1.4.0
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      - name: Build all binaries
-        run: bash scripts/build-all.sh
+      - name: Build Linux and macOS binaries
+        run: bash scripts/build-non-windows.sh
 
-      - name: Build VS Code extension (VSIX)
+      - name: Build VS Code extension
+        shell: bash
         run: |
+          set -euo pipefail
           cd integrations/vscode
-          bun install
+          bun install --frozen-lockfile
           bun run package
           cp showtail-*.vsix ../../dist/
-          # Also publish under a STABLE name so the installer can fetch a fixed URL
-          # (…/releases/latest/download/showtail.vsix) and drop it beside the binary —
-          # this is what makes the VS Code / Antigravity IDE extension auto-install
-          # hands-off (bundledVsixPath() finds it). See install.sh / bundledVsixPath().
-          cp "$(ls -t showtail-*.vsix | head -1)" ../../dist/showtail.vsix
+          extension_version="$(node -p "require('./package.json').version")"
+          cp "showtail-${extension_version}.vsix" ../../dist/showtail.vsix
 
-      - name: Publish release
-        uses: softprops/action-gh-release@v2
+      - name: Upload non-Windows release artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          files: |
+          name: release-non-windows
+          path: |
             dist/showtail-linux-x64
             dist/showtail-linux-arm64
             dist/showtail-darwin-x64
             dist/showtail-darwin-arm64
-            dist/showtail-windows-x64.exe
             dist/showtail-*.vsix
             dist/showtail.vsix
+          if-no-files-found: error
+
+  build-sign-windows:
+    needs: [validate, test]
+    runs-on: windows-latest
+    timeout-minutes: 360
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Require completed SignPath onboarding
+        shell: pwsh
+        env:
+          SIGNPATH_ENABLED: ${{ vars.SIGNPATH_ENABLED }}
+          SIGNPATH_ORGANIZATION_ID: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
+        run: |
+          if ($env:SIGNPATH_ENABLED -ne 'true') {
+            throw 'Set the SIGNPATH_ENABLED repository variable to true after onboarding.'
+          }
+          if (-not $env:SIGNPATH_ORGANIZATION_ID) {
+            throw 'SIGNPATH_ORGANIZATION_ID is not configured.'
+          }
+          if (-not $env:SIGNPATH_API_TOKEN) {
+            throw 'SIGNPATH_API_TOKEN is not configured.'
+          }
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.0
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build Windows executable with metadata
+        shell: pwsh
+        run: ./scripts/build-windows.ps1 -Version '${{ needs.validate.outputs.version }}'
+
+      - name: Upload unsigned executable for origin-verified signing
+        id: upload-unsigned
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          path: dist/showtail-windows-x64.exe
+          archive: false
+          if-no-files-found: error
+
+      - name: Submit SignPath signing request
+        uses: SignPath/github-action-submit-signing-request@c92b958760219087e01f8d67a1669ed57afe2627 # v2
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: showtail
+          signing-policy-slug: release-signing
+          artifact-configuration-slug: windows-exe
+          github-artifact-id: ${{ steps.upload-unsigned.outputs.artifact-id }}
+          wait-for-completion: true
+          wait-for-completion-timeout-in-seconds: 21600
+          output-artifact-directory: dist/signed
+          skip-decompress: true
+          parameters: |
+            version: "${{ needs.validate.outputs.version }}.0"
+
+      - name: Verify signed executable
+        shell: pwsh
+        run: |
+          $files = @(Get-ChildItem -LiteralPath dist/signed -Filter '*.exe' -Recurse)
+          if ($files.Count -ne 1) {
+            throw "Expected one signed executable, found $($files.Count)."
+          }
+          $signed = $files[0].FullName
+          $signature = Get-AuthenticodeSignature -LiteralPath $signed
+          if ($signature.Status -ne 'Valid') {
+            throw "Authenticode status was $($signature.Status), expected Valid."
+          }
+          if ($signature.SignerCertificate.Subject -notlike '*SignPath Foundation*') {
+            throw "Unexpected signer: $($signature.SignerCertificate.Subject)"
+          }
+          $info = (Get-Item -LiteralPath $signed).VersionInfo
+          if ($info.ProductName -ne 'Showtail') { throw 'Unexpected ProductName.' }
+          if ($info.ProductVersion -ne '${{ needs.validate.outputs.version }}.0') {
+            throw 'Unexpected ProductVersion.'
+          }
+          if ($info.FileVersion -ne '${{ needs.validate.outputs.version }}.0') {
+            throw 'Unexpected FileVersion.'
+          }
+          $reported = (& $signed --version).Trim()
+          if ($reported -ne '${{ needs.validate.outputs.version }}') {
+            throw "Executable reported version $reported."
+          }
+          Copy-Item -LiteralPath $signed -Destination dist/showtail-windows-x64.exe -Force
+
+      - name: Upload signed Windows release artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: release-windows
+          path: dist/showtail-windows-x64.exe
+          if-no-files-found: error
+
+  publish:
+    needs: [validate, build-non-windows, build-sign-windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Download release artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          pattern: release-*
+          path: dist
+          merge-multiple: true
+
+      - name: Generate SPDX SBOM
+        uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
+        with:
+          path: .
+          format: spdx-json
+          output-file: dist/showtail-${{ needs.validate.outputs.version }}.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
+
+      - name: Add licenses and checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp LICENSE THIRD_PARTY_NOTICES.md dist/
+          cd dist
+          checksum_file="$(mktemp)"
+          find . -maxdepth 1 -type f ! -name SHA256SUMS -printf '%f\0' \
+            | sort -z \
+            | xargs -0 sha256sum > "$checksum_file"
+          mv "$checksum_file" SHA256SUMS
+
+      - name: Publish signed release
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
+        with:
+          body_path: .github/release-preamble.md
           generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: dist/*

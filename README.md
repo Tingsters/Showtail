@@ -60,12 +60,29 @@ curl -fsSL https://raw.githubusercontent.com/Tingsters/Showtail/main/install.sh 
 irm https://raw.githubusercontent.com/Tingsters/Showtail/main/install.ps1 | iex
 ```
 
+The installer adds Showtail to your user `PATH` and enables local capture by
+configuring detected AI tools. Review all system changes and opt-out/removal
+instructions on the [Installation](https://tingsters.github.io/Showtail/getting-started/installation/)
+and [Uninstallation](https://tingsters.github.io/Showtail/getting-started/uninstallation/)
+pages before running it.
+
 Prefer Bun or building from source? See [Installation](https://tingsters.github.io/Showtail/getting-started/installation/).
 
 ## Contributing
 
 Showtail is built with TypeScript on [Bun](https://bun.sh). See [Contributing & development](https://tingsters.github.io/Showtail/contributing/) for build and test commands and how to work on the docs site.
 
+## Code signing policy
+
+Showtail is preparing Windows releases for SignPath Foundation code signing.
+Current releases are unsigned unless their release notes explicitly say
+otherwise. See the [Code signing policy](https://tingsters.github.io/Showtail/code-signing-policy/)
+for the signed-artifact scope, team roles, privacy statement, verification steps,
+and enrollment status.
+
 ## License
 
 [Apache-2.0](./LICENSE)
+
+Standalone releases include other Open Source components; see
+[Third-party notices](./THIRD_PARTY_NOTICES.md).

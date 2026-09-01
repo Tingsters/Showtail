@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<artifact-configuration xmlns="http://signpath.io/artifact-configuration/v1">
+  <parameters>
+    <parameter name="version" required="true" />
+  </parameters>
+  <pe-file
+    product-name="Showtail"
+    product-version="${version}"
+    file-version="${version}"
+    company-name="Showtail contributors"
+    copyright="Copyright 2026 Showtail contributors">
+    <authenticode-sign
+      description="Showtail"
+      description-url="https://tingsters.github.io/Showtail/" />
+  </pe-file>
+</artifact-configuration>

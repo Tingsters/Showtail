@@ -12,6 +12,22 @@ also **turns tracking on for you** — it connects the AI tools it finds and pre
 the ones it supports, so you never run a setup command and never lose work to a tool
 you install later. (Turn it off anytime with `showtail setup --off`.)
 
+Before running the installer, note the user-level changes it makes:
+
+- downloads the Showtail executable and bundled VS Code extension into the
+  Showtail installation directory;
+- adds that directory to your user `PATH`;
+- creates machine-local state under `~/.showtail-cli/`;
+- enables automatic local capture and may add Showtail hooks, instructions, or
+  an extension to detected AI tools.
+
+Set the `SHOWTAIL_DISABLE_FIRST_RUN` environment variable to `1` before
+installation to download the program without enabling capture or changing
+AI-tool configuration. In PowerShell, run
+`$env:SHOWTAIL_DISABLE_FIRST_RUN = '1'` first. See
+[Uninstallation](uninstallation.md) for complete removal instructions and
+[Code signing policy](../code-signing-policy.md) for Windows signature status.
+
 === "macOS / Linux"
 
     ```bash
@@ -100,3 +116,4 @@ anywhere.
 
 - [Quickstart](quickstart.md) — connect a tool and start capturing in a couple of minutes.
 - [Integrations](../integrations/index.md) — set up Showtail for your specific AI tool.
+- [Uninstallation](uninstallation.md) — remove integrations, the executable, and optional local state.

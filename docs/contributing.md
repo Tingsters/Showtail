@@ -11,6 +11,7 @@ library.
 bun install
 bun test            # Run the test suite
 bun run typecheck   # tsc --noEmit
+bun run license:check # Audit licenses of distributed components
 bun run dev -- --help
 bun run build       # Compile a standalone binary to dist/showtail
 ```
@@ -114,3 +115,12 @@ managed block on `docs/integrations/index.md`.)
 ## License
 
 [Apache-2.0](https://github.com/Tingsters/Showtail/blob/main/LICENSE)
+
+Unless a contribution is explicitly marked otherwise before it is submitted,
+submitting it for inclusion in Showtail means it is provided under Apache-2.0,
+as described by section 5 of the license. Do not contribute code, assets, or
+generated output that you do not have permission to license on those terms.
+
+Release binaries include the Bun runtime and other Open Source components. See
+[`THIRD_PARTY_NOTICES.md`](https://github.com/Tingsters/Showtail/blob/main/THIRD_PARTY_NOTICES.md)
+for their licenses, source locations, and the Bun/WebKit relinking path.

@@ -38,8 +38,8 @@ you sent and the files you changed — captured **automatically** to a plain
 
     ---
 
-    Everything lives in a `.showtail/` folder in your project. No cloud
-    service, no external API calls, no telemetry. Ever.
+    Everything lives in a `.showtail/` folder in your project. No Showtail
+    cloud service, no telemetry, and no automatic upload of your trail.
 
 -   :material-tools:{ .lg .middle } __Works across your tools__
 
@@ -96,3 +96,12 @@ including ones you install later — and Showtail sets up each project on first 
 to remember.
 
 [Read the full quickstart →](getting-started/quickstart.md)
+
+---
+
+## Code signing policy
+
+Showtail is preparing its Windows executable for SignPath Foundation code
+signing. Current releases are unsigned unless their release notes explicitly say
+otherwise. See the [Code signing policy](code-signing-policy.md) for status,
+scope, team roles, privacy, and verification instructions.
