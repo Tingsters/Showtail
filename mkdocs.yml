@@ -62,6 +62,7 @@ nav:
   - Home: index.md
   - Getting started:
       - Installation: getting-started/installation.md
+      - Uninstallation: getting-started/uninstallation.md
       - Quickstart: getting-started/quickstart.md
   - How it works:
       - Concepts & events: concepts/how-it-works.md
@@ -82,5 +83,6 @@ nav:
   - Reference:
       - CLI commands: reference/cli.md
       - Configuration: reference/configuration.md
+  - Code signing policy: code-signing-policy.md
   - Contributing: contributing.md
   - Roadmap: roadmap.md

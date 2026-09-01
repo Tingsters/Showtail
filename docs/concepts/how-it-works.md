@@ -22,8 +22,10 @@ is easier to evaluate when students can show their process.
   AI-generated.
 - **Not surveillance.** It only records your prompts and file edits while a
   capture integration is enabled — nothing else.
-- **Not a cloud service.** Nothing leaves your machine, and there are no
-  external API calls.
+- **Not a cloud service.** Showtail does not upload captured trail data or send
+  telemetry. User-initiated installation, upgrade, shared-conversation import,
+  identity lookup, and extension-install operations may contact the relevant
+  third-party service; see [Privacy & redaction](privacy.md).
 - **Not a grading tool.** It produces a report so people can review the work. It
   does not judge the work itself.
 

@@ -10,7 +10,8 @@
   "files": [
     "src",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "THIRD_PARTY_NOTICES.md"
   ],
   "scripts": {
     "dev": "bun run src/cli.ts",
@@ -19,9 +20,11 @@
     "typecheck": "bun x tsc --noEmit",
     "format": "bun x prettier --write \"src/**/*.ts\" \"tests/**/*.ts\"",
     "format:check": "bun x prettier --check \"src/**/*.ts\" \"tests/**/*.ts\"",
+    "license:check": "bun run scripts/verify-licenses.ts",
     "verify:matrix": "bun run scripts/verify-changed.ts",
     "build": "bun build --compile ./src/cli.ts --outfile dist/showtail",
-    "build:all": "bash scripts/build-all.sh"
+    "build:all": "bash scripts/build-all.sh",
+    "build:release:non-windows": "bash scripts/build-non-windows.sh"
   },
   "keywords": [
     "education",

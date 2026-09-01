@@ -10,6 +10,7 @@
 #   SHOWTAIL_REPO     "owner/repo"        (default: Tingsters/Showtail)
 #   SHOWTAIL_VERSION  "v0.1.0" or "latest" (default: latest)
 #   SHOWTAIL_BIN_DIR  install directory    (default: $HOME/.local/bin)
+#   SHOWTAIL_DISABLE_FIRST_RUN=1 downloads only; skips capture/tool setup
 
 set -euo pipefail
 
@@ -47,6 +48,14 @@ else
 fi
 
 echo "Installing showtail (${asset}) from ${REPO}..."
+echo "  Files: ${BIN_DIR} (executable and bundled editor extension)"
+echo "  System: may add that directory to your shell profile PATH"
+if [ -n "${SHOWTAIL_DISABLE_FIRST_RUN:-}" ]; then
+  echo "  Setup: skipped because SHOWTAIL_DISABLE_FIRST_RUN is set"
+else
+  echo "  Setup: enables local capture and may configure detected AI tools"
+fi
+echo "  Removal: https://tingsters.github.io/Showtail/getting-started/uninstallation/"
 
 mkdir -p "$BIN_DIR"
 target="${BIN_DIR}/showtail"
