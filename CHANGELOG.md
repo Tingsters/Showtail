@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.16.0 — Safer projects and self-updates
+
 ### Added
 
 - **Showtail can update itself with `showtail update`.** Standalone installations
@@ -29,6 +31,13 @@
   `SHA256SUMS`, validate the executable, and restore the previous binary if the
   replacement fails. A failed VSIX refresh leaves the CLI and existing extension
   intact.
+
+### Fixed
+
+- **Releases can continue while SignPath Foundation enrollment is pending.**
+  The Windows executable is published with an explicit unsigned notice and a
+  SHA-256 checksum until signing is activated. After activation, signing remains
+  fail-closed and never falls back to an unsigned executable.
 
 ## 0.15.0 — Recover and export complete AI work
 

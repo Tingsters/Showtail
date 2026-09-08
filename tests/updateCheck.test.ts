@@ -9,9 +9,13 @@ import {
 } from '../src/core/updateCheck.ts';
 import { readGlobalConfig, writeGlobalConfig } from '../src/core/globalConfig.ts';
 import type { FetchFn } from '../src/core/releases.ts';
+import { SHOWTAIL_VERSION } from '../src/core/version.ts';
 import { cleanup, makeTempDir } from './helpers.ts';
 
-function releaseFetch(version = '0.16.0'): FetchFn {
+const [major, minor, patch] = SHOWTAIL_VERSION.split('.').map(Number);
+const NEWER_VERSION = `${major}.${minor}.${patch + 1}`;
+
+function releaseFetch(version = NEWER_VERSION): FetchFn {
   return (async () =>
     new Response(
       JSON.stringify({
@@ -52,10 +56,12 @@ describe('automatic update checks', () => {
       now,
       fetchFn: releaseFetch(),
     };
-    expect(await passiveUpdateNotice(options)).toContain('0.15.0 -> 0.16.0');
+    expect(await passiveUpdateNotice(options)).toContain(
+      `${SHOWTAIL_VERSION} -> ${NEWER_VERSION}`,
+    );
     expect(await passiveUpdateNotice(options)).toBeNull();
     expect(cachedUpdateStatus()).toMatchObject({
-      latestVersion: '0.16.0',
+      latestVersion: NEWER_VERSION,
       updateAvailable: true,
     });
   });
@@ -66,8 +72,8 @@ describe('automatic update checks', () => {
       version: 1,
       update: {
         lastCheckedAt: '2026-09-08T12:00:00.000Z',
-        latestVersion: '0.16.0',
-        lastNotifiedVersion: '0.16.0',
+        latestVersion: NEWER_VERSION,
+        lastNotifiedVersion: NEWER_VERSION,
         lastNotifiedAt: '2026-09-08T12:00:00.000Z',
       },
     });

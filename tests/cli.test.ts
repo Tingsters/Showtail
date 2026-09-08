@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { existsSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { SHOWTAIL_VERSION } from '../src/core/version.ts';
 import { cleanup, envWithHome, makeTempDir, runCli } from './helpers.ts';
 
 /** Run the real CLI (through bun) in a given directory. */
@@ -134,7 +135,7 @@ describe('cli (end-to-end acceptance sequence)', () => {
       expect(status.session.events).toBe(1);
       expect(typeof status.hooksActive).toBe('boolean');
       expect(status.update).toMatchObject({
-        currentVersion: '0.15.0',
+        currentVersion: SHOWTAIL_VERSION,
         updateAvailable: false,
       });
 
