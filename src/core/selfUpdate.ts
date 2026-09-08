@@ -1,6 +1,6 @@
 /** Download, verify, and safely replace a standalone Showtail installation. */
 import { randomUUID } from 'node:crypto';
-import { spawn, spawnSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, rmSync } from 'node:fs';
 import { chmod, mkdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
@@ -275,54 +275,76 @@ async function replaceOptionalFile(source: string, target: string): Promise<void
   }
 }
 
-/** Launch a detached helper because Windows cannot replace the running executable. */
+/** Launch a background helper because Windows cannot replace the running executable. */
 export async function launchWindowsReplacement(
   options: WindowsReplacementOptions,
 ): Promise<void> {
   await writeFile(options.helperFile, windowsReplacementScript(), 'utf8');
-  const args = [
-    '-NoProfile',
-    '-NonInteractive',
-    '-ExecutionPolicy',
-    'Bypass',
-    '-File',
-    options.helperFile,
+  const helperCommand = [
+    `& ${powerShellLiteral(options.helperFile)}`,
     '-ParentPid',
     String(options.parentPid),
     '-Target',
-    options.target,
+    powerShellLiteral(options.target),
     '-BinaryTemp',
-    options.binaryTemp,
+    powerShellLiteral(options.binaryTemp),
     '-Backup',
-    options.backup,
+    powerShellLiteral(options.backup),
     '-ExpectedVersion',
-    options.expectedVersion,
+    powerShellLiteral(options.expectedVersion),
     '-VsixTemp',
-    options.vsixTemp ?? '',
+    powerShellLiteral(options.vsixTemp ?? ''),
     '-VsixTarget',
-    options.vsixTarget,
+    powerShellLiteral(options.vsixTarget),
     '-VsixBackup',
-    options.vsixBackup,
+    powerShellLiteral(options.vsixBackup),
     '-ResultFile',
-    options.resultFile,
-  ];
+    powerShellLiteral(options.resultFile),
+  ].join(' ');
+  const encodedHelper = encodePowerShellCommand(helperCommand);
+  const launcherCommand =
+    `$ErrorActionPreference = 'Stop'; ` +
+    `$child = Start-Process -FilePath 'powershell.exe' ` +
+    `-ArgumentList @('-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-EncodedCommand','${encodedHelper}') ` +
+    `-WindowStyle Hidden -PassThru; ` +
+    `if ($null -eq $child) { throw 'Could not start the Showtail update helper.' }`;
   try {
-    await new Promise<void>((resolvePromise, rejectPromise) => {
-      const child = spawn('powershell.exe', args, {
-        detached: true,
-        stdio: 'ignore',
+    // Bun's detached Windows children can exit before PowerShell starts. A
+    // short, synchronous launcher creates an independent helper reliably.
+    const launched = spawnSync(
+      'powershell.exe',
+      [
+        '-NoProfile',
+        '-NonInteractive',
+        '-ExecutionPolicy',
+        'Bypass',
+        '-EncodedCommand',
+        encodePowerShellCommand(launcherCommand),
+      ],
+      {
+        encoding: 'utf8',
         windowsHide: true,
-      });
-      child.once('error', rejectPromise);
-      child.once('spawn', () => {
-        child.unref();
-        resolvePromise();
-      });
-    });
+      },
+    );
+    if (launched.error) throw launched.error;
+    if (launched.status !== 0) {
+      const detail = (launched.stderr || launched.stdout).trim();
+      throw new Error(
+        `The Windows update helper could not start (${launched.status})${detail ? `: ${detail}` : '.'}`,
+      );
+    }
   } catch (error) {
     await rm(options.helperFile, { force: true }).catch(() => undefined);
     throw error;
   }
+}
+
+function powerShellLiteral(value: string): string {
+  return `'${value.replace(/'/g, "''")}'`;
+}
+
+function encodePowerShellCommand(command: string): string {
+  return Buffer.from(command, 'utf16le').toString('base64');
 }
 
 /** PowerShell helper source kept separate so its rollback behavior is unit-testable. */

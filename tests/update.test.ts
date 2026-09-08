@@ -83,6 +83,24 @@ describe('update command', () => {
     });
   });
 
+  test('explains the update before starting a potentially slow download', async () => {
+    isolateHome();
+    const lines: string[] = [];
+    const realLog = console.log;
+    console.log = (...args: unknown[]) => void lines.push(args.join(' '));
+    try {
+      await runUpdate({
+        currentVersion: '0.15.0',
+        fetchRelease: async () => release('0.16.0'),
+        installRelease: async () => ({ status: 'updated' }),
+      });
+    } finally {
+      console.log = realLog;
+    }
+    expect(lines).toContain('Showtail 0.16.0 is available. You have 0.15.0.');
+    expect(lines).toContain('Downloading and verifying the update...');
+  });
+
   test('persists the automatic-check preference without contacting GitHub', async () => {
     isolateHome();
     let fetched = false;

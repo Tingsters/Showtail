@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import {
   installShowtailRelease,
@@ -134,7 +134,7 @@ describe('standalone self-update', () => {
     expect(readFileSync(target, 'utf8')).toBe('old executable');
   });
 
-  test('hands a running Windows executable to the detached helper', async () => {
+  test('hands a running Windows executable to the background helper', async () => {
     dir = makeTempDir();
     const target = join(dir, 'showtail.exe');
     const next = new TextEncoder().encode('new executable');
@@ -193,7 +193,7 @@ describe('standalone self-update', () => {
     expect(result.status).toBe(0);
     expect(readFileSync(target, 'utf8')).toContain('0.16.0');
     expect(readResult(resultFile)).toMatchObject({ ok: true, version: '0.16.0' });
-  });
+  }, 20_000);
 
   test('the Windows helper restores the previous command after failed verification', () => {
     if (process.platform !== 'win32') return;
@@ -218,7 +218,7 @@ describe('standalone self-update', () => {
     expect(result.status).toBe(0);
     expect(readFileSync(target, 'utf8')).toContain('echo old');
     expect(readResult(resultFile)).toMatchObject({ ok: false, version: '0.16.0' });
-  });
+  }, 20_000);
 
   test('the Windows helper preserves an existing extension when its refresh fails', () => {
     if (process.platform !== 'win32') return;
@@ -254,7 +254,53 @@ describe('standalone self-update', () => {
     expect(String(readResult(resultFile).message)).toContain(
       'editor extension was not updated',
     );
-  });
+  }, 20_000);
+
+  test('the Windows launcher survives after its Bun caller exits', async () => {
+    if (process.platform !== 'win32') return;
+    dir = makeTempDir();
+    const workDir = join(dir, "student's update with spaces");
+    mkdirSync(workDir);
+    const target = join(workDir, 'showtail.cmd');
+    const binaryTemp = join(workDir, 'showtail.tmp');
+    const backup = join(workDir, 'showtail.previous');
+    const helperFile = join(workDir, 'update.ps1');
+    const resultFile = join(workDir, 'result.json');
+    const launcherFile = join(workDir, 'launch.ts');
+    writeFileSync(target, '@echo off\r\necho old\r\n');
+    writeFileSync(binaryTemp, '@echo off\r\nif "%1"=="--version" echo 0.16.0\r\n');
+    writeFileSync(
+      launcherFile,
+      `import { launchWindowsReplacement } from ${JSON.stringify(
+        new URL('../src/core/selfUpdate.ts', import.meta.url).href,
+      )};
+await launchWindowsReplacement(${JSON.stringify({
+        parentPid: 2_147_483_647,
+        target,
+        binaryTemp,
+        backup,
+        expectedVersion: '0.16.0',
+        vsixTarget: join(workDir, 'showtail.vsix'),
+        vsixBackup: join(workDir, 'showtail-vsix.previous'),
+        resultFile,
+        helperFile,
+      })});
+`,
+    );
+
+    const launched = spawnSync(process.execPath, [launcherFile], {
+      encoding: 'utf8',
+      windowsHide: true,
+    });
+    if (launched.status !== 0) {
+      throw new Error(
+        `Launcher fixture failed (${launched.status}): ${launched.stderr || launched.stdout}`,
+      );
+    }
+    await waitForFile(resultFile);
+    expect(readFileSync(target, 'utf8')).toContain('0.16.0');
+    expect(readResult(resultFile)).toMatchObject({ ok: true, version: '0.16.0' });
+  }, 20_000);
 });
 
 function runWindowsHelper(options: {
@@ -305,4 +351,12 @@ function readResult(file: string): Record<string, unknown> {
     string,
     unknown
   >;
+}
+
+async function waitForFile(file: string): Promise<void> {
+  for (let attempt = 0; attempt < 100; attempt++) {
+    if (existsSync(file)) return;
+    await Bun.sleep(50);
+  }
+  throw new Error(`Timed out waiting for ${file}.`);
 }

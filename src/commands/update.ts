@@ -101,6 +101,11 @@ export async function runUpdate(
     return result;
   }
 
+  if (!options.json) {
+    console.log(`Showtail ${release.version} is available. You have ${currentVersion}.`);
+    console.log('Downloading and verifying the update...');
+  }
+
   let installed: InstallReleaseResult;
   try {
     installed = await (
