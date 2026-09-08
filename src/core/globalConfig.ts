@@ -80,6 +80,15 @@ export interface GlobalConfig {
   };
   /** Machine-local paths of trails Showtail has seen, for future bulk maintenance. */
   knownProjects?: Array<{ trailId?: string; path: string; lastSeenAt: string }>;
+  /** Cached release metadata and the user's passive-check preference. */
+  update?: {
+    automaticChecks?: boolean;
+    lastAttemptedAt?: string;
+    lastCheckedAt?: string;
+    latestVersion?: string;
+    lastNotifiedVersion?: string;
+    lastNotifiedAt?: string;
+  };
 }
 
 /** Default signal floor for surfacing an inbox session (see {@link GlobalConfig.inboxMinSignal}). */

@@ -21,6 +21,7 @@ import { runHook, type HookEvent } from './commands/hook.ts';
 import { runImportUndo } from './commands/import.ts';
 import { runRedact } from './commands/redact.ts';
 import { runMigrate, runMigrateUndo } from './commands/migrate.ts';
+import { runUpdate } from './commands/update.ts';
 import { eventTypeList } from './core/schema.ts';
 import { ShowtailError } from './core/errors.ts';
 import { NotInitializedError } from './core/storage.ts';
@@ -36,6 +37,8 @@ import { ensureFirstRunSetup, autoTrackingNotice } from './commands/setup.ts';
 import { autoConnectNewlyDetected } from './core/autoConnectSweep.ts';
 import { autoInitEnabled } from './core/globalConfig.ts';
 import { maybeOfferHistoryMigration } from './commands/upgrade.ts';
+import { passiveUpdateNotice } from './core/updateCheck.ts';
+import { consumeUpdateResultNotice } from './core/selfUpdate.ts';
 
 const VERSION = SHOWTAIL_VERSION;
 
@@ -43,6 +46,7 @@ const VERSION = SHOWTAIL_VERSION;
 const G_CAPTURE = 'Capture your work:';
 const G_REVIEW = 'Review your trail:';
 const G_CONNECT = 'Connect your tools:';
+const G_MAINTAIN = 'Maintain Showtail:';
 // Automatic tracking means there's no "get started" step; these are the occasional
 // manual/repair commands, shown last and below the everyday workflow.
 const G_MANAGE = 'Manage tracking (optional):';
@@ -94,8 +98,29 @@ program
 //     do — it must stay side-effect-free and honestly report "not set up yet").
 // The notice goes to stderr so it never pollutes a command's `--json` stdout. Once-only
 // and best-effort.
-const NO_BOOTSTRAP = new Set(['hook', 'setup', 'connect', 'disconnect', 'capabilities']);
+const NO_BOOTSTRAP = new Set([
+  'hook',
+  'setup',
+  'connect',
+  'disconnect',
+  'capabilities',
+  'update',
+]);
+let pendingUpdateNotice: Promise<string | null> | null = null;
 program.hook('preAction', async (_thisCommand, actionCommand) => {
+  const json = actionCommand.opts().json === true;
+  pendingUpdateNotice = passiveUpdateNotice({
+    command: actionCommand.name(),
+    json,
+  });
+  if (
+    !json &&
+    process.stderr.isTTY &&
+    !['hook', 'capabilities', 'matrix'].includes(actionCommand.name())
+  ) {
+    const previousUpdate = consumeUpdateResultNotice();
+    if (previousUpdate) process.stderr.write(previousUpdate + '\n\n');
+  }
   if (NO_BOOTSTRAP.has(actionCommand.name())) return;
   const boot = ensureFirstRunSetup();
   if (boot.ran) {
@@ -137,6 +162,13 @@ program.hook('preAction', async (_thisCommand, actionCommand) => {
   ) {
     await maybeOfferHistoryMigration();
   }
+});
+
+program.hook('postAction', async () => {
+  const notice = await pendingUpdateNotice;
+  pendingUpdateNotice = null;
+  if (!notice || process.exitCode) return;
+  process.stderr.write(`\n${notice}\n`);
 });
 
 // --- Hidden lifecycle commands --------------------------------------------
@@ -636,6 +668,19 @@ const migrateCmd = program
 //
 // Tracking turns on by itself after install, so these are the rare manual controls:
 // turn tracking off, or wire up a single project/name by hand.
+
+program
+  .command('update')
+  .description('Check for and install the latest stable Showtail release.')
+  .helpGroup(G_MAINTAIN)
+  .option('--check', 'check for an update without installing it')
+  .option('--auto-check <on|off>', 'turn quiet automatic update checks on or off')
+  .option('--json', 'output machine-readable JSON')
+  .action(
+    action(async (opts: { check?: boolean; autoCheck?: string; json?: boolean }) =>
+      runUpdate({ check: opts.check, autoCheck: opts.autoCheck, json: opts.json }),
+    ),
+  );
 
 program
   .command('setup')

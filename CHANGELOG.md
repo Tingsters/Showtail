@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+### Added
+
+- **Showtail can update itself with `showtail update`.** Standalone installations
+  discover the latest stable GitHub release, select the correct platform asset,
+  verify its size and SHA-256 digest, and replace the executable with rollback if
+  the new binary does not report the expected version. `--check` is informational,
+  `--json` supports automation, and source checkouts receive pull/rebuild guidance
+  instead of having Bun or repository files overwritten.
+- **Interactive commands quietly notice newer releases.** The check runs at most
+  daily, failures stay silent, and reminders appear once per release and no more
+  than weekly. Hooks, capture paths, JSON output, CI, and noninteractive commands
+  never perform passive checks. Users can persistently opt out with
+  `showtail update --auto-check off`.
+
+### Changed
+
+- **The one-line installers verify releases before replacing a working install.**
+  Windows, macOS, and Linux now download to temporary files, check the published
+  `SHA256SUMS`, validate the executable, and restore the previous binary if the
+  replacement fails. A failed VSIX refresh leaves the CLI and existing extension
+  intact.
+
 ## 0.15.0 — Recover and export complete AI work
 
 ### Added

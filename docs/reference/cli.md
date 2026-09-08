@@ -17,6 +17,18 @@ Showtail connects the AI tools it finds and pre-wires the ones it supports, so a
 install later is captured too. You never run a getting-started command — just work, then
 `showtail report`. So there is no "Get started" group in `showtail --help`.
 
+## Maintain Showtail
+
+| Command | What it does |
+| ------- | ------------ |
+| `update` | Check for and install the latest stable Showtail release. Downloads into a temporary file, verifies its release SHA-256 digest, and preserves the existing executable unless the replacement validates. Standalone installs update in place; source checkouts print pull/rebuild guidance instead. Flags: `--check` (do not install), `--auto-check <on\|off>` (persist the quiet-check preference), `--json`. |
+
+Interactive, human-facing commands make a best-effort update check at most once
+per day. A newer release is mentioned once when discovered and no more than once
+per week afterwards. Hooks, capture commands, JSON output, CI, and piped commands
+never perform or print passive checks. Set `SHOWTAIL_DISABLE_UPDATE_CHECK=1` for a
+process-level opt-out.
+
 ## Manage tracking (optional)
 
 | Command | What it does |

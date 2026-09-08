@@ -21,10 +21,12 @@ $binDir = if ($env:SHOWTAIL_BIN_DIR) { $env:SHOWTAIL_BIN_DIR } else { Join-Path 
 $asset = 'showtail-windows-x64.exe'
 
 if ($version -eq 'latest') {
-  $url = "https://github.com/$repo/releases/latest/download/$asset"
+  $releaseBase = "https://github.com/$repo/releases/latest/download"
 } else {
-  $url = "https://github.com/$repo/releases/download/$version/$asset"
+  $releaseBase = "https://github.com/$repo/releases/download/$version"
 }
+$url = "$releaseBase/$asset"
+$checksumUrl = "$releaseBase/SHA256SUMS"
 
 Write-Host "Installing showtail ($asset) from $repo..."
 Write-Host "  Files: $binDir (executable and bundled editor extension)"
@@ -38,24 +40,81 @@ Write-Host '  Removal: https://tingsters.github.io/Showtail/getting-started/unin
 
 New-Item -ItemType Directory -Force -Path $binDir | Out-Null
 $target = Join-Path $binDir 'showtail.exe'
+$token = [guid]::NewGuid().ToString('N')
+$download = Join-Path $binDir ".showtail-$token.tmp"
+$checksums = Join-Path $binDir ".showtail-checksums-$token.tmp"
+$backup = Join-Path $binDir ".showtail-$token.previous"
 
-Invoke-WebRequest -Uri $url -OutFile $target -UseBasicParsing
+function Get-ExpectedHash([string]$name, [string[]]$lines) {
+  $pattern = '^([0-9a-fA-F]{64})\s{2}' + [regex]::Escape($name) + '$'
+  foreach ($line in $lines) {
+    $match = [regex]::Match($line, $pattern)
+    if ($match.Success) { return $match.Groups[1].Value.ToLowerInvariant() }
+  }
+  throw "SHA256SUMS does not include $name."
+}
 
-Write-Host "Installed to: $target"
+try {
+  Invoke-WebRequest -Uri $checksumUrl -OutFile $checksums -UseBasicParsing
+  $checksumLines = Get-Content -LiteralPath $checksums
+  $expected = Get-ExpectedHash $asset $checksumLines
+  Invoke-WebRequest -Uri $url -OutFile $download -UseBasicParsing
+  $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $download).Hash.ToLowerInvariant()
+  if ($actual -ne $expected) { throw "SHA-256 verification failed for $asset." }
+
+  if (Test-Path -LiteralPath $target) {
+    Move-Item -LiteralPath $target -Destination $backup -Force
+  }
+  try {
+    Move-Item -LiteralPath $download -Destination $target -Force
+    $reportedVersion = (& $target --version | Out-String).Trim()
+    if ($reportedVersion -notmatch '^\d+\.\d+\.\d+$') {
+      throw "Installed executable reported an invalid version: $reportedVersion"
+    }
+    Remove-Item -LiteralPath $backup -Force -ErrorAction SilentlyContinue
+  } catch {
+    Remove-Item -LiteralPath $target -Force -ErrorAction SilentlyContinue
+    if (Test-Path -LiteralPath $backup) {
+      Move-Item -LiteralPath $backup -Destination $target -Force
+    }
+    throw
+  }
+} finally {
+  Remove-Item -LiteralPath $download -Force -ErrorAction SilentlyContinue
+  Remove-Item -LiteralPath $checksums -Force -ErrorAction SilentlyContinue
+}
+
+Write-Host "Installed and verified: $target"
 
 # Fetch the VS Code / Antigravity extension (VSIX) beside the binary so Showtail can
 # install its editor extension hands-off (bundledVsixPath() looks here). Best-effort — a
 # failed fetch never fails the install (the extension step falls back to guidance).
-if ($version -eq 'latest') {
-  $vsixUrl = "https://github.com/$repo/releases/latest/download/showtail.vsix"
-} else {
-  $vsixUrl = "https://github.com/$repo/releases/download/$version/showtail.vsix"
-}
+$vsixUrl = "$releaseBase/showtail.vsix"
 $vsixTarget = Join-Path $binDir 'showtail.vsix'
+$vsixDownload = Join-Path $binDir ".showtail-vsix-$token.tmp"
+$vsixBackup = Join-Path $binDir ".showtail-vsix-$token.previous"
 try {
-  Invoke-WebRequest -Uri $vsixUrl -OutFile $vsixTarget -UseBasicParsing
+  $expectedVsix = Get-ExpectedHash 'showtail.vsix' $checksumLines
+  Invoke-WebRequest -Uri $vsixUrl -OutFile $vsixDownload -UseBasicParsing
+  $actualVsix = (Get-FileHash -Algorithm SHA256 -LiteralPath $vsixDownload).Hash.ToLowerInvariant()
+  if ($actualVsix -ne $expectedVsix) { throw 'SHA-256 verification failed for showtail.vsix.' }
+  if (Test-Path -LiteralPath $vsixTarget) {
+    Move-Item -LiteralPath $vsixTarget -Destination $vsixBackup -Force
+  }
+  try {
+    Move-Item -LiteralPath $vsixDownload -Destination $vsixTarget -Force
+    Remove-Item -LiteralPath $vsixBackup -Force -ErrorAction SilentlyContinue
+  } catch {
+    if (Test-Path -LiteralPath $vsixBackup) {
+      Remove-Item -LiteralPath $vsixTarget -Force -ErrorAction SilentlyContinue
+      Move-Item -LiteralPath $vsixBackup -Destination $vsixTarget -Force
+    }
+    throw
+  }
 } catch {
-  if (Test-Path $vsixTarget) { Remove-Item $vsixTarget -Force }
+  Write-Host 'The bundled editor extension could not be updated; the CLI is ready.'
+} finally {
+  Remove-Item -LiteralPath $vsixDownload -Force -ErrorAction SilentlyContinue
 }
 
 # Turn tracking on automatically — make Showtail "just work" with no setup command:

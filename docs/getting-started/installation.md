@@ -54,6 +54,38 @@ ARM64 Linux is a first-class target, so the one-line installer works on a
 Raspberry Pi (64-bit Raspberry Pi OS), an ARM Chromebook's Linux container, and
 ARM cloud instances — no from-source build needed.
 
+### Updating
+
+Once Showtail is installed as a standalone binary, update it in place with:
+
+```bash
+showtail update
+```
+
+The command checks the latest stable `Tingsters/Showtail` GitHub release,
+downloads the binary for the current platform, verifies its size and SHA-256
+digest, then replaces the installed executable. The bundled VS Code / Antigravity
+extension is refreshed beside it, and connected integrations update themselves
+the next time Showtail runs.
+
+Useful variants:
+
+```bash
+showtail update --check           # Check without installing
+showtail update --json            # Machine-readable result
+showtail update --auto-check off  # Disable quiet automatic checks
+showtail update --auto-check on   # Re-enable them
+```
+
+Interactive commands check public GitHub release metadata at most once per day.
+If a newer version is available, Showtail mentions it once and then no more than
+weekly. Failed or offline checks stay silent and never affect the command you ran.
+Set `SHOWTAIL_DISABLE_UPDATE_CHECK=1` to disable checks for the current environment.
+
+Showtail never overwrites Bun or a source checkout. `showtail update --check`
+still works there, but installing a newer version means pulling the repository and
+rebuilding it.
+
 ### Upgrading older trails
 
 When an upgrade introduces richer transcript history, an existing installation

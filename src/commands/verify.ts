@@ -730,7 +730,7 @@ export async function runVerify(options: VerifyOptions = {}): Promise<boolean> {
   if (trailIsNewerThanBinary(paths)) {
     console.log(
       'Note: this trail was written by a newer Showtail — some sessions may not be ' +
-        'visible to this version. Upgrade Showtail to read everything.',
+        'visible to this version. Run `showtail update` to read everything.',
     );
     console.log('');
   }

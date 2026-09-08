@@ -222,6 +222,9 @@ export function spawnEnv(): NodeJS.ProcessEnv {
     // that runs a command pollute the shared home. Tests that exercise the bootstrap
     // itself opt back in by deleting this key from their env.
     SHOWTAIL_DISABLE_FIRST_RUN: '1',
+    // CLI acceptance tests must never contact GitHub or inherit a developer's
+    // cached update reminder.
+    SHOWTAIL_DISABLE_UPDATE_CHECK: '1',
     // Deterministic identity so a spawned `showtail init` never prompts or shells
     // out to gh/git, and caches its machine identity inside the temp dir.
     SHOWTAIL_IDENTITY_EMAIL: process.env.SHOWTAIL_IDENTITY_EMAIL ?? TEST_EMAIL,

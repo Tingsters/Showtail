@@ -6,6 +6,13 @@ session and author — lives separately in `.showtail/state.json`, which is
 git-ignored. See [Data layout](../concepts/data-layout.md) for the full file
 tree.
 
+Machine-wide preferences live in `~/.showtail-cli/config.json` and are never
+committed with a project. This includes the automatic-tracking state, report-open
+preference, and cached update-check state. Use
+`showtail update --auto-check off` or `showtail update --auto-check on` instead of
+editing the update preference by hand. `SHOWTAIL_DISABLE_UPDATE_CHECK=1` overrides
+the preference for one process or managed environment.
+
 ## `config.json`
 
 ```json

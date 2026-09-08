@@ -42,10 +42,12 @@ asset="showtail-${plat_os}-${plat_arch}"
 
 # --- Resolve the download URL --------------------------------------------
 if [ "$VERSION" = "latest" ]; then
-  url="https://github.com/${REPO}/releases/latest/download/${asset}"
+  release_base="https://github.com/${REPO}/releases/latest/download"
 else
-  url="https://github.com/${REPO}/releases/download/${VERSION}/${asset}"
+  release_base="https://github.com/${REPO}/releases/download/${VERSION}"
 fi
+url="${release_base}/${asset}"
+checksum_url="${release_base}/SHA256SUMS"
 
 echo "Installing showtail (${asset}) from ${REPO}..."
 echo "  Files: ${BIN_DIR} (executable and bundled editor extension)"
@@ -59,33 +61,89 @@ echo "  Removal: https://tingsters.github.io/Showtail/getting-started/uninstalla
 
 mkdir -p "$BIN_DIR"
 target="${BIN_DIR}/showtail"
+binary_tmp="$(mktemp "${target}.tmp.XXXXXX")"
+checksums_tmp="$(mktemp "${target}.checksums.XXXXXX")"
+backup="${target}.previous.$$"
+vsix_tmp=""
+replacement_started=0
+binary_installed=0
 
-if command -v curl >/dev/null 2>&1; then
-  curl -fSL "$url" -o "$target" || err "download failed from $url"
-elif command -v wget >/dev/null 2>&1; then
-  wget -qO "$target" "$url" || err "download failed from $url"
-else
-  err "need curl or wget to download showtail"
+cleanup() {
+  rm -f "$binary_tmp" "$checksums_tmp"
+  if [ "$replacement_started" = 1 ] && [ "$binary_installed" = 0 ]; then
+    rm -f "$target"
+    if [ -e "$backup" ]; then mv "$backup" "$target"; fi
+  else
+    rm -f "$backup"
+  fi
+  if [ -n "$vsix_tmp" ]; then rm -f "$vsix_tmp"; fi
+}
+trap cleanup EXIT
+
+download() {
+  src="$1"
+  dest="$2"
+  if command -v curl >/dev/null 2>&1; then
+    curl -fSL "$src" -o "$dest" || return 1
+  elif command -v wget >/dev/null 2>&1; then
+    wget -qO "$dest" "$src" || return 1
+  else
+    err "need curl or wget to download showtail"
+  fi
+}
+
+file_sha256() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | awk '{print $1}'
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$1" | awk '{print $1}'
+  else
+    err "need sha256sum or shasum to verify the Showtail release"
+  fi
+}
+
+expected_hash() {
+  awk -v name="$1" '$2 == name { print $1; exit }' "$checksums_tmp"
+}
+
+download "$checksum_url" "$checksums_tmp" || err "download failed from $checksum_url"
+expected="$(expected_hash "$asset")"
+[ -n "$expected" ] || err "SHA256SUMS does not include $asset"
+download "$url" "$binary_tmp" || err "download failed from $url"
+actual="$(file_sha256 "$binary_tmp")"
+[ "$actual" = "$expected" ] || err "SHA-256 verification failed for $asset"
+
+chmod +x "$binary_tmp"
+if [ -e "$target" ]; then
+  mv "$target" "$backup"
 fi
+replacement_started=1
+if ! mv "$binary_tmp" "$target" || ! "$target" --version >/dev/null 2>&1; then
+  err "the downloaded Showtail executable could not be installed"
+fi
+binary_installed=1
+rm -f "$backup"
 
-chmod +x "$target"
-
-echo "Installed to: $target"
+echo "Installed and verified: $target"
 
 # --- Fetch the VS Code / Antigravity extension (VSIX) ---------------------
 # Drop `showtail.vsix` beside the binary so Showtail can install its editor extension
 # hands-off (bundledVsixPath() looks here). Best-effort: a failed fetch never fails the
 # install — the extension step then falls back to the Marketplace or to guidance.
-if [ "$VERSION" = "latest" ]; then
-  vsix_url="https://github.com/${REPO}/releases/latest/download/showtail.vsix"
-else
-  vsix_url="https://github.com/${REPO}/releases/download/${VERSION}/showtail.vsix"
-fi
+vsix_url="${release_base}/showtail.vsix"
 vsix_target="${BIN_DIR}/showtail.vsix"
-if command -v curl >/dev/null 2>&1; then
-  curl -fSL "$vsix_url" -o "$vsix_target" 2>/dev/null || rm -f "$vsix_target"
-elif command -v wget >/dev/null 2>&1; then
-  wget -qO "$vsix_target" "$vsix_url" 2>/dev/null || rm -f "$vsix_target"
+vsix_tmp="$(mktemp "${vsix_target}.tmp.XXXXXX")"
+expected_vsix="$(expected_hash showtail.vsix)"
+if [ -n "$expected_vsix" ] && download "$vsix_url" "$vsix_tmp" 2>/dev/null; then
+  actual_vsix="$(file_sha256 "$vsix_tmp")"
+  if [ "$actual_vsix" = "$expected_vsix" ]; then
+    mv -f "$vsix_tmp" "$vsix_target"
+    vsix_tmp=""
+  else
+    echo "The bundled editor extension failed verification; the CLI is ready." >&2
+  fi
+else
+  echo "The bundled editor extension could not be updated; the CLI is ready." >&2
 fi
 
 # --- Turn tracking on automatically ---------------------------------------

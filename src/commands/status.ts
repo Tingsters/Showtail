@@ -8,6 +8,7 @@ import { connectedToolsLines, toolStatuses } from '../core/tools.ts';
 import { emitJson } from '../core/output.ts';
 import { pluralS } from '../core/text.ts';
 import { EVENT_TYPES } from '../types.ts';
+import { cachedUpdateStatus } from '../core/updateCheck.ts';
 
 /** Count of globally-captured sessions awaiting placement (best-effort; never throws). */
 function inboxCount(): number {
@@ -86,6 +87,7 @@ export async function runStatus(options: StatusOptions = {}): Promise<void> {
       // Sessions captured globally (folderless/scratch tools) not yet placed in a project.
       inbox,
       nextAction: events.length > 0 ? 'report' : 'work',
+      update: cachedUpdateStatus(),
       tools,
     });
     return;
@@ -94,7 +96,7 @@ export async function runStatus(options: StatusOptions = {}): Promise<void> {
   if (trailNewer) {
     console.log(
       'Note: this trail was written by a newer Showtail — some sessions may not be ' +
-        'visible. Upgrade Showtail to see everything.',
+        'visible. Run `showtail update` to see everything.',
     );
     console.log('');
   }

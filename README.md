@@ -6,7 +6,7 @@
 
 **Show your work.** Showtail keeps a clear record of how you built a project with AI: the prompts you sent and the files you changed along the way. It captures this **automatically** as you work, so the trail builds itself.
 
-Showtail writes that record to a plain `.showtail/` folder inside your project. There are no accounts, no cloud service, and no telemetry. It is just local files that you and your educator can open, review, and commit with the rest of your work.
+Showtail writes that record to a plain `.showtail/` folder inside your project. There are no accounts, no cloud service, and no telemetry. It is just local files that you and your educator can open, review, and commit with the rest of your work. Interactive commands may make a quiet, daily request for public GitHub release metadata so Showtail can mention an available update; no trail or project data is sent, and the check can be disabled.
 
 ```bash
 # Install (below), then just work — your prompts and edits are captured automatically.
@@ -67,6 +67,20 @@ and [Uninstallation](https://tingsters.github.io/Showtail/getting-started/uninst
 pages before running it.
 
 Prefer Bun or building from source? See [Installation](https://tingsters.github.io/Showtail/getting-started/installation/).
+
+## Updating
+
+After installing a release, future updates are one command:
+
+```bash
+showtail update
+```
+
+Showtail checks for a newer stable GitHub release, verifies its SHA-256 digest,
+and replaces the standalone binary without touching your trails. Use
+`showtail update --check` to check without installing, or
+`showtail update --auto-check off` to disable the quiet update reminders.
+From-source checkouts are never overwritten; pull and rebuild those with Bun.
 
 ## Contributing
 

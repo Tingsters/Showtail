@@ -7,12 +7,16 @@ Showtail is privacy-first by design:
 - **No telemetry, analytics, or automatic upload of your trail.** Captured
   prompts, edits, reports, and project data are not sent to Showtail's
   maintainers or to a Showtail service.
-- **Network access is tied to an operation you initiate.** The installers and
-  `showtail upgrade` download releases from GitHub; importing a ChatGPT or Gemini
-  share link fetches that link; first-run identity discovery may invoke your
-  authenticated GitHub CLI; and extension installation may contact the editor's
-  marketplace when no bundled VSIX is available. These operations are not
-  telemetry and do not upload a `.showtail/` trail.
+- **Network access is narrow and documented.** Interactive commands may request
+  public release metadata from GitHub at most once per day so Showtail can mention
+  an available update. The request sends no trail, prompt, filename, project, or
+  identity data; disable it with `showtail update --auto-check off` or
+  `SHOWTAIL_DISABLE_UPDATE_CHECK=1`. The installers and `showtail update` download
+  releases from GitHub; importing a ChatGPT or Gemini share link fetches that link;
+  first-run identity discovery may invoke your authenticated GitHub CLI; and
+  extension installation may contact the editor's marketplace when no bundled
+  VSIX is available. These operations are not telemetry and do not upload a
+  `.showtail/` trail.
 - **You control what is recorded.** Showtail only logs what you explicitly run,
   unless you enable one of the optional capture integrations.
 - **Secrets are scrubbed before storage.** Showtail makes a best-effort pass to
@@ -112,8 +116,8 @@ Showtail does not operate a cloud service. User-initiated features may interact
 with services operated by third parties, subject to their privacy policies:
 
 - [GitHub](https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement)
-  for installation, upgrades, releases, and optional identity lookup through
-  GitHub CLI.
+  for installation, public release checks, updates, and optional identity lookup
+  through GitHub CLI.
 - [OpenAI](https://openai.com/policies/privacy-policy/) when you import a
   user-supplied ChatGPT shared conversation.
 - [Google](https://policies.google.com/privacy) when you import a user-supplied

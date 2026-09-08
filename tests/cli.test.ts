@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { existsSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { cleanup, makeTempDir, runCli } from './helpers.ts';
+import { cleanup, envWithHome, makeTempDir, runCli } from './helpers.ts';
 
 /** Run the real CLI (through bun) in a given directory. */
 const run = runCli;
@@ -133,6 +133,10 @@ describe('cli (end-to-end acceptance sequence)', () => {
       expect(status.session.label).toBe('lap one');
       expect(status.session.events).toBe(1);
       expect(typeof status.hooksActive).toBe('boolean');
+      expect(status.update).toMatchObject({
+        currentVersion: '0.15.0',
+        updateAvailable: false,
+      });
 
       // sessions: lists the one session and marks it current
       r = run(dir, ['sessions']);
@@ -161,6 +165,7 @@ describe('cli (end-to-end acceptance sequence)', () => {
         'Capture your work:',
         'Review your trail:',
         'Connect your tools:',
+        'Maintain Showtail:',
         // Tracking is automatic now, so there is no "Get started" step; the manual
         // setup/track commands live under this optional group instead.
         'Manage tracking (optional):',
@@ -171,12 +176,31 @@ describe('cli (end-to-end acceptance sequence)', () => {
       expect(r.stdout).not.toContain('Get started:');
       // The unified integration verbs replace the old per-tool groups.
       expect(r.stdout).toContain('connect');
+      expect(r.stdout).toContain('update');
       expect(r.stdout).toContain('disconnect');
       // `matrix` is a maintainer/informational command — hidden from help, still runnable.
       expect(r.stdout).not.toMatch(/^\s+matrix\b/m);
       expect(run(dir, ['matrix', '--json']).code).toBe(0);
     } finally {
       cleanup(dir);
+    }
+  });
+
+  test('update preferences are available without initializing a project', () => {
+    const dir = makeTempDir();
+    const home = makeTempDir();
+    try {
+      const r = run(dir, ['update', '--auto-check', 'off', '--json'], {
+        env: envWithHome(home),
+      });
+      expect(r.code).toBe(0);
+      expect(JSON.parse(r.stdout)).toEqual({
+        status: 'configured',
+        automaticChecks: false,
+      });
+    } finally {
+      cleanup(dir);
+      cleanup(home);
     }
   });
 });
