@@ -11,6 +11,7 @@ describe('SignPath Foundation readiness', () => {
     const homepage = read('docs/index.md');
     const policy = read('docs/code-signing-policy.md');
     const releasePreamble = read('.github/release-preamble.md');
+    const unsignedReleasePreamble = read('.github/release-preamble-unsigned.md');
     const installation = read('docs/getting-started/installation.md');
     const uninstallation = read('docs/getting-started/uninstallation.md');
     const attribution =
@@ -23,7 +24,9 @@ describe('SignPath Foundation readiness', () => {
     expect(policy).toContain('Tingsters');
     expect(policy).toContain('steveonjava');
     expect(policy).toContain('multi-factor authentication');
-    expect(policy).toContain('no unsigned Windows fallback');
+    expect(policy).toContain('there is no unsigned Windows fallback');
+    expect(unsignedReleasePreamble).toContain('is not Authenticode signed');
+    expect(unsignedReleasePreamble).toContain('SHA256SUMS');
     expect(installation).toContain('user-level changes it makes');
     expect(installation).toContain('[Uninstallation](uninstallation.md)');
     expect(uninstallation).toContain('showtail setup --off');
@@ -50,16 +53,19 @@ describe('SignPath Foundation readiness', () => {
     expect(packageManifest.version).toMatch(/^\d+\.\d+\.\d+$/);
   });
 
-  test('requires origin-verified signing before release publication', () => {
+  test('publishes disclosed unsigned builds until fail-closed signing is enabled', () => {
     const workflow = read('.github/workflows/release.yml');
     const signing = workflow.indexOf('Submit SignPath signing request');
     const verification = workflow.indexOf('Verify signed executable');
-    const publication = workflow.indexOf('Publish signed release');
+    const publication = workflow.indexOf('Publish release');
 
     expect(workflow).toContain('SIGNPATH_ENABLED');
+    expect(workflow).toContain("steps.signing-mode.outputs.signed == 'true'");
     expect(workflow).toContain('archive: false');
     expect(workflow).toContain('skip-decompress: true');
     expect(workflow).toContain('SignPath Foundation');
+    expect(workflow).toContain('release-preamble-unsigned.md');
+    expect(workflow).toContain('needs.build-windows.outputs.signed');
     expect(workflow).toContain('git merge-base --is-ancestor');
     expect(signing).toBeGreaterThan(0);
     expect(verification).toBeGreaterThan(signing);

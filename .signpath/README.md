@@ -17,8 +17,12 @@ Create the artifact configuration in SignPath from
 workflow as the four-part Windows version `MAJOR.MINOR.PATCH.0`, and do not
 weaken its metadata restrictions.
 
-The release workflow is intentionally blocked until all of these repository
-settings exist:
+Before SignPath enrollment is active, the release workflow publishes an
+explicitly disclosed unsigned Windows executable covered by the release
+checksums. Once signing is enabled, the workflow fails closed: it will not fall
+back to that unsigned mode if signing fails.
+
+Enable signing only after all of these repository settings exist:
 
 - repository variable `SIGNPATH_ENABLED` set to `true`;
 - repository variable `SIGNPATH_ORGANIZATION_ID`;

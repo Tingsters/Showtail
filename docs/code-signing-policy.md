@@ -25,8 +25,11 @@ is published. Existing releases will not be retroactively signed.
 - The unsigned Windows executable is uploaded directly from the build before it
   is submitted to SignPath. It is never replaced by a locally uploaded binary.
 - Every signing request requires approval by a human approver in SignPath.
-- A failed, rejected, or unverifiable signing request prevents publication; the
-  release workflow has no unsigned Windows fallback.
+- While enrollment is pending and `SIGNPATH_ENABLED` is not `true`, releases
+  carry an explicitly disclosed unsigned Windows executable covered by the
+  release checksums.
+- After signing is enabled, a failed, rejected, or unverifiable signing request
+  prevents publication; there is no unsigned Windows fallback.
 
 The SignPath artifact configuration enforces the product name `Showtail` and a
 product/file version equal to the release version in Windows four-part form
