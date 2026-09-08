@@ -12,7 +12,7 @@ import type { FetchFn } from '../src/core/releases.ts';
 import { SHOWTAIL_VERSION } from '../src/core/version.ts';
 import { cleanup, makeTempDir } from './helpers.ts';
 
-const [major, minor, patch] = SHOWTAIL_VERSION.split('.').map(Number);
+const [major = 0, minor = 0, patch = 0] = SHOWTAIL_VERSION.split('.').map(Number);
 const NEWER_VERSION = `${major}.${minor}.${patch + 1}`;
 
 function releaseFetch(version = NEWER_VERSION): FetchFn {

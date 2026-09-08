@@ -52,7 +52,9 @@ export interface WindowsReplacementOptions {
 export function isStandaloneExecutable(
   executablePath: string = process.execPath,
 ): boolean {
-  const name = basename(executablePath).toLowerCase();
+  // Release guidance can contain paths for a different OS than the one running
+  // this check, so normalize Windows separators before asking the host parser.
+  const name = basename(executablePath.replace(/\\/g, '/')).toLowerCase();
   return !['bun', 'bun.exe', 'node', 'node.exe'].includes(name);
 }
 

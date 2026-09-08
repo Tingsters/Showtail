@@ -3,6 +3,7 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   renameSync,
   rmSync,
   writeFileSync,
@@ -205,7 +206,16 @@ export function isEligibleAnchor(dir: string): boolean {
  * refuse to create a trail here, so HOME can never become a project boundary.
  */
 export function isHomedirCatchAll(dir: string): boolean {
-  return pathKey(dir) === pathKey(homedir());
+  return existingPathKey(dir) === existingPathKey(homedir());
+}
+
+/** Resolve aliases such as macOS `/var` -> `/private/var` for existing paths. */
+function existingPathKey(p: string): string {
+  try {
+    return pathKey(realpathSync.native(p));
+  } catch {
+    return pathKey(p);
+  }
 }
 
 /**

@@ -38,6 +38,10 @@
   The Windows executable is published with an explicit unsigned notice and a
   SHA-256 checksum until signing is activated. After activation, signing remains
   fail-closed and never falls back to an unsigned executable.
+- **Cross-platform path aliases no longer confuse project and update detection.**
+  macOS recognizes `/var` and `/private/var` as the same HOME location, while
+  source runtimes expressed with Windows paths are never mistaken for standalone
+  Showtail executables on another operating system.
 
 ## 0.15.0 — Recover and export complete AI work
 
