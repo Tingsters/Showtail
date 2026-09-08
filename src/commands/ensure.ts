@@ -1,10 +1,14 @@
-import { homedir } from 'node:os';
 import { resolve } from 'node:path';
 import { resolveActiveAuthorForHook } from '../core/authors.ts';
 import { resolveOrStartSession } from '../core/events.ts';
-import { ShowtailError } from '../core/errors.ts';
 import { emitJson } from '../core/output.ts';
-import { findRoot, pathsForRoot, readConfig, resolveAnchor } from '../core/storage.ts';
+import {
+  findRoot,
+  isHomedirCatchAll,
+  pathsForRoot,
+  readConfig,
+  resolveAnchor,
+} from '../core/storage.ts';
 import { ensureInitialized } from './init.ts';
 
 export interface EnsureOptions {
@@ -25,16 +29,24 @@ export interface EnsureOptions {
  * can't be settled, the trail is still created but no session is opened.
  */
 export async function runEnsure(options: EnsureOptions = {}): Promise<void> {
-  const cwd = options.cwd ?? process.cwd();
+  const cwd = resolve(options.cwd ?? process.cwd());
+
+  if (isHomedirCatchAll(cwd)) {
+    if (options.json) {
+      emitJson({
+        created: false,
+        initialized: false,
+        reason: 'home-directory',
+        nextAction: 'open-project',
+      });
+    } else {
+      console.log('Showtail is ready — open a project folder and start working.');
+    }
+    return;
+  }
+
   const existing = findRoot(cwd);
   const root = existing ?? (await resolveAnchor(cwd));
-
-  if (!existing && resolve(root) === resolve(homedir())) {
-    throw new ShowtailError(
-      'Refusing to initialize Showtail in your HOME directory. Run this inside a project folder.',
-      1,
-    );
-  }
 
   const { created } = await ensureInitialized(root);
   const paths = pathsForRoot(root);

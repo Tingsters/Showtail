@@ -15,8 +15,12 @@ showtail report    # when you're done: generate the report for your educator
 
 **There is no setup step.** Installing turns tracking on and connects your AI tools for
 you — including ones you install later — so a student never has to run a command to get
-started. Just install, work, and generate a report at the end. Prefer to wire up one
-project by hand, or turn tracking off? See [`showtail track`](https://tingsters.github.io/Showtail/getting-started/quickstart/#wiring-up-one-project-by-hand)
+started. Just open the folder for your assignment, work, and generate a report at the
+end. Showtail never treats your home folder as one giant project; if an AI tool starts
+there, your work waits safely until an edited file identifies the real project. A nested
+repository or project folder also gets its own trail instead of being absorbed by a broad
+parent trail. Prefer to wire up one project by hand, or turn tracking off? See
+[`showtail track`](https://tingsters.github.io/Showtail/getting-started/quickstart/#wiring-up-one-project-by-hand)
 and `showtail setup --off`.
 
 ## 📚 Documentation

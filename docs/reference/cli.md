@@ -34,7 +34,7 @@ process-level opt-out.
 | Command | What it does |
 | ------- | ------------ |
 | `setup` | Manage automatic tracking (it turns on by itself after install). `--off` turns it off; re-run to turn it back on. Flags: `--off`, `--yes`, `--json`. |
-| `track [path]` | Set up one project by hand: name it (`-p, --project <name>`), declare a non-code folder (like a book) as a project, and pull its already-captured work in — including work whose files have since **moved** (see [Moving a project](#moving-a-project)). Projects otherwise initialize automatically. Safe to re-run: a second run in an already-tracked folder still pulls in newly-orphaned work. Flags: `-p, --project <name>`, `--json` (emits `backfilled` and `candidates`). |
+| `track [path]` | Set up one project by hand: name it (`-p, --project <name>`), declare a non-code folder (like a book) as a project, and pull its already-captured work in — including work whose files have since **moved** (see [Moving a project](#moving-a-project)). Projects otherwise initialize automatically. Safe to re-run; running it in HOME is a successful no-op because HOME is never one project. Flags: `-p, --project <name>`, `--json` (emits `backfilled` and `candidates`; HOME returns `reason: "home-directory"` and `nextAction: "open-project"`). |
 | `migrate [tool]` | Enrich older trails from the AI tools' retained local transcripts. Recovers missing replies, edits, plans, decisions, tool calls/results, models, and recap statistics without rewriting existing journal lines. With no tool, checks every supported local provider. Flags: `-s, --session <id>`, `--file <path>` (requires a tool), `--dry-run`, `-y, --yes`, `--json`, `--resume <run-id>`. `showtail migrate undo [batch-id]` removes a migration batch and records the declared rewrite for `verify`. |
 | `redact` | Scrub a secret the write-time rules missed out of an already-captured trail, instead of deleting `.showtail/`. `--rescan` re-runs the project's current rules (including a `settings.redact.custom` added since capture) over every stored object, preview, and plan file; `--pattern <regex>` scrubs one specific value — a **preview until you pass `--yes`**. Rewrites the content to its new address, repoints the journal, deletes the old object, re-links the hash chain, and records a dated redaction marker `verify` reports. Flags: `--rescan`, `--pattern <regex>`, `--dry-run`, `-y, --yes`, `--json`. See [Privacy &amp; redaction](../concepts/privacy.md#if-something-leaked-anyway). |
 
@@ -56,7 +56,8 @@ current project capture and redaction settings still apply.
     Tracking is automatic, so `ensure` (init + open a session), `start` (begin a
     session, `-l, --label`), and `end` (close a session) are hidden from `--help`. They
     still work — the editor extension calls `ensure` on project open, and `start`/`end`
-    give power users manual session control — but you never need them.
+    give power users manual session control — but you never need them. Like `track`,
+    `ensure` is a successful no-op in HOME and tells callers to open a project.
 
 ## Capture your work
 
@@ -85,9 +86,10 @@ current project capture and redaction settings still apply.
 
 Work Showtail captured that isn't currently sitting in a project waits in the
 **inbox** — either because it had no project to go to (folderless / scratch
-sessions), or because the folder it *was* in has since moved or been deleted. By
-default the inbox shows work worth acting on; low-signal and scratch work is kept
-aside and revealed with `--all`.
+sessions), because one session touched multiple projects and Showtail refused to
+guess, or because the folder it *was* in has since moved or been deleted. By default
+the inbox shows work worth acting on; low-signal and scratch work is kept aside and
+revealed with `--all`.
 
 | Command | What it does |
 | ------- | ------------ |

@@ -18,6 +18,12 @@
 
 ### Changed
 
+- **Project routing now follows the work instead of a broad launch folder.** HOME is
+  never initialized as a project, nested Git or marker-based projects cannot be
+  absorbed by an ancestor trail, and sessions launched from HOME move into the project
+  revealed by their edits. Sessions that touch multiple projects stay intact in the
+  machine-local inbox instead of being attributed on a guess. Automatic Copilot and
+  Antigravity imports use the same boundary rules.
 - **The one-line installers verify releases before replacing a working install.**
   Windows, macOS, and Linux now download to temporary files, check the published
   `SHA256SUMS`, validate the executable, and restore the previous binary if the

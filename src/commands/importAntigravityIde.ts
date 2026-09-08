@@ -467,11 +467,13 @@ async function runImportAntigravityIdeAuto(
     skipped: 0,
   };
   const importedRoots: string[] = [];
+  const routedRoots: string[] = [];
   for (const [root, edits] of byRoot) {
     const paths = pathsForRoot(root);
     if (!existsSync(paths.config)) continue; // not a tracked project — skip
     const author = await resolveActiveAuthorForHook(paths, { cwd: root });
     if (!author) continue; // can't attribute without prompting — skip this root
+    routedRoots.push(root);
     const res = await importIntoRoot(author, root, transcript, edits, options);
     totals.prompts += res.prompts;
     totals.responses += res.responses;
@@ -483,12 +485,16 @@ async function runImportAntigravityIdeAuto(
 
   // No real project trail received this conversation (folderless/scratch work, or
   // a pure-chat conversation): park it in the inbox via the ledger.
-  if (importedRoots.length === 0) {
+  if (routedRoots.length === 0) {
     const inboxed = captureConversationToInbox(info, transcript, allEdits, options);
     printAutoResult(totals, importedRoots, options.withResponses !== false, inboxed);
     return;
   }
-  printAutoResult(totals, importedRoots, options.withResponses !== false);
+  printAutoResult(
+    totals,
+    importedRoots.length > 0 ? importedRoots : routedRoots,
+    options.withResponses !== false,
+  );
 }
 
 /**

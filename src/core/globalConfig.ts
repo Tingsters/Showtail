@@ -8,10 +8,10 @@ import { readJson, writeJson } from './storage.ts';
  * one-time `showtail setup` has run and whether automatic tracking is enabled.
  *
  * Deliberately stored under `~/.showtail-cli/`, NOT `~/.showtail`: the latter is
- * the per-project marker, and a `.showtail/` in HOME would make `findRoot` treat
- * the entire home directory as one project. The distinct name keeps the two
- * concepts from colliding. `SHOWTAIL_HOME` overrides the location so tests can
- * point it at a temp dir (mirrors the `SHOWTAIL_ROOT_CEILING` pattern).
+ * the per-project marker. Current routing ignores that marker in HOME, while the
+ * distinct global name keeps machine state and project data separate across all
+ * versions. `SHOWTAIL_HOME` overrides the location so tests can point it at a temp
+ * dir (mirrors the `SHOWTAIL_ROOT_CEILING` pattern).
  */
 export interface GlobalConfig {
   /** Schema version, for upgrade-on-read. */

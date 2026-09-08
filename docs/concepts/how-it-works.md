@@ -61,6 +61,12 @@ Each event is appended to a local, file-based trail under `.showtail/`. See
 [Data layout](data-layout.md) for the exact structure, and
 [Example report](example-report.md) for what the rendered output looks like.
 
+Showtail identifies the project from edited files and nearby project boundaries. It
+never treats the user's home folder as a project, and a broad parent trail cannot absorb
+a nested repository or marker-based project. Work with no clear project — including a
+session that edits two projects — stays complete in the machine-local inbox instead of
+being filed on a guess.
+
 ## Why the trail is hard to fake
 
 The trail is plain text on your own machine, so nothing stops you from opening

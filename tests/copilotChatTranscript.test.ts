@@ -515,9 +515,45 @@ describe('copilot import (end to end via --file)', () => {
       expect(
         readAllEvents(projPaths).filter((e) => e.tool === 'github-copilot').length,
       ).toBe(cp.length);
+      expect(
+        unplacedSessions({ includeHidden: true }).filter(
+          (session) => session.tool === 'github-copilot',
+        ),
+      ).toHaveLength(0);
     } finally {
       cleanup(proj);
       cleanup(elsewhere);
+    }
+  });
+
+  test('--auto does not route a nested repository into a broad parent trail', async () => {
+    const parent = makeTempDir();
+    try {
+      await runInit({ cwd: parent });
+      const repo = join(parent, 'school', 'website');
+      mkdirSync(join(repo, '.git'), { recursive: true });
+      mkdirSync(join(repo, 'src'), { recursive: true });
+      const file = join(parent, 'nested-repo.jsonl');
+      writeFileSync(file, makeJournal(repo), 'utf8');
+      const parentPaths = pathsForRoot(parent);
+      const before = readAllEvents(parentPaths).length;
+
+      await runImportCopilot(undefined, {
+        file,
+        auto: true,
+        withResponses: true,
+        cwd: parent,
+      });
+
+      expect(readAllEvents(parentPaths)).toHaveLength(before);
+      expect(existsSync(join(repo, '.showtail'))).toBe(false);
+      const inbox = unplacedSessions({ includeHidden: true }).filter(
+        (session) => session.tool === 'github-copilot',
+      );
+      expect(inbox).toHaveLength(1);
+      expect(inbox[0]!.nativeSessionId).toBe('nested-repo');
+    } finally {
+      cleanup(parent);
     }
   });
 

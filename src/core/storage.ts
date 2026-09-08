@@ -11,10 +11,25 @@ import {
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import type { Config, Session, State } from '../types.ts';
-import { gitToplevel } from './git.ts';
 import { makeId } from './ids.ts';
 
 export const SHOWTAIL_DIR = '.showtail';
+
+/** Files that identify a non-Git development workspace. */
+const DEV_MARKERS = [
+  'package.json',
+  'tsconfig.json',
+  'pyproject.toml',
+  'requirements.txt',
+  'go.mod',
+  'Cargo.toml',
+  'pom.xml',
+  'build.gradle',
+  'Gemfile',
+  'composer.json',
+  'CMakeLists.txt',
+  'Makefile',
+];
 /**
  * Bumped to 4 for the stable `trailId` (the global ledger links sessions to a
  * trail by id, not by its movable path). Older trails are upgraded on read by
@@ -131,8 +146,9 @@ export function authorPaths(
 }
 
 /**
- * Walk up from `startDir` looking for an existing `.showtail/` folder.
- * Returns the project root (the folder containing `.showtail/`) or null.
+ * Find the existing `.showtail/` for the project containing `startDir`.
+ * A broad ancestor trail cannot cross a nearer Git or development-workspace
+ * boundary, and HOME is never treated as a project trail.
  *
  * `SHOWTAIL_ROOT_CEILING` (when set) caps the upward walk at that directory:
  * a `.showtail/` *at* the ceiling is still found, but discovery never climbs
@@ -142,22 +158,8 @@ export function authorPaths(
  * normal use, so real users see the unchanged walk-to-filesystem-root behavior.
  */
 export function findRoot(startDir: string = process.cwd()): string | null {
-  const ceilingEnv = process.env.SHOWTAIL_ROOT_CEILING;
-  const ceiling = ceilingEnv && ceilingEnv.length > 0 ? resolve(ceilingEnv) : null;
-  let dir = resolve(startDir);
-  // Walk up until the filesystem root (or the ceiling, if one is set).
-  while (true) {
-    if (existsSync(join(dir, SHOWTAIL_DIR))) return dir;
-    // pathKey, not ===: on Windows the walked-up dir and the ceiling can spell the
-    // same directory differently (drive-letter case, or the 8.3 short form GitHub
-    // Actions puts in TEMP vs the long form a child's process.cwd() reports). A
-    // missed match here doesn't just fail a comparison — it lets the walk escape
-    // the test sandbox and resolve a real `~/.showtail`.
-    if (ceiling && pathKey(dir) === pathKey(ceiling)) return null;
-    const parent = dirname(dir);
-    if (parent === dir) return null;
-    dir = parent;
-  }
+  const root = projectAnchor(startDir);
+  return root && existsSync(join(root, SHOWTAIL_DIR)) ? root : null;
 }
 
 /**
@@ -171,33 +173,13 @@ export function requirePaths(startDir: string = process.cwd()): ShowtailPaths {
 }
 
 /**
- * The folder a new trail should be anchored at for work happening in `cwd`: the
- * git repo root when `cwd` is inside one, else `cwd` itself. This is the single
- * source of truth that keeps auto-init and {@link findRoot} in agreement — the
- * repo root is an ancestor of every subdir, so once `.showtail/` exists there
- * every subdir's `findRoot` resolves to it and no nested/duplicate trail is made.
+ * The folder a new trail should be anchored at for work happening in `cwd`.
+ * Reuses the same project-boundary rules as {@link findRoot}; when no project
+ * evidence exists, callers receive `cwd` and decide whether it is eligible.
  */
 export async function resolveAnchor(cwd: string = process.cwd()): Promise<string> {
-  const top = await gitToplevel(cwd);
-  return top ? resolve(top) : resolve(cwd);
+  return projectAnchor(cwd) ?? resolve(cwd);
 }
-
-/** Files that mark a directory as a real development workspace. */
-const DEV_MARKERS = [
-  '.git',
-  'package.json',
-  'tsconfig.json',
-  'pyproject.toml',
-  'requirements.txt',
-  'go.mod',
-  'Cargo.toml',
-  'pom.xml',
-  'build.gradle',
-  'Gemfile',
-  'composer.json',
-  'CMakeLists.txt',
-  'Makefile',
-];
 
 /**
  * Whether `dir` is somewhere automatic tracking should create a trail: a real
@@ -207,16 +189,20 @@ const DEV_MARKERS = [
  */
 export function isEligibleAnchor(dir: string): boolean {
   const resolved = resolve(dir);
-  if (resolved === resolve(homedir())) return false;
-  return DEV_MARKERS.some((marker) => existsSync(join(resolved, marker)));
+  const ceiling = rootCeiling();
+  if (isHomedirCatchAll(resolved)) return false;
+  if (!ceiling && isTempPath(resolved)) return false;
+  return (
+    existsSync(join(resolved, '.git')) ||
+    DEV_MARKERS.some((marker) => existsSync(join(resolved, marker)))
+  );
 }
 
 /**
  * Whether `dir` is the user's HOME — i.e. an existing `~/.showtail` is the
  * machine-wide catch-all, not a real project trail. Routing should never *place*
- * folderless work here (it belongs in the inbox); only an explicit, deliberate
- * trail at HOME would be one, and we don't auto-create those (see
- * {@link isEligibleAnchor}).
+ * folderless work here (it belongs in the inbox). `track` and `ensure` also
+ * refuse to create a trail here, so HOME can never become a project boundary.
  */
 export function isHomedirCatchAll(dir: string): boolean {
   return pathKey(dir) === pathKey(homedir());
@@ -253,29 +239,72 @@ export function isTempPath(dir: string): boolean {
 
 /**
  * The eligible project root enclosing `dir`, or null when `dir` is scratch.
- * Walks up (like {@link findRoot}) for either an existing `.showtail/` (a tracked
- * trail) or a `.git` (a real repo); a non-git, marker-only, *untracked* folder is
- * intentionally scratch until `showtail track`. A resolved root that is the home
- * dir or a temp dir is never eligible. Honors `SHOWTAIL_ROOT_CEILING` like
- * `findRoot` (and, in that hermetic-test mode, skips the temp-dir exclusion so
- * fixtures under the OS temp dir still resolve).
+ * Git roots outrank package markers so a monorepo stays one project. An explicit
+ * nested trail may scope part of a Git repo; outside Git, a nearer package marker
+ * outranks a broad ancestor trail. HOME and production temp paths never qualify.
  */
 export function eligibleProjectRoot(dir: string): string | null {
-  const ceilingEnv = process.env.SHOWTAIL_ROOT_CEILING;
-  const ceiling = ceilingEnv && ceilingEnv.length > 0 ? resolve(ceilingEnv) : null;
-  let d = resolve(dir);
+  return projectAnchor(dir);
+}
+
+interface ProjectCandidates {
+  ceiling: string | null;
+  trail: string | null;
+  git: string | null;
+  marker: string | null;
+}
+
+/** Collect the nearest candidate of each kind without committing to a root yet. */
+function projectCandidates(startDir: string): ProjectCandidates {
+  const ceiling = rootCeiling();
+  let trail: string | null = null;
+  let git: string | null = null;
+  let marker: string | null = null;
+  let d = resolve(startDir);
   while (true) {
-    if (existsSync(join(d, SHOWTAIL_DIR)) || existsSync(join(d, '.git'))) {
-      if (isHomedirCatchAll(d)) return null;
-      if (!ceiling && isTempPath(d)) return null;
-      return d;
-    }
-    // pathKey, not ===: see findRoot's ceiling check.
-    if (ceiling && pathKey(d) === pathKey(ceiling)) return null;
+    if (!trail && existsSync(join(d, SHOWTAIL_DIR))) trail = d;
+    if (!git && existsSync(join(d, '.git'))) git = d;
+    if (!marker && DEV_MARKERS.some((name) => existsSync(join(d, name)))) marker = d;
+    if (ceiling && pathKey(d) === pathKey(ceiling)) break;
     const parent = dirname(d);
-    if (parent === d) return null;
+    if (parent === d) break;
     d = parent;
   }
+  return { ceiling, trail, git, marker };
+}
+
+/** Select the real project boundary from the candidates found on one path. */
+function projectAnchor(startDir: string): string | null {
+  const candidates = projectCandidates(startDir);
+  const { ceiling } = candidates;
+  const usable = (candidate: string | null): string | null => {
+    if (!candidate || isHomedirCatchAll(candidate)) return null;
+    if (!ceiling && isTempPath(candidate)) return null;
+    return candidate;
+  };
+  const trail = usable(candidates.trail);
+  const git = usable(candidates.git);
+  const marker = usable(candidates.marker);
+  let root: string | null;
+
+  if (git) {
+    // A trail inside the repository is an intentional nested scope. A trail above
+    // the repository is a container/catch-all and must not absorb the repo.
+    root = trail && isPathUnder(trail, git) ? trail : git;
+  } else if (trail && marker) {
+    // Both lie on the same ancestor chain; whichever is deeper is the actual
+    // project boundary. Equality chooses the already-initialized trail.
+    root = isPathUnder(trail, marker) ? trail : marker;
+  } else {
+    root = trail ?? marker;
+  }
+
+  return root;
+}
+
+function rootCeiling(): string | null {
+  const value = process.env.SHOWTAIL_ROOT_CEILING;
+  return value && value.length > 0 ? resolve(value) : null;
 }
 
 // --- JSON helpers ---------------------------------------------------------

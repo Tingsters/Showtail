@@ -1,4 +1,4 @@
-import { existsSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, test } from 'bun:test';
 import {
@@ -132,8 +132,38 @@ describe('runImportAntigravityIde --auto routes by edited-file paths', () => {
       const before = readAllEvents(paths).length;
       await runImportAntigravityIde(undefined, { auto: true, file });
       expect(readAllEvents(paths).length).toBe(before);
+      expect(
+        unplacedSessions({ includeHidden: true }).filter(
+          (session) => session.tool === 'antigravity-ide',
+        ),
+      ).toHaveLength(0);
     } finally {
       cleanup(proj);
+    }
+  });
+
+  test('a nested repository is not imported into a broad parent trail', async () => {
+    const parent = makeTempDir();
+    try {
+      await runInit({ cwd: parent });
+      const repo = join(parent, 'school', 'calculator');
+      mkdirSync(join(repo, '.git'), { recursive: true });
+      const editPath = `${repo.replace(/\\/g, '/')}/calculator.py`;
+      const file = join(parent, 'nested-repo.jsonl');
+      writeFileSync(file, makeTranscript(editPath), 'utf8');
+      const parentPaths = pathsForRoot(parent);
+      const before = readAllEvents(parentPaths).length;
+
+      await runImportAntigravityIde(undefined, { auto: true, file, cwd: parent });
+
+      expect(readAllEvents(parentPaths)).toHaveLength(before);
+      expect(existsSync(join(repo, '.showtail'))).toBe(false);
+      const inbox = unplacedSessions({ includeHidden: true }).filter(
+        (session) => session.tool === 'antigravity-ide',
+      );
+      expect(inbox).toHaveLength(1);
+    } finally {
+      cleanup(parent);
     }
   });
 

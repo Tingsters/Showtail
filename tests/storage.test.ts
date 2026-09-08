@@ -5,6 +5,7 @@ import { homedir } from 'node:os';
 import {
   NotInitializedError,
   appendJsonl,
+  eligibleProjectRoot,
   findRoot,
   isHomedirCatchAll,
   pathsForRoot,
@@ -65,6 +66,71 @@ describe('storage', () => {
       expect(findRoot(nested)).toBe(dir);
     } finally {
       cleanup(dir);
+    }
+  });
+
+  test('a nested git repo is not captured by a broad parent trail', () => {
+    const parent = makeTempDir();
+    try {
+      mkdirSync(join(parent, '.showtail'), { recursive: true });
+      const repo = join(parent, 'projects', 'parser');
+      const nested = join(repo, 'src');
+      mkdirSync(join(repo, '.git'), { recursive: true });
+      mkdirSync(nested, { recursive: true });
+
+      expect(eligibleProjectRoot(nested)).toBe(repo);
+      expect(findRoot(nested)).toBeNull();
+
+      mkdirSync(join(repo, '.showtail'), { recursive: true });
+      expect(findRoot(nested)).toBe(repo);
+    } finally {
+      cleanup(parent);
+    }
+  });
+
+  test('a non-git project marker outranks a broad parent trail', () => {
+    const parent = makeTempDir();
+    try {
+      mkdirSync(join(parent, '.showtail'), { recursive: true });
+      const project = join(parent, 'courses', 'calculator');
+      const nested = join(project, 'src');
+      mkdirSync(nested, { recursive: true });
+      writeJson(join(project, 'package.json'), { private: true });
+
+      expect(eligibleProjectRoot(nested)).toBe(project);
+      expect(findRoot(nested)).toBeNull();
+    } finally {
+      cleanup(parent);
+    }
+  });
+
+  test('git keeps a monorepo together despite nested package markers', () => {
+    const repo = makeTempDir();
+    try {
+      mkdirSync(join(repo, '.git'), { recursive: true });
+      mkdirSync(join(repo, '.showtail'), { recursive: true });
+      const pkg = join(repo, 'packages', 'web');
+      const nested = join(pkg, 'src');
+      mkdirSync(nested, { recursive: true });
+      writeJson(join(pkg, 'package.json'), { private: true });
+
+      expect(eligibleProjectRoot(nested)).toBe(repo);
+      expect(findRoot(nested)).toBe(repo);
+    } finally {
+      cleanup(repo);
+    }
+  });
+
+  test('ordinary subfolders still inherit their tracked project root', () => {
+    const project = makeTempDir();
+    try {
+      mkdirSync(join(project, '.showtail'), { recursive: true });
+      const nested = join(project, 'notes', 'drafts');
+      mkdirSync(nested, { recursive: true });
+      expect(eligibleProjectRoot(nested)).toBe(project);
+      expect(findRoot(nested)).toBe(project);
+    } finally {
+      cleanup(project);
     }
   });
 

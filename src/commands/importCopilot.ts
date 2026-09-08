@@ -253,10 +253,9 @@ function sessionIdFromFile(file: string): string {
  * `--auto`: route a session's prompts/replies/edits by edited-file path into each
  * enclosing `.showtail/` project (mirrors `runImportAntigravityIdeAuto`). Edits under
  * a tracked project land there; if no edit resolves to a trail (pure Q&A / untracked
- * scratch), fall back to the trail enclosing the invocation cwd — the extension
- * invokes with `cwd = homedir()`, so an empty-window chat lands in a machine-wide
- * `~/.showtail` when present. The full conversation is imported into every touched
- * trail; roots whose author can't be resolved without prompting are skipped.
+ * scratch), keep the conversation in the machine-local inbox. The full
+ * conversation is imported into every touched trail; roots whose author can't be
+ * resolved without prompting are skipped.
  */
 async function runImportCopilotAuto(
   target: string | undefined,
@@ -299,11 +298,13 @@ async function runImportCopilotAuto(
     skipped: 0,
   };
   const importedRoots: string[] = [];
+  const routedRoots: string[] = [];
   for (const [root, edits] of byRoot) {
     const paths = pathsForRoot(root);
     if (!existsSync(paths.config)) continue; // not a tracked project — skip
     const author = await resolveActiveAuthorForHook(paths, { cwd: root });
     if (!author) continue; // can't attribute without prompting — skip this root
+    routedRoots.push(root);
 
     const transcript = parseCopilotSession(session, root);
     const msg = await importCopilotMessages(author, transcript, {
@@ -346,7 +347,7 @@ async function runImportCopilotAuto(
   // No real project trail received this conversation (folderless / empty-window
   // Copilot chat, or pure Q&A): park it in the inbox via the ledger so
   // `showtail inbox` can place it — instead of dumping it into ~/.showtail.
-  if (importedRoots.length === 0) {
+  if (routedRoots.length === 0) {
     const inboxed = captureCopilotConversationToInbox(sid, session, allEdits, options);
     if (!options.quiet)
       printAutoResult(totals, importedRoots, options.withResponses !== false, inboxed);
@@ -354,7 +355,11 @@ async function runImportCopilotAuto(
   }
 
   if (options.quiet) return;
-  printAutoResult(totals, importedRoots, options.withResponses !== false);
+  printAutoResult(
+    totals,
+    importedRoots.length > 0 ? importedRoots : routedRoots,
+    options.withResponses !== false,
+  );
 }
 
 /** The newest ISO timestamp across a conversation's messages and recovered edits. */

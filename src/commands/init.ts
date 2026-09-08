@@ -1,5 +1,4 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import type { Config } from '../types.ts';
 import { establishIdentity } from '../core/authors.ts';
@@ -17,6 +16,7 @@ import {
 import {
   CONFIG_VERSION,
   ensureTrailId,
+  isHomedirCatchAll,
   pathsForRoot,
   readConfig,
   writeConfig,
@@ -132,12 +132,12 @@ export async function ensureInitialized(
     mkdirSync(dir, { recursive: true });
   }
 
-  // One git probe drives both the commit-capture flag and the anchor record:
-  // a repo whose top-level *is* this root was anchored at the repo; otherwise
-  // the trail sits at a plain working dir.
+  // Git availability controls commit capture. The on-disk `.git` entry identifies
+  // whether this exact root is the repository boundary without comparing Git's
+  // long path spelling to Windows' possible 8.3 spelling of the same directory.
   const top = await gitToplevel(root);
   const git = top !== undefined;
-  const anchorKind: 'git' | 'cwd' = git && resolve(top) === resolve(root) ? 'git' : 'cwd';
+  const anchorKind: 'git' | 'cwd' = existsSync(join(root, '.git')) ? 'git' : 'cwd';
 
   const config: Config = {
     version: CONFIG_VERSION,
@@ -264,7 +264,27 @@ function reportBackfill(result: BackfillResult): void {
  * that's already set up just bootstraps *their own* author folder.
  */
 export async function runInit(options: InitOptions = {}): Promise<void> {
-  const root = options.cwd ?? process.cwd();
+  const root = resolve(options.cwd ?? process.cwd());
+
+  // HOME is a container for many unrelated projects, never a project itself.
+  // Treat an accidental `showtail track` here as a friendly no-op instead of
+  // creating the catch-all trail that would absorb every descendant.
+  if (isHomedirCatchAll(root)) {
+    if (options.json) {
+      emitJson({
+        created: false,
+        initialized: false,
+        reason: 'home-directory',
+        nextAction: 'open-project',
+      });
+    } else {
+      console.log('Showtail is ready — your home folder is not treated as a project.');
+      console.log(
+        'Open the folder you are working on and continue; its trail will start automatically.',
+      );
+    }
+    return;
+  }
   const paths = pathsForRoot(root);
 
   if (existsSync(paths.config)) {
@@ -333,16 +353,6 @@ export async function runInit(options: InitOptions = {}): Promise<void> {
       candidates: back.candidates,
     });
     return;
-  }
-
-  // Guard against initializing in the home directory: that would make every
-  // folder under your home look like this one project (commands walk up to the
-  // nearest .showtail/). Warn, but still proceed if that's truly intended.
-  if (resolve(root) === resolve(homedir())) {
-    console.log('Warning: initializing Showtail in your HOME directory.');
-    console.log('  Work in any subfolder would then be recorded into this one trail.');
-    console.log('  Prefer running `showtail track` inside your actual project folder.');
-    console.log('');
   }
 
   await ensureInitialized(root, { project: options.project });

@@ -37,6 +37,20 @@ object store is addressed purely by content hash. Nothing here records where the
 project sits on disk, which is why the whole folder can be moved, renamed, or
 cloned onto another machine and still make sense.
 
+### How Showtail chooses the project root
+
+Showtail routes from the files a session edits, not just the folder where the AI tool
+started. A Git repository is a project boundary; outside Git, common project files such as
+`package.json`, `pyproject.toml`, `go.mod`, and `Cargo.toml` provide the boundary. Package
+files inside one Git repository do not split a monorepo, but an explicitly tracked nested
+folder can define a narrower trail.
+
+The user's home folder and production temporary folders are never project roots. A broad
+ancestor `.showtail/` cannot reach across a nearer project boundary, so an accidental
+trail in a parent folder cannot absorb work from a nested project. If edits resolve to
+more than one project, Showtail keeps the session only in the ledger until the student
+chooses where it belongs.
+
 ## The machine-local ledger — `~/.showtail-cli/`
 
 Every session is captured to a machine-local ledger *first*, before Showtail works

@@ -57,11 +57,14 @@ import {
   ensureLedgerSession,
   markInbox,
   markPlaced,
+  readLedgerRecords,
   readLedgerSession,
+  sessionWorkRoots,
   setLedgerTranscriptPath,
   setLedgerTurn,
   type LedgerSession,
 } from '../core/ledger.ts';
+import { removeOtherLedgerProjections } from '../core/projectionRouting.ts';
 import { captureTranscriptToLedger } from '../core/ledgerCapture.ts';
 import {
   conversationEventEnabled,
@@ -374,19 +377,57 @@ export async function runHook(
       }
     }
 
+    // Route from the work itself, not merely the tool's launch directory. This
+    // lets a session started in HOME remain safely in the ledger until an edit
+    // reveals its real project, and prevents a broad parent trail from absorbing
+    // a nested repository or marker-based workspace.
+    let routedAnchor: string | undefined;
+    if (ledger) {
+      const currentLedger = readLedgerSession(ledger.id) ?? ledger;
+      const ledgerRecords = readLedgerRecords(ledger.id);
+      const workRoots = sessionWorkRoots(currentLedger);
+      const hasEdits = ledgerRecords.some((record) => record.kind === 'edit');
+      if (workRoots.length > 1 || (hasEdits && workRoots.length === 0)) {
+        try {
+          removeOtherLedgerProjections(currentLedger);
+        } catch {
+          // The ledger still has the complete session even if cleanup is delayed.
+        }
+        safeMarkInbox(ledger.id);
+        return;
+      }
+      routedAnchor = workRoots[0];
+      root = routedAnchor ? findRoot(routedAnchor) : null;
+
+      // A real project boundary was found, but it has no trail yet. Remove any
+      // earlier cwd-based placement now, even if automatic initialization is off
+      // or later setup/identity work fails. The ledger remains complete.
+      if (routedAnchor && !root) {
+        try {
+          removeOtherLedgerProjections(currentLedger);
+        } catch {
+          // Best-effort cleanup; never interrupt the host tool.
+        }
+        safeMarkInbox(ledger.id);
+      }
+    }
+
     if (!root) {
       // Automatic tracking: silently start a trail on the first real activity in
       // an eligible project (git repo / dev folder), once the user has opted in
-      // via `showtail setup`. Only a task start may create one — never a stray
-      // edit/stop. `isEligibleAnchor` also refuses HOME, so a whole home dir is
-      // never turned into one shared trail. When no eligible root resolves the
-      // work is NOT dropped — it stays in the ledger inbox (`showtail inbox`).
-      if (event !== 'session-start' && event !== 'user-prompt') {
+      // via `showtail setup`. A post-edit may create one only when this ledger
+      // session already contains a real prompt — enough evidence that it is not a
+      // stray editor event. When no root resolves, the work remains in the inbox.
+      const promptedEdit =
+        event === 'post-edit' &&
+        ledger !== undefined &&
+        readLedgerRecords(ledger.id).some((record) => record.kind === 'prompt');
+      if (event !== 'session-start' && event !== 'user-prompt' && !promptedEdit) {
         if (ledger) safeMarkInbox(ledger.id);
         return;
       }
       if (!autoInitEnabled()) return;
-      const anchor = await resolveAnchor(cwd);
+      const anchor = routedAnchor ?? (await resolveAnchor(cwd));
       if (!isEligibleAnchor(anchor)) {
         if (ledger) safeMarkInbox(ledger.id);
         return;
@@ -402,13 +443,18 @@ export async function runHook(
     const config = readConfig(paths);
     noteKnownProject(paths.root, config.trailId);
 
-    // Record where this session was placed: its stable trailId and the trail's
-    // current location. Minting the trailId here also upgrades an older trail
-    // (config < v4) on first sight. A later move of the repo is recognized by
-    // this id; a delete leaves the session reattributable from the ledger.
+    // Once the destination trail exists, remove projections from any earlier
+    // project before identity resolution. If attribution cannot be resolved yet,
+    // the complete session safely remains in the ledger inbox instead of in the
+    // wrong parent trail.
+    let ledgerTrailId: string | undefined;
     if (ledger) {
       try {
-        markPlaced(ledger.id, ensureTrailId(paths), paths.root);
+        ledgerTrailId = ensureTrailId(paths);
+        removeOtherLedgerProjections(
+          readLedgerSession(ledger.id) ?? ledger,
+          ledgerTrailId,
+        );
       } catch {
         // Placement bookkeeping is best-effort; capture already succeeded.
       }
@@ -425,6 +471,17 @@ export async function runHook(
       migrateLegacySessions(author);
     } catch {
       // Migration is best-effort; a capture must never break on it.
+    }
+
+    // Keep one authoritative projection. If an edit revealed a better project
+    // than an earlier prompt/cwd did, lift the old ledger batch out before writing
+    // the complete session here. The machine-local ledger always retains it.
+    if (ledger) {
+      try {
+        markPlaced(ledger.id, ledgerTrailId ?? ensureTrailId(paths), paths.root);
+      } catch {
+        // Placement bookkeeping is best-effort; capture already succeeded.
+      }
     }
 
     // On any live capture, first close this author's sessions that have gone idle

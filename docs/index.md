@@ -93,7 +93,8 @@ showtail report    # when you're done: generate the report for your educator
 
 There is **no setup command**. Installing turns tracking on and connects your AI tools —
 including ones you install later — and Showtail sets up each project on first use. Nothing
-to remember.
+to remember. Your home folder is never treated as one giant project: Showtail waits for
+the work itself to reveal the right project folder.
 
 [Read the full quickstart →](getting-started/quickstart.md)
 

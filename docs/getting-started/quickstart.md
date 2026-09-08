@@ -16,6 +16,19 @@ time you work in a project, **Showtail initializes it for you** — the `.showta
 is created on the spot. Each time a tool is auto-connected, Showtail prints a short privacy
 note telling you what it wired up and how to turn it off (`showtail setup --off`).
 
+## If your AI tool starts in your home folder
+
+That is safe. Showtail never creates or uses a project trail in your home folder, even if
+you run `showtail track` or `showtail ensure` there by mistake. Your prompt is kept in the
+machine-local ledger, and the first file edit under your assignment tells Showtail where
+the project really is.
+
+Showtail also respects projects nested inside broader folders. A nested Git repository or
+a folder with its own project file (for example `package.json`, `pyproject.toml`, or
+`Cargo.toml`) is not absorbed by a `.showtail/` higher up. If one AI session genuinely
+edits files in more than one project, Showtail does not guess: it removes the session from
+either project trail and leaves the complete session in `showtail inbox` for you to place.
+
 ## Wiring up one project by hand
 
 Tracking is on everywhere already, so you normally don't need this. But if you'd rather set

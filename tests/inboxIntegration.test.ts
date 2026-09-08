@@ -17,16 +17,18 @@ import {
 describe('status surfaces the inbox (D1)', () => {
   test('status --json counts surfaced (real-project) unplaced sessions, not scratch', () => {
     const repo = makeTempDir(); // a tracked project — where we run `status`
-    const proj = makeTempDir(); // an untracked git repo — real project, not yet placed
+    const proj = makeTempDir(); // first real project touched by one session
+    const otherProj = makeTempDir(); // second project makes placement ambiguous
     const scratch = makeTempDir(); // folderless invocation cwd
     const home = makeTempDir();
     try {
       enableAutoInit(home);
       const env = envWithHome(home);
       expect(spawnSync('git', ['init'], { cwd: proj }).status).toBe(0);
+      expect(spawnSync('git', ['init'], { cwd: otherProj }).status).toBe(0);
 
-      // A folderless prompt whose EDIT lands in the untracked git repo → parked in the
-      // inbox, but SURFACED because the work is in a real project.
+      // A folderless prompt whose edits span two projects is kept in the inbox rather
+      // than guessed, but SURFACED because the work is real project work.
       runCli(scratch, ['hook', 'user-prompt'], {
         input: JSON.stringify({
           hook_event_name: 'UserPromptSubmit',
@@ -43,6 +45,20 @@ describe('status surfaces the inbox (D1)', () => {
           session_id: 's1',
           tool_name: 'Edit',
           tool_input: { file_path: join(proj, 'a.ts'), old_string: 'x', new_string: 'y' },
+        }),
+        env,
+      });
+      runCli(scratch, ['hook', 'post-edit'], {
+        input: JSON.stringify({
+          hook_event_name: 'PostToolUse',
+          cwd: scratch,
+          session_id: 's1',
+          tool_name: 'Edit',
+          tool_input: {
+            file_path: join(otherProj, 'b.ts'),
+            old_string: 'x',
+            new_string: 'y',
+          },
         }),
         env,
       });
@@ -67,6 +83,7 @@ describe('status surfaces the inbox (D1)', () => {
     } finally {
       cleanup(repo);
       cleanup(proj);
+      cleanup(otherProj);
       cleanup(scratch);
       cleanup(home);
     }

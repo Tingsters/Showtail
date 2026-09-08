@@ -10,16 +10,12 @@
  * `reattach` alias to `runMove`, so a second entry point here was dead code whose
  * output (notably the stub note) never reached a user.
  */
-import { existsSync } from 'node:fs';
-import { join, resolve } from 'node:path';
-import { activeAuthorPaths, requireActiveAuthor } from '../core/authors.ts';
-import { removeEventsByBatch } from '../core/events.ts';
-import { ledgerBatchId, materializeLedgerSession } from '../core/materialize.ts';
+import { resolve } from 'node:path';
+import { requireActiveAuthor } from '../core/authors.ts';
+import { materializeLedgerSession } from '../core/materialize.ts';
 import {
-  knownTrailPath,
   markPlaced,
   resolveLedgerSessionId,
-  unlinkPlacement,
   type LedgerSession,
 } from '../core/ledger.ts';
 import {
@@ -27,7 +23,8 @@ import {
   type CandidateIndex,
   type PathRebase,
 } from '../core/relocate.ts';
-import { ensureTrailId, pathsForRoot } from '../core/storage.ts';
+import { removeOtherLedgerProjections } from '../core/projectionRouting.ts';
+import { ensureTrailId } from '../core/storage.ts';
 import { ensureInitialized } from './init.ts';
 
 /** The outcome of placing a session, for the caller to report. */
@@ -67,22 +64,7 @@ export async function reattachLedgerSession(
   const author = await requireActiveAuthor(paths, { cwd: root });
 
   // Lift any prior projection out of OTHER trails so the work lands in one place.
-  const movedFrom: string[] = [];
-  for (const target of session.targets ?? []) {
-    if (target.trailId === trailId) continue;
-    const oldRoot = knownTrailPath(target.trailId) ?? target.path;
-    if (!existsSync(join(oldRoot, '.showtail', 'config.json'))) {
-      // The old trail is gone (deleted/moved); just forget the placement.
-      unlinkPlacement(session.id, target.trailId);
-      continue;
-    }
-    const oldAuthor = activeAuthorPaths(pathsForRoot(oldRoot));
-    if (oldAuthor) {
-      const removed = removeEventsByBatch(oldAuthor, ledgerBatchId(session.id));
-      if (removed > 0) movedFrom.push(oldRoot);
-    }
-    unlinkPlacement(session.id, target.trailId);
-  }
+  const movedFrom = removeOtherLedgerProjections(session, trailId);
 
   const { projected, stubs } = await materializeLedgerSession(session, author, {
     rebase: options.rebase,
