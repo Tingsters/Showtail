@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { cleanup, makeTempDir, readJsonReport, runCli, spawnEnv } from './helpers.ts';
 import { isInternalPath } from '../src/commands/hook.ts';
@@ -232,6 +232,134 @@ describe('hook command (end-to-end via stdin)', () => {
       run(dir, ['report', '--format', 'json']);
       const data = readJsonReport(dir);
       expect(data.turns[0].prompt.tool).toBe('codex');
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('Copilot CLI rejects a VS Code snake_case payload before any side effects', () => {
+    const dir = makeTempDir();
+    try {
+      // If the payload were accepted, auto-init would create a project trail and
+      // ledger state. Foreign VS Code payloads must return before either.
+      writeFileSync(
+        join(ledgerHome!, 'config.json'),
+        JSON.stringify({ version: 1, autoInit: true }),
+      );
+      const payload = JSON.stringify({
+        session_id: 'vscode-session',
+        hook_event_name: 'UserPromptSubmit',
+        timestamp: '2026-09-08T20:00:00.000Z',
+        cwd: dir,
+        prompt: 'This came from VS Code Chat',
+      });
+      const r = run(dir, ['hook', 'user-prompt', '--tool', 'copilot-cli'], payload);
+      expect(r.code).toBe(0);
+      expect(existsSync(join(dir, '.showtail'))).toBe(false);
+      expect(existsSync(join(ledgerHome!, 'ledger'))).toBe(false);
+      expect(existsSync(join(ledgerHome!, 'hook-claims'))).toBe(false);
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('Copilot CLI accepts camelCase payloads and rejects mixed or missing ids', () => {
+    const dir = makeTempDir();
+    try {
+      initProject(dir);
+      const accepted = {
+        sessionId: 'cli-session',
+        timestamp: '2026-09-08T20:01:00.000Z',
+        cwd: dir,
+        prompt: 'Capture the genuine CLI prompt',
+      };
+      run(
+        dir,
+        ['hook', 'user-prompt', '--tool', 'copilot-cli'],
+        JSON.stringify(accepted),
+      );
+      run(
+        dir,
+        ['hook', 'user-prompt', '--tool', 'copilot-cli'],
+        JSON.stringify({
+          ...accepted,
+          sessionId: 'mixed-session',
+          session_id: 'vscode-session',
+          timestamp: '2026-09-08T20:02:00.000Z',
+          prompt: 'Reject the mixed payload',
+        }),
+      );
+      for (const sessionId of [undefined, '', '   ']) {
+        run(
+          dir,
+          ['hook', 'user-prompt', '--tool', 'copilot-cli'],
+          JSON.stringify({
+            sessionId,
+            timestamp: '2026-09-08T20:03:00.000Z',
+            cwd: dir,
+            prompt: 'Reject the missing id',
+          }),
+        );
+      }
+
+      run(dir, ['report', '--format', 'json']);
+      const data = readJsonReport(dir);
+      expect(data.turns.map((turn: any) => turn.prompt.text)).toEqual([
+        'Capture the genuine CLI prompt',
+      ]);
+      expect(data.turns[0].prompt.tool).toBe('copilot-cli');
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('duplicate user/project Copilot CLI hook invocations record one event', () => {
+    const dir = makeTempDir();
+    try {
+      initProject(dir);
+      const payload = JSON.stringify({
+        sessionId: 'dual-scope-session',
+        // Copilot CLI 1.0.65 sends epoch milliseconds, not an ISO string.
+        timestamp: Date.parse('2026-09-08T20:04:00.000Z'),
+        cwd: dir,
+        prompt: 'One prompt despite two hook scopes',
+      });
+      run(dir, ['hook', 'user-prompt', '--tool', 'copilot-cli'], payload);
+      run(dir, ['hook', 'user-prompt', '--tool', 'copilot-cli'], payload);
+      expect(readdirSync(join(ledgerHome!, 'hook-claims'))).toHaveLength(1);
+
+      // The same words in a later host event are a new prompt, not a duplicate.
+      run(
+        dir,
+        ['hook', 'user-prompt', '--tool', 'copilot-cli'],
+        JSON.stringify({
+          sessionId: 'dual-scope-session',
+          timestamp: Date.parse('2026-09-08T20:05:00.000Z'),
+          cwd: dir,
+          prompt: 'One prompt despite two hook scopes',
+        }),
+      );
+
+      const ledgerSessions = readdirSync(join(ledgerHome!, 'ledger', 'sessions'));
+      expect(ledgerSessions).toHaveLength(1);
+      const rawRecords = readFileSync(
+        join(ledgerHome!, 'ledger', 'sessions', ledgerSessions[0]!, 'records.jsonl'),
+        'utf8',
+      )
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line));
+      expect(rawRecords.filter((record) => record.kind === 'prompt')).toHaveLength(2);
+      expect(readdirSync(join(ledgerHome!, 'hook-claims'))).toHaveLength(2);
+
+      run(dir, ['report', '--format', 'json']);
+      const data = readJsonReport(dir);
+      expect(data.turns).toHaveLength(2);
+      expect(
+        data.turns.every(
+          (turn: any) => turn.prompt.text === 'One prompt despite two hook scopes',
+        ),
+      ).toBe(true);
     } finally {
       cleanup(dir);
     }

@@ -247,7 +247,7 @@ export interface RedactionRecord {
    * `import undo` recorded one, which were all redaction passes — read a missing
    * value as `redact`.
    */
-  reason?: 'redact' | 'import-undo' | 'migration-undo';
+  reason?: 'redact' | 'import-undo' | 'migration-undo' | 'repair';
   /**
    * For a `redact` pass: `rescan` re-ran the configured rules, `pattern`
    * scrubbed one given regex. Absent for other reasons.
@@ -261,7 +261,7 @@ export interface RedactionRecord {
   labels: string[];
   /** How many stored objects were rewritten to a new address. */
   objects?: number;
-  /** For `import-undo`: the import batch that was removed. */
+  /** For an undo: the import/migration batch that was removed. */
   batch?: string;
 }
 

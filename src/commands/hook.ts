@@ -27,6 +27,7 @@ import { redact } from '../core/redact.ts';
 import { isSyntheticPrompt } from '../core/syntheticPrompt.ts';
 import { asString, prop } from '../core/parse.ts';
 import { autoInitEnabled, noteKnownProject } from '../core/globalConfig.ts';
+import { claimHookInvocation } from '../core/hookClaim.ts';
 import { autoConnectNewlyDetected } from '../core/autoConnectSweep.ts';
 import { ensureFirstRunSetup, autoTrackingNotice } from './setup.ts';
 import {
@@ -281,10 +282,16 @@ export async function runHook(
   let paths: ReturnType<typeof pathsForRoot> | undefined;
   try {
     const payload = await readHookPayload();
-    const cwd = payload?.cwd ?? options.cwd ?? process.cwd();
     const tool: Tool = options.tool ?? 'claude-code';
     trace.tool = tool;
-    const parsed = parseEvent(adapterFor(tool), payload);
+    const adapter = adapterFor(tool);
+    // Some hosts execute hook files installed for another product. Reject a
+    // foreign/malformed payload before cwd discovery, first-run setup, ledger
+    // creation, diagnostics, or any project mutation.
+    if (adapter?.acceptsPayload && !adapter.acceptsPayload(payload)) return;
+    if (adapter?.dedupeInvocations && !claimHookInvocation(tool, event, payload)) return;
+    const cwd = payload?.cwd ?? options.cwd ?? process.cwd();
+    const parsed = parseEvent(adapter, payload);
     trace.nativeSessionId = parsed.nativeSessionId;
 
     // Make Showtail "just work" even when the only thing installed is the Showtail
@@ -341,7 +348,6 @@ export async function runHook(
         // Mirror the conversation into the ledger from the tool transcript on Stop
         // (or post-edit for hosts that only fire that), so an inbox session keeps
         // its replies/decisions/plans — discoverable by native id even with no root.
-        const adapter = adapterFor(tool);
         // Remember where the host keeps this session's transcript, so the
         // catch-up sweep can re-read it later (see `core/catchUp.ts`) — the
         // session's `cwd` is often not the trail root, so it can't be found by

@@ -4,6 +4,7 @@ import {
   resolveCopilotTarget,
   writeCopilotInstructions,
 } from '../core/copilot.ts';
+import { refreshExistingCopilotCliInstructions } from '../core/copilotCli.ts';
 
 export interface CopilotInstallOptions {
   /** Show the VS Code extension install guidance. Defaults to true. */
@@ -24,6 +25,9 @@ export async function runCopilotInstall(options: CopilotInstallOptions): Promise
   const target = resolveCopilotTarget(options.cwd);
   const before = copilotState(target);
   writeCopilotInstructions(target, { force: options.force });
+  const cliRefresh = refreshExistingCopilotCliInstructions(target.root, {
+    force: options.force,
+  });
   const after = copilotState(target);
 
   if (!before.installed) {
@@ -45,12 +49,21 @@ export async function runCopilotInstall(options: CopilotInstallOptions): Promise
     console.log('  A newer version is available. Your edits were kept — run');
     console.log('  `showtail connect copilot --force` to take the latest instead.');
   }
+  if (cliRefresh.updateAvailable.length > 0 && !options.force) {
+    console.log('');
+    console.log(
+      '  A customized Copilot CLI instruction block also has an update available.',
+    );
+    console.log(
+      '  Your edits were kept; `--force` updates both Copilot instruction sets.',
+    );
+  }
 
   console.log('');
   console.log(
-    'These teach Copilot to record your prompts (tagged github-copilot) as you pair;',
+    'Native Copilot Chat prompts and replies are captured by the VS Code extension;',
   );
-  console.log('saved files are snapshotted by the VS Code extension.');
+  console.log('saved files are snapshotted there too, without per-message commands.');
 
   if (options.extension !== false) {
     console.log('');
@@ -58,9 +71,9 @@ export async function runCopilotInstall(options: CopilotInstallOptions): Promise
       'For automatic capture of prompts and edits, install the Showtail VS Code',
     );
     console.log(
-      'extension (it snapshots saved files and adds an `@showtail` chat that logs',
+      'extension (it captures native chat, snapshots saved files, and adds an `@showtail`',
     );
-    console.log('your prompts):');
+    console.log('control surface):');
     console.log(`  code --install-extension ${MARKETPLACE_ID}`);
     console.log('  (or install the .vsix from the GitHub Releases page)');
   }

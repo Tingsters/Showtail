@@ -11,6 +11,10 @@
 import { runCopilotInstall, runCopilotUninstall } from '../commands/copilot.ts';
 import { runImportCopilot } from '../commands/importCopilot.ts';
 import { copilotState, resolveCopilotTarget } from '../core/copilot.ts';
+import {
+  copilotCliInstructionsState,
+  resolveCopilotCliTarget,
+} from '../core/copilotCli.ts';
 import { findChatSessions, readChatSessionFile } from '../core/copilotChatTranscript.ts';
 import { findVsCodeCli, installVsCodeExtension } from '../core/vscodeExtension.ts';
 import type { EnvironmentPlugin } from './types.ts';
@@ -70,9 +74,15 @@ export const copilotPlugin: EnvironmentPlugin = {
 
     status(cwd) {
       const state = copilotState(resolveCopilotTarget(cwd));
+      const cliUpdateAvailable = (['user', 'project'] as const).some((scope) => {
+        const cliState = copilotCliInstructionsState(resolveCopilotCliTarget(scope, cwd));
+        return cliState.installed && cliState.updateAvailable;
+      });
       return {
         connected: state.installed,
-        updateAvailable: state.installed ? state.updateAvailable : undefined,
+        updateAvailable: state.installed
+          ? state.updateAvailable || cliUpdateAvailable
+          : undefined,
       };
     },
   },

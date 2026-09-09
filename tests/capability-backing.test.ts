@@ -144,7 +144,16 @@ function backCapture(
     run(
       dir,
       ['hook', 'user-prompt', '--tool', toolId],
-      JSON.stringify({ cwd: dir, prompt: `${toolId}: do it` }),
+      JSON.stringify(
+        toolId === 'copilot-cli'
+          ? {
+              cwd: dir,
+              prompt: `${toolId}: do it`,
+              sessionId: 'cc-sess-1',
+              timestamp: '2026-09-08T20:00:00.000Z',
+            }
+          : { cwd: dir, prompt: `${toolId}: do it` },
+      ),
     );
     const filePath = join(dir, traceFile);
     writeFileSync(filePath, 'export const x = 1;');
@@ -162,6 +171,7 @@ function backCapture(
           {
             cwd: dir,
             sessionId: 'cc-sess-1',
+            timestamp: '2026-09-08T20:00:01.000Z',
             toolName: 'edit',
             toolArgs: JSON.stringify({
               path: filePath,

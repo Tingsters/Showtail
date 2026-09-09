@@ -9,7 +9,7 @@
  * the JSONL.
  *
  * This mirrors src/core/codexTranscript.ts (the closest pattern: a CLI that
- * writes JSONL sessions on disk, located by session id or newest mtime), adapted
+ * writes JSONL sessions on disk, located by exact session id), adapted
  * to Copilot CLI's event vocabulary. We read only the shapes we care about so
  * Showtail can reconcile AI replies at stop time:
  *
@@ -143,18 +143,14 @@ export function findCopilotCliSessions(): CopilotCliSessionInfo[] {
 }
 
 /**
- * Locate the session this Stop belongs to: prefer the one whose id matches
- * `sessionId`; otherwise the most recently modified (the one that just stopped).
- * Returns null when nothing plausible is on disk.
+ * Locate the exact session this lifecycle event belongs to. A missing or unknown
+ * id returns null; guessing the newest transcript can attach an unrelated CLI
+ * conversation to a VS Code event or another concurrent terminal session.
  */
 export function findCopilotCliSession(sessionId?: string): CopilotCliSessionInfo | null {
-  const sessions = findCopilotCliSessions();
-  if (sessions.length === 0) return null;
-  if (sessionId) {
-    const byId = sessions.find((s) => s.sessionId === sessionId);
-    if (byId) return byId;
-  }
-  return sessions[0]!; // newest first
+  const exact = sessionId?.trim();
+  if (!exact) return null;
+  return findCopilotCliSessions().find((s) => s.sessionId === exact) ?? null;
 }
 
 // --- Parsing ---------------------------------------------------------------

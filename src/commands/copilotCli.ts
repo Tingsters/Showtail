@@ -1,5 +1,8 @@
 import { existsSync } from 'node:fs';
 import {
+  copilotCliHooksGloballyDisabled,
+  copilotCliHooksInstalledAt,
+  copilotCliInstructionsState,
   installCopilotCliHooks,
   removeCopilotCliInstructions,
   resolveCopilotCliTarget,
@@ -33,6 +36,7 @@ export async function runCopilotCliInstall(
 
   const existed = existsSync(target.instructionsFile);
   writeCopilotCliInstructions(target, { force: options.force });
+  const instructionState = copilotCliInstructionsState(target);
   printInstallHeader(
     'GitHub Copilot CLI instructions',
     target.instructionsFile,
@@ -42,21 +46,48 @@ export async function runCopilotCliInstall(
 
   if (withHooks) {
     installCopilotCliHooks(target);
-    printHooksEnabled(target.hooksFile);
-    printPrivacyNote({
-      editSubject: 'GitHub Copilot CLI',
-      disconnectName: 'copilot-cli',
-      scope,
-    });
+    const globallyDisabled = copilotCliHooksGloballyDisabled();
+    if (globallyDisabled) {
+      console.log(`Installed Showtail hooks in: ${target.hooksFile}`);
+      console.log(
+        '  Copilot CLI currently has disableAllHooks enabled, so they are inactive.',
+      );
+    } else {
+      printHooksEnabled(target.hooksFile);
+      printPrivacyNote({
+        editSubject: 'GitHub Copilot CLI',
+        disconnectName: 'copilot-cli',
+        scope,
+      });
+    }
   } else {
-    console.log('Auto-capture hooks were SKIPPED (--no-hooks).');
+    const removed = uninstallCopilotCliHooks(target);
     console.log(
-      '  The instructions still teach Copilot CLI to log prompts and snapshot edits',
+      `Auto-capture hooks are OFF at ${scope} scope${removed ? ' (existing Showtail hooks removed)' : ''}.`,
     );
+    const otherScope = scope === 'user' ? 'project' : 'user';
+    const other = resolveCopilotCliTarget(otherScope, options.cwd);
+    if (copilotCliHooksGloballyDisabled()) {
+      console.log(
+        '  Copilot CLI has disableAllHooks enabled, so no hook scope is active.',
+      );
+    } else if (copilotCliHooksInstalledAt(other.hooksFile)) {
+      console.log(
+        `  Automatic capture remains active through ${otherScope}-scope hooks.`,
+      );
+    } else {
+      console.log(
+        '  Automatic Copilot CLI capture is off. Re-run without --no-hooks to enable it.',
+      );
+    }
+  }
+
+  if (instructionState.userEdited && instructionState.updateAvailable && !options.force) {
+    console.log('');
+    console.log('A newer safety update is available for your customized instructions.');
     console.log(
-      '  itself as you pair. That capture is model-driven, so it may be less complete',
+      'Your edits were kept; use `--force` once to take the latest managed block.',
     );
-    console.log('  than the hooks. Re-run without --no-hooks to enable them.');
   }
 
   console.log('');

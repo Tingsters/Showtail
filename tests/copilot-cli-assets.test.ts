@@ -36,4 +36,10 @@ describe('copilot-cli assets stay in sync with the single source of truth', () =
       expect(c).toContain('--tool copilot-cli');
     }
   });
+
+  test('instructions rely on hooks instead of model-driven routine capture', () => {
+    expect(COPILOT_BODY).not.toContain('showtail log');
+    expect(COPILOT_BODY).not.toContain('showtail artifact');
+    expect(COPILOT_BODY).toContain('lifecycle hooks own routine capture');
+  });
 });

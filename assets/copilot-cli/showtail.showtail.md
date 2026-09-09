@@ -1,46 +1,22 @@
 # Showtail: help the student show THEIR work
 
-This project uses [Showtail](https://github.com/Tingsters/Showtail) to record a local,
-reviewable trail of **how the student built it** — the prompts they sent and the files that
-changed as you worked together. It is the **student's** record of **their own** work. It is
-**not** AI-detection, and **not** a log of what you (the assistant) did.
+This project uses [Showtail](https://github.com/Tingsters/Showtail) to keep a local,
+reviewable trail of the student's prompts, AI replies, and changed files. It is the
+student's record of their own work, not AI detection and not a narration of what the
+assistant did. Everything stays under `.showtail/`; never send it anywhere.
 
-It is meant to be **hands-free**: when capture hooks are on, the trail builds itself while the
-student works. Everything is stored locally under `.showtail/`. Never send it anywhere.
+## Capture is automatic in Copilot CLI
 
-## Check the capture mode first
+Copilot CLI lifecycle hooks own routine capture: they record submitted prompts, edits,
+and the session transcript without model-driven terminal commands. Work normally and do
+not ask the student for per-message recording permission.
 
-Run this once at the start and follow what it says:
+Never run manual prompt-logging or artifact-snapshot commands during routine work, even if
+hooks appear unavailable or another combined instruction suggests doing so. Manual capture
+can duplicate events and is not a reliable fallback. If automatic capture is explicitly
+disabled, mention once that the student can reconnect it with
+`showtail connect copilot-cli`; then continue helping without repeated prompts.
 
-```bash
-showtail status --json
-```
-
-- **`"hooksActive": true`** — GitHub Copilot CLI hooks already record every student prompt and
-  snapshot every file you edit. **Do nothing else** — just help the student with their work.
-  Don't log anything yourself; you'd only create duplicates.
-- **`"hooksActive": false`** — nothing is recording automatically. As you work, capture the
-  basics yourself, **in the student's voice** (their request, not your narration):
-  - log the student's request before you act on it:
-    `showtail log --type prompt --text "<what the student actually asked>" --tool copilot-cli`
-  - snapshot each file you create or change: `showtail artifact <path> --tool copilot-cli`
-
-  (Better: suggest the student turn hooks on so this is automatic.)
-
-Tracking is automatic — it turns on when the student installs Showtail: a
-trail is created on first use and sessions open and close on their own. If a project somehow has
-no `.showtail/` folder, run `showtail ensure` — it initializes at the right place (the git repo
-root, or the working folder) and opens a session. It is safe to run anytime.
-
-## Principles
-
-- **The student's record, not yours.** The trail is their prompts and their files, not a
-  play-by-play of what you did.
-- **Hands-free first.** When hooks are on, let capture happen automatically — don't add noise.
-- **Privacy.** Never log secrets, tokens, or personal information — the trail may be committed.
-- **The student is the author.** Showtail documents their process; it does not replace it.
-
-When the student asks to **"generate a report"**, **"show my work"**, or **"wrap up"** (or the
-work block is clearly done), run it **for** them — don't make them switch to the command line:
-`showtail report` (the report for the educator) and `showtail verify` (checks the trail is
-complete and consistent). Then point them at the generated file.
+When the student explicitly asks to generate a report, show their work, verify the trail,
+or check status, you may run `showtail report`, `showtail verify`, or `showtail status` for
+them. Never record secrets.

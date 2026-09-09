@@ -254,12 +254,25 @@ describe('Copilot CLI session discovery + plugin getTranscript', () => {
     }
   });
 
+  test('findCopilotCliSession never guesses for a missing or unknown id', () => {
+    const repo = makeTempDir();
+    const home = seedSession('known-session', repo);
+    try {
+      expect(findCopilotCliSession()).toBeNull();
+      expect(findCopilotCliSession('')).toBeNull();
+      expect(findCopilotCliSession('unknown-session')).toBeNull();
+    } finally {
+      cleanup(home);
+      cleanup(repo);
+    }
+  });
+
   test('plugin getTranscript reads the session by id from the Stop payload', () => {
     const repo = makeTempDir();
     const home = seedSession('payload-sid', repo);
     try {
       const transcript = copilotCliPlugin.connect!.hooks!.getTranscript!(
-        { session_id: 'payload-sid', hook_event_name: 'Stop' },
+        { sessionId: 'payload-sid', timestamp: '2026-09-08T20:00:00.000Z' },
         repo,
       );
       expect(transcript).not.toBeNull();
@@ -272,23 +285,65 @@ describe('Copilot CLI session discovery + plugin getTranscript', () => {
     }
   });
 
-  test('plugin getTranscript falls back to the newest session and is null when none', () => {
+  test('plugin getTranscript requires the exact payload session', () => {
     // No COPILOT_HOME session-state dir at all → null (stop stays a no-op).
     process.env.COPILOT_HOME = makeTempDir();
-    expect(
-      copilotCliPlugin.connect!.hooks!.getTranscript!({ hook_event_name: 'Stop' }, '/r'),
-    ).toBeNull();
+    expect(copilotCliPlugin.connect!.hooks!.getTranscript!({}, '/r')).toBeNull();
     cleanup(process.env.COPILOT_HOME);
 
-    // With a session present but no matching id, fall back to newest.
+    // With a session present but no matching id, do not guess the newest.
     const repo = makeTempDir();
     const home = seedSession('only-one', repo);
     try {
       const transcript = copilotCliPlugin.connect!.hooks!.getTranscript!(
-        { hook_event_name: 'Stop' },
+        { sessionId: 'not-the-session', timestamp: '2026-09-08T20:01:00.000Z' },
         repo,
       );
-      expect(transcript?.sessionId).toBe('only-one');
+      expect(transcript).toBeNull();
+    } finally {
+      cleanup(home);
+      cleanup(repo);
+    }
+  });
+
+  test('plugin rejects a transcript whose embedded session id conflicts', () => {
+    const repo = makeTempDir();
+    const home = makeTempDir();
+    process.env.COPILOT_HOME = home;
+    try {
+      const dir = join(home, 'session-state', 'directory-id');
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, 'events.jsonl'), makeEvents(repo, 'embedded-id'), 'utf8');
+      expect(
+        copilotCliPlugin.connect!.hooks!.getTranscript!(
+          { sessionId: 'directory-id', timestamp: '2026-09-08T20:02:00.000Z' },
+          repo,
+        ),
+      ).toBeNull();
+    } finally {
+      cleanup(home);
+      cleanup(repo);
+    }
+  });
+
+  test('plugin uses the exact directory id when the transcript omits one', () => {
+    const repo = makeTempDir();
+    const home = makeTempDir();
+    process.env.COPILOT_HOME = home;
+    try {
+      const dir = join(home, 'session-state', 'directory-id');
+      mkdirSync(dir, { recursive: true });
+      const withoutStart = makeEvents(repo, 'unused')
+        .split('\n')
+        .filter(Boolean)
+        .filter((line) => JSON.parse(line).type !== 'session.start')
+        .join('\n');
+      writeFileSync(join(dir, 'events.jsonl'), withoutStart, 'utf8');
+      const transcript = copilotCliPlugin.connect!.hooks!.getTranscript!(
+        { sessionId: 'directory-id', timestamp: '2026-09-08T20:03:00.000Z' },
+        repo,
+      );
+      expect(transcript?.sessionId).toBe('directory-id');
     } finally {
       cleanup(home);
       cleanup(repo);

@@ -124,6 +124,13 @@ interface JournalRewrite {
 /** One-line description of a marker the trail uses to declare a rewrite. */
 function describeMarker(entry: JournalEntry): string {
   const r = entry.redaction;
+  if (r?.reason === 'repair') {
+    return (
+      `trail repair at ${entry.ts} (${r.entries} entr` +
+      `${r.entries === 1 ? 'y' : 'ies'} removed` +
+      `${r.labels?.length ? `; ${r.labels.join(', ')}` : ''})`
+    );
+  }
   if (r?.reason === 'import-undo' || r?.reason === 'migration-undo') {
     const label = r.reason === 'migration-undo' ? 'migration undo' : 'import undo';
     return `${label} at ${entry.ts} (${r.entries} entr${r.entries === 1 ? 'y' : 'ies'} removed)`;
@@ -283,8 +290,8 @@ async function checkJournalHistory(
     return check;
   }
 
-  // Reconcile against what the trail says it did to itself. `showtail redact`
-  // and the supported import/migration undo commands legitimately rewrite lines,
+  // Reconcile against what the trail says it did to itself. Redaction, supported
+  // import/migration undo commands, and guarded repairs legitimately rewrite lines,
   // and each records a
   // dated marker; one marker accounts for one rewrite, oldest first, so the
   // rewrites left over are the ones nothing declares.
@@ -321,8 +328,8 @@ async function checkJournalHistory(
   check.ok = false;
   check.details.push(
     `${unexplained.length} of ${rewrites.length} rewrite(s) unexplained: the trail ` +
-      `declares ${declared.length} deliberate rewrite(s) (\`showtail redact\`, ` +
-      '`showtail import undo`, `showtail migrate undo`), which does not account for them.',
+      `declares ${declared.length} deliberate rewrite(s) (redaction, repair, ` +
+      'import undo, or migration undo), which does not account for them.',
   );
   check.details.push(
     'This says the recorded history was rewritten, not that anyone cheated. A ' +
@@ -470,6 +477,7 @@ export async function verifyProject(paths: ShowtailPaths): Promise<VerifyResult>
   let unchained = 0;
   const passes: JournalEntry[] = [];
   const undos: JournalEntry[] = [];
+  const repairs: JournalEntry[] = [];
   for (const journal of journals) {
     if (journal.error !== undefined) continue; // Already reported by check 2.
     for (const shard of journal.shards) {
@@ -478,7 +486,9 @@ export async function verifyProject(paths: ShowtailPaths): Promise<VerifyResult>
       unchained += legacy;
       for (const entry of shard.entries) {
         if (entry.kind !== 'redaction') continue;
-        if (
+        if (entry.redaction?.reason === 'repair') {
+          repairs.push(entry);
+        } else if (
           entry.redaction?.reason === 'import-undo' ||
           entry.redaction?.reason === 'migration-undo'
         ) {
@@ -545,6 +555,19 @@ export async function verifyProject(paths: ShowtailPaths): Promise<VerifyResult>
       chainCheck.details.push(
         `  ${entry.ts} — ${r?.entries ?? 0} entr${r?.entries === 1 ? 'y' : 'ies'} removed` +
           `${r?.batch ? ` (batch ${r.batch})` : ''}.`,
+      );
+    }
+  }
+  if (repairs.length > 0) {
+    chainCheck.details.push(
+      `${repairs.length} recorded trail repair${repairs.length === 1 ? '' : 's'} ` +
+        '(a guarded maintenance pass removed known-bad capture entries and re-linked the chain):',
+    );
+    for (const entry of repairs) {
+      const r = entry.redaction;
+      chainCheck.details.push(
+        `  ${entry.ts} — ${r?.entries ?? 0} entr${r?.entries === 1 ? 'y' : 'ies'} removed` +
+          `${r?.labels?.length ? ` (${r.labels.join(', ')})` : ''}.`,
       );
     }
   }

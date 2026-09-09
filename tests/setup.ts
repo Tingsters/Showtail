@@ -222,6 +222,11 @@ afterEach(() => {
 // opts in by setting `SHOWTAIL_VSCODE_CLI` to its own stub. Honor an external value.
 process.env.SHOWTAIL_VSCODE_CLI ??= join(tmpdir(), 'showtail-no-vscode-cli');
 
+// Copilot CLI detection probes WinGet/Homebrew/npm locations outside the pinned
+// COPILOT_HOME. Keep the real machine installation out of setup/detection tests
+// unless a test explicitly supplies its own executable.
+process.env.SHOWTAIL_COPILOT_CLI ??= join(tmpdir(), 'showtail-no-copilot-cli');
+
 // Same hazard, Antigravity IDE: `findAntigravityIdeCli()` probes absolute app-bundle
 // paths (/Applications/Antigravity.app, ~/.local/bin/antigravity-ide) that no HOME or
 // PATH isolation reaches, and `installAntigravityIdeExtension()` then SPAWNS it — so on

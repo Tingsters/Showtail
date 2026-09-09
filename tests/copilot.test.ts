@@ -111,7 +111,8 @@ describe('copilot integration', () => {
       writeCopilotInstructions(target);
       const content = readFileSync(target.instructionsFile, 'utf8');
       expect(content).not.toContain('OLD CONTENT');
-      expect(content).toContain('EVERY prompt');
+      expect(content).toContain('Capture is automatic in VS Code');
+      expect(content).toContain('do not run any prompt-logging');
       expect(copilotUpToDate(target)).toBe(true);
     } finally {
       cleanup(dir);
@@ -141,11 +142,14 @@ describe('copilot integration', () => {
     expect(SHOWTAIL_PATH_INSTRUCTIONS).toContain('applyTo:');
   });
 
-  test('instructions tell Copilot to log every prompt (incl. brainstorming)', () => {
-    expect(COPILOT_INSTRUCTIONS).toContain('EVERY prompt');
-    expect(COPILOT_INSTRUCTIONS).toContain('Brainstorming');
-    expect(SHOWTAIL_PATH_INSTRUCTIONS.toLowerCase()).toContain('every');
-    expect(SHOWTAIL_PATH_INSTRUCTIONS.toLowerCase()).toContain('brainstorm');
+  test('instructions leave routine VS Code capture to the extension', () => {
+    expect(COPILOT_INSTRUCTIONS).toContain('extension imports native Copilot Chat');
+    expect(COPILOT_INSTRUCTIONS).toContain('do not run any prompt-logging');
+    expect(COPILOT_INSTRUCTIONS).toContain('per-message permission');
+    expect(SHOWTAIL_PATH_INSTRUCTIONS).toContain(
+      'automatically imports native Copilot Chat',
+    );
+    expect(SHOWTAIL_PATH_INSTRUCTIONS).toContain('never run manual');
   });
 });
 

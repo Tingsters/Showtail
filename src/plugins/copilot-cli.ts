@@ -17,7 +17,9 @@ import { runCopilotCliInstall, runCopilotCliUninstall } from '../commands/copilo
 import {
   copilotCliAutoCaptureActive,
   copilotCliInstructionsState,
+  findCopilotCliExecutable,
   installCopilotCliHooks,
+  refreshExistingCopilotCliInstructions,
   resolveCopilotCliTarget,
   writeCopilotCliInstructions,
 } from '../core/copilotCli.ts';
@@ -27,7 +29,6 @@ import {
   parseCopilotCliTranscript,
   readCopilotCliSessionFile,
 } from '../core/copilotCliTranscript.ts';
-import { commandOnPath, homeDirExists } from '../core/detect.ts';
 import {
   extractCopilotCliEditedFiles,
   extractCopilotCliPrompt,
@@ -42,15 +43,18 @@ import type { EnvironmentPlugin, HookTranscript } from './types.ts';
  * On stop, read the just-finished session's `events.jsonl` and normalize it for
  * the generic stop reconcile. Copilot CLI hook payloads carry no transcript
  * path, so — like Codex — we locate the session under ~/.copilot/session-state
- * ourselves: by the payload's session id, else the newest. Returns null when
- * nothing readable is found, so stop stays a safe no-op.
+ * ourselves by the payload's exact session id. Returns null when nothing
+ * readable is found, so stop stays a safe no-op.
  */
 function copilotCliGetTranscript(raw: unknown, root: string): HookTranscript | null {
   const sid = extractCopilotCliSessionId(raw as CopilotCliHookPayload | null);
+  if (!sid) return null;
   const info = findCopilotCliSession(sid);
   if (!info || !existsSync(info.path)) return null;
   try {
-    return parseCopilotCliTranscript(readFileSync(info.path, 'utf8'), root);
+    const transcript = parseCopilotCliTranscript(readFileSync(info.path, 'utf8'), root);
+    if (transcript.sessionId && transcript.sessionId !== info.sessionId) return null;
+    return { ...transcript, sessionId: transcript.sessionId ?? info.sessionId };
   } catch {
     return null; // Unreadable/unsupported log — nothing to capture.
   }
@@ -78,7 +82,7 @@ export const copilotCliPlugin: EnvironmentPlugin = {
       {
         name: 'hooks',
         flag: '--no-hooks',
-        description: 'skip auto-capture hooks; log prompts/edits yourself',
+        description: 'disable auto-capture hooks at the selected scope',
       },
       {
         name: 'force',
@@ -88,7 +92,7 @@ export const copilotCliPlugin: EnvironmentPlugin = {
     ],
     applicableFlags: ['user', 'project', 'hooks', 'force'],
 
-    detect: () => commandOnPath('copilot') || homeDirExists('.copilot'),
+    detect: () => findCopilotCliExecutable() !== null,
 
     // Not pre-wired before install: pre-seed firing is unverified for Copilot CLI, so
     // it's connected once detected rather than written ahead of install.
@@ -98,6 +102,13 @@ export const copilotCliPlugin: EnvironmentPlugin = {
       const target = resolveCopilotCliTarget('user', cwd);
       writeCopilotCliInstructions(target, {});
       installCopilotCliHooks(target);
+      const refresh = refreshExistingCopilotCliInstructions(cwd);
+      if (refresh.updateAvailable.length > 0) {
+        console.log(
+          'Showtail kept customized Copilot CLI instructions that need a safety update.',
+        );
+        console.log('Run `showtail connect copilot-cli --force` once to apply it.');
+      }
       return { hooks: true };
     },
 
@@ -123,6 +134,16 @@ export const copilotCliPlugin: EnvironmentPlugin = {
     },
 
     hooks: {
+      acceptsPayload(raw) {
+        if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return false;
+        const payload = raw as Record<string, unknown>;
+        const sid = payload.sessionId;
+        if (typeof sid !== 'string' || sid.trim().length === 0) return false;
+        return !['session_id', 'hook_event_name', 'transcript_path'].some((key) =>
+          Object.prototype.hasOwnProperty.call(payload, key),
+        );
+      },
+      dedupeInvocations: true,
       // Copilot CLI's postToolUse / userPromptSubmitted payloads use a shape of
       // their own: `{ sessionId, cwd, prompt, toolName, toolArgs (JSON string) }`.
       // We read them with Copilot-specific extractors (Claude's field names don't
@@ -140,7 +161,7 @@ export const copilotCliPlugin: EnvironmentPlugin = {
       internalPaths: [/(^|[\\/])\.copilot([\\/]|$)/],
       // Copilot CLI hook payloads carry no transcript path, so we locate the
       // session's events.jsonl under ~/.copilot/session-state ourselves (by
-      // session id, else newest) and read AI replies from it. Note: Copilot CLI
+      // exact session id) and read AI replies from it. Note: Copilot CLI
       // records no plan/decision construct in its event log, so only assistant
       // replies (and prompts) are reconciled — see copilotCliTranscript.ts.
       getTranscript: copilotCliGetTranscript,

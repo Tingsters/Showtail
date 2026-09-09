@@ -2,18 +2,13 @@
 applyTo: "**"
 ---
 
-# Showtail provenance (agent mode)
+# Showtail provenance (VS Code agent mode)
 
-This project records a "show your work" trail with [Showtail](https://github.com/Tingsters/Showtail).
-Do the coding normally — you are the agent. Copilot has no automatic prompt-capture hooks, so
-as you work, record the student's **prompt** in the **student's own voice** using the
-`showtail` CLI, always tagging `--tool github-copilot`:
+Work normally. The Showtail VS Code extension automatically imports native Copilot Chat
+prompts and replies and snapshots saved files. During routine work, never run manual
+prompt-logging or artifact-snapshot commands, never ask for per-message recording
+permission, and never invoke hooks intended for the standalone Copilot CLI. Those actions
+would duplicate capture or assign the wrong tool label.
 
-- log **every** prompt the student sends you — including brainstorming, planning, and
-  conceptual questions, not only code requests — in their own words:
-  `showtail log --type prompt --text "<their message>" --tool github-copilot`
-  (skip if they asked through `@showtail` — it's already logged).
-
-**Do NOT run `showtail artifact`** — the Showtail VS Code extension already snapshots every
-saved file, so running it yourself would double-record. Do not narrate your own actions. Offer
-`showtail report` and `showtail verify` when a work block ends. Never log secrets.
+Only run `showtail report`, `showtail verify`, or `showtail status` when the student
+explicitly asks for that control action. Keep everything local and never record secrets.

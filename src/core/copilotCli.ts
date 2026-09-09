@@ -33,7 +33,8 @@
  * below are the names Copilot actually reads; the `command` strings are unchanged
  * (`showtail hook <subcommand>`), since those drive Showtail's own dispatch.
  */
-import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync } from 'node:fs';
+import { homedir, platform } from 'node:os';
 import { join } from 'node:path';
 // Single source of truth: committed under assets/ AND embedded into the binary,
 // so `showtail connect copilot-cli` is fully self-contained (no files to ship).
@@ -54,10 +55,50 @@ import {
 } from './managedBlock.ts';
 import { findRoot, readJson, writeJson } from './storage.ts';
 import { dirOf } from './text.ts';
+import { commandOnPath } from './detect.ts';
 
 export { COPILOT_BODY };
 
 export type InstallScope = 'user' | 'project';
+
+/** Locate a standalone Copilot CLI executable without mistaking VS Code state for it. */
+export function findCopilotCliExecutable(): string | null {
+  const override = process.env.SHOWTAIL_COPILOT_CLI;
+  if (override) return existsSync(override) ? override : null;
+  if (commandOnPath('copilot')) return 'copilot';
+
+  const home = homedir();
+  const candidates = [
+    '/opt/homebrew/bin/copilot',
+    '/usr/local/bin/copilot',
+    '/usr/bin/copilot',
+    '/home/linuxbrew/.linuxbrew/bin/copilot',
+    join(home, '.linuxbrew', 'bin', 'copilot'),
+    join(home, '.local', 'bin', 'copilot'),
+  ];
+
+  if (platform() === 'win32') {
+    const local = process.env.LOCALAPPDATA ?? join(home, 'AppData', 'Local');
+    const roaming = process.env.APPDATA ?? join(home, 'AppData', 'Roaming');
+    candidates.push(
+      join(local, 'Microsoft', 'WinGet', 'Links', 'copilot.exe'),
+      join(roaming, 'npm', 'copilot.cmd'),
+      join(local, 'npm', 'copilot.cmd'),
+    );
+    const packages = join(local, 'Microsoft', 'WinGet', 'Packages');
+    try {
+      for (const name of readdirSync(packages)) {
+        if (name.startsWith('GitHub.Copilot_')) {
+          candidates.push(join(packages, name, 'copilot.exe'));
+        }
+      }
+    } catch {
+      // WinGet is optional.
+    }
+  }
+
+  return candidates.find((candidate) => existsSync(candidate)) ?? null;
+}
 
 /**
  * The canonical GitHub Copilot CLI hook configuration. Copilot's lifecycle events
@@ -290,8 +331,90 @@ export function copilotCliHooksInstalledAt(hooksFile: string): boolean {
  * they're installed at either project or user scope.
  */
 export function copilotCliAutoCaptureActive(cwd: string = process.cwd()): boolean {
+  if (copilotCliHooksGloballyDisabled()) return false;
   return (
     copilotCliHooksInstalledAt(resolveCopilotCliTarget('project', cwd).hooksFile) ||
     copilotCliHooksInstalledAt(resolveCopilotCliTarget('user', cwd).hooksFile)
   );
+}
+
+/** Whether Copilot's global configuration explicitly disables every hook. */
+export function copilotCliHooksGloballyDisabled(): boolean {
+  const file = join(hostHome('COPILOT_HOME', '.copilot'), 'config.json');
+  if (!existsSync(file)) return false;
+  try {
+    const raw = readFileSync(file, 'utf8');
+    let withoutComments = '';
+    let inString = false;
+    let escaped = false;
+    let lineComment = false;
+    let blockComment = false;
+    for (let i = 0; i < raw.length; i += 1) {
+      const char = raw[i]!;
+      const next = raw[i + 1];
+      if (lineComment) {
+        if (char === '\n') {
+          lineComment = false;
+          withoutComments += char;
+        }
+        continue;
+      }
+      if (blockComment) {
+        if (char === '*' && next === '/') {
+          blockComment = false;
+          i += 1;
+        } else if (char === '\n') {
+          withoutComments += char;
+        }
+        continue;
+      }
+      if (inString) {
+        withoutComments += char;
+        if (escaped) escaped = false;
+        else if (char === '\\') escaped = true;
+        else if (char === '"') inString = false;
+        continue;
+      }
+      if (char === '"') {
+        inString = true;
+        withoutComments += char;
+      } else if (char === '/' && next === '/') {
+        lineComment = true;
+        i += 1;
+      } else if (char === '/' && next === '*') {
+        blockComment = true;
+        i += 1;
+      } else {
+        withoutComments += char;
+      }
+    }
+    const config = JSON.parse(withoutComments) as Record<string, unknown>;
+    return config.disableAllHooks === true;
+  } catch {
+    return false;
+  }
+}
+
+export interface CopilotCliInstructionRefresh {
+  installed: string[];
+  updateAvailable: string[];
+}
+
+/** Refresh only CLI instruction blocks that already exist at user/project scope. */
+export function refreshExistingCopilotCliInstructions(
+  cwd: string = process.cwd(),
+  options: WriteOptions = {},
+): CopilotCliInstructionRefresh {
+  const installed: string[] = [];
+  const updateAvailable: string[] = [];
+  for (const scope of ['user', 'project'] as const) {
+    const target = resolveCopilotCliTarget(scope, cwd);
+    const before = copilotCliInstructionsState(target);
+    if (!before.installed) continue;
+    installed.push(target.instructionsFile);
+    writeCopilotCliInstructions(target, options);
+    const after = copilotCliInstructionsState(target);
+    if (after.updateAvailable) updateAvailable.push(target.instructionsFile);
+  }
+  return { installed, updateAvailable };
 }

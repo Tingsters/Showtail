@@ -24,7 +24,13 @@ import {
   type AuthorPaths,
   type ShowtailPaths,
 } from '../src/core/storage.ts';
-import { journalSegmentPaths, readJournal, rechainEntries } from '../src/core/journal.ts';
+import {
+  appendJournal,
+  journalSegmentPaths,
+  readJournal,
+  rechainEntries,
+  rewriteJournal,
+} from '../src/core/journal.ts';
 import { verifyProject } from '../src/commands/verify.ts';
 import type { JournalEntry } from '../src/types.ts';
 import { authorFor, cleanup, makeTempDir, runCli } from './helpers.ts';
@@ -576,6 +582,45 @@ describe('verify: git history as the outside anchor', () => {
       const history = historyCheck(result);
       expect(history.details.join('\n')).toContain('declared: import undo');
       expect(history.ok).toBe(true);
+      expect(result.ok).toBe(true);
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('a repair marker explains a guarded cleanup without calling it redaction', async () => {
+    const dir = makeGitProject();
+    try {
+      await runInit({ cwd: dir });
+      const paths = pathsForRoot(dir);
+      const author = authorFor(paths);
+      const first = await logEvent(author, { type: 'prompt', text: 'duplicate prompt' });
+      await logEvent(author, { type: 'prompt', text: 'prompt to keep' });
+      commitAll(dir, 'captured work');
+
+      expect(rewriteJournal(author, (entry) => entry.id !== first.event.id)).toBe(1);
+      appendJournal(author, {
+        v: 1,
+        kind: 'redaction',
+        id: 'red_repair_test',
+        ts: '2026-09-08T20:00:00.000Z',
+        type: 'redaction',
+        actorSlug: author.slug,
+        redaction: {
+          reason: 'repair',
+          entries: 1,
+          values: 0,
+          labels: ['duplicate-capture'],
+        },
+      });
+
+      const result = await verifyProject(paths);
+      const chain = checkByName(result, 'journal chain is unbroken').details.join('\n');
+      const history = historyCheck(result).details.join('\n');
+      expect(chain).toContain('recorded trail repair');
+      expect(chain).not.toContain('recorded redaction pass');
+      expect(history).toContain('declared: trail repair');
+      expect(history).not.toContain('UNEXPLAINED');
       expect(result.ok).toBe(true);
     } finally {
       cleanup(dir);

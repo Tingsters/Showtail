@@ -239,6 +239,15 @@ export interface DiscoveredPlanFile {
 }
 
 export interface HookAdapter {
+  /**
+   * Whether this adapter owns the raw payload. Hosts can execute hook files that
+   * belong to another product (notably VS Code executing Copilot CLI hooks), so
+   * adapters with an unambiguous wire format should reject foreign or malformed
+   * payloads before the dispatcher performs any setup or capture side effects.
+   */
+  acceptsPayload?(raw: unknown): boolean;
+  /** Deduplicate concurrent user/project hook invocations carrying one payload. */
+  dedupeInvocations?: boolean;
   /** Parse this host's raw stdin payload into the normalized shape (best-effort). */
   parse(raw: unknown): NormalizedHookEvent;
   /** Path patterns whose edits must NOT be snapshotted (this tool's own dirs). */
