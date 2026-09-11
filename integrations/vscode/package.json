@@ -139,7 +139,7 @@
     "package": "node esbuild.js --production && vsce package --no-dependencies"
   },
   "devDependencies": {
-    "@types/node": "^22.0.0",
+    "@types/node": "^26.5.0",
     "@types/vscode": "1.95.0",
     "@vscode/test-electron": "2.5.2",
     "@vscode/vsce": "^3.0.0",
