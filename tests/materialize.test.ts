@@ -7,7 +7,7 @@ import { readAllEvents } from '../src/core/events.ts';
 import { appendLedgerRecord, ensureLedgerSession } from '../src/core/ledger.ts';
 import { materializeLedgerSession } from '../src/core/materialize.ts';
 import { PLAN_APPROVED_TAG } from '../src/core/plans.ts';
-import { pathsForRoot } from '../src/core/storage.ts';
+import { pathsForRoot, readSessions, readState } from '../src/core/storage.ts';
 import { authorFor, cleanup, makeTempDir } from './helpers.ts';
 
 let prev: string | undefined;
@@ -20,6 +20,46 @@ afterEach(() => {
 });
 
 describe('materialize: projecting every record kind', () => {
+  test('revocation before native-session creation leaves no projected session or state', async () => {
+    const home = makeTempDir();
+    const dir = makeTempDir();
+    try {
+      process.env.SHOWTAIL_HOME = home;
+      await runInit({ cwd: dir });
+      const paths = pathsForRoot(dir);
+      const author = authorFor(paths);
+      const initialState = readState(paths);
+      const session = ensureLedgerSession({
+        tool: 'claude-code',
+        nativeSessionId: 'revoked-before-repo-session',
+        cwd: dir,
+      });
+      appendLedgerRecord(session.id, {
+        kind: 'prompt',
+        tool: 'claude-code',
+        text: 'must not create a projected session',
+      });
+      let checks = 0;
+
+      const interrupted = await materializeLedgerSession(session, author, {
+        continueCapture: () => {
+          checks += 1;
+          return checks < 2;
+        },
+      });
+
+      expect(checks).toBe(2);
+      expect(interrupted.completed).toBe(false);
+      expect(interrupted.projected).toBe(0);
+      expect(readSessions(author)).toEqual([]);
+      expect(readState(paths)).toEqual(initialState);
+      expect(readAllEvents(paths)).toEqual([]);
+    } finally {
+      cleanup(dir);
+      cleanup(home);
+    }
+  });
+
   test('projects prompt, ai_output, decision, plan, diff-edit and snapshot-edit, idempotently', async () => {
     const home = makeTempDir();
     const dir = makeTempDir();
@@ -171,6 +211,111 @@ describe('materialize: projecting every record kind', () => {
       const plan = readAllEvents(paths).find((e) => e.type === 'plan')!;
       expect(plan.tags?.length).toBeGreaterThan(0);
       expect(plan.tags).not.toContain(PLAN_APPROVED_TAG);
+    } finally {
+      cleanup(dir);
+      cleanup(home);
+    }
+  });
+
+  test('a continuation predicate stops materialization before later record writes', async () => {
+    const home = makeTempDir();
+    const dir = makeTempDir();
+    try {
+      process.env.SHOWTAIL_HOME = home;
+      await runInit({ cwd: dir });
+      const paths = pathsForRoot(dir);
+      const author = authorFor(paths);
+      const session = ensureLedgerSession({
+        tool: 'claude-code',
+        nativeSessionId: 'revoked-mid-materialize',
+        cwd: dir,
+      });
+      const prompt = appendLedgerRecord(session.id, {
+        kind: 'prompt',
+        tool: 'claude-code',
+        text: 'project this prompt only',
+      });
+      appendLedgerRecord(session.id, {
+        kind: 'ai_output',
+        tool: 'claude-code',
+        text: 'do not project this reply yet',
+        turnKey: prompt.id,
+      });
+      appendLedgerRecord(session.id, {
+        kind: 'edit',
+        tool: 'claude-code',
+        file: join(dir, 'later.ts'),
+        diff: '+ export const later = true;',
+        turnKey: prompt.id,
+      });
+
+      const interrupted = await materializeLedgerSession(session, author, {
+        continueCapture: () => readAllEvents(paths).length === 0,
+      });
+
+      expect(interrupted.completed).toBe(false);
+      expect(interrupted.projected).toBe(1);
+      expect(readAllEvents(paths).map((event) => event.type)).toEqual(['prompt']);
+      expect(readAllArtifacts(paths)).toHaveLength(0);
+
+      const resumed = await materializeLedgerSession(session, author);
+      expect(resumed.completed).toBe(true);
+      expect(resumed.projected).toBe(2);
+      expect(readAllEvents(paths).map((event) => event.type)).toEqual([
+        'prompt',
+        'ai_output',
+      ]);
+      expect(readAllArtifacts(paths).map((artifact) => artifact.path)).toEqual([
+        'later.ts',
+      ]);
+    } finally {
+      cleanup(dir);
+      cleanup(home);
+    }
+  });
+
+  test('revocation during snapshot preparation does not create an artifact or stub', async () => {
+    const home = makeTempDir();
+    const dir = makeTempDir();
+    try {
+      process.env.SHOWTAIL_HOME = home;
+      await runInit({ cwd: dir });
+      const paths = pathsForRoot(dir);
+      const author = authorFor(paths);
+      const session = ensureLedgerSession({
+        tool: 'claude-code',
+        nativeSessionId: 'revoked-mid-snapshot',
+        cwd: dir,
+      });
+      writeFileSync(join(dir, 'guarded.ts'), 'export const guarded = true;\n');
+      appendLedgerRecord(session.id, {
+        kind: 'edit',
+        tool: 'claude-code',
+        file: join(dir, 'guarded.ts'),
+      });
+      let checks = 0;
+
+      const interrupted = await materializeLedgerSession(session, author, {
+        continueCapture: () => {
+          checks += 1;
+          return checks < 5;
+        },
+      });
+
+      expect(checks).toBe(5);
+      expect(interrupted.completed).toBe(false);
+      expect(interrupted.projected).toBe(0);
+      expect(interrupted.stubs).toBe(0);
+      expect(readAllArtifacts(paths)).toHaveLength(0);
+
+      const resumed = await materializeLedgerSession(session, author);
+      expect(resumed.completed).toBe(true);
+      expect(resumed.projected).toBe(1);
+      expect(resumed.edits).toBe(1);
+      expect(resumed.stubs).toBe(0);
+      expect(readAllArtifacts(paths).map((artifact) => artifact.path)).toEqual([
+        'guarded.ts',
+      ]);
     } finally {
       cleanup(dir);
       cleanup(home);

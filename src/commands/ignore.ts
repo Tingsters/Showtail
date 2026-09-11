@@ -2,9 +2,9 @@
  * `showtail ignore` — mark a folder as scratch so its captured sessions never
  * surface in `showtail inbox` (they stay in the ledger, revealed by `--all`).
  *
- * This is the override for a folder that IS a real project (git/marker) but you
- * treat as a sandbox — the default surfacing rule already hides folderless / home /
- * temp / trivial work, so most scratch needs no entry here.
+ * Use this for any otherwise-valid project folder that the student deliberately
+ * treats as a sandbox. Location alone no longer makes HOME or temp work scratch;
+ * only explicit ignores and the ordinary low-signal filter hide it by default.
  */
 import { resolve } from 'node:path';
 import { emitJson } from '../core/output.ts';

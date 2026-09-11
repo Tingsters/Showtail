@@ -15,7 +15,7 @@ import {
 } from './helpers.ts';
 
 describe('status surfaces the inbox (D1)', () => {
-  test('status --json counts surfaced (real-project) unplaced sessions, not scratch', () => {
+  test('status --json counts actionable ambiguous work, not already placed work', () => {
     const repo = makeTempDir(); // a tracked project — where we run `status`
     const proj = makeTempDir(); // first real project touched by one session
     const otherProj = makeTempDir(); // second project makes placement ambiguous
@@ -63,7 +63,7 @@ describe('status surfaces the inbox (D1)', () => {
         env,
       });
 
-      // A pure folderless scratch session (no real project) → hidden, NOT counted.
+      // A second prompt in the writable folder creates and places its own trail.
       runCli(scratch, ['hook', 'user-prompt'], {
         input: JSON.stringify({
           hook_event_name: 'UserPromptSubmit',
@@ -78,7 +78,7 @@ describe('status surfaces the inbox (D1)', () => {
       runCli(repo, ['track', '--project', 'Demo'], { env });
 
       const status = JSON.parse(runCli(repo, ['status', '--json'], { env }).stdout);
-      // Only the real-project session surfaces; the pure-scratch one is kept aside.
+      // Only the ambiguous multi-project session remains in the inbox.
       expect(status.inbox).toBe(1);
     } finally {
       cleanup(repo);

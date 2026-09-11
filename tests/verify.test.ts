@@ -363,7 +363,7 @@ describe('verify --json', () => {
       const paths = pathsForRoot(dir);
       await logEvent(authorFor(paths), { type: 'prompt', text: 'hello' });
 
-      const res = runCli(dir, ['verify', '--json']);
+      const res = runCli(dir, ['verify', '--json', '--verbose-json']);
       expect(res.code).toBe(0);
       const parsed = JSON.parse(res.stdout);
       expect(parsed.ok).toBe(true);
@@ -620,6 +620,50 @@ describe('verify: git history as the outside anchor', () => {
       expect(chain).toContain('recorded trail repair');
       expect(chain).not.toContain('recorded redaction pass');
       expect(history).toContain('declared: trail repair');
+      expect(history).not.toContain('UNEXPLAINED');
+      expect(result.ok).toBe(true);
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('a routing reprojection explains moving captured records to the corrected project', async () => {
+    const dir = makeGitProject();
+    try {
+      await runInit({ cwd: dir });
+      const paths = pathsForRoot(dir);
+      const author = authorFor(paths);
+      const misplaced = await logEvent(author, {
+        type: 'prompt',
+        text: 'build the other game',
+      });
+      await logEvent(author, { type: 'prompt', text: 'keep this game here' });
+      commitAll(dir, 'captured work before routing settled');
+
+      expect(rewriteJournal(author, (entry) => entry.id !== misplaced.event.id)).toBe(1);
+      appendJournal(author, {
+        v: 1,
+        kind: 'redaction',
+        id: 'red_routing_reprojection_test',
+        ts: '2026-09-10T20:00:00.000Z',
+        type: 'redaction',
+        actorSlug: author.slug,
+        redaction: {
+          reason: 'routing-reprojection',
+          entries: 1,
+          values: 0,
+          labels: [],
+          batch: 'segment-test',
+        },
+      });
+
+      const result = await verifyProject(paths);
+      const chain = checkByName(result, 'journal chain is unbroken').details.join('\n');
+      const history = historyCheck(result).details.join('\n');
+      expect(chain).toContain('recorded routing reprojection');
+      expect(chain).not.toContain('recorded batch undo');
+      expect(chain).not.toContain('recorded redaction pass');
+      expect(history).toContain('declared: routing reprojection');
       expect(history).not.toContain('UNEXPLAINED');
       expect(result.ok).toBe(true);
     } finally {

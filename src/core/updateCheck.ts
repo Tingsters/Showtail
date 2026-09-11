@@ -32,7 +32,10 @@ const PASSIVE_EXCLUSIONS = new Set([
   'hook',
   'log',
   'matrix',
+  'projects',
+  'status',
   'update',
+  'verify',
 ]);
 
 /** Read the cached update status without performing network I/O. */

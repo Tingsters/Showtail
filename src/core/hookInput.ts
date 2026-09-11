@@ -8,7 +8,8 @@
  * when anything is missing or malformed.
  */
 
-import { isAbsolute, relative } from 'node:path';
+import { statSync } from 'node:fs';
+import { isAbsolute, relative, resolve } from 'node:path';
 
 /**
  * One file an edit touched, with its own diff — richer than a bare path so the
@@ -112,6 +113,48 @@ function normalizeHookPath(path: string, cwd: string | undefined): string {
   // If the path escapes cwd, `relative` yields `..`; keep it as-is (posix) so the
   // downstream repo-relative guard can reject it rather than silently mangling it.
   return rel.replace(/\\/g, '/');
+}
+
+const MAX_CODEX_EDIT_PATH_LENGTH = 4096;
+const CODE_SHAPED_PATH_RE =
+  /^(?:```|~~~|\*\*\*|@@|diff\s+--git\b|---\s|\+\+\+\s|(?:const|let|var|function|class|import|export)\s)/i;
+
+function hasInvalidCodexPathSyntax(path: string): boolean {
+  const withoutDrive = /^[a-z]:[\\/]/i.test(path) ? path.slice(2) : path;
+  return (
+    /^[+-]/.test(path) ||
+    /[<>"|?*]/.test(path) ||
+    withoutDrive.includes(':') ||
+    /(?:^|[\\/])--/.test(path)
+  );
+}
+
+/** Reject payload text that cannot safely be treated as one Codex edit path. */
+function normalizeCodexEditPath(path: string, cwd: string | undefined): string | null {
+  const trimmed = path.trim();
+  if (
+    trimmed.length === 0 ||
+    trimmed.length > MAX_CODEX_EDIT_PATH_LENGTH ||
+    trimmed !== path ||
+    /[\u0000-\u001f\u007f]/.test(trimmed) ||
+    CODE_SHAPED_PATH_RE.test(trimmed) ||
+    hasInvalidCodexPathSyntax(trimmed)
+  ) {
+    return null;
+  }
+  return normalizeHookPath(trimmed, cwd);
+}
+
+/** Shell parsing is heuristic, so accept only a file that exists after the tool ran. */
+function existingShellEditPath(path: string, cwd: string | undefined): string | null {
+  const normalized = normalizeCodexEditPath(path, cwd);
+  if (!normalized || (!cwd && !isAbsolute(path))) return null;
+  const absolute = isAbsolute(path) ? resolve(path) : resolve(cwd!, path);
+  try {
+    return statSync(absolute).isFile() ? normalized : null;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -301,7 +344,8 @@ export function extractApplyPatchFiles(payload: HookPayload): string[] {
       const path = m[1]?.trim();
       // Envelope paths may be absolute or repo-relative; normalize either way so
       // the downstream snapshot resolves correctly (otherwise it silently fails).
-      if (path) out.push(normalizeHookPath(path, payload.cwd));
+      const normalized = path ? normalizeCodexEditPath(path, payload.cwd) : null;
+      if (normalized) out.push(normalized);
     }
   }
 
@@ -311,12 +355,14 @@ export function extractApplyPatchFiles(payload: HookPayload): string[] {
     const changes = obj.changes;
     if (changes && typeof changes === 'object' && !Array.isArray(changes)) {
       for (const path of Object.keys(changes)) {
-        if (path.length > 0) out.push(normalizeHookPath(path, payload.cwd));
+        const normalized = normalizeCodexEditPath(path, payload.cwd);
+        if (normalized) out.push(normalized);
       }
     }
     const single = obj.file_path;
     if (typeof single === 'string' && single.length > 0) {
-      out.push(normalizeHookPath(single, payload.cwd));
+      const normalized = normalizeCodexEditPath(single, payload.cwd);
+      if (normalized) out.push(normalized);
     }
   }
 
@@ -351,7 +397,7 @@ function cleanPatchBody(lines: string[]): string {
  */
 export function editsFromEnvelope(
   envelope: string,
-  normalize: (p: string) => string,
+  normalize: (p: string) => string | null,
 ): EditedFile[] {
   const byFile = new Map<string, EditedFile>();
   const put = (edit: EditedFile) => {
@@ -362,6 +408,10 @@ export function editsFromEnvelope(
   const flush = () => {
     if (!cur) return;
     const file = normalize(cur.file);
+    if (!file) {
+      cur = null;
+      return;
+    }
     if (cur.op === 'Delete') {
       put({ file, deleted: true });
     } else {
@@ -407,7 +457,7 @@ export function applyPatchEdits(payload: HookPayload): EditedFile[] {
     if (!prev || (!prev.deleted && !prev.diff)) byFile.set(edit.file, edit);
   };
 
-  const normalize = (p: string) => normalizeHookPath(p, payload.cwd);
+  const normalize = (p: string): string | null => normalizeCodexEditPath(p, payload.cwd);
   for (const envelope of applyPatchEnvelopes(payload)) {
     for (const e of editsFromEnvelope(envelope, normalize)) put(e);
   }
@@ -419,12 +469,14 @@ export function applyPatchEdits(payload: HookPayload): EditedFile[] {
     const changes = obj.changes;
     if (changes && typeof changes === 'object' && !Array.isArray(changes)) {
       for (const p of Object.keys(changes)) {
-        if (p.length > 0) put({ file: normalize(p) });
+        const file = normalize(p);
+        if (file) put({ file });
       }
     }
     const single = obj.file_path;
     if (typeof single === 'string' && single.length > 0) {
-      put({ file: normalize(single) });
+      const file = normalize(single);
+      if (file) put({ file });
     }
   }
 
@@ -474,7 +526,7 @@ const SHELL_WRITE_RES: RegExp[] = [
   // PowerShell: Set-Content/Add-Content/Out-File/Tee-Object -LiteralPath|-Path|-FilePath <path>
   /(?:Set-Content|Add-Content|Out-File|Tee-Object)\b[^\n|;]*?\s-(?:LiteralPath|FilePath|Path)\s+("[^"]+"|'[^']+'|[^\s'"|;]+)/gi,
   // Shell redirect: `> path` / `>> path`.
-  />>?\s*("[^"]+"|'[^']+'|[^\s'"|;&>]+)/g,
+  /(?<![-=])>>?\s*("[^"]+"|'[^']+'|[^\s'"|;&>]+)/g,
   // tee / tee -a <path>
   /\btee\b(?:\s+-a)?\s+("[^"]+"|'[^']+'|[^\s'"|;&]+)/g,
   // sed -i / perl -i over a final path token.
@@ -491,6 +543,10 @@ function unquote(tok: string): string {
   return tok;
 }
 
+function withoutApplyPatchEnvelopes(command: string): string {
+  return command.replace(/\*\*\* Begin Patch[\s\S]*?\*\*\* End Patch/g, '');
+}
+
 /**
  * Best-effort file path(s) a Codex `shell_command` wrote. Codex edits files via
  * raw shell when it doesn't use `apply_patch` (notably PowerShell `Set-Content`
@@ -505,16 +561,19 @@ export function extractShellCommandFiles(payload: HookPayload): string[] {
     // `apply_patch` invoked through the shell carries a full envelope.
     for (const m of cmd.matchAll(APPLY_PATCH_FILE_RE)) {
       const p = m[1]?.trim();
-      if (p) out.push(normalizeHookPath(p, payload.cwd));
+      const normalized = p ? existingShellEditPath(p, payload.cwd) : null;
+      if (normalized) out.push(normalized);
     }
+    const shellText = withoutApplyPatchEnvelopes(cmd);
     for (const re of SHELL_WRITE_RES) {
-      for (const m of cmd.matchAll(re)) {
+      for (const m of shellText.matchAll(re)) {
         const tok = m[1]?.trim();
         if (!tok) continue;
         const p = unquote(tok);
         // Skip unresolved shell variables (PowerShell `$x`, cmd `%x%`).
         if (!p || p.includes('$') || p.includes('%')) continue;
-        out.push(normalizeHookPath(p, payload.cwd));
+        const normalized = existingShellEditPath(p, payload.cwd);
+        if (normalized) out.push(normalized);
       }
     }
   }
@@ -549,10 +608,14 @@ const AGY_CODE_KEYS = [
   'content',
 ] as const;
 
-function agyWorkspaceRoot(p: AgyHookPayload): string | undefined {
+export function extractAgyWorkspacePaths(p: AgyHookPayload): string[] {
   const ws = p.workspacePaths;
-  if (Array.isArray(ws) && typeof ws[0] === 'string') return ws[0];
-  return undefined;
+  if (!Array.isArray(ws)) return [];
+  return [...new Set(ws.filter((value): value is string => typeof value === 'string'))];
+}
+
+function agyWorkspaceRoot(p: AgyHookPayload): string | undefined {
+  return extractAgyWorkspacePaths(p)[0];
 }
 
 /** File(s) an agy edit tool touched, repo-relative (from `toolCall.args.TargetFile`). */

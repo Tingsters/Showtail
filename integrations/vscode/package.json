@@ -2,7 +2,7 @@
   "name": "showtail",
   "displayName": "Showtail",
   "description": "Show your work: capture your AI coding prompts and edits (GitHub Copilot, Antigravity IDE) into a local provenance trail.",
-  "version": "0.6.4",
+  "version": "0.7.0",
   "publisher": "Tingsters",
   "license": "Apache-2.0",
   "repository": {
@@ -10,11 +10,17 @@
     "url": "https://github.com/Tingsters/Showtail"
   },
   "engines": {
-    "vscode": "^1.90.0"
+    "vscode": "^1.95.0"
   },
-  "categories": ["Education", "Other"],
+  "categories": [
+    "Education",
+    "Other"
+  ],
   "main": "./dist/extension.js",
-  "activationEvents": ["onStartupFinished"],
+  "activationEvents": [
+    "onStartupFinished",
+    "onLanguageModelTool:showtail_project_control"
+  ],
   "contributes": {
     "chatParticipants": [
       {
@@ -24,16 +30,89 @@
         "description": "Record your prompt and drive Showtail (report, verify, status, trace)",
         "isSticky": true,
         "commands": [
-          { "name": "report", "description": "Generate the Showtail report for your educator" },
-          { "name": "verify", "description": "Check that your trail is complete and consistent" },
-          { "name": "status", "description": "Show whether Showtail capture is active" },
-          { "name": "trace", "description": "Show the provenance trail for a file (pass the path)" }
+          {
+            "name": "report",
+            "description": "Resolve a project and generate its Showtail report"
+          },
+          {
+            "name": "open_report",
+            "description": "Open the last validated report, or generate it once if needed"
+          },
+          {
+            "name": "verify",
+            "description": "Resolve a project and verify its Showtail trail"
+          },
+          {
+            "name": "status",
+            "description": "Resolve a project and show its Showtail status"
+          },
+          {
+            "name": "trace",
+            "description": "Show the provenance trail for a file (pass the path)"
+          }
         ]
       }
     ],
     "commands": [
-      { "command": "showtail.report", "title": "Showtail: Generate Report" },
-      { "command": "showtail.status", "title": "Showtail: Status" }
+      {
+        "command": "showtail.report",
+        "title": "Showtail: Generate Report"
+      },
+      {
+        "command": "showtail.status",
+        "title": "Showtail: Status"
+      },
+      {
+        "command": "showtail.openReport",
+        "title": "Showtail: Open Report"
+      },
+      {
+        "command": "showtail.verify",
+        "title": "Showtail: Verify Trail"
+      }
+    ],
+    "languageModelTools": [
+      {
+        "name": "showtail_project_control",
+        "displayName": "Showtail Project Control",
+        "userDescription": "Resolve the intended local project and run a Showtail report, open, status, or verify action.",
+        "modelDescription": "Use this tool for Showtail report, open report, status, and verify requests. Pass selector only when it copies the student's project wording or an explicitly supplied trail ID/path. Never invent a filesystem path from the open workspace. The tool resolves locally, asks the student when evidence is ambiguous, and runs the control by stable trail ID or a validated explicit path when copied trail IDs require disambiguation.",
+        "toolReferenceName": "showtailProjectControl",
+        "tags": [
+          "showtail",
+          "project",
+          "report",
+          "education"
+        ],
+        "canBeReferencedInPrompt": true,
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "action": {
+              "type": "string",
+              "enum": [
+                "report",
+                "open_report",
+                "status",
+                "verify"
+              ],
+              "description": "The Showtail control action to run."
+            },
+            "selector": {
+              "type": "string",
+              "description": "Optional project wording copied from the student's request, or an explicit path/trail ID supplied by the student."
+            },
+            "priorClaimId": {
+              "type": "string",
+              "description": "Optional one-use claimId from a previous successful Showtail control. Reuses that validated project when selector is omitted; an explicit selector always wins."
+            }
+          },
+          "required": [
+            "action"
+          ],
+          "additionalProperties": false
+        }
+      }
     ],
     "configuration": {
       "title": "Showtail",
@@ -46,7 +125,7 @@
         "showtail.captureOnSave": {
           "type": "boolean",
           "default": true,
-          "description": "Automatically snapshot files as artifacts when you save them."
+          "description": "Capture saved files through Showtail's local work ledger."
         }
       }
     }
@@ -54,12 +133,15 @@
   "scripts": {
     "build": "node esbuild.js",
     "watch": "node esbuild.js --watch",
+    "test": "bun test",
+    "test:extension-host": "bun run build && node test/runExtensionHost.mjs",
     "typecheck": "tsc --noEmit",
     "package": "node esbuild.js --production && vsce package --no-dependencies"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
-    "@types/vscode": "^1.90.0",
+    "@types/vscode": "1.95.0",
+    "@vscode/test-electron": "2.5.2",
     "@vscode/vsce": "^3.0.0",
     "esbuild": "^0.23.0",
     "typescript": "^5.5.0"

@@ -1,11 +1,74 @@
 import { describe, expect, test } from 'bun:test';
-import { existsSync, readdirSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  writeFileSync,
+} from 'node:fs';
 import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { SHOWTAIL_VERSION } from '../src/core/version.ts';
-import { cleanup, envWithHome, makeTempDir, runCli } from './helpers.ts';
+import { VSCODE_EXTENSION_ID } from '../src/core/vscodeExtension.ts';
+import { cleanup, envWithHome, makeTempDir, readJsonReport, runCli } from './helpers.ts';
 
 /** Run the real CLI (through bun) in a given directory. */
 const run = runCli;
+
+/** A VS Code CLI stub that records whether disconnect consent existed on entry. */
+function disconnectConsentProbeCli(dir: string, marker: string): string {
+  const checker = join(dir, 'check-disconnect-consent.ts');
+  const globalConfigUrl = pathToFileURL(
+    join(import.meta.dir, '..', 'src', 'core', 'globalConfig.ts'),
+  ).href;
+  writeFileSync(
+    checker,
+    [
+      `import { writeFileSync } from 'node:fs';`,
+      `import { readGlobalConfig, toolCaptureGloballyDisabled } from '${globalConfigUrl}';`,
+      `const cfg = readGlobalConfig();`,
+      `const stopped = toolCaptureGloballyDisabled('copilot') && cfg.autoConnectDisabledTools?.includes('copilot') === true;`,
+      `writeFileSync(${JSON.stringify(marker)}, stopped ? 'stopped' : 'missing', 'utf8');`,
+      '',
+    ].join('\n'),
+    'utf8',
+  );
+
+  if (process.platform === 'win32') {
+    const cli = join(dir, 'consent-probe.cmd');
+    writeFileSync(
+      cli,
+      [
+        '@echo off',
+        `"${process.execPath}" run "${checker}"`,
+        'if /I "%~1"=="--list-extensions" goto showtail_probe_list',
+        'exit /b 7',
+        ':showtail_probe_list',
+        `echo ${VSCODE_EXTENSION_ID}`,
+        'exit /b 0',
+        '',
+      ].join('\r\n'),
+      'utf8',
+    );
+    return cli;
+  }
+
+  const cli = join(dir, 'consent-probe.sh');
+  writeFileSync(
+    cli,
+    [
+      '#!/bin/sh',
+      `"${process.execPath}" run "${checker}"`,
+      `if [ "$1" = "--list-extensions" ]; then printf '%s\\n' '${VSCODE_EXTENSION_ID}'; exit 0; fi`,
+      'exit 7',
+      '',
+    ].join('\n'),
+    'utf8',
+  );
+  chmodSync(cli, 0o755);
+  return cli;
+}
 
 describe('cli (end-to-end acceptance sequence)', () => {
   test('runs the full documented workflow successfully', () => {
@@ -93,7 +156,276 @@ describe('cli (end-to-end acceptance sequence)', () => {
     try {
       const r = run(dir, ['start']);
       expect(r.code).not.toBe(0);
-      expect(r.stderr).toContain('showtail track');
+      expect(r.stderr).toContain('No Showtail project trail exists for this folder yet.');
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('--no-hooks and disconnect persist opt-outs until a hooks-on reconnect', () => {
+    const dir = makeTempDir();
+    const home = makeTempDir();
+    try {
+      mkdirSync(join(dir, '.showtail'), { recursive: true });
+      const env = envWithHome(home);
+
+      const disconnected = run(dir, ['disconnect', 'codex'], { env });
+      expect(disconnected.code).toBe(0);
+      expect(
+        JSON.parse(readFileSync(join(home, 'config.json'), 'utf8'))
+          .autoConnectDisabledTools,
+      ).toContain('codex');
+      expect(
+        JSON.parse(readFileSync(join(home, 'config.json'), 'utf8')).captureDisabledTools,
+      ).toContain('codex');
+
+      const connected = run(dir, ['connect', 'codex', '--project', '--no-hooks'], {
+        env,
+      });
+      expect(connected.code).toBe(0);
+      expect(
+        JSON.parse(readFileSync(join(home, 'config.json'), 'utf8'))
+          .autoConnectDisabledTools,
+      ).toContain('codex');
+      expect(
+        JSON.parse(readFileSync(join(home, 'config.json'), 'utf8')).captureDisabledTools,
+      ).toContain('codex');
+
+      const automatic = run(dir, ['connect', 'codex', '--project', '--yes'], { env });
+      expect(automatic.code).toBe(0);
+      expect(
+        JSON.parse(readFileSync(join(home, 'config.json'), 'utf8'))
+          .autoConnectDisabledTools,
+      ).not.toContain('codex');
+      expect(
+        JSON.parse(readFileSync(join(home, 'config.json'), 'utf8')).captureDisabledTools,
+      ).not.toContain('codex');
+    } finally {
+      cleanup(dir);
+      cleanup(home);
+    }
+  });
+
+  test('managed integration refresh cannot clear or overwrite a machine-wide stop', () => {
+    const dir = makeTempDir();
+    const home = makeTempDir();
+    try {
+      mkdirSync(join(dir, '.showtail'), { recursive: true });
+      const env = {
+        ...envWithHome(join(home, 'global')),
+        CODEX_HOME: join(home, 'codex'),
+      };
+      expect(run(dir, ['connect', 'codex', '--project', '--yes'], { env }).code).toBe(0);
+      const hooks = join(dir, '.codex', 'hooks.json');
+      expect(readFileSync(hooks, 'utf8')).toContain('showtail hook');
+      expect(run(dir, ['disconnect', 'codex'], { env }).code).toBe(0);
+      expect(readFileSync(hooks, 'utf8')).not.toContain('showtail hook');
+
+      const refresh = run(
+        dir,
+        ['connect', 'codex', '--project', '--yes', '--managed-refresh'],
+        { env },
+      );
+      expect(refresh.code).toBe(4);
+      expect(refresh.stderr).toContain('Managed refresh skipped');
+      expect(readFileSync(hooks, 'utf8')).not.toContain('showtail hook');
+      expect(
+        JSON.parse(readFileSync(join(home, 'global', 'config.json'), 'utf8'))
+          .captureDisabledTools,
+      ).toContain('codex');
+    } finally {
+      cleanup(dir);
+      cleanup(home);
+    }
+  });
+
+  test('managed integration refresh honors a scoped disconnect opt-out', () => {
+    const dir = makeTempDir();
+    const home = makeTempDir();
+    try {
+      mkdirSync(join(dir, '.showtail'), { recursive: true });
+      const env = {
+        ...envWithHome(join(home, 'global')),
+        CODEX_HOME: join(home, 'codex'),
+      };
+      expect(run(dir, ['connect', 'codex', '--project', '--yes'], { env }).code).toBe(0);
+      const hooks = join(dir, '.codex', 'hooks.json');
+      expect(readFileSync(hooks, 'utf8')).toContain('showtail hook');
+
+      expect(run(dir, ['disconnect', 'codex', '--project'], { env }).code).toBe(0);
+      const config = JSON.parse(
+        readFileSync(join(home, 'global', 'config.json'), 'utf8'),
+      );
+      expect(config.autoConnectDisabledTools).toContain('codex');
+      expect(config.captureDisabledTools ?? []).not.toContain('codex');
+
+      const refresh = run(
+        dir,
+        ['connect', 'codex', '--project', '--yes', '--managed-refresh'],
+        { env },
+      );
+      expect(refresh.code).toBe(4);
+      expect(readFileSync(hooks, 'utf8')).not.toContain('showtail hook');
+
+      expect(run(dir, ['connect', 'codex', '--project', '--yes'], { env }).code).toBe(0);
+      expect(readFileSync(hooks, 'utf8')).toContain('showtail hook');
+    } finally {
+      cleanup(dir);
+      cleanup(home);
+    }
+  });
+
+  test('bare disconnect persists consent before native extension removal starts', () => {
+    const dir = makeTempDir();
+    const home = makeTempDir();
+    try {
+      const marker = join(home, 'disconnect-consent.txt');
+      const env = {
+        ...envWithHome(join(home, 'global')),
+        SHOWTAIL_VSCODE_CLI: disconnectConsentProbeCli(home, marker),
+      };
+
+      const disconnected = run(dir, ['disconnect', 'copilot'], { env });
+
+      expect(disconnected.code).toBe(0);
+      expect(readFileSync(marker, 'utf8')).toBe('stopped');
+      expect(disconnected.stdout).toContain(
+        'Automatic capture is off for GitHub Copilot',
+      );
+      expect(disconnected.stdout).toContain('Warning:');
+    } finally {
+      cleanup(dir);
+      cleanup(home);
+    }
+  });
+
+  test('bare disconnect removes project and user capture', () => {
+    const dir = makeTempDir();
+    const home = makeTempDir();
+    try {
+      mkdirSync(join(dir, '.showtail'), { recursive: true });
+      const codexHome = join(home, 'codex');
+      const env = { ...envWithHome(join(home, 'global')), CODEX_HOME: codexHome };
+
+      expect(run(dir, ['connect', 'codex', '--user', '--yes'], { env }).code).toBe(0);
+      expect(run(dir, ['connect', 'codex', '--project', '--yes'], { env }).code).toBe(0);
+      expect(existsSync(join(codexHome, 'hooks.json'))).toBe(true);
+      expect(existsSync(join(dir, '.codex', 'hooks.json'))).toBe(true);
+
+      const disconnected = run(dir, ['disconnect', 'codex'], { env });
+
+      expect(disconnected.code).toBe(0);
+      expect(disconnected.stdout).toContain('Automatic capture is off for OpenAI Codex');
+      expect(existsSync(join(codexHome, 'hooks.json'))).toBe(true);
+      expect(readFileSync(join(codexHome, 'hooks.json'), 'utf8')).not.toContain(
+        'showtail hook',
+      );
+      expect(readFileSync(join(dir, '.codex', 'hooks.json'), 'utf8')).not.toContain(
+        'showtail hook',
+      );
+    } finally {
+      cleanup(dir);
+      cleanup(home);
+    }
+  });
+
+  test('bare disconnect stops stale Codex hooks in every project until reconnect', () => {
+    const workspace = makeTempDir();
+    const home = makeTempDir();
+    const projectA = join(workspace, 'project-a');
+    const projectB = join(workspace, 'project-b');
+    try {
+      mkdirSync(projectA, { recursive: true });
+      mkdirSync(projectB, { recursive: true });
+      const env = {
+        ...envWithHome(join(home, 'global')),
+        CODEX_HOME: join(home, 'codex'),
+      };
+      expect(run(projectA, ['track', '--project', 'A'], { env }).code).toBe(0);
+      expect(run(projectB, ['track', '--project', 'B'], { env }).code).toBe(0);
+      expect(
+        run(projectA, ['connect', 'codex', '--project', '--yes'], { env }).code,
+      ).toBe(0);
+      expect(
+        run(projectB, ['connect', 'codex', '--project', '--yes'], { env }).code,
+      ).toBe(0);
+
+      const projectBHooks = join(projectB, '.codex', 'hooks.json');
+      expect(readFileSync(projectBHooks, 'utf8')).toContain('showtail hook');
+
+      const disconnected = run(projectA, ['disconnect', 'codex'], { env });
+      expect(disconnected.code).toBe(0);
+      expect(disconnected.stdout).toContain('Automatic capture is off for OpenAI Codex');
+      // A command in project A cannot find and physically remove project B's hook.
+      expect(readFileSync(projectBHooks, 'utf8')).toContain('showtail hook');
+
+      const status = run(projectB, ['status', '--json', '--tool', 'codex'], { env });
+      expect(status.code).toBe(0);
+      expect(JSON.parse(status.stdout)).toEqual(
+        expect.objectContaining({
+          capture: {
+            tool: 'codex',
+            mode: 'disconnected',
+            connected: false,
+            hooksActive: false,
+          },
+          tools: [
+            expect.objectContaining({
+              tool: 'codex',
+              connected: false,
+              hooksActive: false,
+              captureActive: false,
+            }),
+          ],
+        }),
+      );
+
+      const blockedPrompt = 'this stale project hook must not capture';
+      expect(
+        run(projectB, ['hook', 'user-prompt', '--tool', 'codex'], {
+          env,
+          input: JSON.stringify({ cwd: projectB, prompt: blockedPrompt }),
+        }).code,
+      ).toBe(0);
+      expect(
+        run(projectB, ['report', '--format', 'json', '--no-sync'], { env }).code,
+      ).toBe(0);
+      expect(JSON.stringify(readJsonReport(projectB))).not.toContain(blockedPrompt);
+
+      expect(
+        run(projectB, ['connect', 'codex', '--project', '--yes'], { env }).code,
+      ).toBe(0);
+      const resumedPrompt = 'capture resumes after an explicit reconnect';
+      expect(
+        run(projectB, ['hook', 'user-prompt', '--tool', 'codex'], {
+          env,
+          input: JSON.stringify({ cwd: projectB, prompt: resumedPrompt }),
+        }).code,
+      ).toBe(0);
+      expect(
+        run(projectB, ['report', '--format', 'json', '--no-sync'], { env }).code,
+      ).toBe(0);
+      expect(JSON.stringify(readJsonReport(projectB))).toContain(resumedPrompt);
+    } finally {
+      cleanup(workspace);
+      cleanup(home);
+    }
+  });
+
+  test('track rejects a missing path instead of creating a typo directory', () => {
+    const dir = makeTempDir();
+    try {
+      const missing = join(dir, 'does-not-exist');
+      const r = run(dir, ['track', missing, '--json']);
+      expect(r.code).toBe(2);
+      expect(JSON.parse(r.stdout)).toEqual(
+        expect.objectContaining({
+          ok: false,
+          errorCode: 'PATH_NOT_FOUND',
+          nextAction: 'choose-existing-path',
+        }),
+      );
+      expect(existsSync(missing)).toBe(false);
     } finally {
       cleanup(dir);
     }
@@ -163,7 +495,7 @@ describe('cli (end-to-end acceptance sequence)', () => {
       const r = run(dir, ['--help']);
       expect(r.code).toBe(0);
       for (const heading of [
-        'Capture your work:',
+        'Manual capture (optional):',
         'Review your trail:',
         'Connect your tools:',
         'Maintain Showtail:',
@@ -175,6 +507,12 @@ describe('cli (end-to-end acceptance sequence)', () => {
       }
       // Tracking turns on automatically — no getting-started commands are shown.
       expect(r.stdout).not.toContain('Get started:');
+      expect(r.stdout).toContain(
+        'Normal flow: open your project, work with your AI tool, then run `showtail report`.',
+      );
+      expect(r.stdout.indexOf('Review your trail:')).toBeLessThan(
+        r.stdout.indexOf('Manual capture (optional):'),
+      );
       // The unified integration verbs replace the old per-tool groups.
       expect(r.stdout).toContain('connect');
       expect(r.stdout).toContain('update');
@@ -182,6 +520,32 @@ describe('cli (end-to-end acceptance sequence)', () => {
       // `matrix` is a maintainer/informational command — hidden from help, still runnable.
       expect(r.stdout).not.toMatch(/^\s+matrix\b/m);
       expect(run(dir, ['matrix', '--json']).code).toBe(0);
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('project review help exposes explicit path operands for agents', () => {
+    const dir = makeTempDir();
+    try {
+      const status = run(dir, ['status', '--help']);
+      expect(status.code).toBe(0);
+      expect(status.stdout).toContain('Usage: showtail status [options] [path]');
+      expect(status.stdout).toContain('startup capture-mode probe');
+      expect(status.stdout).toContain('<absolute-project-path>');
+
+      const report = run(dir, ['report', '--help']);
+      expect(report.code).toBe(0);
+      expect(report.stdout).toContain('Usage: showtail report [options] [path]');
+      expect(report.stdout).toContain(
+        'showtail report <absolute-project-path> --json --no-open',
+      );
+
+      const verify = run(dir, ['verify', '--help']);
+      expect(verify.code).toBe(0);
+      expect(verify.stdout).toContain('Usage: showtail verify [options] [path]');
+      expect(verify.stdout).toContain('showtail verify <absolute-project-path> --json');
+      expect(verify.stdout).toContain('confirm the returned root');
     } finally {
       cleanup(dir);
     }

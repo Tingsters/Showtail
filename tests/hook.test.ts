@@ -6,6 +6,8 @@ import { cleanup, makeTempDir, readJsonReport, runCli, spawnEnv } from './helper
 import { isInternalPath } from '../src/commands/hook.ts';
 import { pathsForRoot } from '../src/core/storage.ts';
 import { readObject } from '../src/core/objects.ts';
+import { connectPlugins } from '../src/plugins/registry.ts';
+import { VSCODE_EXTENSION_HOOK_PROTOCOL } from '../src/core/vscodeExtensionHook.ts';
 
 // Isolate the machine-local ledger per test: `run` spawns the CLI with
 // `spawnEnv()`, which inherits `process.env` — without this, `SHOWTAIL_HOME` is
@@ -217,6 +219,74 @@ describe('hook command (end-to-end via stdin)', () => {
       const r = run(dir, ['status', '--json']);
       expect(r.code).toBe(0);
       expect(JSON.parse(r.stdout).hooksActive).toBe(true);
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('a global stop short-circuits every hook-backed plugin before side effects', () => {
+    const dir = makeTempDir();
+    try {
+      const hookPlugins = connectPlugins().filter((plugin) => plugin.connect.hooks);
+      expect(hookPlugins.length).toBeGreaterThan(0);
+      writeFileSync(
+        join(ledgerHome!, 'config.json'),
+        JSON.stringify({
+          version: 1,
+          autoInit: true,
+          captureDisabledTools: hookPlugins.map((plugin) => plugin.cliName),
+        }),
+      );
+
+      for (const plugin of hookPlugins) {
+        const cwd = join(dir, plugin.cliName);
+        mkdirSync(cwd, { recursive: true });
+        const prompt = `must not capture from ${plugin.cliName}`;
+        const candidates = [
+          {
+            cwd,
+            prompt,
+            session_id: `disabled-${plugin.cliName}`,
+            hook_event_name: 'UserPromptSubmit',
+          },
+          {
+            cwd,
+            prompt,
+            sessionId: `disabled-${plugin.cliName}`,
+            timestamp: Date.now(),
+          },
+          {
+            showtailExtension: VSCODE_EXTENSION_HOOK_PROTOCOL,
+            cwd,
+            projectCwd: cwd,
+            workspacePaths: [cwd],
+            timestamp: new Date().toISOString(),
+            prompt,
+            session_id: `disabled-${plugin.cliName}`,
+          },
+        ];
+        const adapter = plugin.connect.hooks!;
+        const payload = candidates.find(
+          (candidate) => !adapter.acceptsPayload || adapter.acceptsPayload(candidate),
+        );
+        expect(payload).toBeDefined();
+        expect(adapter.parse(payload!).prompt).toBe(prompt);
+        const r = run(
+          cwd,
+          ['hook', 'user-prompt', '--tool', plugin.id],
+          JSON.stringify(payload),
+        );
+        expect(r.code).toBe(0);
+        if (plugin.id === 'antigravity-ide' || plugin.id === 'antigravity-cli') {
+          expect(r.stdout.trim()).toBe('{"decision":"allow"}');
+        } else {
+          expect(r.stdout).toBe('');
+        }
+        expect(existsSync(join(cwd, '.showtail'))).toBe(false);
+      }
+
+      expect(existsSync(join(ledgerHome!, 'ledger'))).toBe(false);
+      expect(existsSync(join(ledgerHome!, 'hook-claims'))).toBe(false);
     } finally {
       cleanup(dir);
     }
@@ -1490,4 +1560,202 @@ describe('Antigravity IDE: reconcile the transcript on PostToolUse (Stop never f
       cleanup(home);
     }
   });
+});
+
+describe('hook resume consent boundary', () => {
+  for (const writer of ['1', '0'] as const) {
+    const mode = writer === '1' ? 'ledger writer' : 'direct writer';
+    test(`${mode} excludes disconnected work and resumes with the same native session`, () => {
+      const dir = makeTempDir();
+      const previousWriter = process.env.SHOWTAIL_LEDGER_WRITER;
+      process.env.SHOWTAIL_LEDGER_WRITER = writer;
+      try {
+        initProject(dir);
+        const sessionId = `resume-${writer}`;
+        const now = Date.now();
+        const oldTime = new Date(now - 60_000).toISOString();
+        const oldAnswerTime = new Date(now - 59_000).toISOString();
+        const disabledTime = new Date(now - 30_000).toISOString();
+        const cutoff = new Date(now - 10_000).toISOString();
+
+        expect(
+          run(
+            dir,
+            ['hook', 'user-prompt'],
+            JSON.stringify({
+              cwd: dir,
+              session_id: sessionId,
+              prompt: 'Prompt captured before disconnect',
+            }),
+          ).code,
+        ).toBe(0);
+
+        const transcript = writeTranscript(dir, `resume-${writer}.jsonl`, [
+          userLineWithSource(
+            'resume-old-user',
+            'Prompt captured before disconnect',
+            dir,
+            'typed',
+            { sessionId, timestamp: oldTime },
+          ),
+          {
+            ...asstLine('resume-old-answer', 'Baseline captured answer.'),
+            timestamp: oldAnswerTime,
+          },
+        ]);
+        expect(
+          run(
+            dir,
+            ['hook', 'stop'],
+            JSON.stringify({
+              cwd: dir,
+              session_id: sessionId,
+              transcript_path: transcript,
+            }),
+          ).code,
+        ).toBe(0);
+
+        const consentDir = join(ledgerHome!, 'capture-consent');
+        mkdirSync(consentDir, { recursive: true });
+        writeFileSync(
+          join(consentDir, 'tool-claude.json'),
+          JSON.stringify({ version: 1, tool: 'claude', capture: 'disabled' }),
+          'utf8',
+        );
+        writeFileSync(
+          join(consentDir, 'tool-claude.json'),
+          JSON.stringify({
+            version: 1,
+            tool: 'claude',
+            capture: 'enabled',
+            enabledAt: cutoff,
+          }),
+          'utf8',
+        );
+
+        expect(
+          run(
+            dir,
+            ['hook', 'user-prompt'],
+            JSON.stringify({
+              cwd: dir,
+              session_id: sessionId,
+              prompt: 'Prompt captured after reconnect',
+            }),
+          ).code,
+        ).toBe(0);
+        const resumedTime = new Date(Date.now() + 1_000).toISOString();
+        const resumedAnswerTime = new Date(Date.now() + 2_000).toISOString();
+        const disabledFile = join(dir, 'src', 'disabled.ts');
+        const resumedFile = join(dir, 'src', 'resumed.ts');
+        writeFileSync(
+          transcript,
+          [
+            userLineWithSource(
+              'resume-old-user',
+              'Prompt captured before disconnect',
+              dir,
+              'typed',
+              { sessionId, timestamp: oldTime },
+            ),
+            {
+              ...asstLine('resume-old-answer', 'Baseline captured answer.'),
+              timestamp: oldAnswerTime,
+            },
+            userLineWithSource(
+              'resume-disabled-user',
+              'Prompt written while capture was disconnected',
+              dir,
+              'typed',
+              { sessionId, timestamp: disabledTime },
+            ),
+            {
+              ...asstLine('resume-disabled-answer', 'Disconnected answer must stay out.'),
+              timestamp: disabledTime,
+            },
+            {
+              type: 'assistant',
+              uuid: 'resume-disabled-edit',
+              timestamp: disabledTime,
+              message: {
+                role: 'assistant',
+                model: 'claude-opus-4-8',
+                content: [
+                  {
+                    type: 'tool_use',
+                    id: 'resume-disabled-edit-tool',
+                    name: 'Edit',
+                    input: {
+                      file_path: disabledFile,
+                      old_string: '',
+                      new_string: 'disabled',
+                    },
+                  },
+                ],
+              },
+            },
+            userLineWithSource(
+              'resume-live-user',
+              'Prompt captured after reconnect',
+              dir,
+              'typed',
+              { sessionId, timestamp: resumedTime },
+            ),
+            {
+              ...asstLine('resume-live-answer', 'Post-reconnect answer is captured.'),
+              timestamp: resumedAnswerTime,
+            },
+            {
+              type: 'assistant',
+              uuid: 'resume-live-edit',
+              timestamp: resumedAnswerTime,
+              message: {
+                role: 'assistant',
+                model: 'claude-opus-4-8',
+                content: [
+                  {
+                    type: 'tool_use',
+                    id: 'resume-live-edit-tool',
+                    name: 'Edit',
+                    input: {
+                      file_path: resumedFile,
+                      old_string: '',
+                      new_string: 'resumed',
+                    },
+                  },
+                ],
+              },
+            },
+          ]
+            .map((line) => JSON.stringify(line))
+            .join('\n'),
+          'utf8',
+        );
+
+        expect(
+          run(
+            dir,
+            ['hook', 'stop'],
+            JSON.stringify({
+              cwd: dir,
+              session_id: sessionId,
+              transcript_path: transcript,
+            }),
+          ).code,
+        ).toBe(0);
+        expect(run(dir, ['report', '--format', 'json', '--no-sync']).code).toBe(0);
+        const report = JSON.stringify(readJsonReport(dir));
+        expect(report).not.toContain('Prompt written while capture was disconnected');
+        expect(report).not.toContain('Disconnected answer must stay out.');
+        expect(report).not.toContain('disabled.ts');
+        expect(report).toContain('Prompt captured after reconnect');
+        expect(report).toContain('Post-reconnect answer is captured.');
+        expect(report).toContain('resumed.ts');
+      } finally {
+        if (previousWriter === undefined) delete process.env.SHOWTAIL_LEDGER_WRITER;
+        else process.env.SHOWTAIL_LEDGER_WRITER = previousWriter;
+        cleanup(dir);
+      }
+    });
+  }
 });

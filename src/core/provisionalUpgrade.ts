@@ -22,7 +22,10 @@ export async function upgradeProvisionalAuthor(
   realAuthor: AuthorPaths,
   machineId: string,
   real: Identity,
-): Promise<void> {
+  options: { continueCapture?: () => boolean } = {},
+): Promise<boolean> {
+  const continueCapture = options.continueCapture ?? (() => true);
+  if (!continueCapture()) return false;
   const trailId = ensureTrailId(paths);
   const realSlug = slugifyEmail(real.email);
 
@@ -33,10 +36,14 @@ export async function upgradeProvisionalAuthor(
     if (!placedHere) continue;
 
     try {
-      await materializeLedgerSession(session, realAuthor); // re-project under real author
+      const materialized = await materializeLedgerSession(session, realAuthor, {
+        continueCapture,
+      });
+      if (!materialized.completed) return false;
     } catch {
       /* skip a bad session; the others still upgrade */
     }
+    if (!continueCapture()) return false;
     try {
       // Keep the ledger's slug hint correct (cosmetic; materialize ignores it).
       const ls = readLedgerSession(session.id);
@@ -51,9 +58,11 @@ export async function upgradeProvisionalAuthor(
 
   // Remove the placeholder folder entirely — clears its events AND un-batched artifacts,
   // so the real author folder is the single, correctly-attributed copy.
+  if (!continueCapture()) return false;
   try {
     rmSync(provisionalAuthor.dir, { recursive: true, force: true });
   } catch {
     /* leave it; worst case the report briefly shows both until the next run */
   }
+  return true;
 }

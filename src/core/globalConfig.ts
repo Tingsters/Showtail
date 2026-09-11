@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join, resolve } from 'node:path';
-import { readJson, writeJson } from './storage.ts';
+import { basename, isAbsolute, join, resolve } from 'node:path';
+import { existingPathKey, readJson, writeJson } from './storage.ts';
 
 /**
  * Machine-wide Showtail state that lives *outside* any project: whether the
@@ -13,6 +13,53 @@ import { readJson, writeJson } from './storage.ts';
  * versions. `SHOWTAIL_HOME` overrides the location so tests can point it at a temp
  * dir (mirrors the `SHOWTAIL_ROOT_CEILING` pattern).
  */
+export interface KnownProject {
+  /** Stable trail identity. Older entries may predate trail ids. */
+  trailId?: string;
+  /** Most recently observed absolute root. */
+  path: string;
+  /** Earlier roots retained as bounded move/copy validation hints. */
+  previousPaths?: string[];
+  /** True once real edit provenance has been observed for this trail. */
+  editBacked?: boolean;
+  lastSeenAt: string;
+}
+
+export const PROJECT_IDENTITY_CATALOG_VERSION = 1 as const;
+
+/** Exact machine-ledger evidence that ties an edited file to one project identity. */
+export interface ProjectEditReference {
+  ledgerId: string;
+  nativeSessionId: string;
+  recordId: string;
+  segmentId?: string;
+  path: string;
+  basename: string;
+  sha256?: string;
+}
+
+/** Durable machine-local identity metadata keyed by the stable trail id. */
+export interface ProjectIdentity {
+  trailId: string;
+  currentPath: string;
+  previousPaths?: string[];
+  configuredName?: string;
+  previousConfiguredNames?: string[];
+  currentFolderBasename: string;
+  previousFolderBasenames?: string[];
+  entrypointBasenames?: string[];
+  previousEntrypointBasenames?: string[];
+  editReferences?: ProjectEditReference[];
+  conflictPaths?: string[];
+  editBacked?: boolean;
+  lastSeenAt: string;
+}
+
+export interface ProjectIdentityCatalog {
+  version: typeof PROJECT_IDENTITY_CATALOG_VERSION;
+  byTrailId: Record<string, ProjectIdentity>;
+}
+
 export interface GlobalConfig {
   /** Schema version, for upgrade-on-read. */
   version: number;
@@ -33,6 +80,20 @@ export interface GlobalConfig {
    * `core/autoConnectSweep.ts`.
    */
   autoConnectedTools?: string[];
+  /**
+   * Tools the user explicitly disconnected. The automatic sweep must neither
+   * reconnect nor refresh these until an explicit connect/setup enables them.
+   */
+  autoConnectDisabledTools?: string[];
+  /**
+   * Tools whose installed integrations must not capture, even if stale hooks
+   * remain in another project. Set by a machine-wide disconnect and cleared
+   * only by an explicit reconnect that enables automatic capture.
+   *
+   * This is deliberately separate from {@link autoConnectDisabledTools}, which
+   * controls background installation/refresh rather than runtime consent.
+   */
+  captureDisabledTools?: string[];
   /**
    * Folders the student has marked as scratch (`showtail ignore <path>`). Sessions
    * whose work lives under one never surface in `showtail inbox` — the override for
@@ -63,6 +124,17 @@ export interface GlobalConfig {
    */
   wiringVersion?: string;
   /**
+   * Revision of the managed tool instructions last refreshed on this machine.
+   * Unlike `wiringVersion`, this can advance without a package-version change.
+   */
+  managedInstructionRevision?: number;
+  /**
+   * Integration generation last applied to each auto-connected tool. Per-tool
+   * state keeps a temporarily unavailable tool stale without repeatedly
+   * refreshing tools that already received the same update.
+   */
+  toolIntegrationGenerations?: Record<string, string>;
+  /**
    * Whether `showtail report` opens the generated report afterwards: `always`,
    * `never`, or `ask` (the default — the post-report open menu prompts once per
    * run). Set when the user picks "always"/"never" in that menu.
@@ -79,7 +151,9 @@ export interface GlobalConfig {
     bulkRunId?: string;
   };
   /** Machine-local paths of trails Showtail has seen, for future bulk maintenance. */
-  knownProjects?: Array<{ trailId?: string; path: string; lastSeenAt: string }>;
+  knownProjects?: KnownProject[];
+  /** Versioned metadata-first project identities, keyed by stable trail id. */
+  projectCatalog?: ProjectIdentityCatalog;
   /** Cached release metadata and the user's passive-check preference. */
   update?: {
     automaticChecks?: boolean;
@@ -103,6 +177,15 @@ export function showtailHome(): string {
 /** Absolute path to the global config file. */
 export function globalConfigPath(): string {
   return join(showtailHome(), 'config.json');
+}
+
+/** Authoritative per-tool capture-consent file, isolated from shared config RMWs. */
+export function toolCaptureConsentPath(cliName: string): string {
+  return join(
+    showtailHome(),
+    'capture-consent',
+    `tool-${encodeURIComponent(cliName)}.json`,
+  );
 }
 
 /** Whether this machine already had Showtail global state before the current run. */
@@ -144,28 +227,336 @@ export function writeGlobalConfig(config: GlobalConfig): void {
   writeJson(globalConfigPath(), config);
 }
 
-/** Record a project location in machine-local state, de-duplicated by trail id/path. */
-export function noteKnownProject(path: string, trailId?: string): void {
+function uniqueKnownPaths(paths: string[], current: string): string[] {
+  const currentKey = existingPathKey(current);
+  const seen = new Set<string>();
+  const unique: string[] = [];
+  for (const path of paths) {
+    const resolved = resolve(path);
+    const key = existingPathKey(resolved);
+    if (key === currentKey || seen.has(key)) continue;
+    seen.add(key);
+    unique.push(resolved);
+  }
+  return unique.slice(-16);
+}
+
+function uniqueResolvedPaths(paths: Iterable<string>): string[] {
+  const seen = new Set<string>();
+  const unique: string[] = [];
+  for (const path of paths) {
+    const resolved = resolve(path);
+    const key = existingPathKey(resolved);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    unique.push(resolved);
+  }
+  return unique.slice(-16);
+}
+
+function uniqueStrings(
+  values: Iterable<string>,
+  current: Iterable<string> = [],
+): string[] {
+  const excluded = new Set(current);
+  return [...new Set([...values].map((value) => value.trim()).filter(Boolean))]
+    .filter((value) => !excluded.has(value))
+    .slice(-32);
+}
+
+function editReferenceKey(reference: ProjectEditReference): string {
+  return `${reference.ledgerId}\t${reference.segmentId ?? ''}\t${reference.recordId}`;
+}
+
+function mergeEditReferences(
+  current: readonly ProjectEditReference[],
+  observed: readonly ProjectEditReference[],
+): ProjectEditReference[] {
+  const byId = new Map<string, ProjectEditReference>();
+  for (const reference of [...current, ...observed]) {
+    if (
+      !reference ||
+      typeof reference.ledgerId !== 'string' ||
+      !reference.ledgerId.trim() ||
+      typeof reference.nativeSessionId !== 'string' ||
+      !reference.nativeSessionId.trim() ||
+      typeof reference.recordId !== 'string' ||
+      !reference.recordId.trim() ||
+      typeof reference.path !== 'string' ||
+      !reference.path.trim() ||
+      !isAbsolute(reference.path) ||
+      typeof reference.basename !== 'string' ||
+      !reference.basename.trim()
+    ) {
+      continue;
+    }
+    const path = resolve(reference.path);
+    byId.set(editReferenceKey(reference), {
+      ...reference,
+      path,
+      basename: basename(path),
+    });
+  }
+  return [...byId.values()].slice(-64);
+}
+
+function sameEditReferences(
+  left: readonly ProjectEditReference[],
+  right: readonly ProjectEditReference[],
+): boolean {
+  const normalized = (references: readonly ProjectEditReference[]) =>
+    mergeEditReferences([], references)
+      .map((reference) => JSON.stringify(reference))
+      .sort();
+  return JSON.stringify(normalized(left)) === JSON.stringify(normalized(right));
+}
+
+function sameStringSet(left: Iterable<string>, right: Iterable<string>): boolean {
+  const a = [...new Set(left)].sort();
+  const b = [...new Set(right)].sort();
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
+function identityObservationChanges(
+  identity: ProjectIdentity | undefined,
+  path: string,
+  options: KnownProjectObservation,
+): boolean {
+  if (options.resetIdentity) return true;
+  if (!identity || existingPathKey(identity.currentPath) !== existingPathKey(path)) {
+    return true;
+  }
+  const configuredName = options.configuredName?.trim();
+  if (configuredName && configuredName !== identity.configuredName) return true;
+  if (options.replaceEditEvidence) {
+    const observedEntrypoints = uniqueStrings(
+      (options.entrypointBasenames ?? []).map((value) => basename(value)),
+    );
+    const observedReferences = mergeEditReferences([], options.editReferences ?? []);
+    const editBacked = options.editBacked === true || observedReferences.length > 0;
+    if (!sameStringSet(observedEntrypoints, identity.entrypointBasenames ?? [])) {
+      return true;
+    }
+    if ((identity.previousEntrypointBasenames?.length ?? 0) > 0) return true;
+    if (!sameEditReferences(observedReferences, identity.editReferences ?? []))
+      return true;
+    if (editBacked !== (identity.editBacked === true)) return true;
+  }
+  if (options.entrypointBasenames) {
+    const observed = options.entrypointBasenames.map((value) => basename(value));
+    if (!sameStringSet(observed, identity.entrypointBasenames ?? [])) return true;
+  }
+  if (options.editReferences) {
+    const known = new Set((identity.editReferences ?? []).map(editReferenceKey));
+    if (
+      options.editReferences.some((reference) => !known.has(editReferenceKey(reference)))
+    ) {
+      return true;
+    }
+  }
+  if (options.conflictPaths) {
+    const observed = uniqueResolvedPaths(options.conflictPaths).map(existingPathKey);
+    const current = (identity.conflictPaths ?? []).map(existingPathKey);
+    if (!sameStringSet(observed, current)) return true;
+  }
+  return options.editBacked === true && identity.editBacked !== true;
+}
+
+export interface KnownProjectObservation {
+  editBacked?: boolean;
+  configuredName?: string;
+  entrypointBasenames?: string[];
+  editReferences?: ProjectEditReference[];
+  conflictPaths?: string[];
+  /** Replace only ledger-derived evidence, retaining path and name history. */
+  replaceEditEvidence?: boolean;
+  /** Replace metadata that was contradicted by a live trail-id validation. */
+  resetIdentity?: boolean;
+}
+
+/**
+ * Record a project location in machine-local state, keyed by stable trail id.
+ * A real identity/path change bypasses the timestamp debounce and retains the
+ * previous root as a bounded hint for move/copy validation.
+ */
+export function noteKnownProject(
+  path: string,
+  trailId?: string,
+  options: KnownProjectObservation = {},
+): void {
   try {
     const resolved = resolve(path);
     const cfg = readGlobalConfig();
     const now = new Date().toISOString();
     const projects = [...(cfg.knownProjects ?? [])];
-    const index = projects.findIndex(
-      (project) =>
-        (trailId && project.trailId === trailId) || resolve(project.path) === resolved,
+    const supportedCatalog =
+      cfg.projectCatalog?.version === PROJECT_IDENTITY_CATALOG_VERSION
+        ? cfg.projectCatalog
+        : undefined;
+    const trailIndex = trailId
+      ? projects.findIndex((project) => project.trailId === trailId)
+      : -1;
+    const pathIndex = projects.findIndex(
+      (project) => existingPathKey(project.path) === existingPathKey(resolved),
     );
+    const index = trailIndex >= 0 ? trailIndex : pathIndex;
     if (index >= 0) {
-      const lastSeen = Date.parse(projects[index]!.lastSeenAt);
-      if (Number.isFinite(lastSeen) && Date.now() - lastSeen < 5 * 60_000) return;
+      const current = projects[index]!;
+      const samePath = existingPathKey(current.path) === existingPathKey(resolved);
+      const sameTrail = current.trailId === trailId;
+      const addsEditProvenance = options.editBacked === true && !current.editBacked;
+      const identityChanged = trailId
+        ? identityObservationChanges(
+            supportedCatalog?.byTrailId[trailId],
+            resolved,
+            options,
+          )
+        : false;
+      if (samePath && sameTrail && !addsEditProvenance && !identityChanged) {
+        const lastSeen = Date.parse(current.lastSeenAt);
+        if (Number.isFinite(lastSeen) && Date.now() - lastSeen < 5 * 60_000) return;
+      }
+
+      const previousPaths = options.resetIdentity
+        ? []
+        : uniqueKnownPaths(
+            [
+              ...(current.previousPaths ?? []),
+              ...(sameTrail && !samePath ? [current.path] : []),
+            ],
+            resolved,
+          );
+      const editBacked = options.replaceEditEvidence
+        ? options.editBacked === true
+        : (!options.resetIdentity && sameTrail && current.editBacked) ||
+          options.editBacked === true;
+      projects[index] = {
+        ...(trailId ? { trailId } : {}),
+        path: resolved,
+        ...(previousPaths.length > 0 ? { previousPaths } : {}),
+        ...(editBacked ? { editBacked: true } : {}),
+        lastSeenAt: now,
+      };
+    } else {
+      projects.push({
+        ...(trailId ? { trailId } : {}),
+        path: resolved,
+        ...(options.editBacked ? { editBacked: true } : {}),
+        lastSeenAt: now,
+      });
     }
-    const entry = { ...(trailId ? { trailId } : {}), path: resolved, lastSeenAt: now };
-    if (index === -1) projects.push(entry);
-    else projects[index] = entry;
-    writeGlobalConfig({ ...cfg, knownProjects: projects });
+    let projectCatalog = cfg.projectCatalog;
+    if (trailId && (!projectCatalog || supportedCatalog)) {
+      const byTrailId = { ...(supportedCatalog?.byTrailId ?? {}) };
+      for (const [knownTrailId, identity] of Object.entries(byTrailId)) {
+        if (
+          knownTrailId !== trailId &&
+          existingPathKey(identity.currentPath) === existingPathKey(resolved)
+        ) {
+          delete byTrailId[knownTrailId];
+        }
+      }
+      const current = options.resetIdentity ? undefined : byTrailId[trailId];
+      const samePath =
+        current && existingPathKey(current.currentPath) === existingPathKey(resolved);
+      const currentFolderBasename = basename(resolved);
+      const observedEntrypoints = uniqueStrings(
+        (options.entrypointBasenames ?? []).map((value) => basename(value)),
+      );
+      const currentEntrypoints = current?.entrypointBasenames ?? [];
+      const entrypointsChanged =
+        observedEntrypoints.length > 0 &&
+        JSON.stringify(observedEntrypoints) !== JSON.stringify(currentEntrypoints);
+      const configuredName = options.configuredName?.trim() || current?.configuredName;
+      const previousConfiguredNames = uniqueStrings(
+        [
+          ...(current?.previousConfiguredNames ?? []),
+          ...(current?.configuredName &&
+          configuredName &&
+          current.configuredName !== configuredName
+            ? [current.configuredName]
+            : []),
+        ],
+        configuredName ? [configuredName] : [],
+      );
+      const previousFolderBasenames = uniqueStrings(
+        [
+          ...(current?.previousFolderBasenames ?? []),
+          ...(current && !samePath ? [current.currentFolderBasename] : []),
+        ],
+        [currentFolderBasename],
+      );
+      const entrypointBasenames = options.replaceEditEvidence
+        ? observedEntrypoints
+        : observedEntrypoints.length > 0
+          ? observedEntrypoints
+          : currentEntrypoints;
+      const previousEntrypointBasenames = options.replaceEditEvidence
+        ? []
+        : uniqueStrings(
+            [
+              ...(current?.previousEntrypointBasenames ?? []),
+              ...(entrypointsChanged ? currentEntrypointBasenames(current) : []),
+            ],
+            entrypointBasenames,
+          );
+      const editReferences = mergeEditReferences(
+        options.replaceEditEvidence ? [] : (current?.editReferences ?? []),
+        options.editReferences ?? [],
+      );
+      const conflictPaths =
+        options.conflictPaths === undefined
+          ? current?.conflictPaths
+          : uniqueResolvedPaths(options.conflictPaths);
+      const previousPaths = current
+        ? uniqueKnownPaths(
+            [
+              ...(current.previousPaths ?? []),
+              ...(!samePath ? [current.currentPath] : []),
+            ],
+            resolved,
+          )
+        : [];
+      byTrailId[trailId] = {
+        trailId,
+        currentPath: resolved,
+        ...(previousPaths.length > 0 ? { previousPaths } : {}),
+        ...(configuredName ? { configuredName } : {}),
+        ...(previousConfiguredNames.length > 0 ? { previousConfiguredNames } : {}),
+        currentFolderBasename,
+        ...(previousFolderBasenames.length > 0 ? { previousFolderBasenames } : {}),
+        ...(entrypointBasenames.length > 0 ? { entrypointBasenames } : {}),
+        ...(previousEntrypointBasenames.length > 0
+          ? { previousEntrypointBasenames }
+          : {}),
+        ...(editReferences.length > 0 ? { editReferences } : {}),
+        ...(conflictPaths && conflictPaths.length > 1 ? { conflictPaths } : {}),
+        ...((
+          options.replaceEditEvidence
+            ? options.editBacked === true || editReferences.length > 0
+            : current?.editBacked || options.editBacked || editReferences.length > 0
+        )
+          ? { editBacked: true }
+          : {}),
+        lastSeenAt: now,
+      };
+      projectCatalog = {
+        version: PROJECT_IDENTITY_CATALOG_VERSION,
+        byTrailId,
+      };
+    }
+    writeGlobalConfig({
+      ...cfg,
+      knownProjects: projects,
+      ...(projectCatalog ? { projectCatalog } : {}),
+    });
   } catch {
     // Registry maintenance must never disrupt capture or a project command.
   }
+}
+
+function currentEntrypointBasenames(identity: ProjectIdentity | undefined): string[] {
+  return identity?.entrypointBasenames ?? [];
 }
 
 /** Detect an existing installation crossing into the current history generation. */
@@ -200,6 +591,132 @@ export function setMigrationOffer(
 /** Whether automatic tracking (silent auto-init on first AI use) is enabled. */
 export function autoInitEnabled(): boolean {
   return readGlobalConfig().autoInit === true;
+}
+
+/** Persist a user's explicit request that the automatic sweep leave a tool alone. */
+export function disableToolAutoConnect(tool: string): void {
+  const cfg = readGlobalConfig();
+  if (cfg.autoConnectDisabledTools?.includes(tool)) return;
+  writeGlobalConfig({
+    ...cfg,
+    autoConnectDisabledTools: [...(cfg.autoConnectDisabledTools ?? []), tool],
+  });
+}
+
+/** Clear a tool-level automatic-connect opt-out after an explicit reconnect. */
+export function enableToolAutoConnect(tool: string): void {
+  const cfg = readGlobalConfig();
+  if (!cfg.autoConnectDisabledTools?.includes(tool)) return;
+  writeGlobalConfig({
+    ...cfg,
+    autoConnectDisabledTools: cfg.autoConnectDisabledTools.filter(
+      (candidate) => candidate !== tool,
+    ),
+  });
+}
+
+type ToolCaptureConsent = {
+  version: 1;
+  tool: string;
+  capture: 'disabled' | 'enabled';
+  /** Automatic transcript recovery may not cross this explicit resume boundary. */
+  enabledAt?: string;
+};
+
+/** Read authoritative consent; a present but unreadable marker fails closed. */
+function readToolCaptureConsent(
+  cliName: string,
+): { disabled: boolean; enabledAt?: string } | undefined {
+  const file = toolCaptureConsentPath(cliName);
+  if (!existsSync(file)) return undefined;
+  try {
+    const consent = readJson<ToolCaptureConsent>(file);
+    if (
+      consent.version === 1 &&
+      consent.tool === cliName &&
+      (consent.capture === 'disabled' || consent.capture === 'enabled')
+    ) {
+      if (consent.capture === 'disabled') return { disabled: true };
+      // Accept an enabled marker written by the short-lived pre-watermark build;
+      // the next explicit connect upgrades it with a timestamp.
+      if (consent.enabledAt === undefined) return { disabled: false };
+      if (Number.isFinite(Date.parse(consent.enabledAt))) {
+        return { disabled: false, enabledAt: consent.enabledAt };
+      }
+    }
+  } catch {
+    // A damaged consent marker must never silently restore capture.
+  }
+  return { disabled: true };
+}
+
+function writeToolCaptureConsent(
+  cliName: string,
+  capture: ToolCaptureConsent['capture'],
+  enabledAt?: string,
+): void {
+  writeJson(toolCaptureConsentPath(cliName), {
+    version: 1,
+    tool: cliName,
+    capture,
+    ...(capture === 'enabled' && enabledAt ? { enabledAt } : {}),
+  } satisfies ToolCaptureConsent);
+}
+
+/** Best-effort compatibility mirror for versions that only read global config. */
+function mirrorToolCaptureConsent(cliName: string, disabled: boolean): void {
+  try {
+    const cfg = readGlobalConfig();
+    const current = Array.isArray(cfg.captureDisabledTools)
+      ? cfg.captureDisabledTools
+      : [];
+    const next = disabled
+      ? Array.from(new Set([...current, cliName]))
+      : current.filter((candidate) => candidate !== cliName);
+    if (
+      next.length === current.length &&
+      next.every((candidate, index) => candidate === current[index])
+    ) {
+      return;
+    }
+    writeGlobalConfig({ ...cfg, captureDisabledTools: next });
+  } catch {
+    // The isolated consent marker remains authoritative if this shared write loses.
+  }
+}
+
+/** Whether machine-wide capture is explicitly disabled for a canonical CLI name. */
+export function toolCaptureGloballyDisabled(cliName: string): boolean {
+  const consent = readToolCaptureConsent(cliName);
+  if (consent !== undefined) return consent.disabled;
+  const legacy = readGlobalConfig().captureDisabledTools;
+  return Array.isArray(legacy) && legacy.includes(cliName);
+}
+
+/** Explicit reconnect time used as the lower bound for automatic transcript recovery. */
+export function toolCaptureEnabledAt(cliName: string): string | undefined {
+  const consent = readToolCaptureConsent(cliName);
+  return consent?.disabled === false ? consent.enabledAt : undefined;
+}
+
+/** Persist a machine-wide capture stop before mirroring it into shared config. */
+export function disableToolCapture(cliName: string): void {
+  writeToolCaptureConsent(cliName, 'disabled');
+  mirrorToolCaptureConsent(cliName, true);
+}
+
+/** Persist explicit capture consent before clearing the legacy shared mirror. */
+export function enableToolCapture(
+  cliName: string,
+  enabledAt: string = new Date().toISOString(),
+): void {
+  const current = readToolCaptureConsent(cliName);
+  // Re-running an already-enabled connect is a refresh, not a new privacy
+  // boundary. Preserve its original resume time; upgrade timestamp-less markers.
+  const effectiveEnabledAt =
+    current?.disabled === false && current.enabledAt ? current.enabledAt : enabledAt;
+  writeToolCaptureConsent(cliName, 'enabled', effectiveEnabledAt);
+  mirrorToolCaptureConsent(cliName, false);
 }
 
 // --- inbox triage config --------------------------------------------------

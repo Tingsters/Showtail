@@ -12,6 +12,7 @@ import {
   installAntigravityIdeHooks,
   resolveAntigravityIdeTarget,
   uninstallAntigravityIdeHooks,
+  writeAntigravityIdeInstructions,
 } from '../src/core/antigravityIde.ts';
 import { antigravityIdePlugin } from '../src/plugins/antigravity-ide.ts';
 import {
@@ -25,7 +26,7 @@ import {
   runAntigravityIdeInstall,
   runAntigravityIdeUninstall,
 } from '../src/commands/antigravityIde.ts';
-import { cleanup, makeTempDir } from './helpers.ts';
+import { cleanup, makeTempDir, stubInstalledExtensionCli } from './helpers.ts';
 
 /**
  * The IDE reads its hooks from the GLOBAL ~/.gemini/config/hooks.json. Point
@@ -127,6 +128,36 @@ describe('antigravity-ide install / uninstall', () => {
     }
   });
 
+  test('a full disconnect removes both instruction scopes and the native extension', async () => {
+    const dir = makeTempDir();
+    const previousCli = process.env.SHOWTAIL_ANTIGRAVITY_CLI;
+    try {
+      mkdirSync(join(dir, '.showtail'), { recursive: true });
+      const record = join(dir, 'extension-args.txt');
+      process.env.SHOWTAIL_ANTIGRAVITY_CLI = stubInstalledExtensionCli(
+        dir,
+        record,
+        'tingsters.showtail',
+        'antigravity-ide',
+      );
+      const project = resolveAntigravityIdeTarget('project', dir);
+      const user = resolveAntigravityIdeTarget('user', dir);
+      writeAntigravityIdeInstructions(project);
+      writeAntigravityIdeInstructions(user);
+
+      const result = await runAntigravityIdeUninstall({ all: true, cwd: dir });
+
+      expect(result.captureStopped).toBe(true);
+      expect(existsSync(project.contextFile)).toBe(false);
+      expect(existsSync(user.contextFile)).toBe(false);
+      expect(readFileSync(record, 'utf8')).toContain('--uninstall-extension');
+    } finally {
+      if (previousCli === undefined) delete process.env.SHOWTAIL_ANTIGRAVITY_CLI;
+      else process.env.SHOWTAIL_ANTIGRAVITY_CLI = previousCli;
+      cleanup(dir);
+    }
+  });
+
   test('CLI and IDE bundles coexist in the shared hooks.json; disconnecting one preserves the other', () => {
     // In reality (GEMINI_HOME unset) both tools resolve the SAME global file
     // ~/.gemini/config/hooks.json. Point a CLI target at the IDE's shared file so
@@ -189,6 +220,58 @@ describe('antigravity-ide install / uninstall', () => {
       expect(state.upToDate).toBe(true);
       expect(state.userEdited).toBe(false);
     } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('user-scope instructions without capture report a connected manual integration', () => {
+    const dir = makeTempDir();
+    try {
+      mkdirSync(join(dir, '.showtail'), { recursive: true });
+      writeAntigravityIdeInstructions(resolveAntigravityIdeTarget('user', dir));
+
+      expect(antigravityIdePlugin.connect!.status(dir)).toEqual({
+        connected: true,
+        hooksActive: false,
+        captureActive: false,
+        updateAvailable: false,
+      });
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('auto-connect reports incomplete when the native extension cannot install', () => {
+    const dir = makeTempDir();
+    const previous = process.env.SHOWTAIL_ANTIGRAVITY_CLI;
+    try {
+      process.env.SHOWTAIL_ANTIGRAVITY_CLI = join(dir, 'missing-ide-cli');
+      expect(antigravityIdePlugin.connect!.autoConnect!(dir)).toBeNull();
+    } finally {
+      if (previous === undefined) delete process.env.SHOWTAIL_ANTIGRAVITY_CLI;
+      else process.env.SHOWTAIL_ANTIGRAVITY_CLI = previous;
+      cleanup(dir);
+    }
+  });
+
+  test('failed extension install never claims automatic capture is active', async () => {
+    const dir = makeTempDir();
+    const previous = process.env.SHOWTAIL_ANTIGRAVITY_CLI;
+    const realLog = console.log;
+    const lines: string[] = [];
+    try {
+      process.env.SHOWTAIL_ANTIGRAVITY_CLI = join(dir, 'missing-ide-cli');
+      console.log = (...args: unknown[]) => void lines.push(args.join(' '));
+
+      await runAntigravityIdeInstall({ project: true, cwd: dir });
+
+      const output = lines.join('\n');
+      expect(output).toContain('automatic capture is not active yet');
+      expect(output).not.toContain('your prompts and edits are captured');
+    } finally {
+      console.log = realLog;
+      if (previous === undefined) delete process.env.SHOWTAIL_ANTIGRAVITY_CLI;
+      else process.env.SHOWTAIL_ANTIGRAVITY_CLI = previous;
       cleanup(dir);
     }
   });

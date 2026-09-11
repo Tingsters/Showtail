@@ -31,20 +31,27 @@ import { commitExists } from './git.ts';
 import { sha256OfFile } from './hash.ts';
 import {
   allLedgerSessions,
+  effectiveLedgerSegmentPath,
+  effectiveLedgerPath,
+  readLedgerSegmentRecords,
   readLedgerRecords,
   type LedgerRecord,
+  type LedgerSegment,
   type LedgerSession,
 } from './ledger.ts';
+import type { PathRebase } from './pathRebase.ts';
 import { pathKey } from './storage.ts';
+
+export {
+  applyRebase,
+  applyRebaseForPathStyle,
+  applyPathRebases,
+  type PathRebase,
+  type RebasePathStyle,
+} from './pathRebase.ts';
 
 /** How confident a relocation match is. See the module note. */
 export type MatchTier = 'A' | 'B';
-
-/** An old-root → new-root mapping, so projected paths re-relativize cleanly. */
-export interface PathRebase {
-  fromRoot: string;
-  toRoot: string;
-}
 
 /** A candidate location for a session's moved work, with the evidence for it. */
 export interface RelocationMatch {
@@ -143,13 +150,16 @@ function normalizeEol(text: string): string {
   return text.replace(/\r\n/g, '\n');
 }
 
-/** The per-edit evidence a session carries, newest-last, edits only. */
-function editEvidenceOf(records: LedgerRecord[]): EditEvidence[] {
+/** The per-edit evidence a record set carries, newest-last, edits only. */
+function editEvidenceOf(
+  records: LedgerRecord[],
+  effectivePath: (path: string) => string,
+): EditEvidence[] {
   const out: EditEvidence[] = [];
   for (const rec of records) {
     if (rec.kind !== 'edit' || !rec.file) continue;
     out.push({
-      file: rec.file,
+      file: effectivePath(rec.file),
       sha256: rec.sha256,
       addedLines: rec.diff ? addedLinesOf(rec.diff) : [],
     });
@@ -188,7 +198,7 @@ function ledgerHashIndex(): Map<string, Set<string>> {
   for (const s of allLedgerSessions()) {
     for (const rec of readLedgerRecords(s.id)) {
       if (rec.kind !== 'edit' || !rec.file || !rec.sha256) continue;
-      const key = pathKey(rec.file);
+      const key = pathKey(effectiveLedgerPath(s, rec.file));
       const set = out.get(key);
       if (set) set.add(rec.sha256);
       else out.set(key, new Set([rec.sha256]));
@@ -407,18 +417,6 @@ export function deriveRebaseAgainstRoot(
   return undefined;
 }
 
-/**
- * Re-point a stale absolute path through a rebase, or return undefined when the
- * path doesn't sit under the mapping's old root.
- */
-export function applyRebase(rebase: PathRebase, oldAbs: string): string | undefined {
-  const from = pathKey(rebase.fromRoot);
-  const target = pathKey(oldAbs);
-  if (target === from) return rebase.toRoot;
-  if (!target.startsWith(from + sep)) return undefined;
-  return join(rebase.toRoot, resolve(oldAbs).slice(rebase.fromRoot.length + 1));
-}
-
 // --- matching -------------------------------------------------------------
 
 /**
@@ -435,12 +433,55 @@ export async function matchSessionToRoot(
   opts: RelocationOptions = {},
   index?: CandidateIndex,
 ): Promise<RelocationMatch | null> {
+  const records = readLedgerRecords(session.id);
+  return matchRecordsToRoot(
+    records,
+    editEvidenceOf(records, (path) => effectiveLedgerPath(session, path)),
+    root,
+    opts,
+    index,
+    true,
+  );
+}
+
+/**
+ * Match one independently routeable turn against its moved project folder.
+ *
+ * Unlike {@link matchSessionToRoot}, sibling turns in the same native chat cannot
+ * contribute commits, hashes, or captured content. Stored path rebases are also
+ * resolved from the segment, so moving project A never changes project B's
+ * lineage evidence.
+ */
+export async function matchLedgerSegmentToRoot(
+  session: LedgerSession,
+  segment: LedgerSegment,
+  root: string,
+  opts: RelocationOptions = {},
+  index?: CandidateIndex,
+): Promise<RelocationMatch | null> {
+  const records = readLedgerSegmentRecords(session.id, segment);
+  return matchRecordsToRoot(
+    records,
+    editEvidenceOf(records, (path) => effectiveLedgerSegmentPath(segment, path)),
+    root,
+    opts,
+    index,
+    false,
+  );
+}
+
+/** Run the shared lineage matcher against an explicitly scoped record set. */
+async function matchRecordsToRoot(
+  records: LedgerRecord[],
+  evidence: EditEvidence[],
+  root: string,
+  opts: RelocationOptions,
+  index?: CandidateIndex,
+  includeLedgerHashHistory = true,
+): Promise<RelocationMatch | null> {
   const minContainment = opts.minContainment ?? DEFAULT_MIN_CONTAINMENT;
   const idx = index ?? prepareCandidateIndex(root, opts);
   const maxFileBytes = idx.maxFileBytes;
-
-  const records = readLedgerRecords(session.id);
-  const evidence = editEvidenceOf(records);
 
   // --- Tier A.1: git-commit containment. Cheapest and strongest; needs no walk.
   // It proves the folder without pairing a file, so the rebase is derived by
@@ -491,18 +532,22 @@ export async function matchSessionToRoot(
   const own = await hashHit(ownHashes);
   if (own) return exactMatch(root, evidence, own, ownHashes, 'content hash');
 
-  // Widen to hashes any session ever recorded for these same paths, minus the ones
-  // we just tried. The ledger-wide index is built at most once and shared.
-  idx.ledgerHashes ??= ledgerHashIndex();
-  const historical = new Set<string>();
-  for (const e of evidence) {
-    const seen = idx.ledgerHashes.get(pathKey(e.file));
-    if (seen) for (const h of seen) historical.add(h);
-  }
-  for (const h of ownHashes) historical.delete(h);
-  const past = await hashHit(historical);
-  if (past) {
-    return exactMatch(root, evidence, past, historical, 'earlier content hash');
+  if (includeLedgerHashHistory) {
+    // Legacy session matching widens to hashes any session ever recorded for
+    // these paths. Segment matching deliberately skips this: a sibling turn may
+    // have written a different version at the same path, and its hash is not
+    // evidence that the selected turn belongs in the candidate project.
+    idx.ledgerHashes ??= ledgerHashIndex();
+    const historical = new Set<string>();
+    for (const e of evidence) {
+      const seen = idx.ledgerHashes.get(pathKey(e.file));
+      if (seen) for (const h of seen) historical.add(h);
+    }
+    for (const h of ownHashes) historical.delete(h);
+    const past = await hashHit(historical);
+    if (past) {
+      return exactMatch(root, evidence, past, historical, 'earlier content hash');
+    }
   }
 
   // --- Tier B: content, name-independent.

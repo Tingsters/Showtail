@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { runBulkMigration } from '../src/commands/migrateAll.ts';
 import { runInit } from '../src/commands/init.ts';
@@ -90,6 +90,12 @@ describe('bulk migration', () => {
           transcript(root, nativeId, start),
         );
       }
+
+      const configPath = join(globalHome, 'config.json');
+      const configBeforePreview = readFileSync(configPath, 'utf8');
+      const preview = await runBulkMigration({ home, json: true });
+      expect(preview.status).toBe('preview');
+      expect(readFileSync(configPath, 'utf8')).toBe(configBeforePreview);
 
       const result = await runBulkMigration({ home, yes: true });
       expect(result.status).toBe('completed');

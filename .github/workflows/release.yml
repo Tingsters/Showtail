@@ -76,6 +76,23 @@ jobs:
       - name: Run tests
         run: bun test
 
+      - name: Install VS Code extension dependencies
+        if: matrix.os == 'ubuntu-latest'
+        working-directory: integrations/vscode
+        run: bun install --frozen-lockfile
+
+      - name: Check VS Code extension
+        if: matrix.os == 'ubuntu-latest'
+        working-directory: integrations/vscode
+        run: |
+          bun run typecheck
+          bun run test
+
+      - name: Run VS Code 1.95 extension-host smoke test
+        if: matrix.os == 'ubuntu-latest'
+        working-directory: integrations/vscode
+        run: xvfb-run -a bun run test:extension-host
+
   build-non-windows:
     needs: [validate, test]
     runs-on: ubuntu-latest

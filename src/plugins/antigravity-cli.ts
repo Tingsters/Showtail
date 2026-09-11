@@ -35,6 +35,7 @@ import {
   extractAgySessionId,
   extractAgySuggestedCode,
   extractAgyTranscriptPath,
+  extractAgyWorkspacePaths,
   extractEditedFiles,
   extractPrompt,
   extractSessionId,
@@ -95,7 +96,7 @@ export const antigravityCliPlugin: EnvironmentPlugin = {
       {
         name: 'hooks',
         flag: '--no-hooks',
-        description: 'skip auto-capture hooks; log prompts/edits yourself',
+        description: 'install instructions only; automatic capture stays off',
       },
       {
         name: 'force',
@@ -127,17 +128,28 @@ export const antigravityCliPlugin: EnvironmentPlugin = {
         cwd: opts.cwd,
       }),
 
-    uninstall: (opts) => runAntigravityCliUninstall({ user: opts.user, cwd: opts.cwd }),
+    uninstall: (opts) =>
+      runAntigravityCliUninstall({
+        user: opts.user,
+        all: opts.all,
+        cwd: opts.cwd,
+      }),
 
     status(cwd) {
-      const state = antigravityCliInstructionsState(
+      const projectState = antigravityCliInstructionsState(
         resolveAntigravityCliTarget('project', cwd),
       );
+      const userState = antigravityCliInstructionsState(
+        resolveAntigravityCliTarget('user', cwd),
+      );
       const hooksActive = antigravityCliAutoCaptureActive(cwd);
+      const installed = projectState.installed || userState.installed;
       return {
-        connected: state.installed || hooksActive,
+        connected: installed || hooksActive,
         hooksActive,
-        updateAvailable: state.installed ? state.updateAvailable : undefined,
+        updateAvailable: installed
+          ? projectState.updateAvailable || userState.updateAvailable
+          : undefined,
       };
     },
 
@@ -153,6 +165,7 @@ export const antigravityCliPlugin: EnvironmentPlugin = {
           nativeSessionId: extractAgySessionId(p) ?? extractSessionId(p),
           prompt: extractAgyPrompt(p) ?? extractPrompt(p) ?? undefined,
           editedFiles: edited.length > 0 ? edited : extractEditedFiles(p),
+          workspacePaths: extractAgyWorkspacePaths(p),
           suggestedDiff: extractAgySuggestedCode(p) ?? extractSuggestedCode(p),
         };
       },

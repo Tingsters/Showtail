@@ -19,6 +19,7 @@ import { runExtensionCli } from './extensionCli.ts';
 import {
   bundledVsixPath,
   type ExtensionInstallResult,
+  type ExtensionUninstallResult,
 } from './antigravityIdeExtension.ts';
 
 /** The VS Code Marketplace id — the offline `.vsix` is preferred; this is the fallback. */
@@ -93,4 +94,43 @@ export function installVsCodeExtension(): ExtensionInstallResult {
     vsix: payload,
     reason: (res.stderr || res.error?.message || `exit ${res.status ?? '?'}`).trim(),
   };
+}
+
+/** Remove the native VS Code extension that performs Copilot capture. */
+export function uninstallVsCodeExtension(): ExtensionUninstallResult {
+  const cli = findVsCodeCli();
+  if (!cli) return { uninstalled: false, reason: 'cli-not-found' };
+
+  const listed = runExtensionCli(cli, ['--list-extensions']);
+  if (listed.status === 0 && !vscodeExtensionListContainsShowtail(listed.stdout ?? '')) {
+    return { uninstalled: true, wasInstalled: false, cli };
+  }
+
+  const result = runExtensionCli(cli, ['--uninstall-extension', VSCODE_EXTENSION_ID]);
+  if (result.status === 0) return { uninstalled: true, wasInstalled: true, cli };
+  return {
+    uninstalled: false,
+    cli,
+    reason: (
+      result.stderr ||
+      result.error?.message ||
+      `exit ${result.status ?? '?'}`
+    ).trim(),
+  };
+}
+
+/** Read-only probe for the VS Code extension that performs automatic capture. */
+export function vscodeExtensionInstalled(): boolean {
+  const cli = findVsCodeCli();
+  if (!cli) return false;
+  const result = runExtensionCli(cli, ['--list-extensions']);
+  if (result.status !== 0) return false;
+  return vscodeExtensionListContainsShowtail(result.stdout ?? '');
+}
+
+/** Parse VS Code-compatible `--list-extensions` output. */
+export function vscodeExtensionListContainsShowtail(output: string): boolean {
+  return output
+    .split(/\r?\n/)
+    .some((line) => line.trim().toLowerCase() === VSCODE_EXTENSION_ID.toLowerCase());
 }

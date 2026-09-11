@@ -12,8 +12,9 @@ hide:
 
 <p class="st-tagline" markdown>
 Showtail keeps a clear record of how you built a project with AI — the prompts
-you sent and the files you changed — captured **automatically** to a plain
-`.showtail/` folder. No accounts, no cloud, no telemetry.
+you sent and the files you changed — captured **automatically**, then kept in a
+plain project-local `.showtail/` trail once its project is clear. No accounts,
+no cloud, no telemetry.
 </p>
 
 [Get started](getting-started/installation.md){ .md-button .md-button--primary }
@@ -38,8 +39,8 @@ you sent and the files you changed — captured **automatically** to a plain
 
     ---
 
-    Everything lives in a `.showtail/` folder in your project. No Showtail
-    cloud service, no telemetry, and no automatic upload of your trail.
+    Resolved work lives in your project's `.showtail/`; unresolved work waits in
+    a machine-local inbox. No Showtail cloud service, telemetry, or automatic upload.
 
 -   :material-tools:{ .lg .middle } __Works across your tools__
 
@@ -86,15 +87,17 @@ you sent and the files you changed — captured **automatically** to a plain
 ## Install, then just work
 
 ```bash
-# Install (below) — that's it, tracking is on and your AI tools are connected.
+# Install (below) — tracking is on and detected supported tools are connected.
 # ...just work — your prompts and edits are captured automatically...
 showtail report    # when you're done: generate the report for your educator
 ```
 
-There is **no setup command**. Installing turns tracking on and connects your AI tools —
-including ones you install later — and Showtail sets up each project on first use. Nothing
-to remember. Your home folder is never treated as one giant project: Showtail waits for
-the work itself to reveal the right project folder.
+There is **no setup command**. Installing turns tracking on and connects the AI tools it
+finds; the first meaningful prompt creates the project's `.showtail/` trail. Nothing to
+remember for the normal flow. Any writable folder can be a project, including
+HOME and temporary folders. A HOME trail applies only to work launched exactly there and
+is never inherited by child folders; stronger workspace or edit evidence reroutes work to
+the nested project it actually belongs to.
 
 [Read the full quickstart →](getting-started/quickstart.md)
 

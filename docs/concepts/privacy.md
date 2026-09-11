@@ -2,8 +2,9 @@
 
 Showtail is privacy-first by design:
 
-- **Everything is local.** All data lives in the `.showtail/` folder in your
-  project.
+- **Everything is local.** Resolved work lives in the project's `.showtail/`
+  trail. Work that does not yet have one safe project destination waits in the
+  machine-local ledger/inbox under `~/.showtail-cli/` (or `SHOWTAIL_HOME`).
 - **No telemetry, analytics, or automatic upload of your trail.** Captured
   prompts, edits, reports, and project data are not sent to Showtail's
   maintainers or to a Showtail service.
@@ -17,8 +18,9 @@ Showtail is privacy-first by design:
   extension installation may contact the editor's marketplace when no bundled
   VSIX is available. These operations are not telemetry and do not upload a
   `.showtail/` trail.
-- **You control what is recorded.** Showtail only logs what you explicitly run,
-  unless you enable one of the optional capture integrations.
+- **You control what is recorded.** Installation enables supported capture
+  integrations by default. Use `showtail setup --off` to stop automatic project
+  creation, or `showtail disconnect <tool>` to stop a tool's capture integration.
 - **Secrets are scrubbed before storage.** Showtail makes a best-effort pass to
   redact provider keys, tokens, passwords, and personal data (email, phone,
   card, SSN) from captured text *before* it is written, and the report notes how
@@ -29,6 +31,22 @@ Showtail is privacy-first by design:
   [If something leaked anyway](#if-something-leaked-anyway).
 - **The files are plain and inspectable.** They are JSON and JSONL files that
   you can open in any editor.
+
+## Local project-selection metadata
+
+To keep project controls from following a stale editor workspace, Showtail maintains a small
+machine-local catalog keyed by each trail's generated ID. It contains known current/previous
+paths, project/folder names, edit-backed ledger references, and local selection bindings. None of
+this catalog is written into a project report or uploaded.
+
+The VS Code integration reads only allowlisted fields from the local chat files it already
+captures: native session/request IDs, explicitly attached file URIs, edit URIs, and Showtail's own
+versioned tool-result marker. It does not inspect VS Code's `state.vscdb`, shell history,
+recent-file database, or private Copilot SQLite stores. Automatically attached instructions,
+workspace paths, generated titles, and recency cannot select a project by themselves.
+
+Recorded file hashes may validate an already supplied move candidate, but Showtail does not scan
+the machine for matching hashes or treat a hash as evidence of the student's current intent.
 
 ## If something leaked anyway
 

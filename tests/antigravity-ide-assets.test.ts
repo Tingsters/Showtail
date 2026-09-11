@@ -19,6 +19,22 @@ describe('antigravity-ide assets stay in sync with the single source of truth', 
     expect(AGY_IDE_BODY.replace(/\r\n/g, '\n')).toBe(
       readAsset('assets', 'antigravity-ide', 'AGY-IDE.showtail.md'),
     );
+    expect(AGY_IDE_BODY).toContain('showtail status --json --tool antigravity-ide');
+    expect(AGY_IDE_BODY).toContain('"mode": "automatic"');
+    expect(AGY_IDE_BODY).not.toContain('"hooksActive"');
+    expect(AGY_IDE_BODY).not.toContain('showtail ensure');
+    expect(AGY_IDE_BODY).not.toContain('showtail log --type');
+    expect(AGY_IDE_BODY).not.toContain('showtail artifact');
+    expect(AGY_IDE_BODY).toContain(
+      'showtail projects "<student-project-wording>" --json',
+    );
+    expect(AGY_IDE_BODY).toContain('--project "<trail-id>"');
+    expect(AGY_IDE_BODY).toContain("agent terminal's working directory");
+    expect(AGY_IDE_BODY).toContain('returned `trailId` and `root`');
+    expect(AGY_IDE_BODY).not.toMatch(
+      /^\s*showtail (?:report|verify|status)(?:\s+#.*)?\s*$/m,
+    );
+    expect(AGY_IDE_BODY).not.toMatch(/`showtail (?:report|verify|status)`/);
   });
 
   test('hooks.json is a named bundle, enabled, using the IDE event names + glob matcher', () => {

@@ -1,7 +1,7 @@
 /**
  * GitHub Copilot — project-scoped instructions in `.github/`, plus a VS Code
- * extension that does the actual capture. No lifecycle hooks, so no `hooksActive`
- * and no setup auto-connect (the extension sets each project up on first open).
+ * extension that does the actual capture. It uses Showtail's internal hook/import
+ * surfaces, but installs no host lifecycle hooks, so `hooksActive` remains N/A.
  *
  * It also imports: native Copilot Chat persists every session to disk as JSON
  * (`…/workspaceStorage/<hash>/chatSessions/<uuid>.json`), so `import copilot`
@@ -16,7 +16,16 @@ import {
   resolveCopilotCliTarget,
 } from '../core/copilotCli.ts';
 import { findChatSessions, readChatSessionFile } from '../core/copilotChatTranscript.ts';
-import { findVsCodeCli, installVsCodeExtension } from '../core/vscodeExtension.ts';
+import {
+  findVsCodeCli,
+  installVsCodeExtension,
+  vscodeExtensionInstalled,
+} from '../core/vscodeExtension.ts';
+import {
+  isVsCodeExtensionPayload,
+  parseVsCodeExtensionPayload,
+  vscodeExtensionTranscript,
+} from '../core/vscodeExtensionHook.ts';
 import type { EnvironmentPlugin } from './types.ts';
 
 const MARKETPLACE_ID = 'Tingsters.showtail';
@@ -52,38 +61,52 @@ export const copilotPlugin: EnvironmentPlugin = {
     // (extension installed) the moment VS Code is detected — never pre-seeded.
     prewireSafe: false,
 
-    // Install the Showtail VS Code extension hands-off when VS Code is present. The
-    // extension then self-installs the per-project `.github/` instructions on first open,
-    // so there's nothing for the student to run. Capture is via the extension, not hooks.
+    // Install the Showtail VS Code extension hands-off when VS Code is present. It
+    // watches immediately without initializing folders on open; the first meaningful
+    // prompt (or an explicit report/track) creates the project trail, then instructions.
     autoConnect() {
-      installVsCodeExtension();
-      return { hooks: false };
+      return installVsCodeExtension().installed ? { hooks: false } : null;
     },
 
     // Fallback guidance if VS Code is present but its CLI can't be located to auto-install.
     setupGuidance: [
       'VS Code detected. For GitHub Copilot capture, install the extension:',
       `  code --install-extension ${MARKETPLACE_ID}`,
-      '  (It sets up each project automatically the first time you open it.)',
+      '  (It watches immediately; the project trail appears after meaningful work.)',
     ],
 
     install: (opts) =>
       runCopilotInstall({ extension: opts.extension, force: opts.force, cwd: opts.cwd }),
 
-    uninstall: (opts) => runCopilotUninstall({ cwd: opts.cwd }),
+    uninstall: (opts) => runCopilotUninstall({ all: opts.all, cwd: opts.cwd }),
 
     status(cwd) {
       const state = copilotState(resolveCopilotTarget(cwd));
+      const captureActive = vscodeExtensionInstalled();
       const cliUpdateAvailable = (['user', 'project'] as const).some((scope) => {
         const cliState = copilotCliInstructionsState(resolveCopilotCliTarget(scope, cwd));
         return cliState.installed && cliState.updateAvailable;
       });
       return {
-        connected: state.installed,
+        connected: state.installed || captureActive,
+        captureActive,
         updateAvailable: state.installed
           ? state.updateAvailable || cliUpdateAvailable
           : undefined,
       };
+    },
+
+    hooks: {
+      acceptsPayload: isVsCodeExtensionPayload,
+      parse: parseVsCodeExtensionPayload,
+      // VS Code metadata and Showtail's generated Copilot instructions are not
+      // student work, so editor saves must never turn them into artifacts.
+      internalPaths: [
+        /(^|[\\/])\.vscode([\\/]|$)/,
+        /(^|[\\/])\.github[\\/]copilot-instructions\.md$/,
+        /(^|[\\/])\.github[\\/]instructions[\\/]showtail\.instructions\.md$/,
+      ],
+      getTranscript: vscodeExtensionTranscript,
     },
   },
 

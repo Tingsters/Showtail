@@ -10,6 +10,7 @@ import {
   findCopilotCliExecutable,
   copilotCliInstructionsState,
   resolveCopilotCliTarget,
+  writeCopilotCliInstructions,
 } from '../src/core/copilotCli.ts';
 import { mergeHookEvents } from '../src/core/hookMerge.ts';
 import { blockFor, parseBlock } from '../src/core/managedBlock.ts';
@@ -108,6 +109,28 @@ describe('copilot-cli install / uninstall', () => {
       ).toBe(true);
     } finally {
       cleanup(dir);
+    }
+  });
+
+  test('user-scope instructions without hooks report a connected manual integration', () => {
+    const dir = makeTempDir();
+    const copilotHome = makeTempDir();
+    const previous = process.env.COPILOT_HOME;
+    try {
+      process.env.COPILOT_HOME = copilotHome;
+      mkdirSync(join(dir, '.showtail'), { recursive: true });
+      writeCopilotCliInstructions(resolveCopilotCliTarget('user', dir));
+
+      expect(copilotCliPlugin.connect!.status(dir)).toEqual({
+        connected: true,
+        hooksActive: false,
+        updateAvailable: false,
+      });
+    } finally {
+      if (previous === undefined) delete process.env.COPILOT_HOME;
+      else process.env.COPILOT_HOME = previous;
+      cleanup(dir);
+      cleanup(copilotHome);
     }
   });
 

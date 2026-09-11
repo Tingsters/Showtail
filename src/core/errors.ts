@@ -6,15 +6,27 @@
  * Stable codes:
  *   0  success
  *   1  generic error
- *   2  not initialized (no .showtail/ project found)
+ *   2  no single usable project could be selected (missing trail/path or ambiguity)
  *   3  verify failed (integrity check did not pass)
  *   4  nothing to do / not connected
  */
 export class ShowtailError extends Error {
   readonly code: number;
-  constructor(message: string, code = 1) {
+  readonly errorCode: string;
+  readonly nextAction: string;
+  readonly details?: Record<string, unknown>;
+  constructor(
+    message: string,
+    code = 1,
+    details?: Record<string, unknown>,
+    errorCode = 'COMMAND_FAILED',
+    nextAction = 'review-error',
+  ) {
     super(message);
     this.name = 'ShowtailError';
     this.code = code;
+    this.errorCode = errorCode;
+    this.nextAction = nextAction;
+    this.details = details;
   }
 }

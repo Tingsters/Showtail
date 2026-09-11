@@ -6,20 +6,23 @@
 
 **Show your work.** Showtail keeps a clear record of how you built a project with AI: the prompts you sent and the files you changed along the way. It captures this **automatically** as you work, so the trail builds itself.
 
-Showtail writes that record to a plain `.showtail/` folder inside your project. There are no accounts, no cloud service, and no telemetry. It is just local files that you and your educator can open, review, and commit with the rest of your work. Interactive commands may make a quiet, daily request for public GitHub release metadata so Showtail can mention an available update; no trail or project data is sent, and the check can be disabled.
+Showtail writes resolved work to a plain `.showtail/` folder inside your project; work that does not yet have one clear project waits in a machine-local inbox. There are no accounts, no cloud service, and no telemetry. It is just local files that you and your educator can open, review, and commit with the rest of your work. Interactive commands may make a quiet, daily request for public GitHub release metadata so Showtail can mention an available update; no trail or project data is sent, and the check can be disabled.
 
 ```bash
 # Install (below), then just work — your prompts and edits are captured automatically.
 showtail report    # when you're done: generate the report for your educator
 ```
 
-**There is no setup step.** Installing turns tracking on and connects your AI tools for
-you — including ones you install later — so a student never has to run a command to get
-started. Just open the folder for your assignment, work, and generate a report at the
-end. Showtail never treats your home folder as one giant project; if an AI tool starts
-there, your work waits safely until an edited file identifies the real project. A nested
-repository or project folder also gets its own trail instead of being absorbed by a broad
-parent trail. Prefer to wire up one project by hand, or turn tracking off? See
+**There is no setup step.** Installing turns tracking on and connects the AI tools it can
+find, so a student can start working immediately. Just open the folder for your assignment
+and work: the first meaningful prompt
+creates that project's `.showtail/` trail. Plain folders, temporary folders, and your home
+folder can all be projects. A trail created exactly in your home folder applies only there;
+it is never inherited by child folders. Showtail identifies projects by their stable trail ID;
+paths are revalidated hints that may change when a project moves. Actual edits, explicit file
+attachments, and confirmed selections can bind a chat to that identity, while a stale editor
+workspace alone cannot. Prefer to wire up one project by hand, or disable automatic creation of new
+project trails? See
 [`showtail track`](https://tingsters.github.io/Showtail/getting-started/quickstart/#wiring-up-one-project-by-hand)
 and `showtail setup --off`.
 

@@ -11,7 +11,7 @@ what lets two students merge their trails through git without a conflict.
 
 ```text
 .showtail/
-  config.json                    # shared project settings (version, trailId, name, git, capture & redaction)
+  config.json                    # shared settings: trailId, name, routing evidence/provenance, capture & redaction
   state.json                     # machine-local: active session/author (git-ignored)
   authors/                       # one folder per student, keyed by a slug of their email
     <slug>/
@@ -32,24 +32,32 @@ what lets two students merge their trails through git without a conflict.
   .gitignore                     # ignores state.json and reports/
 ```
 
-Every path recorded inside the trail is **relative to the project root**, and the
-object store is addressed purely by content hash. Nothing here records where the
-project sits on disk, which is why the whole folder can be moved, renamed, or
-cloned onto another machine and still make sense.
+Every work path recorded inside the trail is **relative to the project root**, and the
+object store is addressed purely by content hash. `config.json` may retain the original
+absolute anchor as informational routing metadata, but the work itself does not depend on
+that location. The whole folder can therefore be moved, renamed, or cloned onto another
+machine and still make sense.
 
 ### How Showtail chooses the project root
 
-Showtail routes from the files a session edits, not just the folder where the AI tool
-started. A Git repository is a project boundary; outside Git, common project files such as
-`package.json`, `pyproject.toml`, `go.mod`, and `Cargo.toml` provide the boundary. Package
-files inside one Git repository do not split a monorepo, but an explicitly tracked nested
-folder can define a narrower trail.
+Showtail creates a project trail on the first meaningful prompt, not merely because an AI
+tool opened a session or an editor reported an isolated save. It starts with the strongest
+boundary it can prove: an existing nested trail, a Git repository, or — outside Git — a
+nearby project file such as `package.json`, `pyproject.toml`, `go.mod`, or `Cargo.toml`.
+Package files inside one Git repository do not split a monorepo. Host-provided workspace
+roots and edited-file paths supply the next evidence, with the tool's working directory as
+the final fallback.
 
-The user's home folder and production temporary folders are never project roots. A broad
-ancestor `.showtail/` cannot reach across a nearer project boundary, so an accidental
-trail in a parent folder cannot absorb work from a nested project. If edits resolve to
-more than one project, Showtail keeps the session only in the ledger until the student
-chooses where it belongs.
+Any writable folder can be the fallback, including the user's home folder and temporary
+folders. HOME is deliberately exact-root only: a `.showtail/` created for work launched in
+HOME is not inherited by a child folder. If a later workspace or edit reveals a more
+specific child project, Showtail moves that complete session to the stronger root. An
+automatically created fallback trail is removed only while it is still pristine; a trail
+that was changed, committed, reported, or used by other work is left intact.
+
+An explicitly tracked nested folder can always define a narrower trail. If the evidence
+resolves to more than one independent project, Showtail does not guess: the complete
+session stays in the machine-local ledger until the student chooses where it belongs.
 
 ## The machine-local ledger — `~/.showtail-cli/`
 
@@ -69,10 +77,10 @@ sessions the ledger has placed there.
     <run-id>.json              # local progress/results for a bulk upgrade migration
 ```
 
-This is what stops work being lost when there's no project to put it in — a chat
-with no folder open, a scratch directory, a tool whose state lives in your home
-folder. That work waits in [`showtail inbox`](../reference/cli.md#manage-the-inbox)
-until it has a home.
+This is what stops work being lost when there is not yet one unambiguous project to put it
+in — a chat with no folder open, a session whose edits span projects, or a tool whose state
+lives outside the work folder. That work waits in
+[`showtail inbox`](../reference/cli.md#manage-the-inbox) until it has a home.
 
 Unlike the trail, the ledger records **absolute** paths, and it does not travel
 with a project folder. So each trail also carries a stable `trailId` in its

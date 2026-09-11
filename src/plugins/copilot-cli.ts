@@ -102,13 +102,9 @@ export const copilotCliPlugin: EnvironmentPlugin = {
       const target = resolveCopilotCliTarget('user', cwd);
       writeCopilotCliInstructions(target, {});
       installCopilotCliHooks(target);
-      const refresh = refreshExistingCopilotCliInstructions(cwd);
-      if (refresh.updateAvailable.length > 0) {
-        console.log(
-          'Showtail kept customized Copilot CLI instructions that need a safety update.',
-        );
-        console.log('Run `showtail connect copilot-cli --force` once to apply it.');
-      }
+      // Automatic sweeps run around machine-readable commands too, so they must
+      // never print. Status surfaces any customized block that still needs review.
+      refreshExistingCopilotCliInstructions(cwd);
       return { hooks: true };
     },
 
@@ -121,15 +117,22 @@ export const copilotCliPlugin: EnvironmentPlugin = {
         cwd: opts.cwd,
       }),
 
-    uninstall: (opts) => runCopilotCliUninstall({ user: opts.user, cwd: opts.cwd }),
+    uninstall: (opts) =>
+      runCopilotCliUninstall({ user: opts.user, all: opts.all, cwd: opts.cwd }),
 
     status(cwd) {
-      const state = copilotCliInstructionsState(resolveCopilotCliTarget('project', cwd));
+      const projectState = copilotCliInstructionsState(
+        resolveCopilotCliTarget('project', cwd),
+      );
+      const userState = copilotCliInstructionsState(resolveCopilotCliTarget('user', cwd));
       const hooksActive = copilotCliAutoCaptureActive(cwd);
+      const installed = projectState.installed || userState.installed;
       return {
-        connected: state.installed || hooksActive,
+        connected: installed || hooksActive,
         hooksActive,
-        updateAvailable: state.installed ? state.updateAvailable : undefined,
+        updateAvailable: installed
+          ? projectState.updateAvailable || userState.updateAvailable
+          : undefined,
       };
     },
 

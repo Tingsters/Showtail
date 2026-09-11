@@ -1,10 +1,12 @@
 # Configuration
 
-Showtail's project settings live in `.showtail/config.json`, written at `track`
-time and shared (committed) across the team. Machine-local state — the active
-session and author — lives separately in `.showtail/state.json`, which is
-git-ignored. See [Data layout](../concepts/data-layout.md) for the full file
-tree.
+Showtail's project settings live in `.showtail/config.json`. The file is created
+automatically with the project trail on the first meaningful prompt, by `track`
+or `ensure`, or by `report` when matching captured work exists. It is shared
+(committed) across the team. Machine-local state — the active session and author —
+lives separately in
+`.showtail/state.json`, which is git-ignored. See
+[Data layout](../concepts/data-layout.md) for the full file tree.
 
 Machine-wide preferences live in `~/.showtail-cli/config.json` and are never
 committed with a project. This includes the automatic-tracking state, report-open
@@ -17,11 +19,17 @@ the preference for one process or managed environment.
 
 ```json
 {
-  "version": 4,
-  "name": "Week 5 Parser",
+  "version": 5,
+  "project": "Week 5 Parser",
+  "createdAt": "2026-09-10T18:42:00.000Z",
   "trailId": "trl_k3f9x2",
   "anchor": "/abs/path/to/project",
   "anchorKind": "git",
+  "initialization": {
+    "mode": "automatic",
+    "evidence": "git",
+    "ledgerSessionId": "led_f8d2m1"
+  },
   "settings": {
     "git": true,
     "captureAiOutput": true,
@@ -35,11 +43,13 @@ the preference for one process or managed environment.
 
 | Key | Meaning |
 | --- | ------- |
-| `version` | Showtail config schema version (currently `4`). Older trails are upgraded in place the first time you use them. |
-| `name` | Project name shown in report titles. Set with `showtail track --project <name>`. |
+| `version` | Showtail config schema version (currently `5`). Older trails remain readable and are upgraded when Showtail needs to write current metadata. |
+| `project` | Optional project name shown in report titles. Set with `showtail track --project <name>`. |
+| `createdAt` | ISO timestamp recording when the project trail was created. |
 | `trailId` | Stable id identifying this trail wherever it lives. It travels with the folder, so a [moved project](cli.md#moving-a-project) is recognized rather than treated as deleted. Never changes; don't edit it. |
 | `anchor` | Absolute path the trail is rooted at, for reference only — nothing resolves the project through it, and it is refreshed automatically if the folder moves. |
-| `anchorKind` | Whether `anchor` was chosen from the git repo root (`git`) or the working dir (`cwd`). |
+| `anchorKind` | Evidence that chose the root: `git`, `marker`, `workspace`, `edit`, `cwd`, or `explicit`. |
+| `initialization` | How the trail was created (`automatic`, `report`, `track`, or `ensure`), the routing evidence, and—only for an automatic fallback—the ledger session that created it. Showtail uses this provenance when deciding whether a superseded pristine fallback can be removed safely. |
 | `settings.git` | Try to capture the git commit hash on each event. |
 | `settings.captureAiOutput` | Capture AI text responses (Stop hook / imports). Default on. |
 | `settings.captureCode` | Capture AI-suggested code/diffs alongside edits. Default on. |

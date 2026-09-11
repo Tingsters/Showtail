@@ -9,6 +9,7 @@ import {
   installAntigravityCliHooks,
   resolveAntigravityCliTarget,
   uninstallAntigravityCliHooks,
+  writeAntigravityCliInstructions,
 } from '../src/core/antigravityCli.ts';
 import { writeJson } from '../src/core/storage.ts';
 import {
@@ -16,6 +17,7 @@ import {
   runAntigravityCliUninstall,
 } from '../src/commands/antigravityCli.ts';
 import { cleanup, makeTempDir } from './helpers.ts';
+import { antigravityCliPlugin } from '../src/plugins/antigravity-cli.ts';
 
 describe('antigravity-cli install / uninstall', () => {
   test('install writes instructions block + hooks.json', async () => {
@@ -70,12 +72,39 @@ describe('antigravity-cli install / uninstall', () => {
 
   test('--no-hooks writes only instructions, no hooks.json', async () => {
     const dir = makeTempDir();
+    const lines: string[] = [];
+    const realLog = console.log;
     try {
       mkdirSync(join(dir, '.showtail'), { recursive: true });
+      console.log = (...args: unknown[]) => void lines.push(args.join(' '));
       await runAntigravityCliInstall({ project: true, hooks: false, cwd: dir });
       const target = resolveAntigravityCliTarget('project', dir);
       expect(existsSync(target.contextFile)).toBe(true);
       expect(existsSync(target.hooksFile)).toBe(false);
+      expect(antigravityCliHooksInstalledAt(target.hooksFile)).toBe(false);
+
+      const output = lines.join('\n');
+      expect(output).toContain('routine prompts');
+      expect(output).toContain('will not be captured automatically');
+      expect(output).toContain('restore hands-free capture');
+      expect(output).not.toContain('teach Antigravity CLI to log prompts');
+    } finally {
+      console.log = realLog;
+      cleanup(dir);
+    }
+  });
+
+  test('--no-hooks removes hooks from an earlier connect', async () => {
+    const dir = makeTempDir();
+    try {
+      mkdirSync(join(dir, '.showtail'), { recursive: true });
+      const target = resolveAntigravityCliTarget('project', dir);
+      await runAntigravityCliInstall({ project: true, cwd: dir });
+      expect(antigravityCliHooksInstalledAt(target.hooksFile)).toBe(true);
+
+      await runAntigravityCliInstall({ project: true, hooks: false, cwd: dir });
+
+      expect(existsSync(target.contextFile)).toBe(true);
       expect(antigravityCliHooksInstalledAt(target.hooksFile)).toBe(false);
     } finally {
       cleanup(dir);
@@ -112,6 +141,28 @@ describe('antigravity-cli install / uninstall', () => {
       expect(state.userEdited).toBe(false);
     } finally {
       cleanup(dir);
+    }
+  });
+
+  test('user-scope instructions without hooks report a connected manual integration', () => {
+    const dir = makeTempDir();
+    const gemini = makeTempDir();
+    const previous = process.env.GEMINI_HOME;
+    try {
+      process.env.GEMINI_HOME = gemini;
+      mkdirSync(join(dir, '.showtail'), { recursive: true });
+      writeAntigravityCliInstructions(resolveAntigravityCliTarget('user', dir));
+
+      expect(antigravityCliPlugin.connect!.status(dir)).toEqual({
+        connected: true,
+        hooksActive: false,
+        updateAvailable: false,
+      });
+    } finally {
+      if (previous === undefined) delete process.env.GEMINI_HOME;
+      else process.env.GEMINI_HOME = previous;
+      cleanup(dir);
+      cleanup(gemini);
     }
   });
 

@@ -2,6 +2,96 @@
 
 ## Unreleased
 
+_Updated September 11, 2026._
+
+### Added
+
+- **Project controls resolve stable trail identities instead of guessed paths.**
+  `showtail projects [selector] --json` validates the machine-local project catalog,
+  and `report`, `status`, and `verify` accept `--project <path|trail-id|name>` without
+  falling back to the process directory. Complete project-name matches may resolve
+  automatically only when independent edit-backed provenance corroborates one live trail.
+- **Native VS Code agents get a local Showtail project-control tool.** Report, open,
+  status, and verify requests resolve through the same selector as the CLI, return a compact
+  versioned claim tied back to the native request, and reuse an existing report instead of
+  generating it again for a follow-up open request.
+- **Mixed-project chats are reviewable one prompt turn at a time.** Showtail links
+  each prompt to its own edits, keeps clearly owned turns with their project, and
+  lets an editless follow-up inherit the preceding owned project instead of a stale
+  workspace. Genuinely ambiguous turns remain visible as assignable inbox ranges.
+  `inbox` and `move --json` expose stable range selectors; `move <range-id> --to
+  <path>` moves only that range, while a legacy session id remains valid when it
+  names exactly one actionable range.
+- **`showtail report [path]` can finish an uninitialized project's workflow in one
+  command.** If captured work unambiguously belongs to the target, Showtail creates
+  its project-local `.showtail/`, claims the pending sessions, and generates the
+  report. A no-work target is left untouched with exit `4`; multi-project ambiguity
+  is left in the inbox with exit `2`. JSON output identifies the selected root,
+  routing evidence, creation state, claimed sessions, and remaining ambiguity.
+- **`showtail status --tool <tool>` exposes one integration's capture mode.** Managed
+  agent instructions can now branch on `automatic`, `manual`, or `disconnected`
+  without assuming another tool's hooks. The legacy top-level `hooksActive` field
+  remains for compatibility, and `capabilities` uses the same snapshot.
+
+### Changed
+
+- **Project identity is metadata-first and move-safe.** Stable trail IDs are authoritative;
+  paths, workspace roots, active files, chat titles, and recency are hints. Managed tool
+  instructions preserve the student's wording, resolve it locally, and use the returned trail
+  ID rather than asking the model to manufacture an absolute path.
+- **Machine JSON is compact by default.** Report/status/verify return selected identity,
+  result paths, summaries, and diagnostic counts; full routing, relocation, and check arrays
+  remain available with `--verbose-json` so editor agents do not retry after truncated output.
+- **Managed AI integrations now report against an explicit project folder.** Codex,
+  Claude Code, Copilot, Copilot CLI, and Antigravity instructions derive the project
+  from the files being worked on and call `report`, `verify`, and project status with
+  that absolute path instead of inheriting a stale terminal or editor workspace.
+  Agent-generated reports use JSON and do not open a local viewer; bare human CLI
+  commands retain their existing current-folder behavior.
+- **Moving or renaming work carries its turn-level trail forward.** Project matching
+  rebases each affected turn to the files' current location, lazily repartitions old
+  mixed sessions, and removes only stale projections that belong elsewhere. Raw
+  ledger records and previously generated report files remain unchanged.
+- **Project-local tracking is fully hands-free.** A trail is created by the first
+  meaningful prompt, not session startup or a stray editor event. Existing trails,
+  Git roots, project markers, host workspaces, edited paths, and finally the working
+  directory provide deterministic evidence. If stronger child-workspace or edit
+  evidence appears later, the complete session is rerouted; an automatically created
+  fallback trail is pruned only while it is provably pristine.
+- **HOME and temporary folders can be projects.** Explicit `track`/`ensure` and
+  automatic prompt capture may create a trail at any writable exact root. A HOME
+  trail applies only to work launched exactly there and is never inherited by child
+  folders, so it cannot become a catch-all for unrelated projects.
+- **`showtail status` is now a read-only probe that succeeds anywhere.** Before a
+  trail exists it reports the candidate root and evidence together with global setup,
+  inbox, and tool state; it no longer initializes, upgrades identity, or rewrites
+  relocation bookkeeping. `capabilities` reuses that same source of truth.
+- **Integration opt-outs are durable and accurately reported.** `connect --no-hooks`
+  removes hooks at the selected scope and records manual mode so a later automatic
+  sweep does not silently restore them. Bare `disconnect <tool>` removes every user and
+  project scope it can find (explicit scope flags remain narrow) and persists a
+  machine-wide runtime stop before physical removal begins. Stale hooks and editor
+  extensions therefore remain dormant even when removal fails. Extension-backed
+  disconnects use the native VS Code or Antigravity CLI with a warning when removal
+  cannot be proven. Pending and failed automatic installs remain retryable instead of
+  being stamped successful.
+- **The VS Code extension now follows the ledger-first lifecycle.** Opening a workspace
+  creates no trail; the first meaningful Copilot prompt, chat import, and saved-file
+  snapshots enter the ledger before projection. Multi-root sessions stay inbox-only,
+  and editor report commands recognize the CLI's labeled report paths.
+
+### Fixed
+
+- **A stale VS Code workspace cannot silently own a new zero-edit chat.** Static cwd/workspace
+  metadata no longer projects an unbound native turn. Exact edits and attachments, trusted
+  control claims, and same-session bindings outrank ambient editor context; unresolved turns
+  remain in the local inbox.
+- **Project projection cannot escape its selected root.** Showtail preflights every
+  edited path before materializing a session and never emits `../` artifacts. Newly
+  discovered multi-root work is removed from stale projections and retained in the
+  inbox; `move`, `reattach`, and report catch-up refuse ambiguous placement rather than
+  partially writing or guessing.
+
 ## 0.16.0 — Safer projects and self-updates
 
 ### Added

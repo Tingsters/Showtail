@@ -6,6 +6,10 @@ import {
   importEditArtifact,
   importedArtifactSourceIds,
 } from '../core/artifacts.ts';
+import {
+  CaptureInterruptedError,
+  requireCaptureContinuation,
+} from '../core/captureGuard.ts';
 import { changedFiles, maybeCurrentCommit } from '../core/git.ts';
 import { sha256OfFile } from '../core/hash.ts';
 import { readObject } from '../core/objects.ts';
@@ -26,7 +30,12 @@ import {
 import { redact } from '../core/redact.ts';
 import { isSyntheticPrompt } from '../core/syntheticPrompt.ts';
 import { asString, prop } from '../core/parse.ts';
-import { autoInitEnabled, noteKnownProject } from '../core/globalConfig.ts';
+import {
+  autoInitEnabled,
+  noteKnownProject,
+  toolCaptureEnabledAt,
+  toolCaptureGloballyDisabled,
+} from '../core/globalConfig.ts';
 import { claimHookInvocation } from '../core/hookClaim.ts';
 import { autoConnectNewlyDetected } from '../core/autoConnectSweep.ts';
 import { ensureFirstRunSetup, autoTrackingNotice } from './setup.ts';
@@ -38,14 +47,14 @@ import {
 } from '../core/sessions.ts';
 import {
   ensureTrailId,
-  findRoot,
   isEligibleAnchor,
   migrateLegacySessions,
   pathsForRoot,
   readConfig,
   readSessions,
   readState,
-  resolveAnchor,
+  resolveProjectContext,
+  clearTurnForNativeSession,
   setTurnForNativeSession,
   turnForNativeSession,
   updateState,
@@ -60,13 +69,16 @@ import {
   markPlaced,
   readLedgerRecords,
   readLedgerSession,
-  sessionWorkRoots,
+  sessionProjectContext,
   setLedgerTranscriptPath,
   setLedgerTurn,
   type LedgerSession,
 } from '../core/ledger.ts';
-import { removeOtherLedgerProjections } from '../core/projectionRouting.ts';
-import { captureTranscriptToLedger } from '../core/ledgerCapture.ts';
+import { clearOtherLedgerProjections } from '../core/projectionRouting.ts';
+import {
+  automaticCaptureTimestampAllowed,
+  captureTranscriptToLedger,
+} from '../core/ledgerCapture.ts';
 import {
   conversationEventEnabled,
   importedConversationSourceIds,
@@ -104,6 +116,17 @@ export interface HookOptions {
   cwd?: string;
   /** Which tool fired the hook; the plugin's id (defaults to claude-code when omitted). */
   tool?: Tool;
+}
+
+/** Require the exact automatic-capture consent epoch observed before a read. */
+function captureConsentMatches(
+  cliName: string | undefined,
+  enabledAt: string | undefined,
+): boolean {
+  return (
+    !cliName ||
+    (!toolCaptureGloballyDisabled(cliName) && toolCaptureEnabledAt(cliName) === enabledAt)
+  );
 }
 
 /** Showtail's own bookkeeping dir — always skipped, independent of any tool. */
@@ -192,29 +215,36 @@ async function captureToLedger(
   event: HookEvent,
   parsed: NormalizedHookEvent,
   cwd: string,
+  continueCapture: () => boolean,
 ): Promise<void> {
+  requireCaptureContinuation(continueCapture);
   if (event === 'user-prompt') {
     // Skip harness-injected user-role envelopes (`<task-notification>` subagent
     // results, `<system-reminder>` context) — never the student's own prompt.
     if (!parsed.prompt || isSyntheticPrompt(parsed.prompt)) return;
+    const gitCommit = await maybeCurrentCommit(cwd, true);
+    requireCaptureContinuation(continueCapture);
     const rec = appendLedgerRecord(session.id, {
       kind: 'prompt',
       tool: session.tool,
       text: parsed.prompt,
       // Captured live so a projection keeps the real commit (it back-dates events).
-      gitCommit: await maybeCurrentCommit(cwd, true),
+      gitCommit,
     });
+    requireCaptureContinuation(continueCapture);
     setLedgerTurn(session.id, rec.id);
     return;
   }
   if (event === 'post-edit') {
     const turnKey = readLedgerSession(session.id)?.currentTurnKey;
     const gitCommit = await maybeCurrentCommit(cwd, true);
+    requireCaptureContinuation(continueCapture);
     const add = async (
       file: string,
       diff: string | undefined,
       deleted: boolean,
     ): Promise<void> => {
+      requireCaptureContinuation(continueCapture);
       if (isInternalPath(file)) return;
       const abs = resolve(cwd, file);
       // Hash the file as it stands now (the live snapshot), so a projection keeps
@@ -226,7 +256,9 @@ async function captureToLedger(
         } catch {
           // File gone/unreadable — record the edit without a hash.
         }
+        requireCaptureContinuation(continueCapture);
       }
+      requireCaptureContinuation(continueCapture);
       appendLedgerRecord(session.id, {
         kind: 'edit',
         tool: session.tool,
@@ -246,17 +278,39 @@ async function captureToLedger(
     return;
   }
   if (event === 'session-end') {
+    requireCaptureContinuation(continueCapture);
     endLedgerSession(session.id);
   }
 }
 
 /** Mark a ledger session unplaced without ever letting bookkeeping break the hook. */
-function safeMarkInbox(sessionId: string): void {
+function safeMarkInbox(sessionId: string, continueCapture: () => boolean): void {
   try {
-    markInbox(sessionId);
-  } catch {
+    requireCaptureContinuation(continueCapture);
+    markInbox(sessionId, { continueCapture });
+  } catch (error) {
+    if (error instanceof CaptureInterruptedError) throw error;
     // Best-effort.
   }
+}
+
+function normalizedWorkspacePaths(parsed: NormalizedHookEvent, cwd: string): string[] {
+  return [
+    ...new Map(
+      (parsed.workspacePaths ?? []).map((path) => {
+        const absolute = resolve(cwd, path);
+        return [
+          process.platform === 'win32' ? absolute.toLowerCase() : absolute,
+          absolute,
+        ];
+      }),
+    ).values(),
+  ];
+}
+
+function normalizedParsedEditPaths(parsed: NormalizedHookEvent, cwd: string): string[] {
+  const paths = parsed.edits?.map((edit) => edit.file) ?? parsed.editedFiles;
+  return paths.filter((path) => !isInternalPath(path)).map((path) => resolve(cwd, path));
 }
 
 /**
@@ -280,40 +334,74 @@ export async function runHook(
     tool: options.tool ?? 'claude-code',
   };
   let paths: ReturnType<typeof pathsForRoot> | undefined;
+  let continueAutomaticCapture: (() => boolean) | undefined;
   try {
-    const payload = await readHookPayload();
     const tool: Tool = options.tool ?? 'claude-code';
     trace.tool = tool;
-    const adapter = adapterFor(tool);
+    const plugin = getPluginById(tool);
+    const captureCliName = plugin?.connect ? plugin.cliName : undefined;
+    // A bare `disconnect` is a machine-wide consent boundary. Check it before
+    // reading the payload, deduping, bootstrapping, or writing diagnostics so a
+    // stale hook in any project is a true no-op. Antigravity's allow response is
+    // still emitted by `finally` below.
+    if (captureCliName && toolCaptureGloballyDisabled(captureCliName)) return;
+    const initialCaptureSince = captureCliName
+      ? toolCaptureEnabledAt(captureCliName)
+      : undefined;
+    const continueInitialCapture = (): boolean =>
+      captureConsentMatches(captureCliName, initialCaptureSince);
+    const payload = await readHookPayload();
+    if (!continueInitialCapture()) return;
+    const adapter = plugin?.connect?.hooks;
     // Some hosts execute hook files installed for another product. Reject a
     // foreign/malformed payload before cwd discovery, first-run setup, ledger
     // creation, diagnostics, or any project mutation.
     if (adapter?.acceptsPayload && !adapter.acceptsPayload(payload)) return;
-    if (adapter?.dedupeInvocations && !claimHookInvocation(tool, event, payload)) return;
+    if (adapter?.dedupeInvocations) {
+      requireCaptureContinuation(continueInitialCapture);
+      if (!claimHookInvocation(tool, event, payload)) return;
+    }
     const cwd = payload?.cwd ?? options.cwd ?? process.cwd();
     const parsed = parseEvent(adapter, payload);
+    const projectCwd = parsed.projectCwd === undefined ? cwd : parsed.projectCwd;
+    const workspacePaths = normalizedWorkspacePaths(parsed, cwd);
     trace.nativeSessionId = parsed.nativeSessionId;
 
     // Make Showtail "just work" even when the only thing installed is the Showtail
     // Claude Code plugin (whose hooks fire before any `showtail setup`): on the first
-    // session start, bootstrap tracking and pre-wire every AI tool; on later starts,
-    // top up any tool installed or newly supported since — so a student never loses
-    // work to a missed tool. Once-only, opt-in-respecting, best-effort: a failure here
-    // must never break the session.
+    // session start, bootstrap tracking, connect detected tools, and pre-wire only the
+    // integrations that are safe before their host exists. Later starts top up tools
+    // installed or newly supported since. Once-only, opt-in-respecting, best-effort:
+    // a failure here must never break the session.
     if (event === 'session-start') {
       try {
         const boot = ensureFirstRunSetup({ cwd });
         // When already set up, still run the sweep: it connects a newly-detected tool
         // AND refreshes hooks to the current version (a fix in a newer Showtail reaches
         // already-installed hooks this way, even if only some tool hooks still fire).
-        const connected = boot.ran
-          ? boot.connected
-          : autoConnectNewlyDetected(cwd, undefined, { connectAll: true }).connected;
+        const sweep = boot.ran
+          ? {
+              connected: boot.connected,
+              pending: boot.pending,
+              failed: boot.failed,
+            }
+          : autoConnectNewlyDetected(cwd, undefined, { connectAll: true });
         // Surface the privacy notice through the session-start context (Claude/Codex
         // read hook stdout as context; Antigravity reads it as a JSON decision, so we
         // suppress the human note there — see isAntigravityHostTool).
-        if ((boot.ran || connected.length > 0) && !isAntigravityHostTool(tool)) {
-          for (const line of autoTrackingNotice(connected, boot.guidance)) {
+        if (
+          (boot.ran ||
+            sweep.connected.length > 0 ||
+            sweep.pending.length > 0 ||
+            sweep.failed.length > 0) &&
+          !isAntigravityHostTool(tool)
+        ) {
+          for (const line of autoTrackingNotice(
+            sweep.connected,
+            boot.guidance,
+            sweep.pending,
+            sweep.failed,
+          )) {
             process.stdout.write(line + '\n');
           }
         }
@@ -322,7 +410,18 @@ export async function runHook(
       }
     }
 
-    let root = findRoot(cwd);
+    // Bootstrap can create the first enabled marker, so the recovery boundary
+    // must be read after setup. From here on, any disconnect/reconnect changes
+    // the epoch and aborts this invocation before its next capture write.
+    const automaticCaptureSince = captureCliName
+      ? toolCaptureEnabledAt(captureCliName)
+      : undefined;
+    continueAutomaticCapture = (): boolean =>
+      captureConsentMatches(captureCliName, automaticCaptureSince);
+    if (!continueAutomaticCapture()) return;
+
+    let context = resolveProjectContext({ cwd: projectCwd, workspacePaths });
+    let root = context.state === 'tracked' ? context.root : null;
 
     // Durable ledger capture — runs whenever tracking is active (a trail already
     // exists, or the user has opted into auto-init via `showtail setup`), and
@@ -337,14 +436,17 @@ export async function runHook(
     let ledger: LedgerSession | undefined;
     if (trackingActive && parsed.nativeSessionId) {
       try {
+        if (!captureConsentMatches(captureCliName, automaticCaptureSince)) return;
         ledger = ensureLedgerSession({
           tool,
           nativeSessionId: parsed.nativeSessionId,
           machineId: readMachineIdentity()?.machineId,
           slug: readMachineIdentity()?.slug,
-          cwd,
+          cwd: projectCwd,
+          workspacePaths,
+          continueCapture: continueAutomaticCapture,
         });
-        await captureToLedger(ledger, event, parsed, cwd);
+        await captureToLedger(ledger, event, parsed, cwd, continueAutomaticCapture);
         // Mirror the conversation into the ledger from the tool transcript on Stop
         // (or post-edit for hosts that only fire that), so an inbox session keeps
         // its replies/decisions/plans — discoverable by native id even with no root.
@@ -353,7 +455,10 @@ export async function runHook(
         // session's `cwd` is often not the trail root, so it can't be found by
         // path matching alone.
         const seenTranscript = asString(prop(payload, 'transcript_path'));
-        if (seenTranscript) setLedgerTranscriptPath(ledger.id, seenTranscript);
+        if (seenTranscript) {
+          requireCaptureContinuation(continueAutomaticCapture);
+          setLedgerTranscriptPath(ledger.id, seenTranscript, continueAutomaticCapture);
+        }
         if (
           (event === 'stop' ||
             // A session's LAST turn has no following Stop to re-read the
@@ -373,15 +478,28 @@ export async function runHook(
             } catch {
               planFiles = []; // Plan-file discovery is best-effort; never break capture.
             }
-            captureTranscriptToLedger(ledger, transcript, tool, planFiles, {
-              isInternalPath,
-            });
+            if (!continueAutomaticCapture()) return;
+            const captured = captureTranscriptToLedger(
+              ledger,
+              transcript,
+              tool,
+              planFiles,
+              {
+                isInternalPath,
+                automaticCaptureSince,
+                continueCapture: continueAutomaticCapture,
+              },
+            );
+            if (!captured) return;
           }
         }
-      } catch {
+      } catch (error) {
+        if (error instanceof CaptureInterruptedError) return;
         ledger = undefined; // Ledger problems never disrupt the session.
       }
     }
+
+    if (!captureConsentMatches(captureCliName, automaticCaptureSince)) return;
 
     // Route from the work itself, not merely the tool's launch directory. This
     // lets a session started in HOME remain safely in the ledger until an edit
@@ -390,32 +508,45 @@ export async function runHook(
     let routedAnchor: string | undefined;
     if (ledger) {
       const currentLedger = readLedgerSession(ledger.id) ?? ledger;
-      const ledgerRecords = readLedgerRecords(ledger.id);
-      const workRoots = sessionWorkRoots(currentLedger);
-      const hasEdits = ledgerRecords.some((record) => record.kind === 'edit');
-      if (workRoots.length > 1 || (hasEdits && workRoots.length === 0)) {
+      context = sessionProjectContext(currentLedger);
+      if (context.state === 'ambiguous' || context.state === 'none') {
         try {
-          removeOtherLedgerProjections(currentLedger);
-        } catch {
+          await clearOtherLedgerProjections(currentLedger, undefined, {
+            continueCapture: continueAutomaticCapture,
+          });
+        } catch (error) {
+          if (error instanceof CaptureInterruptedError) throw error;
           // The ledger still has the complete session even if cleanup is delayed.
         }
-        safeMarkInbox(ledger.id);
+        safeMarkInbox(ledger.id, continueAutomaticCapture);
         return;
       }
-      routedAnchor = workRoots[0];
-      root = routedAnchor ? findRoot(routedAnchor) : null;
+      routedAnchor = context.root;
+      root = context.state === 'tracked' ? context.root : null;
 
       // A real project boundary was found, but it has no trail yet. Remove any
       // earlier cwd-based placement now, even if automatic initialization is off
       // or later setup/identity work fails. The ledger remains complete.
       if (routedAnchor && !root) {
         try {
-          removeOtherLedgerProjections(currentLedger);
-        } catch {
+          await clearOtherLedgerProjections(currentLedger, undefined, {
+            continueCapture: continueAutomaticCapture,
+          });
+        } catch (error) {
+          if (error instanceof CaptureInterruptedError) throw error;
           // Best-effort cleanup; never interrupt the host tool.
         }
-        safeMarkInbox(ledger.id);
+        safeMarkInbox(ledger.id, continueAutomaticCapture);
       }
+    } else {
+      context = resolveProjectContext({
+        cwd: projectCwd,
+        editPaths: normalizedParsedEditPaths(parsed, cwd),
+        workspacePaths,
+      });
+      if (context.state === 'ambiguous' || context.state === 'none') return;
+      routedAnchor = context.root;
+      root = context.state === 'tracked' ? context.root : null;
     }
 
     if (!root) {
@@ -428,25 +559,44 @@ export async function runHook(
         event === 'post-edit' &&
         ledger !== undefined &&
         readLedgerRecords(ledger.id).some((record) => record.kind === 'prompt');
-      if (event !== 'session-start' && event !== 'user-prompt' && !promptedEdit) {
-        if (ledger) safeMarkInbox(ledger.id);
+      const meaningfulPrompt =
+        event === 'user-prompt' &&
+        parsed.prompt !== undefined &&
+        parsed.prompt.trim().length > 0 &&
+        !isSyntheticPrompt(parsed.prompt);
+      if (!meaningfulPrompt && !promptedEdit) {
+        if (ledger) safeMarkInbox(ledger.id, continueAutomaticCapture);
         return;
       }
       if (!autoInitEnabled()) return;
-      const anchor = routedAnchor ?? (await resolveAnchor(cwd));
+      const anchor = routedAnchor;
+      if (!anchor) return;
       if (!isEligibleAnchor(anchor)) {
-        if (ledger) safeMarkInbox(ledger.id);
+        if (ledger) safeMarkInbox(ledger.id, continueAutomaticCapture);
         return;
       }
-      await ensureInitialized(anchor);
+      const evidence = context.evidence;
+      if (!captureConsentMatches(captureCliName, automaticCaptureSince)) return;
+      await ensureInitialized(anchor, {
+        ...(evidence === 'trail' ? {} : { anchorKind: evidence }),
+        initialization: {
+          mode: 'automatic',
+          evidence,
+          ...(ledger ? { ledgerSessionId: ledger.id } : {}),
+        },
+        continueCapture: continueAutomaticCapture,
+      });
+      if (!captureConsentMatches(captureCliName, automaticCaptureSince)) return;
       root = anchor;
     }
     paths = pathsForRoot(root);
     // Opt-in (SHOWTAIL_DEBUG_PAYLOAD=1) raw-payload capture, for pinning down a
     // host's exact PostToolUse payload shape. No-op unless the flag is set.
+    requireCaptureContinuation(continueAutomaticCapture);
     recordRawPayload(paths, event, tool, payload);
     if (!existsSync(paths.config)) return; // Not initialized.
     const config = readConfig(paths);
+    requireCaptureContinuation(continueAutomaticCapture);
     noteKnownProject(paths.root, config.trailId);
 
     // Once the destination trail exists, remove projections from any earlier
@@ -456,12 +606,15 @@ export async function runHook(
     let ledgerTrailId: string | undefined;
     if (ledger) {
       try {
-        ledgerTrailId = ensureTrailId(paths);
-        removeOtherLedgerProjections(
+        requireCaptureContinuation(continueAutomaticCapture);
+        ledgerTrailId = ensureTrailId(paths, continueAutomaticCapture);
+        await clearOtherLedgerProjections(
           readLedgerSession(ledger.id) ?? ledger,
           ledgerTrailId,
+          { continueCapture: continueAutomaticCapture },
         );
-      } catch {
+      } catch (error) {
+        if (error instanceof CaptureInterruptedError) throw error;
         // Placement bookkeeping is best-effort; capture already succeeded.
       }
     }
@@ -469,25 +622,20 @@ export async function runHook(
     // Resolve who is writing this trail. Cache-only / git-config at worst — never
     // prompts or hits the network, so the hook stays fast and non-blocking. If
     // identity can't be settled silently, no-op rather than guess.
-    const author = await resolveActiveAuthorForHook(paths, { cwd });
+    const author = await resolveActiveAuthorForHook(paths, {
+      cwd,
+      continueCapture: continueAutomaticCapture,
+    });
     if (!author) return;
+    if (!captureConsentMatches(captureCliName, automaticCaptureSince)) return;
     // One-time, idempotent: fold a legacy `sessions.json` into this machine's shard
     // so old sessions can be closed/swept. No-op once migrated.
     try {
-      migrateLegacySessions(author);
-    } catch {
+      requireCaptureContinuation(continueAutomaticCapture);
+      migrateLegacySessions(author, continueAutomaticCapture);
+    } catch (error) {
+      if (error instanceof CaptureInterruptedError) throw error;
       // Migration is best-effort; a capture must never break on it.
-    }
-
-    // Keep one authoritative projection. If an edit revealed a better project
-    // than an earlier prompt/cwd did, lift the old ledger batch out before writing
-    // the complete session here. The machine-local ledger always retains it.
-    if (ledger) {
-      try {
-        markPlaced(ledger.id, ledgerTrailId ?? ensureTrailId(paths), paths.root);
-      } catch {
-        // Placement bookkeeping is best-effort; capture already succeeded.
-      }
     }
 
     // On any live capture, first close this author's sessions that have gone idle
@@ -495,7 +643,9 @@ export async function runHook(
     // open. Tool-agnostic fallback to the SessionEnd hook below.
     if (event === 'user-prompt' || event === 'post-edit') {
       const idleMin = config.settings.idleTimeoutMinutes ?? DEFAULT_IDLE_TIMEOUT_MINUTES;
-      const swept = sweepIdleSessions(author, idleMin * 60_000, Date.now());
+      const swept = sweepIdleSessions(author, idleMin * 60_000, Date.now(), {
+        continueCapture: continueAutomaticCapture,
+      });
       if (swept.length > 0) trace.closedSessions = swept;
     }
 
@@ -513,8 +663,19 @@ export async function runHook(
       (event === 'session-start' || event === 'session-end')
     ) {
       try {
-        await materializeLedgerSession(ledger, author);
-      } catch {
+        const materialized = await materializeLedgerSession(ledger, author, {
+          continueCapture: continueAutomaticCapture,
+        });
+        if (!materialized.completed || !continueAutomaticCapture()) return;
+        requireCaptureContinuation(continueAutomaticCapture);
+        markPlaced(
+          ledger.id,
+          ledgerTrailId ?? ensureTrailId(paths, continueAutomaticCapture),
+          paths.root,
+          { continueCapture: continueAutomaticCapture },
+        );
+      } catch (error) {
+        if (error instanceof CaptureInterruptedError) throw error;
         // A projection failure must never block the session lifecycle.
       }
     }
@@ -524,7 +685,17 @@ export async function runHook(
       ledger &&
       (event === 'user-prompt' || event === 'post-edit' || event === 'stop')
     ) {
-      const m = await materializeLedgerSession(ledger, author);
+      const m = await materializeLedgerSession(ledger, author, {
+        continueCapture: continueAutomaticCapture,
+      });
+      if (!m.completed || !continueAutomaticCapture()) return;
+      requireCaptureContinuation(continueAutomaticCapture);
+      markPlaced(
+        ledger.id,
+        ledgerTrailId ?? ensureTrailId(paths, continueAutomaticCapture),
+        paths.root,
+        { continueCapture: continueAutomaticCapture },
+      );
       trace.sessionId = m.sessionId;
       if (event === 'user-prompt') {
         const promptSource = asString(prop(payload, 'promptSource'));
@@ -532,6 +703,7 @@ export async function runHook(
         if (m.lastPromptId) trace.promptId = m.lastPromptId;
         // Make this the CLI's current session, like the live handler does, so
         // `status`/`log` see it.
+        requireCaptureContinuation(continueAutomaticCapture);
         updateState(author.shared, { currentSessionId: m.sessionId });
       }
       if (m.replies > 0) trace.replies = m.replies;
@@ -545,24 +717,63 @@ export async function runHook(
 
     switch (event) {
       case 'session-start':
-        return handleSessionStart(author, payload, tool, trace);
+        handleSessionStart(author, payload, tool, trace, continueAutomaticCapture);
+        break;
       case 'user-prompt':
-        return await handleUserPrompt(author, payload, tool, trace);
+        await handleUserPrompt(author, payload, tool, trace, continueAutomaticCapture);
+        break;
       case 'post-edit':
-        return await handlePostEdit(author, payload, tool, config, trace);
+        await handlePostEdit(
+          author,
+          payload,
+          tool,
+          config,
+          trace,
+          automaticCaptureSince,
+          continueAutomaticCapture,
+        );
+        break;
       case 'stop':
-        return await handleStop(author, payload, tool, config, trace);
+        await handleStop(
+          author,
+          payload,
+          tool,
+          config,
+          trace,
+          automaticCaptureSince,
+          continueAutomaticCapture,
+        );
+        break;
       case 'session-end':
-        return handleSessionEnd(author, payload, tool, trace);
+        handleSessionEnd(author, payload, tool, trace, continueAutomaticCapture);
+        break;
+    }
+    if (!continueAutomaticCapture()) return;
+    if (ledger) {
+      try {
+        requireCaptureContinuation(continueAutomaticCapture);
+        markPlaced(
+          ledger.id,
+          ledgerTrailId ?? ensureTrailId(paths, continueAutomaticCapture),
+          paths.root,
+          { continueCapture: continueAutomaticCapture },
+        );
+      } catch (error) {
+        if (error instanceof CaptureInterruptedError) throw error;
+        // Legacy direct-write placement is best-effort.
+      }
     }
   } catch (err) {
+    if (err instanceof CaptureInterruptedError) return;
     // Swallow everything — a hook must never break the session. Note it in the
     // trace so a silently-failed hook is still visible to the diagnostics.
     trace.error = err instanceof Error ? err.message : String(err);
     return;
   } finally {
     trace.durationMs = Date.now() - startedAt;
-    if (paths) recordHookTrace(paths, trace);
+    if (paths && continueAutomaticCapture?.() !== false) {
+      recordHookTrace(paths, trace);
+    }
     // Antigravity reads a JSON decision from the hook's stdout and fails closed on
     // a missing/invalid one. Emit "allow" here in `finally` so it runs on EVERY
     // path — early no-op return, successful capture, or a swallowed error — and a
@@ -579,7 +790,9 @@ function handleSessionStart(
   payload: HookPayload | null,
   tool: Tool,
   trace: HookTrace,
+  continueCapture: () => boolean,
 ): void {
+  requireCaptureContinuation(continueCapture);
   // Bind this session to the tool's own session id when we have one, so a
   // resume/compact reuses the *same* trail instead of spawning a new session
   // each time. Without an id (older clients), fall back to the single current
@@ -594,17 +807,19 @@ function handleSessionStart(
       )
     : undefined;
   const session = nativeSessionId
-    ? sessionForNativeSession(author, nativeSessionId, { tool })
-    : (currentSession(author) ?? startSession(author));
+    ? sessionForNativeSession(author, nativeSessionId, { tool, continueCapture })
+    : (currentSession(author) ?? startSession(author, undefined, { continueCapture }));
   trace.nativeSessionId = nativeSessionId;
   trace.sessionId = session.id;
   trace.sessionStartedAt = session.startedAt;
   if (hadOpen === false) trace.createdSession = true;
+  requireCaptureContinuation(continueCapture);
   updateState(author.shared, { currentSessionId: session.id });
   // SessionStart stdout is injected into Claude's context — keep it to one line.
   // Antigravity hosts instead read stdout as a JSON decision (emitted in runHook's
   // `finally`), so suppress this human-readable note there to keep stdout valid JSON.
   if (!isAntigravityHostTool(tool)) {
+    requireCaptureContinuation(continueCapture);
     process.stdout.write(
       `Showtail is capturing this session's work trail (session ${session.id}). ` +
         `Your prompts and edits are captured automatically — just work as usual.\n`,
@@ -623,7 +838,9 @@ function handleSessionEnd(
   payload: HookPayload | null,
   tool: Tool,
   trace: HookTrace,
+  continueCapture: () => boolean,
 ): void {
+  requireCaptureContinuation(continueCapture);
   const nativeSessionId = parseEvent(adapterFor(tool), payload).nativeSessionId;
   trace.nativeSessionId = nativeSessionId;
   const sessions = readSessions(author);
@@ -638,7 +855,9 @@ function handleSessionEnd(
     if (e.timestamp > lastTs) lastTs = e.timestamp;
   }
   const at = new Date().toISOString();
-  closeSession(author, session.id, lastTs > at ? lastTs : at);
+  closeSession(author, session.id, lastTs > at ? lastTs : at, {
+    continueCapture,
+  });
   trace.closedSessions = [...(trace.closedSessions ?? []), session.id];
 }
 
@@ -647,7 +866,9 @@ async function handleUserPrompt(
   payload: HookPayload | null,
   tool: Tool,
   trace: HookTrace,
+  continueCapture: () => boolean,
 ): Promise<void> {
+  requireCaptureContinuation(continueCapture);
   if (!payload) return;
   const ev = parseEvent(adapterFor(tool), payload);
   const text = ev.prompt;
@@ -665,7 +886,7 @@ async function handleUserPrompt(
   // session is used (unchanged behavior).
   const nativeSessionId = ev.nativeSessionId;
   const sessionId = nativeSessionId
-    ? sessionForNativeSession(author, nativeSessionId, { tool }).id
+    ? sessionForNativeSession(author, nativeSessionId, { tool, continueCapture }).id
     : undefined;
   const { event, session } = await logEvent(author, {
     type: 'prompt',
@@ -674,6 +895,7 @@ async function handleUserPrompt(
     // Live-hook tools that only capture prompts (no AI text) carry the model here.
     model: ev.model,
     sessionId,
+    continueCapture,
   });
   trace.sessionId = session.id;
   trace.sessionStartedAt = session.startedAt;
@@ -681,9 +903,12 @@ async function handleUserPrompt(
   // Open a new "turn": edits and AI output that follow link back to this prompt.
   // Track it per tool session so interleaved sessions don't share one turn.
   if (nativeSessionId) {
+    requireCaptureContinuation(continueCapture);
     updateState(author.shared, { currentSessionId: sessionId });
+    requireCaptureContinuation(continueCapture);
     setTurnForNativeSession(author.shared, nativeSessionId, event.id);
   } else {
+    requireCaptureContinuation(continueCapture);
     updateState(author.shared, { currentPromptId: event.id });
   }
   // Print nothing: this path must not add anything to the session's context.
@@ -717,7 +942,10 @@ async function handlePostEdit(
   tool: Tool,
   config: Config,
   trace: HookTrace,
+  automaticCaptureSince: string | undefined,
+  continueCapture: () => boolean,
 ): Promise<void> {
+  requireCaptureContinuation(continueCapture);
   if (!payload) return;
   const ev = parseEvent(adapterFor(tool), payload);
   trace.nativeSessionId = ev.nativeSessionId;
@@ -744,7 +972,13 @@ async function handlePostEdit(
         const del = captureOff ? undefined : deletionDiff(author, e.file);
         if (
           del &&
-          importEditArtifact(author, { path: e.file, diff: del, tool, turnId })
+          importEditArtifact(author, {
+            path: e.file,
+            diff: del,
+            tool,
+            turnId,
+            continueCapture,
+          })
         ) {
           edits += 1;
         }
@@ -756,9 +990,11 @@ async function handlePostEdit(
           tool,
           turnId,
           diff: captureOff ? undefined : e.diff,
+          continueCapture,
         });
         edits += 1;
-      } catch {
+      } catch (error) {
+        if (error instanceof CaptureInterruptedError) throw error;
         // File may have been moved/deleted by now — skip it quietly.
       }
     }
@@ -768,9 +1004,16 @@ async function handlePostEdit(
     for (const file of ev.editedFiles) {
       if (isInternalPath(file)) continue;
       try {
-        await addArtifact(author, { filePath: file, tool, turnId, diff });
+        await addArtifact(author, {
+          filePath: file,
+          tool,
+          turnId,
+          diff,
+          continueCapture,
+        });
         edits += 1;
-      } catch {
+      } catch (error) {
+        if (error instanceof CaptureInterruptedError) throw error;
         // File may have been moved/deleted by now — skip it quietly.
       }
     }
@@ -792,7 +1035,10 @@ async function handlePostEdit(
     const cwd = payload.cwd ?? author.shared.root;
     const cutoff = Date.now() - GIT_FALLBACK_WINDOW_MS;
     let recovered = 0;
-    for (const file of await changedFiles(cwd)) {
+    const files = await changedFiles(cwd);
+    requireCaptureContinuation(continueCapture);
+    for (const file of files) {
+      requireCaptureContinuation(continueCapture);
       if (isInternalPath(file)) continue;
       // `file` is repo-relative; resolve against the trail root (the same base
       // addArtifact uses) so the mtime check and the snapshot agree on one path.
@@ -800,9 +1046,15 @@ async function handlePostEdit(
       try {
         if (statSync(abs).mtimeMs < cutoff) continue; // not touched this turn
         // A raw-shell write carries no diff in the payload — snapshot only.
-        await addArtifact(author, { filePath: file, tool, turnId });
+        await addArtifact(author, {
+          filePath: file,
+          tool,
+          turnId,
+          continueCapture,
+        });
         recovered += 1;
-      } catch {
+      } catch (error) {
+        if (error instanceof CaptureInterruptedError) throw error;
         // Moved/deleted/unreadable since git saw it — skip quietly.
       }
     }
@@ -817,7 +1069,15 @@ async function handlePostEdit(
   // `PostToolUse`), reconcile the transcript here too, so prompts/replies/plans
   // are still captured. Idempotent (dedup), so running it per tool step is safe.
   if (adapterFor(tool)?.reconcileOnPostEdit) {
-    await reconcileFromAdapter(author, payload, tool, config, trace);
+    await reconcileFromAdapter(
+      author,
+      payload,
+      tool,
+      config,
+      trace,
+      automaticCaptureSince,
+      continueCapture,
+    );
   }
 }
 
@@ -836,8 +1096,18 @@ async function handleStop(
   tool: Tool,
   config: Config,
   trace: HookTrace,
+  automaticCaptureSince: string | undefined,
+  continueCapture: () => boolean,
 ): Promise<void> {
-  await reconcileFromAdapter(author, payload, tool, config, trace);
+  await reconcileFromAdapter(
+    author,
+    payload,
+    tool,
+    config,
+    trace,
+    automaticCaptureSince,
+    continueCapture,
+  );
 }
 
 /**
@@ -855,9 +1125,13 @@ async function reconcileFromAdapter(
   tool: Tool,
   config: Config,
   trace: HookTrace,
+  automaticCaptureSince: string | undefined,
+  continueCapture: () => boolean,
 ): Promise<void> {
+  requireCaptureContinuation(continueCapture);
   const adapter = adapterFor(tool);
   const transcript = adapter?.getTranscript?.(payload, author.shared.root);
+  requireCaptureContinuation(continueCapture);
   const fallbackNativeId = parseEvent(adapter, payload).nativeSessionId;
   trace.nativeSessionId = transcript?.sessionId ?? fallbackNativeId;
   if (!transcript) return; // No transcript for this tool — nothing to reconcile.
@@ -869,6 +1143,7 @@ async function reconcileFromAdapter(
   } catch {
     planFiles = []; // Plan-file discovery is best-effort; never break the hook.
   }
+  requireCaptureContinuation(continueCapture);
   const summary = await reconcileTranscript(
     author,
     transcript,
@@ -876,6 +1151,8 @@ async function reconcileFromAdapter(
     config,
     fallbackNativeId,
     planFiles,
+    automaticCaptureSince,
+    continueCapture,
   );
   if (summary) {
     trace.sessionId = summary.sessionId;
@@ -937,7 +1214,10 @@ async function reconcileTranscript(
   config: Config,
   fallbackNativeId?: string,
   planFiles: DiscoveredPlanFile[] = [],
+  automaticCaptureSince?: string,
+  continueCapture: () => boolean = () => true,
 ): Promise<StopSummary | undefined> {
+  requireCaptureContinuation(continueCapture);
   // AI text replies obey `captureAiOutput`; prompts and decisions are the
   // student's own work and are captured regardless.
   const captureAi = config.settings.captureAiOutput !== false;
@@ -949,6 +1229,10 @@ async function reconcileTranscript(
   // session id is the source of truth; fall back to the payload's, then to the
   // global current session (older clients that send no id).
   const nativeSessionId = transcript.sessionId ?? fallbackNativeId;
+  const initialPersistedTurn =
+    automaticCaptureSince && nativeSessionId
+      ? turnForNativeSession(author.shared, nativeSessionId)
+      : undefined;
   let session;
   let createdSession = false;
   if (nativeSessionId) {
@@ -959,7 +1243,11 @@ async function reconcileTranscript(
     createdSession = !readSessions(author).some(
       (s) => s.nativeSessionId === nativeSessionId && !s.endedAt,
     );
-    session = sessionForNativeSession(author, nativeSessionId, { tool });
+    requireCaptureContinuation(continueCapture);
+    session = sessionForNativeSession(author, nativeSessionId, {
+      tool,
+      continueCapture,
+    });
   } else {
     const currentId = readState(author.shared).currentSessionId;
     session = currentId
@@ -1029,11 +1317,14 @@ async function reconcileTranscript(
   // (Antigravity's `plan.md`) overwrites it per update, so the single discovered
   // file is the session's canonical plan and every plan event links to it; tools
   // with no file (Claude, Codex) fall back to materializing each plan's own text.
-  const planFilesForSession = planFiles.filter(
-    (f) => !f.nativeSessionId || f.nativeSessionId === nativeSessionId,
-  );
+  const planFilesForSession = automaticCaptureSince
+    ? []
+    : planFiles.filter(
+        (f) => !f.nativeSessionId || f.nativeSessionId === nativeSessionId,
+      );
   let sessionPlanPath: string | undefined;
   let sessionPlanResolved = false;
+  let sawUserBoundary = false;
   const resolveSessionPlanPath = (): string | undefined => {
     if (!sessionPlanResolved) {
       sessionPlanResolved = true;
@@ -1042,6 +1333,7 @@ async function reconcileTranscript(
         sessionPlanPath = materializePlan(author.shared, {
           text: file.content,
           sourceId: file.sourceId,
+          continueCapture,
         }).planPath;
       }
     }
@@ -1049,7 +1341,13 @@ async function reconcileTranscript(
   };
 
   for (const msg of transcript.messages) {
+    requireCaptureContinuation(continueCapture);
+    const inAutomaticWindow = automaticCaptureTimestampAllowed(
+      msg.timestamp,
+      automaticCaptureSince,
+    );
     if (msg.role === 'user') {
+      sawUserBoundary = true;
       // Match an already-logged prompt FIRST — by uuid, then by redacted text
       // (prompts are stored redacted, so redact the transcript text to compare).
       // A prompt we already logged this session is in-window by definition and
@@ -1064,7 +1362,7 @@ async function reconcileTranscript(
         // Unmatched. Back-fill only when a timestamp proves it's in-window
         // (at/after this session's start); a backlog or timestamp-less prompt is
         // skipped so a resumed transcript isn't dumped onto a later turn.
-        if (!msg.timestamp || msg.timestamp < startedAt) {
+        if (!inAutomaticWindow || !msg.timestamp || msg.timestamp < startedAt) {
           currentTurn = undefined;
           summary.backlogSkipped += 1;
           continue;
@@ -1076,6 +1374,7 @@ async function reconcileTranscript(
           timestamp: msg.timestamp,
           sourceId: msg.sourceId,
           sessionId,
+          continueCapture,
         });
         ref = { promptId: event.id, sessionId };
         if (msg.sourceId) bySourceId.set(msg.sourceId, ref);
@@ -1083,6 +1382,8 @@ async function reconcileTranscript(
       currentTurn = ref.promptId;
       currentTurnSession = ref.sessionId;
       if (msg.sourceId) bySourceId.set(msg.sourceId, ref);
+    } else if (!inAutomaticWindow) {
+      continue;
     } else if (msg.role === 'assistant') {
       // A reply only belongs to the trail if it follows an in-window prompt.
       if (!captureAi || !currentTurn || seen.has(msg.sourceId)) continue;
@@ -1097,6 +1398,7 @@ async function reconcileTranscript(
         turnId: currentTurn,
         sourceId: msg.sourceId,
         sessionId: currentTurnSession,
+        continueCapture,
       });
       seen.add(msg.sourceId);
       summary.replies += 1;
@@ -1113,6 +1415,7 @@ async function reconcileTranscript(
         turnId: currentTurn,
         sourceId: msg.sourceId,
         sessionId: currentTurnSession,
+        continueCapture,
       });
       seen.add(msg.sourceId);
       summary.decisions += 1;
@@ -1140,10 +1443,12 @@ async function reconcileTranscript(
         sessionId: currentTurnSession,
         tags: planTags,
         planPath: resolveSessionPlanPath(),
+        continueCapture,
       });
       seen.add(msg.sourceId);
       summary.plans += 1;
     } else if (msg.role === 'edit') {
+      if (automaticCaptureSince && !currentTurn) continue;
       // Import per-file CLEAN diffs (and deletions) recovered from the host's
       // transcript — the reliable diff source when the live hook payload carries
       // the file but not the diff (Codex `apply_patch`). The live snapshot still
@@ -1161,6 +1466,7 @@ async function reconcileTranscript(
           timestamp: msg.timestamp,
           sessionId: currentTurnSession,
           sourceId: editSourceId,
+          continueCapture,
         });
         if (wrote) {
           seenArtifacts.add(editSourceId);
@@ -1181,6 +1487,7 @@ async function reconcileTranscript(
         sessionId: currentTurnSession,
         toolName: msg.toolName,
         isError: msg.isError,
+        continueCapture,
       });
       seen.add(msg.sourceId);
       summary.toolCalls += 1;
@@ -1203,6 +1510,7 @@ async function reconcileTranscript(
         outputTokens: msg.outputTokens,
         cacheReadTokens: msg.cacheReadTokens,
         cacheCreationTokens: msg.cacheCreationTokens,
+        continueCapture,
       });
       seen.add(msg.sourceId);
       summary.recaps += 1;
@@ -1219,10 +1527,12 @@ async function reconcileTranscript(
   );
   let conversationTurn: PromptRef | undefined;
   for (const event of transcript.events ?? []) {
+    requireCaptureContinuation(continueCapture);
     if (event.type === 'user_text') {
       conversationTurn = bySourceId.get(event.sourceId);
     }
     if (
+      !automaticCaptureTimestampAllowed(event.timestamp, automaticCaptureSince) ||
       !conversationTurn ||
       !conversationEventEnabled(event, conversationToolNames, config.settings)
     ) {
@@ -1235,8 +1545,22 @@ async function reconcileTranscript(
       tool,
       turnId: conversationTurn.promptId,
       sessionId: conversationTurn.sessionId,
+      continueCapture,
     });
     seenConversation.add(sourceId);
+  }
+  if (automaticCaptureSince && nativeSessionId && sawUserBoundary) {
+    requireCaptureContinuation(continueCapture);
+    // Preserve a newer live prompt if it raced the transcript read/reconcile.
+    if (turnForNativeSession(author.shared, nativeSessionId) === initialPersistedTurn) {
+      if (currentTurn) {
+        requireCaptureContinuation(continueCapture);
+        setTurnForNativeSession(author.shared, nativeSessionId, currentTurn);
+      } else {
+        requireCaptureContinuation(continueCapture);
+        clearTurnForNativeSession(author.shared, nativeSessionId);
+      }
+    }
   }
   return summary;
 }

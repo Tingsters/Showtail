@@ -21,7 +21,10 @@ import {
   resolveAntigravityIdeTarget,
   writeAntigravityIdeInstructions,
 } from '../core/antigravityIde.ts';
-import { installAntigravityIdeExtension } from '../core/antigravityIdeExtension.ts';
+import {
+  antigravityIdeExtensionInstalled,
+  installAntigravityIdeExtension,
+} from '../core/antigravityIdeExtension.ts';
 import {
   antigravityIdePlanFiles,
   findAntigravityIdeTranscripts,
@@ -37,6 +40,11 @@ import {
   extractSuggestedCode,
   type HookPayload,
 } from '../core/hookInput.ts';
+import {
+  isVsCodeExtensionPayload,
+  parseVsCodeExtensionPayload,
+  vscodeExtensionTranscript,
+} from '../core/vscodeExtensionHook.ts';
 import type { EnvironmentPlugin, HookTranscript } from './types.ts';
 
 /**
@@ -49,6 +57,7 @@ import type { EnvironmentPlugin, HookTranscript } from './types.ts';
  * on disk or it can't be parsed, leaving Stop a no-op.
  */
 function antigravityIdeGetTranscript(raw: unknown, root: string): HookTranscript | null {
+  if (isVsCodeExtensionPayload(raw)) return vscodeExtensionTranscript(raw);
   const sid = extractSessionId(raw as HookPayload | null);
   const info = locateAntigravityIdeTranscript(sid);
   if (!info) return null;
@@ -98,8 +107,7 @@ export const antigravityIdePlugin: EnvironmentPlugin = {
       const target = resolveAntigravityIdeTarget('user', cwd);
       writeAntigravityIdeInstructions(target, {});
       // Capture rides on the VS Code extension, not the IDE's (dead) hooks.
-      installAntigravityIdeExtension();
-      return { hooks: false };
+      return installAntigravityIdeExtension().installed ? { hooks: false } : null;
     },
 
     install: (opts) =>
@@ -110,17 +118,30 @@ export const antigravityIdePlugin: EnvironmentPlugin = {
         cwd: opts.cwd,
       }),
 
-    uninstall: (opts) => runAntigravityIdeUninstall({ user: opts.user, cwd: opts.cwd }),
+    uninstall: (opts) =>
+      runAntigravityIdeUninstall({
+        user: opts.user,
+        all: opts.all,
+        cwd: opts.cwd,
+      }),
 
     status(cwd) {
-      const state = antigravityIdeInstructionsState(
+      const projectState = antigravityIdeInstructionsState(
         resolveAntigravityIdeTarget('project', cwd),
       );
+      const userState = antigravityIdeInstructionsState(
+        resolveAntigravityIdeTarget('user', cwd),
+      );
       const hooksActive = antigravityIdeAutoCaptureActive(cwd);
+      const captureActive = antigravityIdeExtensionInstalled();
+      const installed = projectState.installed || userState.installed;
       return {
-        connected: state.installed || hooksActive,
+        connected: installed || hooksActive || captureActive,
         hooksActive,
-        updateAvailable: state.installed ? state.updateAvailable : undefined,
+        captureActive,
+        updateAvailable: installed
+          ? projectState.updateAvailable || userState.updateAvailable
+          : undefined,
       };
     },
 
@@ -131,6 +152,7 @@ export const antigravityIdePlugin: EnvironmentPlugin = {
       // back to the Claude-shaped one. Prompts/replies/plans are recovered from the
       // transcript at Stop, so a missing live `prompt` field is fine.
       parse(raw) {
+        if (isVsCodeExtensionPayload(raw)) return parseVsCodeExtensionPayload(raw);
         const p = raw as HookPayload;
         const edited = extractAntigravityEditedFiles(p);
         return {
@@ -151,6 +173,7 @@ export const antigravityIdePlugin: EnvironmentPlugin = {
       // brain/<id>/implementation_plan.md; surface it so the report links the
       // canonical (final) plan file even after later edits.
       planFiles(raw) {
+        if (isVsCodeExtensionPayload(raw)) return [];
         return antigravityIdePlanFiles(extractSessionId(raw as HookPayload | null));
       },
       // This IDE build only dispatches PostToolUse hooks (PreInvocation/Stop never

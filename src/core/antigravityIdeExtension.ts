@@ -78,6 +78,13 @@ export interface ExtensionInstallResult {
   reason?: string;
 }
 
+export interface ExtensionUninstallResult {
+  uninstalled: boolean;
+  wasInstalled?: boolean;
+  cli?: string;
+  reason?: string;
+}
+
 /**
  * Install (or update, via `--force`) the Showtail VSIX into the Antigravity IDE
  * through its CLI launcher. Never throws; returns a structured result so the
@@ -97,4 +104,53 @@ export function installAntigravityIdeExtension(): ExtensionInstallResult {
     vsix,
     reason: (res.stderr || res.error?.message || `exit ${res.status ?? '?'}`).trim(),
   };
+}
+
+/**
+ * Remove the native extension that performs Antigravity IDE capture. A missing
+ * launcher is reported as incomplete rather than treated as success: in that
+ * case Showtail cannot prove that capture has actually stopped.
+ */
+export function uninstallAntigravityIdeExtension(): ExtensionUninstallResult {
+  const cli = findAntigravityIdeCli();
+  if (!cli) return { uninstalled: false, reason: 'cli-not-found' };
+
+  const listed = runExtensionCli(cli, ['--list-extensions']);
+  if (
+    listed.status === 0 &&
+    !antigravityExtensionListContainsShowtail(listed.stdout ?? '')
+  ) {
+    return { uninstalled: true, wasInstalled: false, cli };
+  }
+
+  const result = runExtensionCli(cli, [
+    '--uninstall-extension',
+    ANTIGRAVITY_EXTENSION_ID,
+  ]);
+  if (result.status === 0) return { uninstalled: true, wasInstalled: true, cli };
+  return {
+    uninstalled: false,
+    cli,
+    reason: (
+      result.stderr ||
+      result.error?.message ||
+      `exit ${result.status ?? '?'}`
+    ).trim(),
+  };
+}
+
+/** Read-only probe for the native extension that performs automatic IDE capture. */
+export function antigravityIdeExtensionInstalled(): boolean {
+  const cli = findAntigravityIdeCli();
+  if (!cli) return false;
+  const result = runExtensionCli(cli, ['--list-extensions']);
+  if (result.status !== 0) return false;
+  return antigravityExtensionListContainsShowtail(result.stdout ?? '');
+}
+
+/** Parse VS Code-compatible `--list-extensions` output. */
+export function antigravityExtensionListContainsShowtail(output: string): boolean {
+  return output
+    .split(/\r?\n/)
+    .some((line) => line.trim().toLowerCase() === ANTIGRAVITY_EXTENSION_ID);
 }

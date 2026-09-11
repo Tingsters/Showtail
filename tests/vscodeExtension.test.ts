@@ -1,13 +1,28 @@
-import { readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, test } from 'bun:test';
 import {
   findVsCodeCli,
   installVsCodeExtension,
+  uninstallVsCodeExtension,
   VSCODE_EXTENSION_ID,
+  vscodeExtensionInstalled,
+  vscodeExtensionListContainsShowtail,
 } from '../src/core/vscodeExtension.ts';
 import { extensionCliInvocation } from '../src/core/extensionCli.ts';
-import { cleanup, makeTempDir, stubCli, stubCliScript } from './helpers.ts';
+import {
+  cleanup,
+  makeTempDir,
+  stubCli,
+  stubCliScript,
+  stubInstalledExtensionCli,
+} from './helpers.ts';
+import { copilotPlugin } from '../src/plugins/copilot.ts';
+import {
+  isVsCodeExtensionPayload,
+  VSCODE_EXTENSION_HOOK_PROTOCOL,
+  vscodeExtensionTranscript,
+} from '../src/core/vscodeExtensionHook.ts';
 
 // `stubCli` stands in for the `code` CLI: a `#!/bin/sh` script on POSIX, a `.cmd`
 // batch file on Windows (where CreateProcess can't launch a `.sh` and chmod is a
@@ -43,6 +58,32 @@ describe('vscode extension install (env-overridable, no real VS Code)', () => {
       const res = installVsCodeExtension();
       expect(res.installed).toBe(false);
       expect(res.reason).toBe('cli-not-found');
+      expect(copilotPlugin.connect!.autoConnect!()).toBeNull();
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('detects the installed extension and reports native capture as active', () => {
+    const dir = makeTempDir();
+    try {
+      const cli = join(dir, process.platform === 'win32' ? 'code.cmd' : 'code.sh');
+      const body =
+        process.platform === 'win32'
+          ? '@echo off\r\nif "%~1"=="--list-extensions" echo Tingsters.Showtail\r\nexit /b 0\r\n'
+          : '#!/bin/sh\n[ "$1" = "--list-extensions" ] && printf "Tingsters.Showtail\\n"\n';
+      writeFileSync(cli, body);
+      if (process.platform !== 'win32') chmodSync(cli, 0o755);
+      process.env.SHOWTAIL_VSCODE_CLI = cli;
+
+      expect(
+        vscodeExtensionListContainsShowtail('publisher.other\r\ntingsters.showtail\r\n'),
+      ).toBe(true);
+      expect(vscodeExtensionInstalled()).toBe(true);
+      expect(copilotPlugin.connect!.status(dir)).toMatchObject({
+        connected: true,
+        captureActive: true,
+      });
     } finally {
       cleanup(dir);
     }
@@ -78,6 +119,28 @@ describe('vscode extension install (env-overridable, no real VS Code)', () => {
       const res = installVsCodeExtension();
       expect(res.installed).toBe(true);
       expect(readFileSync(record, 'utf8')).toContain(VSCODE_EXTENSION_ID);
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('uninstalls the native capture extension through the VS Code CLI', () => {
+    const dir = makeTempDir();
+    try {
+      const record = join(dir, 'args.txt');
+      process.env.SHOWTAIL_VSCODE_CLI = stubInstalledExtensionCli(
+        dir,
+        record,
+        VSCODE_EXTENSION_ID,
+        'code',
+      );
+
+      const result = uninstallVsCodeExtension();
+
+      expect(result).toMatchObject({ uninstalled: true, wasInstalled: true });
+      const args = readFileSync(record, 'utf8');
+      expect(args).toContain('--uninstall-extension');
+      expect(args).toContain(VSCODE_EXTENSION_ID);
     } finally {
       cleanup(dir);
     }
@@ -146,5 +209,37 @@ describe('extension CLI process invocation', () => {
       command: '/usr/bin/code',
       args,
     });
+  });
+});
+
+describe('VS Code extension hook payload', () => {
+  test('requires and propagates the extension event timestamp', () => {
+    const dir = makeTempDir();
+    try {
+      const timestamp = '2026-09-09T12:34:56.000Z';
+      const payload = {
+        showtailExtension: VSCODE_EXTENSION_HOOK_PROTOCOL,
+        session_id: 'extension-session',
+        cwd: dir,
+        projectCwd: dir,
+        workspacePaths: [dir],
+        timestamp,
+        assistant: {
+          text: 'The response completed after capture resumed.',
+          sourceId: 'assistant-response-1',
+          model: 'copilot-test',
+        },
+      };
+
+      expect(isVsCodeExtensionPayload(payload)).toBe(true);
+      expect(vscodeExtensionTranscript(payload)?.messages[0]).toMatchObject({
+        role: 'assistant',
+        timestamp,
+      });
+      expect(isVsCodeExtensionPayload({ ...payload, timestamp: undefined })).toBe(false);
+      expect(isVsCodeExtensionPayload({ ...payload, timestamp: 'invalid' })).toBe(false);
+    } finally {
+      cleanup(dir);
+    }
   });
 });

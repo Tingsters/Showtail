@@ -12,9 +12,6 @@ export interface StartOptions {
   json?: boolean;
 }
 
-const LOG_PROMPT_EXAMPLE =
-  '  showtail log --type prompt --text "How should I structure this?"';
-
 /** Start a new work session and make it the active one for `log`. */
 export async function runStart(options: StartOptions = {}): Promise<void> {
   const paths = requirePaths(options.cwd);
@@ -36,7 +33,12 @@ export async function runStart(options: StartOptions = {}): Promise<void> {
   // Orient the user around how their work gets captured: show which tools are
   // connected, then recommend the next step based on that state.
   const tools = toolStatuses(options.cwd);
-  const anyHooks = tools.some((t) => t.hooksActive);
+  const anyAutomatic = tools.some(
+    (tool) =>
+      tool.hooksActive === true ||
+      tool.captureActive === true ||
+      (tool.connected && tool.hooksActive === undefined),
+  );
   const anyConnected = tools.some((t) => t.connected);
 
   console.log('');
@@ -44,25 +46,21 @@ export async function runStart(options: StartOptions = {}): Promise<void> {
   for (const line of connectedToolsLines(tools)) console.log(line);
   console.log('');
 
-  if (anyHooks) {
+  if (anyAutomatic) {
     console.log(
       'Your prompts and edits are captured automatically — just work as usual.',
     );
   } else if (anyConnected) {
-    console.log('A tool is connected, but auto-capture hooks are not active.');
+    console.log('A tool is connected, but automatic capture is not active.');
     console.log(
-      'Re-run `showtail connect <tool>` to enable them, or log prompts as you work:',
+      'Re-run `showtail connect <tool>` to restore hands-free prompt and edit capture.',
     );
-    console.log(LOG_PROMPT_EXAMPLE);
   } else {
     console.log('No AI tools connected yet. Connect one so your prompts and edits are');
     console.log('captured automatically as you work:');
     for (const p of connectPlugins()) {
       console.log(`  showtail connect ${p.cliName.padEnd(11)}(${p.label})`);
     }
-    console.log('');
-    console.log('Prefer to log by hand? Record your prompts as you go:');
-    console.log(LOG_PROMPT_EXAMPLE);
   }
 
   console.log('');

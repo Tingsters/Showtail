@@ -8,7 +8,10 @@
  * is Windows-only in production and so would otherwise never be exercised.
  */
 import { describe, expect, test } from 'bun:test';
-import { byVersionDesc } from '../src/core/liveVerify.ts';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { byVersionDesc, readReport } from '../src/core/liveVerify.ts';
 
 describe('liveVerify', () => {
   test('orders version dirs numerically, not lexicographically', () => {
@@ -25,5 +28,30 @@ describe('liveVerify', () => {
 
   test('orders across a major-version rollover too', () => {
     expect(['9.0.0', '10.0.0'].sort(byVersionDesc)).toEqual(['10.0.0', '9.0.0']);
+  });
+
+  test('forwards the isolated Showtail environment to report generation', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'showtail-live-report-'));
+    const reportsDir = join(dir, '.showtail', 'reports');
+    const isolatedEnv = {
+      ...process.env,
+      SHOWTAIL_HOME: join(dir, 'isolated-home'),
+    };
+    let receivedEnv: NodeJS.ProcessEnv | undefined;
+
+    try {
+      mkdirSync(reportsDir, { recursive: true });
+      writeFileSync(join(reportsDir, 'report.json'), JSON.stringify({ ok: true }));
+
+      const report = readReport(dir, isolatedEnv, (_dir, _args, env) => {
+        receivedEnv = env;
+        return { stdout: '', stderr: '', code: 0, error: undefined };
+      });
+
+      expect(receivedEnv).toBe(isolatedEnv);
+      expect(report).toEqual({ ok: true });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

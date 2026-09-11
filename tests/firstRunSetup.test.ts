@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { cleanup, makeTempDir, runCli, spawnEnv } from './helpers.ts';
+import { cleanup, makeTempDir, runCli, spawnEnv, stubCli } from './helpers.ts';
 
 /**
  * Isolated env for exercising the install/first-run bootstrap: a temp HOME (so any
@@ -76,7 +76,7 @@ describe('first-run bootstrap ("just works" on install)', () => {
     }
   });
 
-  test('a normal command bootstraps on first run, notice on stderr, --json stdout stays clean', () => {
+  test('a normal JSON command bootstraps silently and keeps stdout machine-readable', () => {
     const dir = makeTempDir();
     const home = makeTempDir();
     const ghome = join(makeTempDir(), '.showtail-cli');
@@ -85,13 +85,11 @@ describe('first-run bootstrap ("just works" on install)', () => {
       // `matrix --json` works in any folder and is not on the bootstrap skip-list.
       const r = runCli(dir, ['matrix', '--json'], { env });
       expect(r.code).toBe(0);
-      // stdout must be valid JSON — the notice must not leak into it.
+      // Machine-readable commands emit one JSON document and no prose on either stream.
       expect(() => JSON.parse(r.stdout)).not.toThrow();
+      expect(r.stderr).toBe('');
       // The bootstrap turned tracking on...
       expect(globalConfig(ghome).autoInit).toBe(true);
-      // ...and surfaced the privacy notice on stderr.
-      expect(r.stderr).toContain('Showtail is on');
-      expect(r.stderr).toContain('showtail setup --off');
     } finally {
       cleanup(dir);
       cleanup(home);
@@ -112,6 +110,94 @@ describe('first-run bootstrap ("just works" on install)', () => {
     } finally {
       cleanup(dir);
       cleanup(home);
+    }
+  });
+
+  test('project discovery, move listing, and verification never trigger first-run setup', () => {
+    for (const { args, expectedCode } of [
+      { args: ['projects', '--json'], expectedCode: 0 },
+      { args: ['move', '--json'], expectedCode: 0 },
+      { args: ['verify', '--project', 'trl_missing', '--json'], expectedCode: 2 },
+    ]) {
+      const dir = makeTempDir();
+      const home = makeTempDir();
+      const globalRoot = makeTempDir();
+      const ghome = join(globalRoot, '.showtail-cli');
+      try {
+        const result = runCli(dir, args, { env: bootstrapEnv(home, ghome) });
+        expect(result.code).toBe(expectedCode);
+        expect(() => JSON.parse(result.stdout)).not.toThrow();
+        expect(existsSync(join(ghome, 'config.json'))).toBe(false);
+        expect(existsSync(join(home, '.claude', 'settings.json'))).toBe(false);
+      } finally {
+        cleanup(dir);
+        cleanup(home);
+        cleanup(globalRoot);
+      }
+    }
+  });
+
+  test('the JSON move listing never refreshes an existing integration config', () => {
+    const dir = makeTempDir();
+    const home = makeTempDir();
+    const globalRoot = makeTempDir();
+    const ghome = join(globalRoot, '.showtail-cli');
+    try {
+      const env = bootstrapEnv(home, ghome);
+      expect(runCli(dir, ['setup', '--first-run', '--json'], { env }).code).toBe(0);
+      const configFile = join(ghome, 'config.json');
+      const config = globalConfig(ghome);
+      config.toolIntegrationGenerations = Object.fromEntries(
+        Object.keys(config.toolIntegrationGenerations ?? {}).map((tool) => [
+          tool,
+          '0.0.0:0',
+        ]),
+      );
+      writeFileSync(configFile, JSON.stringify(config, null, 2) + '\n');
+      const before = readFileSync(configFile);
+
+      const result = runCli(dir, ['move', '--json'], { env });
+
+      expect(result.code).toBe(0);
+      expect(JSON.parse(result.stdout)).toEqual({ sessions: [], ranges: [] });
+      expect(readFileSync(configFile)).toEqual(before);
+    } finally {
+      cleanup(dir);
+      cleanup(home);
+      cleanup(globalRoot);
+    }
+  });
+
+  test('background auto-import reaches its consent guard without bootstrapping', () => {
+    for (const tool of ['copilot', 'antigravity-ide']) {
+      const dir = makeTempDir();
+      const home = makeTempDir();
+      const globalRoot = makeTempDir();
+      const globalHome = join(globalRoot, '.showtail-cli');
+      try {
+        const env = bootstrapEnv(home, globalHome);
+        mkdirSync(globalHome, { recursive: true });
+        const configFile = join(globalHome, 'config.json');
+        const original =
+          JSON.stringify({ version: 1, captureDisabledTools: [tool] }) + '\n';
+        writeFileSync(configFile, original, 'utf8');
+
+        const result = runCli(
+          dir,
+          ['import', tool, '--auto', '--file', join(dir, 'missing.jsonl'), '--quiet'],
+          { env },
+        );
+
+        expect(result.code).toBe(0);
+        expect(readFileSync(configFile, 'utf8')).toBe(original);
+        expect(existsSync(join(globalHome, 'ledger'))).toBe(false);
+        expect(existsSync(join(dir, '.showtail'))).toBe(false);
+        expect(existsSync(join(home, '.claude', 'settings.json'))).toBe(false);
+      } finally {
+        cleanup(dir);
+        cleanup(home);
+        cleanup(globalRoot);
+      }
     }
   });
 
@@ -192,6 +278,7 @@ describe('first-run bootstrap ("just works" on install)', () => {
       // tool update broke the hooks and a NEWER Showtail with the fix is now running.
       const cfg = globalConfig(ghome);
       cfg.wiringVersion = '0.0.0';
+      delete cfg.toolIntegrationGenerations;
       writeFileSync(join(ghome, 'config.json'), JSON.stringify(cfg));
       // Wipe Showtail's hooks from the on-disk config to prove the refresh re-applies
       // them (the tool's own hooks are NOT relied on to fire the fix).
@@ -199,7 +286,7 @@ describe('first-run bootstrap ("just works" on install)', () => {
 
       // (a) A plain CLI command (like the AI skill's `showtail status`, or `report`) —
       //     NOT a tool hook — must carry the fix to the on-disk hooks.
-      const r = runCli(dir, ['matrix', '--json'], { env });
+      const r = runCli(dir, ['matrix'], { env });
       expect(r.code).toBe(0);
       expect(globalConfig(ghome).wiringVersion).not.toBe('0.0.0'); // re-stamped to current
       const rewritten = readFileSync(join(home, '.claude', 'settings.json'), 'utf8');
@@ -210,11 +297,122 @@ describe('first-run bootstrap ("just works" on install)', () => {
       // (b) The installer path (re-running on upgrade) also refreshes stale wiring.
       const cfg2 = globalConfig(ghome);
       cfg2.wiringVersion = '0.0.0';
+      delete cfg2.toolIntegrationGenerations;
       writeFileSync(join(ghome, 'config.json'), JSON.stringify(cfg2));
       const up = runCli(dir, ['setup', '--first-run', '--json'], { env });
       expect(up.code).toBe(0);
       expect(JSON.parse(up.stdout).refreshed).toContain('claude');
       expect(globalConfig(ghome).wiringVersion).not.toBe('0.0.0');
+    } finally {
+      cleanup(dir);
+      cleanup(home);
+    }
+  });
+
+  test('an incomplete first-run integration is reported without claiming capture is ready', () => {
+    const dir = makeTempDir();
+    const home = makeTempDir();
+    const ghome = join(makeTempDir(), '.showtail-cli');
+    try {
+      mkdirSync(join(home, '.gemini', 'antigravity-ide'), { recursive: true });
+      const record = join(home, 'antigravity-args.txt');
+      const env = {
+        ...bootstrapEnv(home, ghome),
+        SHOWTAIL_ANTIGRAVITY_CLI: stubCli(home, record, 'antigravity-ide'),
+        SHOWTAIL_VSIX: join(home, 'missing-showtail.vsix'),
+      };
+
+      const result = runCli(dir, ['setup', '--first-run'], { env });
+
+      expect(result.code).toBe(0);
+      expect(result.stdout).toContain('automatic AI capture still needs attention');
+      expect(result.stdout).toContain('Antigravity IDE: connection pending');
+      expect(result.stdout).not.toContain(
+        'your work with AI is captured automatically from now on',
+      );
+    } finally {
+      cleanup(dir);
+      cleanup(home);
+    }
+  });
+
+  test('session-start bootstrap surfaces an incomplete integration without a ready claim', () => {
+    const dir = makeTempDir();
+    const home = makeTempDir();
+    const ghome = join(makeTempDir(), '.showtail-cli');
+    try {
+      mkdirSync(join(home, '.gemini', 'antigravity-ide'), { recursive: true });
+      const record = join(home, 'antigravity-hook-args.txt');
+      const env = {
+        ...bootstrapEnv(home, ghome),
+        SHOWTAIL_ANTIGRAVITY_CLI: stubCli(home, record, 'antigravity-ide'),
+        SHOWTAIL_VSIX: join(home, 'missing-showtail.vsix'),
+      };
+
+      const result = runCli(dir, ['hook', 'session-start'], {
+        env,
+        input: JSON.stringify({ cwd: dir, session_id: 'bootstrap-pending' }),
+      });
+
+      expect(result.code).toBe(0);
+      expect(result.stdout).toContain('automatic AI capture still needs attention');
+      expect(result.stdout).toContain('Antigravity IDE: connection pending');
+      expect(result.stdout).not.toContain(
+        'your work with AI is captured automatically from now on',
+      );
+      expect(existsSync(join(dir, '.showtail'))).toBe(false);
+    } finally {
+      cleanup(dir);
+      cleanup(home);
+    }
+  });
+
+  test('JSON refresh failures stay silent on stderr and expose pending state in setup', () => {
+    const dir = makeTempDir();
+    const home = makeTempDir();
+    const ghome = join(makeTempDir(), '.showtail-cli');
+    try {
+      const baseEnv = bootstrapEnv(home, ghome);
+      runCli(dir, ['setup', '--first-run', '--json'], { env: baseEnv });
+
+      const cfg = globalConfig(ghome);
+      cfg.autoConnectedTools = [
+        ...((cfg.autoConnectedTools as string[] | undefined) ?? []),
+        'antigravity-ide',
+      ];
+      cfg.toolIntegrationGenerations = {
+        ...((cfg.toolIntegrationGenerations as Record<string, string> | undefined) ?? {}),
+        'antigravity-ide': '0.0.0:0',
+      };
+      writeFileSync(join(ghome, 'config.json'), JSON.stringify(cfg));
+      mkdirSync(join(home, '.gemini', 'antigravity-ide'), { recursive: true });
+
+      const env = {
+        ...baseEnv,
+        SHOWTAIL_ANTIGRAVITY_CLI: stubCli(
+          home,
+          join(home, 'antigravity-args.txt'),
+          'antigravity-ide',
+        ),
+        SHOWTAIL_VSIX: join(home, 'missing-showtail.vsix'),
+      };
+      const command = runCli(dir, ['matrix', '--json'], { env });
+      expect(command.code).toBe(0);
+      expect(() => JSON.parse(command.stdout)).not.toThrow();
+      expect(command.stderr).toBe('');
+
+      const setup = runCli(dir, ['setup', '--first-run', '--json'], { env });
+      expect(setup.code).toBe(0);
+      expect(setup.stderr).toBe('');
+      expect(JSON.parse(setup.stdout).pending).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            tool: 'antigravity-ide',
+            operation: 'refresh',
+            state: 'pending',
+          }),
+        ]),
+      );
     } finally {
       cleanup(dir);
       cleanup(home);

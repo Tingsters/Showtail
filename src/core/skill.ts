@@ -185,8 +185,9 @@ export function hooksInstalledAt(settingsFile: string): boolean {
 
 /**
  * Whether Showtail's auto-capture hooks are active for work in `cwd` — true if
- * they're installed at either project or user scope. The skill uses this (via
- * `showtail status --json`) to decide whether to capture prompts/edits manually.
+ * they're installed at either project or user scope. The managed skill checks
+ * this through tool-specific status so it can describe capture without starting
+ * a parallel manual prompt/artifact loop.
  */
 export function autoCaptureActive(cwd: string = process.cwd()): boolean {
   return (

@@ -48,7 +48,7 @@ describe('automatic update checks', () => {
     isolateHome();
     const now = new Date('2026-09-08T12:00:00.000Z');
     const options = {
-      command: 'status',
+      command: 'report',
       stdinIsTTY: true,
       stderrIsTTY: true,
       disabledByEnv: false,
@@ -78,7 +78,7 @@ describe('automatic update checks', () => {
       },
     });
     const notice = await passiveUpdateNotice({
-      command: 'status',
+      command: 'report',
       stdinIsTTY: true,
       stderrIsTTY: true,
       disabledByEnv: false,
@@ -121,6 +121,17 @@ describe('automatic update checks', () => {
         ci: false,
       }),
     ).toBe(false);
+    for (const command of ['projects', 'verify']) {
+      expect(
+        passiveUpdateCheckAllowed({
+          command,
+          stdinIsTTY: true,
+          stderrIsTTY: true,
+          disabledByEnv: false,
+          ci: false,
+        }),
+      ).toBe(false);
+    }
   });
 
   test('network failures stay silent and record a retry watermark', async () => {

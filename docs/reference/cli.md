@@ -13,9 +13,11 @@ for machine-readable output (noted below).
 ## Getting started — nothing to run
 
 Tracking turns on **when you install** (see [Installation](../getting-started/installation.md)):
-Showtail connects the AI tools it finds and pre-wires the ones it supports, so a tool you
-install later is captured too. You never run a getting-started command — just work, then
-`showtail report`. So there is no "Get started" group in `showtail --help`.
+Showtail connects the AI tools it finds and pre-wires integrations that are safe to configure
+before their host exists. You never run a getting-started command — just work, then
+`showtail report`. The first meaningful prompt creates the project-local trail; session
+startup and isolated editor events do not. So there is no "Get started" group in
+`showtail --help`.
 
 ## Maintain Showtail
 
@@ -33,8 +35,8 @@ process-level opt-out.
 
 | Command | What it does |
 | ------- | ------------ |
-| `setup` | Manage automatic tracking (it turns on by itself after install). `--off` turns it off; re-run to turn it back on. Flags: `--off`, `--yes`, `--json`. |
-| `track [path]` | Set up one project by hand: name it (`-p, --project <name>`), declare a non-code folder (like a book) as a project, and pull its already-captured work in — including work whose files have since **moved** (see [Moving a project](#moving-a-project)). Projects otherwise initialize automatically. Safe to re-run; running it in HOME is a successful no-op because HOME is never one project. Flags: `-p, --project <name>`, `--json` (emits `backfilled` and `candidates`; HOME returns `reason: "home-directory"` and `nextAction: "open-project"`). |
+| `setup` | Manage automatic creation of new project trails (enabled by installation). `--off` prevents hook-driven initialization but does not remove capture hooks or stop connected tools from writing to existing trails; use `disconnect <tool>` for that. Re-run `setup` to enable automatic creation again. Flags: `--off`, `--yes`, `--json`. |
+| `track [path]` | Explicitly set up one project: name it (`-p, --project <name>`), declare a non-code folder (like a book) as a project, or recover already-captured work after a folder or file-only move (see [Moving a project](#moving-a-project)). Exact content lineage can be relocated even while the old trail folder still exists; copies and uncertain matches are never moved automatically. Safe to re-run and valid at any exact path, including HOME and temporary folders. An explicit nested trail defines its own boundary. Flags: `-p, --project <name>`, `--json` (includes `created`, `root`, `backfilled`, `claimedSessions`, and uncertain `candidates`). |
 | `migrate [tool]` | Enrich older trails from the AI tools' retained local transcripts. Recovers missing replies, edits, plans, decisions, tool calls/results, models, and recap statistics without rewriting existing journal lines. With no tool, checks every supported local provider. Flags: `-s, --session <id>`, `--file <path>` (requires a tool), `--dry-run`, `-y, --yes`, `--json`, `--resume <run-id>`. `showtail migrate undo [batch-id]` removes a migration batch and records the declared rewrite for `verify`. |
 | `redact` | Scrub a secret the write-time rules missed out of an already-captured trail, instead of deleting `.showtail/`. `--rescan` re-runs the project's current rules (including a `settings.redact.custom` added since capture) over every stored object, preview, and plan file; `--pattern <regex>` scrubs one specific value — a **preview until you pass `--yes`**. Rewrites the content to its new address, repoints the journal, deletes the old object, re-links the hash chain, and records a dated redaction marker `verify` reports. Flags: `--rescan`, `--pattern <regex>`, `--dry-run`, `-y, --yes`, `--json`. See [Privacy &amp; redaction](../concepts/privacy.md#if-something-leaked-anyway). |
 
@@ -55,26 +57,45 @@ current project capture and redaction settings still apply.
 !!! note "Hidden lifecycle commands"
     Tracking is automatic, so `ensure` (init + open a session), `start` (begin a
     session, `-l, --label`), and `end` (close a session) are hidden from `--help`. They
-    still work — the editor extension calls `ensure` on project open, and `start`/`end`
-    give power users manual session control — but you never need them. Like `track`,
-    `ensure` is a successful no-op in HOME and tells callers to open a project.
+    still work — integrations can call `ensure`, and `start`/`end` give power users
+    manual session control — but you never need them. `ensure` uses the same resolver as
+    automatic capture, creates the trail if needed, and opens a session. It is idempotent
+    and valid at any exact path, including HOME and temporary folders; a HOME trail is not
+    inherited by descendants.
 
-## Capture your work
+## Manual capture (optional)
+
+Connected integrations already record routine prompts and edits. Use these commands only for
+an event or snapshot you intentionally want to add; repeating automatic capture can create
+duplicates.
 
 | Command | What it does |
 | ------- | ------------ |
-| `log` | Record an event (usually a prompt) in your current session. Flags: `-t, --type <type>` (required), `-x, --text <text>` (or pipe via stdin), `-f, --files <files>`, `--tool <tool>`, `-s, --session <id>`, `--turn <id>`. |
-| `artifact <file>` | Snapshot a file's current state (hash, time, git commit). Flags: `-s, --session <id>`, `--tool <tool>`. |
+| `log` | Add an optional event to the current session. Flags: `-t, --type <type>` (required), `-x, --text <text>` (or pipe via stdin), `-f, --files <files>`, `--tool <tool>`, `-s, --session <id>`, `--turn <id>`. |
+| `artifact <file>` | Optionally snapshot a file's current state (hash, time, git commit). Flags: `-s, --session <id>`, `--tool <tool>`. |
 
 ## Review your trail
 
+Human use stays convenient: omit the path to act on the project containing the current
+directory. An AI agent should preserve the student's project wording and resolve it to a stable
+trail ID before invoking a project command. The bare `showtail status --json --tool <tool>` startup
+probe is intentionally different: it checks capture mode, not a user-requested project action.
+
+```bash
+showtail projects "<student-project-wording>" --json
+showtail status --project "<trail-id>" --json --tool <tool>
+showtail report --project "<trail-id>" --json --no-open
+showtail verify --project "<trail-id>" --json
+```
+
 | Command | What it does |
 | ------- | ------------ |
-| `status` | Your current session and connected tools at a glance. Also notices when this project has **moved** since it was last seen and updates its recorded location (and warns if the folder looks *copied* rather than moved — two folders sharing one trail id). Flags: `--json`. |
+| `projects [selector]` | List the validated machine-local project catalog, or resolve a path, trail ID, configured/folder name, or exact complete-name phrase. JSON reports `selected`, `confirmation-required`, `ambiguous`, `conflict`, or `not-found` with evidence; it never scans the home directory. Flags: `--json`, `--verbose-json`. |
+| `status [path]` | A read-only project, session, inbox, setup, and connected-tool snapshot that succeeds even before `.showtail/` exists. `--project <selector>` resolves a path, trail ID, or name and never falls back to cwd. Success JSON includes `trailId` and the selected `root`; a nonexistent explicit path returns `PATH_NOT_FOUND`. `--tool <tool>` adds `capture.mode` (`automatic`, `manual`, or `disconnected`). Flags: `--project <selector>`, `--json`, `--verbose-json`, `--tool <tool>`. |
 | `sessions` | List your work sessions. Flags: `--all` (every contributor's), `--json`. |
-| `capabilities` | Report this folder's tracking state and what to do next (for AI agents). Flags: `--json`. |
-| `report` | Generate a shareable report. Like `status`, it refreshes this project's recorded location if it has moved. A combined **team** report is written only when the project has **two or more** contributors; a solo project gets a single report. After writing, an interactive menu offers to open the report (**once / always / never**, Esc to skip); *always*/*never* is remembered in `~/.showtail-cli/config.json`. Flags: `--format <html\|md\|json>` (default `html`), `--ai <collapsed\|full\|off>` (how much AI narration to show; `--no-ai` = off), `--open` (open without asking), `--no-open` (don't open or prompt), `--ask` (show the menu, ignoring a remembered choice), `--author <slug>`, `--team`, `--title <text>`, `--json`, `--no-sync`. Before rendering, `report` re-reads your AI tool's own transcript to fold in anything the live hooks couldn't see — a host writes its transcript asynchronously and appends each turn's recap minutes later, so a session's final exchange has no hook left to capture it. The sweep only adds what's missing (repeat runs change nothing); `--no-sync` skips it. |
-| `verify` | Run integrity checks on your trail: config, journal entry validity, the journal **hash chain**, stored content vs. its content address, file snapshots, path portability, and report generation. Exits `3` if a check fails. Flags: `--json`. |
+| `capabilities` | The same read-only snapshot as `status`, plus agent-oriented commands and next-action guidance. Flags: `--json`, `--tool <tool>`. |
+| `report [path]` | Generate a shareable report for the current or named project. `--project <selector>` resolves and locks the target before any write. Default command JSON is compact and returns the selected `trailId`, root, report paths, summary, and diagnostic counts; `--verbose-json` includes full routing and relocation arrays. Ambiguous/conflicting selection exits without creating a report. Other report, recovery, author/team, narration, sync, and open flags are unchanged. |
+| `verify [path]` | Run integrity checks on the current or named trail. `--project <selector>` never falls back to cwd, and success JSON includes the selected `trailId` and root. Default JSON reports compact check counts; `--verbose-json` includes every check detail. Exits `3` if an integrity check fails. Flags: `--project <selector>`, `--json`, `--verbose-json`. |
 | `trace <file>` | Show every snapshot and related event for a file. Flags: `--format <text\|json>` (default `text`). |
 
 !!! note "Maintainer command"
@@ -84,17 +105,22 @@ current project capture and redaction settings still apply.
 
 ## Manage the inbox
 
-Work Showtail captured that isn't currently sitting in a project waits in the
-**inbox** — either because it had no project to go to (folderless / scratch
-sessions), because one session touched multiple projects and Showtail refused to
-guess, or because the folder it *was* in has since moved or been deleted. By default
-the inbox shows work worth acting on; low-signal and scratch work is kept aside and
-revealed with `--all`.
+Work Showtail captured that isn't currently sitting in one project waits in the
+**inbox** — because the host supplied no usable project path, one session touched
+multiple projects and Showtail refused to guess, automatic tracking was off, or the
+folder it *was* in has since moved or been deleted. Any exact writable folder can be
+a project. By default the inbox shows work worth acting on; unresolved, low-signal,
+explicitly ignored, and dismissed work is revealed with `--all`.
+
+After a file-only move, work may still be placed in the old trail because that hidden
+folder remains valid. `report <new folder>` and `track <new folder>` also inspect that
+placed work for exact relocation evidence, so it does not have to appear in the inbox
+before it can be recovered.
 
 | Command | What it does |
 | ------- | ------------ |
-| `inbox` | List sessions awaiting placement; pick to place them, or dismiss (`d1,3` / `dismiss all`). Flags: `--all` (also show scratch kept aside, tagged with why), `--json` (each session carries `pathGone`). |
-| `ignore [path]` | Mark a folder as scratch so its sessions stay out of the default `inbox` (still under `--all`). No path lists ignored folders. Flags: `--remove`, `--list`, `--json`. |
+| `inbox` | List sessions awaiting placement; pick to place them, or dismiss (`d1,3` / `dismiss all`). Flags: `--all` (also show filtered work, tagged with why), `--json` (each session carries `pathGone`). |
+| `ignore [path]` | Keep a folder's sessions out of the default `inbox` (still under `--all`). No path lists ignored folders. Flags: `--remove`, `--list`, `--json`. |
 | `move [sessionId]` (alias `reattach`) | Move any captured session to another project folder. With no id, lists every session to pick from. If the session's files moved, its recorded paths are re-pointed at the new folder. Flags: `--to <path>`, `--json`. |
 
 Sessions are tagged with why they appear:
@@ -103,28 +129,31 @@ Sessions are tagged with why they appear:
 | --- | ------- |
 | `[target missing]` | It *was* placed in a project, but that folder is gone. |
 | `[files moved or deleted]` | The folder its files were captured in no longer exists. Shown in the default view, because it's actionable — see below. |
-| `[scratch: not in a project]` | Captured somewhere that isn't a project folder. `--all` only. |
-| `[scratch: low-signal]` | Too little in it to be worth placing. `--all` only. |
-| `[scratch: ignored path]` | Under a folder you marked with `ignore`. `--all` only. |
+| `[unresolved: no project path]` | The host supplied no usable cwd, workspace, or edit path. `--all` only. |
+| `[filtered: low signal]` | Too little in it to be worth placing. `--all` only. |
+| `[filtered: ignored path]` | Under a folder you marked with `ignore`. `--all` only. |
 | `[dismissed]` | You dismissed it. Reversible; `--all` only. |
 
 ### Moving a project
 
-Moving or renaming a project folder — yourself, or by asking your AI tool to do
-it — does not lose anything. The trail inside `.showtail/` travels with the folder,
-and everything captured is also held in a machine-local ledger.
+Moving or renaming the whole project folder — yourself, or by asking your AI tool to
+do it — does not lose anything. The trail inside `.showtail/` travels with the folder,
+and `report` refreshes its recorded location from the stable trail id.
 
-To pick the work back up at the new location:
+If only the project files moved and `.showtail/` stayed at the old location, use either:
 
 ```text
-showtail track <new folder>
+showtail report <new folder>    # recover, then report
+showtail track <new folder>     # recover without reporting
 ```
 
-Showtail recognizes the work by its **content** (a matching file, or a captured
-commit in the folder's history), not by the old path — so it still finds it after a
-move. When the evidence is conclusive it places the work for you; when it's only a
-strong resemblance it lists the sessions and leaves them alone, so nothing is ever
-attributed to the wrong project on a guess. Place one of those yourself with:
+Showtail recognizes the work by its **content**: a byte-identical captured file or a
+captured commit in the folder's history is Tier-A evidence and can relocate the session
+automatically, including from a still-existing old trail. If the original files still
+exist, the destination may be a copy, so the prior session is left alone. Tier-B
+similarity, sessions spanning multiple projects, and a conclusive match that cannot safely
+rebase every edited path also stop for review; Showtail never splits a session or
+attributes it on a guess. Confirm an intended move with:
 
 ```text
 showtail move <session-id> --to .
@@ -135,7 +164,7 @@ showtail move <session-id> --to .
 | Command | What it does |
 | ------- | ------------ |
 | `connect <tool>` | Connect an AI tool so your prompts and edits are captured (`claude`, `codex`, `copilot`, …). Flags vary by tool: `--user`, `--project`, `--no-hooks`, `--extension`, `--yes`, `--force`. Inapplicable flags are rejected loudly. |
-| `disconnect <tool>` | Remove a tool's instructions/skill and any auto-capture hooks. Flags: `--user`, `--project` (default). |
+| `disconnect <tool>` | Stop one tool's capture machine-wide and remove the user/current-project integration files Showtail can reach. The durable runtime stop makes stale hooks or extensions elsewhere no-op even when native removal fails. `--user` and `--project` are narrower removals and do not set that machine-wide stop. A capture-enabled `connect <tool>` clears it; `connect <tool> --no-hooks` does not. |
 | `import <tool> [source]` | Import conversations from another tool into your trail. Subcommands below. |
 | `import undo` | Undo the most recent import (permanently removes that batch of events). |
 
@@ -156,13 +185,14 @@ examples.
 
 ## `verify --json`
 
-`showtail verify --json` prints one JSON object on stdout (nothing else) and
+`showtail verify [path] --json` prints one JSON object on stdout (nothing else) and
 keeps the same exit codes as the human output — `0` when every check passes, `3`
 when any fails. It's the form to use in CI:
 
 ```json
 {
   "ok": false,
+  "root": "/absolute/path/to/project",
   "checks": [
     {
       "name": "journal chain is unbroken",
@@ -187,6 +217,7 @@ when any fails. It's the form to use in CI:
 ```
 
 - `ok` — true only when every check passed.
+- `root` — the absolute project root whose trail was checked.
 - `checks[]` — one entry per check, in the order the human output prints them,
   each with a stable `name`, its own `ok`, and human-readable `details` lines.
 - `skipped` — present only when a check could not examine anything, set to a
@@ -214,7 +245,8 @@ checkout (`fetch-depth: 0`); see
 | ---- | ------- |
 | `0` | Success. |
 | `1` | General error. |
-| `2` | Not initialized (run `showtail track`, or just start working with a connected tool). |
+| `2` | No single project could be selected, the requested folder does not exist, captured work is ambiguous, or a relocation requires review. Nothing is created or guessed. |
 | `3` | `verify` found a problem with the trail. |
+| `4` | `report [path]` targeted a folder with no trail and no path or content-lineage match in captured work. Nothing is created. |
 
 (A `ShowtailError` may set its own specific code; agents can branch on these.)

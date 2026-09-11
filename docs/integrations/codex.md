@@ -3,7 +3,11 @@
 If you work with [Codex](https://developers.openai.com/codex), Showtail can
 capture that work into the same `.showtail/` trail. Codex is similar to Claude
 Code because it has lifecycle hooks and reads project instructions from
-`AGENTS.md`, so the setup is similar:
+`AGENTS.md`. A normal Showtail install connects Codex automatically when it is
+detected: just work in your project, then run `showtail report`. Use
+`showtail connect` when you want a specific scope, need to repair the
+integration, or installed Codex afterward and need capture before its next
+automatic sweep:
 
 ```bash
 # In your project. Writes ./AGENTS.md and ./.codex/hooks.json, then offers to enable hooks.
@@ -12,7 +16,7 @@ showtail connect codex --project
 # Or install for all projects.
 showtail connect codex --user
 
-# Instructions only, no hooks. AGENTS.md then captures manually.
+# Instructions only, no hooks. Status reports manual mode; routine work is not auto-captured.
 showtail connect codex --project --no-hooks
 ```
 
@@ -53,10 +57,19 @@ Useful commands:
 ```bash
 showtail connect codex --project --yes  # Enable hooks without prompting
 showtail status                          # Check instructions and auto-capture state
-showtail disconnect codex                # Remove the AGENTS.md block and hooks
+showtail disconnect codex                # Stop Codex capture everywhere
 ```
 
-`showtail disconnect codex` leaves `config.toml` alone.
+The managed `AGENTS.md` keeps its startup capture probe pathless, but it tells Codex to use an
+explicit absolute project path for a student-requested `status`, `report`, or `verify`. Codex
+checks the returned `root` before handing back `reportPath`, so a chat or terminal still attached
+to an older folder cannot silently generate the wrong project's report.
+
+`showtail disconnect codex` leaves Codex's `features.hooks` setting in
+`config.toml` alone, so it does not affect hooks owned by other tools. Showtail's
+own hooks are disabled machine-wide, including stale project hooks that could not
+be removed from the current folder. Use `--user` or `--project` only for a narrower
+physical cleanup that intentionally leaves other scopes active.
 
 ## Notes on Codex edits
 

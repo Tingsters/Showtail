@@ -63,4 +63,43 @@ describe('setup', () => {
       cleanup(home);
     }
   });
+
+  test('--off explains that connected capture remains active', () => {
+    const dir = makeTempDir();
+    const home = makeTempDir();
+    const ghome = join(makeTempDir(), '.showtail-cli');
+    try {
+      const result = run(dir, ['setup', '--off'], isolatedEnv(home, ghome));
+
+      expect(result.code).toBe(0);
+      expect(result.stdout).toContain(
+        'Automatic creation of new project trails is now OFF.',
+      );
+      expect(result.stdout).toContain(
+        'Connected tools still capture in existing trails.',
+      );
+      expect(result.stdout).toContain('showtail disconnect <tool>');
+      expect(result.stdout).not.toContain('Automatic tracking is now OFF.');
+    } finally {
+      cleanup(dir);
+      cleanup(home);
+    }
+  });
+
+  test('human guidance distinguishes local ledger storage from project trails', () => {
+    const dir = makeTempDir();
+    const home = makeTempDir();
+    const ghome = join(makeTempDir(), '.showtail-cli');
+    try {
+      const result = run(dir, ['setup'], isolatedEnv(home, ghome));
+
+      expect(result.code).toBe(0);
+      expect(result.stdout).toContain('machine-local inbox/ledger');
+      expect(result.stdout).toContain('showtail disconnect <tool>');
+      expect(result.stdout).not.toContain('everything stays local under .showtail');
+    } finally {
+      cleanup(dir);
+      cleanup(home);
+    }
+  });
 });

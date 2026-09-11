@@ -33,6 +33,18 @@ import {
 } from '../core/hookInput.ts';
 import type { EnvironmentPlugin, HookTranscript } from './types.ts';
 
+type CodexEditTool = 'apply_patch' | 'shell_command';
+
+function codexEditTool(payload: HookPayload): CodexEditTool | undefined {
+  const names = [payload.tool_name, payload.name]
+    .filter((name): name is string => typeof name === 'string' && name.trim().length > 0)
+    .map((name) => name.trim().toLowerCase());
+  const unique = [...new Set(names)];
+  if (unique.length !== 1) return undefined;
+  const name = unique[0];
+  return name === 'apply_patch' || name === 'shell_command' ? name : undefined;
+}
+
 /**
  * Locate the rollout file this hook payload belongs to. Codex hook payloads
  * don't carry a transcript path, so we find it ourselves: prefer the rollout
@@ -84,7 +96,7 @@ export const codexPlugin: EnvironmentPlugin = {
       {
         name: 'hooks',
         flag: '--no-hooks',
-        description: 'skip auto-capture hooks; log prompts/edits yourself',
+        description: 'install instructions only; automatic capture stays off',
       },
       {
         name: 'yes',
@@ -128,34 +140,47 @@ export const codexPlugin: EnvironmentPlugin = {
         cwd: opts.cwd,
       }),
 
-    uninstall: (opts) => runCodexUninstall({ user: opts.user, cwd: opts.cwd }),
+    uninstall: (opts) =>
+      runCodexUninstall({ user: opts.user, all: opts.all, cwd: opts.cwd }),
 
     status(cwd) {
-      const state = codexInstructionsState(resolveCodexTarget('project', cwd));
+      const projectState = codexInstructionsState(resolveCodexTarget('project', cwd));
+      const userState = codexInstructionsState(resolveCodexTarget('user', cwd));
+      const hooksActive = codexAutoCaptureActive(cwd);
+      const installed = projectState.installed || userState.installed;
       return {
-        connected: state.installed,
-        hooksActive: codexAutoCaptureActive(cwd),
-        updateAvailable: state.installed ? state.updateAvailable : undefined,
+        connected: installed || hooksActive,
+        hooksActive,
+        updateAvailable: installed
+          ? projectState.updateAvailable || userState.updateAvailable
+          : undefined,
       };
     },
 
     hooks: {
       parse(raw) {
         const p = raw as HookPayload;
+        const editTool = codexEditTool(p);
         // Per-file edits with clean diffs (apply_patch) + bare shell-written
         // files; deduped, apply_patch (diff-bearing) winning over a bare path.
-        const edits = new Map(extractShellCommandFiles(p).map((f) => [f, { file: f }]));
-        for (const e of applyPatchEdits(p)) edits.set(e.file, e);
+        const shellFiles =
+          editTool === 'shell_command' ? extractShellCommandFiles(p) : [];
+        const patchEdits = editTool === 'apply_patch' ? applyPatchEdits(p) : [];
+        const edits = new Map(shellFiles.map((file) => [file, { file }]));
+        for (const edit of patchEdits) edits.set(edit.file, edit);
         return {
           nativeSessionId: extractSessionId(p),
           prompt: extractPrompt(p) ?? undefined,
           // editedFiles kept for the legacy/no-`edits` consumers; `edits` drives
           // rendering so each file shows only its own change (and deletions).
-          editedFiles: [
-            ...new Set([...extractApplyPatchFiles(p), ...extractShellCommandFiles(p)]),
-          ],
+          editedFiles:
+            editTool === 'apply_patch'
+              ? extractApplyPatchFiles(p)
+              : editTool === 'shell_command'
+                ? shellFiles
+                : [],
           edits: [...edits.values()],
-          suggestedDiff: extractSuggestedCode(p),
+          suggestedDiff: editTool === 'apply_patch' ? extractSuggestedCode(p) : undefined,
         };
       },
       internalPaths: [/(^|[\\/])\.codex([\\/]|$)/],

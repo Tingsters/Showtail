@@ -1,5 +1,12 @@
-import { describe, expect, test } from 'bun:test';
-import { mkdirSync, readdirSync, writeFileSync } from 'node:fs';
+import { describe, expect, setSystemTime, test } from 'bun:test';
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  symlinkSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { basename, join } from 'node:path';
 import { runInit } from '../src/commands/init.ts';
 import { runReport } from '../src/commands/report.ts';
@@ -512,6 +519,123 @@ describe('report', () => {
   // guards keep a test from silently asserting against a stale artifact — the
   // failure mode that made catchUp.test.ts intermittently fail.
   describe('report files', () => {
+    test('rejects an author path traversal before writing any report', async () => {
+      const container = makeTempDir();
+      const parent = join(container, 'one', 'two');
+      const dir = join(parent, 'project');
+      mkdirSync(dir, { recursive: true });
+      try {
+        await runInit({ cwd: dir, project: 'Contained reports' });
+        const paths = pathsForRoot(dir);
+        const author = authorFor(paths);
+        startSession(author);
+        await logEvent(author, { type: 'prompt', text: 'keep this report local' });
+        const parentBefore = readdirSync(parent).sort();
+        const reportsBefore = readdirSync(paths.reportsDir).sort();
+
+        await expect(
+          runReport({
+            cwd: dir,
+            author: 'x/../../../../escaped',
+            format: 'json',
+            json: true,
+            sync: false,
+            open: false,
+          }),
+        ).rejects.toMatchObject({ errorCode: 'INVALID_AUTHOR_SLUG' });
+
+        expect(readdirSync(parent).sort()).toEqual(parentBefore);
+        expect(readdirSync(paths.reportsDir).sort()).toEqual(reportsBefore);
+      } finally {
+        cleanup(container);
+      }
+    });
+
+    test('rejects an existing report destination that resolves outside the project', async () => {
+      const dir = makeTempDir();
+      const outside = makeTempDir();
+      const fixed = new Date('2026-09-11T12:34:56.789Z');
+      let escaped = '';
+      try {
+        await runInit({ cwd: dir, project: 'Contained destination' });
+        const paths = pathsForRoot(dir);
+        const author = authorFor(paths);
+        startSession(author);
+        await logEvent(author, { type: 'prompt', text: 'keep this report local' });
+        escaped = join(paths.reportsDir, 'report-team-2026-09-11T123456789.md');
+        symlinkSync(outside, escaped, process.platform === 'win32' ? 'junction' : 'dir');
+        setSystemTime(fixed);
+
+        await expect(
+          runReport({
+            cwd: dir,
+            explicitPath: true,
+            team: true,
+            format: 'md',
+            json: true,
+            sync: false,
+            open: false,
+          }),
+        ).rejects.toMatchObject({ errorCode: 'REPORT_PATH_OUTSIDE_PROJECT' });
+
+        expect(readdirSync(outside)).toEqual([]);
+      } finally {
+        setSystemTime();
+        if (escaped && existsSync(escaped)) unlinkSync(escaped);
+        cleanup(dir);
+        cleanup(outside);
+      }
+    });
+
+    test('rejects a dangling report symlink before it can create an outside file', async () => {
+      const dir = makeTempDir();
+      const outside = makeTempDir();
+      const fixed = new Date('2026-09-11T12:34:56.789Z');
+      const outsideTarget = join(outside, 'missing-report.md');
+      let escaped = '';
+      let linked = false;
+      try {
+        await runInit({ cwd: dir, project: 'Dangling destination' });
+        const paths = pathsForRoot(dir);
+        const author = authorFor(paths);
+        startSession(author);
+        await logEvent(author, { type: 'prompt', text: 'keep this report local' });
+        escaped = join(paths.reportsDir, 'report-team-2026-09-11T123456789.md');
+        try {
+          symlinkSync(outsideTarget, escaped, 'file');
+          linked = true;
+        } catch (error) {
+          if (
+            process.platform === 'win32' &&
+            ['EACCES', 'EPERM'].includes((error as NodeJS.ErrnoException).code ?? '')
+          ) {
+            return;
+          }
+          throw error;
+        }
+        setSystemTime(fixed);
+
+        await expect(
+          runReport({
+            cwd: dir,
+            explicitPath: true,
+            team: true,
+            format: 'md',
+            json: true,
+            sync: false,
+            open: false,
+          }),
+        ).rejects.toMatchObject({ errorCode: 'REPORT_PATH_OUTSIDE_PROJECT' });
+
+        expect(existsSync(outsideTarget)).toBe(false);
+      } finally {
+        setSystemTime();
+        if (linked) unlinkSync(escaped);
+        cleanup(dir);
+        cleanup(outside);
+      }
+    });
+
     test('keeps two reports generated in the same second as distinct files', async () => {
       const dir = makeTempDir();
       try {

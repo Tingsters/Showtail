@@ -131,6 +131,12 @@ afterEach(() => {
       maxRetries: 5,
       retryDelay: 50,
     });
+    rmSync(join(home, 'capture-consent'), {
+      recursive: true,
+      force: true,
+      maxRetries: 5,
+      retryDelay: 50,
+    });
     rmSync(join(home, 'config.json'), { force: true, maxRetries: 5, retryDelay: 50 });
   } catch {
     /* ignore */

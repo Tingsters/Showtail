@@ -1,69 +1,26 @@
-import { activeAuthorPaths } from '../core/authors.ts';
-import { readSessionEvents } from '../core/events.ts';
-import { autoInitEnabled, readGlobalConfig } from '../core/globalConfig.ts';
 import { emitJson } from '../core/output.ts';
-import { currentSession } from '../core/sessions.ts';
-import { findRoot, pathsForRoot, readConfig } from '../core/storage.ts';
-import { toolStatuses } from '../core/tools.ts';
+import { buildStatusSnapshot } from './status.ts';
 
 export interface CapabilitiesOptions {
   json?: boolean;
   cwd?: string;
+  tool?: string;
 }
 
-/** What an agent should do next, given the current machine + project state. */
-type NextAction = 'run-setup' | 'work' | 'report';
-
 /**
- * A self-describing snapshot for an AI agent: is this folder tracked, is
- * automatic tracking on, what tools are connected, and what to do next. Unlike
- * `status`, this never throws in an untracked folder (it does not call
- * `requirePaths`), so an agent can safely call it anywhere to orient itself.
+ * A self-describing agent probe backed by the exact same read-only snapshot as
+ * `status`, so the two commands cannot disagree about project or capture state.
  */
 export async function runCapabilities(options: CapabilitiesOptions = {}): Promise<void> {
-  const cwd = options.cwd;
-  const root = findRoot(cwd);
-  const autoInit = autoInitEnabled();
-  const setupCompleted = Boolean(readGlobalConfig().setupCompletedAt);
-
-  let anchorKind: 'git' | 'cwd' | null = null;
-  let session: { id: string; events: number } | null = null;
-  if (root) {
-    const paths = pathsForRoot(root);
-    try {
-      anchorKind = readConfig(paths).anchorKind ?? null;
-    } catch {
-      anchorKind = null;
-    }
-    const author = activeAuthorPaths(paths);
-    const current = author ? currentSession(author) : null;
-    if (author && current) {
-      session = { id: current.id, events: readSessionEvents(author, current.id).length };
-    }
-  }
-
-  const nextAction: NextAction = !autoInit
-    ? 'run-setup'
-    : session && session.events > 0
-      ? 'report'
-      : 'work';
-
+  const snapshot = buildStatusSnapshot(options);
   const payload = {
-    initialized: Boolean(root),
-    root: root ?? null,
-    anchorKind,
-    autoInit,
-    setupCompleted,
-    session,
-    tools: toolStatuses(cwd),
-    nextAction,
+    ...snapshot,
     commands: [
+      { name: 'showtail status --json', does: 'project, capture, and tool state' },
       {
-        name: 'showtail ensure --json',
-        does: 'initialize + open a session (idempotent)',
+        name: 'showtail report [path]',
+        does: 'place captured work and generate a report',
       },
-      { name: 'showtail status --json', does: 'current session and connected tools' },
-      { name: 'showtail report', does: 'generate the show-your-work report' },
       { name: 'showtail setup', does: 'one-time: connect tools + enable auto-tracking' },
     ],
   };
@@ -75,7 +32,11 @@ export async function runCapabilities(options: CapabilitiesOptions = {}): Promis
 
   console.log(`initialized: ${payload.initialized}`);
   console.log(`root: ${payload.root ?? '(none)'}`);
-  console.log(`autoInit: ${autoInit}  setupCompleted: ${setupCompleted}`);
-  console.log(`nextAction: ${nextAction}`);
+  if (payload.candidateRoot) {
+    console.log(`candidate: ${payload.candidateRoot} (${payload.evidence})`);
+  }
+  console.log(`autoInit: ${payload.autoInit}  setupCompleted: ${payload.setupCompleted}`);
+  if (payload.capture) console.log(`capture: ${payload.capture.mode}`);
+  console.log(`nextAction: ${payload.nextAction}`);
   console.log('(use --json for the full machine-readable form)');
 }

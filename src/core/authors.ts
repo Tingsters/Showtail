@@ -26,6 +26,7 @@ import {
   type CachedIdentity,
   type Identity,
 } from './identity.ts';
+import { CaptureInterruptedError, requireCaptureContinuation } from './captureGuard.ts';
 
 /** The contents of an `author.json` — one student's identity within a project. */
 export interface Author {
@@ -90,12 +91,14 @@ export function ensureAuthor(
   paths: ShowtailPaths,
   identity: Identity,
   machineId?: string,
-  opts?: { provisional?: boolean },
+  opts?: { provisional?: boolean; continueCapture?: () => boolean },
 ): AuthorPaths {
   const slug = slugifyEmail(identity.email);
   const ap = authorPaths(paths, slug, machineId);
+  requireCaptureContinuation(opts?.continueCapture);
   mkdirSync(ap.dir, { recursive: true });
   if (!existsSync(ap.authorFile)) {
+    requireCaptureContinuation(opts?.continueCapture);
     writeAuthor(ap, {
       slug,
       email: identity.email,
@@ -185,9 +188,12 @@ export async function requireActiveAuthor(
  */
 export async function resolveActiveAuthorForHook(
   paths: ShowtailPaths,
-  opts: { cwd: string },
+  opts: { cwd: string; continueCapture?: () => boolean },
 ): Promise<AuthorPaths | undefined> {
+  const continueCapture = opts.continueCapture ?? (() => true);
+  if (!continueCapture()) return undefined;
   const machineId = ensureMachineId();
+  if (!continueCapture()) return undefined;
   const currentSlug = readState(paths).currentAuthorSlug;
   const currentAuthor = currentSlug
     ? authorPaths(paths, currentSlug, machineId)
@@ -210,7 +216,14 @@ export async function resolveActiveAuthorForHook(
   }
 
   if (real) {
-    const realAuthor = cacheAndEnsure(paths, real);
+    if (!continueCapture()) return undefined;
+    let realAuthor: AuthorPaths;
+    try {
+      realAuthor = cacheAndEnsure(paths, real, { continueCapture, machineId });
+    } catch (error) {
+      if (error instanceof CaptureInterruptedError) return undefined;
+      throw error;
+    }
     // A real identity just appeared over a provisional placeholder → move the
     // placeholder's work to the real author and drop it. Best-effort; the hook never
     // blocks, and the work is safe in the ledger either way.
@@ -221,26 +234,49 @@ export async function resolveActiveAuthorForHook(
     ) {
       try {
         const { upgradeProvisionalAuthor } = await import('./provisionalUpgrade.ts');
-        await upgradeProvisionalAuthor(paths, currentAuthor, realAuthor, machineId, real);
+        const upgraded = await upgradeProvisionalAuthor(
+          paths,
+          currentAuthor,
+          realAuthor,
+          machineId,
+          real,
+          { continueCapture },
+        );
+        if (!upgraded) return undefined;
       } catch {
         /* placeholder lingers until next time; nothing lost */
       }
     }
+    if (!continueCapture()) return undefined;
     return realAuthor;
   }
 
   // No real identity anywhere → a computer-derived placeholder so work is still captured
   // and reported (never dropped). Upgraded automatically once a real identity appears.
   if (currentAuthor && currentIsProvisional) return currentAuthor;
-  return createProvisionalAuthor(paths, machineId, cached);
+  if (!continueCapture()) return undefined;
+  try {
+    return createProvisionalAuthor(paths, machineId, cached, continueCapture);
+  } catch (error) {
+    if (error instanceof CaptureInterruptedError) return undefined;
+    throw error;
+  }
 }
 
 /** Write the machine cache (as REAL), create the author folder, and mark it active. */
-function cacheAndEnsure(paths: ShowtailPaths, identity: Identity): AuthorPaths {
-  const machineId = ensureMachineId();
+function cacheAndEnsure(
+  paths: ShowtailPaths,
+  identity: Identity,
+  options: { continueCapture?: () => boolean; machineId?: string } = {},
+): AuthorPaths {
+  const machineId = options.machineId ?? ensureMachineId();
   const slug = slugifyEmail(identity.email);
+  requireCaptureContinuation(options.continueCapture);
   writeMachineIdentity({ ...identity, slug, machineId });
-  const ap = ensureAuthor(paths, identity, machineId);
+  const ap = ensureAuthor(paths, identity, machineId, {
+    continueCapture: options.continueCapture,
+  });
+  requireCaptureContinuation(options.continueCapture);
   updateState(paths, { currentAuthorSlug: slug });
   return ap;
 }
@@ -255,6 +291,7 @@ function createProvisionalAuthor(
   paths: ShowtailPaths,
   machineId: string,
   cached: CachedIdentity | null,
+  continueCapture?: () => boolean,
 ): AuthorPaths {
   const identity: Identity =
     cached && cached.provisional
@@ -262,9 +299,14 @@ function createProvisionalAuthor(
       : syntheticIdentity();
   const slug = slugifyEmail(identity.email);
   if (!(cached && cached.provisional)) {
+    requireCaptureContinuation(continueCapture);
     writeMachineIdentity({ ...identity, slug, machineId, provisional: true });
   }
-  const ap = ensureAuthor(paths, identity, machineId, { provisional: true });
+  const ap = ensureAuthor(paths, identity, machineId, {
+    provisional: true,
+    continueCapture,
+  });
+  requireCaptureContinuation(continueCapture);
   updateState(paths, { currentAuthorSlug: slug });
   return ap;
 }

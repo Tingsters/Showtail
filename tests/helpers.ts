@@ -168,6 +168,57 @@ export function stubCli(dir: string, recordPath: string, name = 'code-stub'): st
 }
 
 /**
+ * Stub a VS Code-compatible CLI with one installed extension. Listing reports
+ * `extensionId`; other invocations are recorded like {@link stubCli}.
+ */
+export function stubInstalledExtensionCli(
+  dir: string,
+  recordPath: string,
+  extensionId: string,
+  name = 'extension-stub',
+): string {
+  const script =
+    process.platform === 'win32'
+      ? {
+          ext: '.cmd',
+          mode: null,
+          body: [
+            '@echo off',
+            'if /I "%~1"=="--list-extensions" goto showtail_stub_list',
+            'goto showtail_stub_record',
+            ':showtail_stub_list',
+            `echo ${extensionId}`,
+            'exit /b 0',
+            ':showtail_stub_record',
+            'setlocal',
+            `set "REC=${recordPath}"`,
+            'type nul>"%REC%"',
+            ':showtail_stub_arg',
+            'if "%~1"=="" goto showtail_stub_done',
+            '>>"%REC%" echo(%~1',
+            'shift',
+            'goto showtail_stub_arg',
+            ':showtail_stub_done',
+            'endlocal',
+            'exit /b 0',
+            '',
+          ].join('\r\n'),
+        }
+      : {
+          ext: '.sh',
+          mode: 0o755,
+          body:
+            `#!/bin/sh\n` +
+            `if [ "$1" = "--list-extensions" ]; then printf '%s\\n' "${extensionId}"; exit 0; fi\n` +
+            `printf '%s\\n' "$@" > "${recordPath}"\nexit 0\n`,
+        };
+  const path = join(dir, name + script.ext);
+  writeFileSync(path, script.body);
+  if (script.mode !== null) chmodSync(path, script.mode);
+  return path;
+}
+
+/**
  * The active author's paths for an initialized test project. `runInit` (run with
  * the identity env from setup.ts) establishes the author; this resolves it.
  */

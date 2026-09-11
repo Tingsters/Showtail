@@ -11,30 +11,26 @@
  * guessing about user vs. assistant.
  *
  * `--auto` is the headless/no-folder path (mirrors `import antigravity-ide --auto`):
- * it routes each session's prompts/replies/edits into the `.showtail/` project that
- * encloses its edited files (`findRoot`), falling back to the trail enclosing the
- * invocation cwd — so an empty-window chat still lands somewhere (e.g. a machine-wide
- * `~/.showtail`). The VS Code extension invokes this for both the folder watcher
- * (`--file`) and the empty-window watcher (`--file --auto`); shared `sourceId` dedupe
- * means the live path and a later manual import never double-count.
+ * it captures one durable ledger session, then resolves the whole conversation to
+ * one deterministic project from its cwd and complete edit set. Ambiguous work
+ * stays in the inbox instead of being duplicated across projects. The VS Code
+ * extension invokes this for both the folder watcher (`--file`) and the empty-window
+ * watcher (`--file --auto`); shared `sourceId` dedupe means the live path and a later
+ * manual import never double-count.
  */
 import { existsSync, readFileSync } from 'node:fs';
-import { basename, dirname, isAbsolute, relative } from 'node:path';
+import { basename, isAbsolute, relative } from 'node:path';
 import { createInterface } from 'node:readline';
 import {
   extractCopilotEdits,
   findProjectChatSessions,
   importCopilotChatTranscript,
-  importCopilotEdits,
-  importCopilotMessages,
   isInternalEditPath,
   parseCopilotSession,
   readChatSessionFile,
   reconstructSession,
-  requestIdOf,
   summarizeChatSessions,
   type CopilotAbsEdit,
-  type CopilotEditArtifact,
   type CopilotImportResult,
   type CopilotSessionSummary,
 } from '../core/copilotChatTranscript.ts';
@@ -42,27 +38,42 @@ import { makeId } from '../core/ids.ts';
 import { readMachineIdentity } from '../core/identity.ts';
 import {
   appendLedgerRecord,
+  effectiveLedgerPath,
   ensureLedgerSession,
   markInbox,
+  markPlaced,
   readLedgerRecords,
+  readLedgerSession,
+  sessionProjectContext,
+  type LedgerSession,
 } from '../core/ledger.ts';
 import { captureTranscriptToLedger } from '../core/ledgerCapture.ts';
+import { materializeLedgerSession } from '../core/materialize.ts';
+import { clearOtherLedgerProjections } from '../core/projectionRouting.ts';
+import { CaptureInterruptedError } from '../core/captureGuard.ts';
 import {
   autoInitEnabled,
   ensureCaptureSince,
   isStaleForAutoBackfill,
+  toolCaptureEnabledAt,
+  toolCaptureGloballyDisabled,
 } from '../core/globalConfig.ts';
 import { requireActiveAuthor, resolveActiveAuthorForHook } from '../core/authors.ts';
 import {
-  findRoot,
-  isHomedirCatchAll,
+  ensureTrailId,
+  isEligibleAnchor,
+  isPathUnder,
+  pathKey,
   pathsForRoot,
   requirePaths,
+  resolveProjectContext,
   type AuthorPaths,
 } from '../core/storage.ts';
+import { isSyntheticPrompt } from '../core/syntheticPrompt.ts';
 import type { HookTranscript } from '../plugins/types.ts';
 import { oneLine } from '../core/text.ts';
 import { parseSelection } from './importCodex.ts';
+import { ensureInitialized } from './init.ts';
 
 export interface ImportCopilotOptions {
   /** List this project's sessions and exit. */
@@ -75,9 +86,31 @@ export interface ImportCopilotOptions {
   session?: string;
   /** Suppress the human-facing summary (used by the extension's live watcher). */
   quiet?: boolean;
-  /** Route by edited-file paths into each enclosing `.showtail/` project (headless). */
+  /** Resolve the full session to one project from cwd + edit paths (headless). */
   auto?: boolean;
   cwd?: string;
+}
+
+interface CopilotAutomaticCaptureWindow {
+  automaticCaptureSince?: string;
+}
+
+/** Read a consent epoch only while machine-wide automatic capture is enabled. */
+function readCopilotAutomaticCaptureWindow(): CopilotAutomaticCaptureWindow | null {
+  if (toolCaptureGloballyDisabled('copilot')) return null;
+  const automaticCaptureSince = toolCaptureEnabledAt('copilot');
+  // Recheck because disconnect and reconnect are separate cross-process writes.
+  if (toolCaptureGloballyDisabled('copilot')) return null;
+  return { automaticCaptureSince };
+}
+
+/** Stop a sweep if consent was revoked or restarted after its transcript read. */
+function copilotAutomaticCaptureWindowUnchanged(
+  automaticCaptureSince: string | undefined,
+): boolean {
+  if (toolCaptureGloballyDisabled('copilot')) return false;
+  const current = toolCaptureEnabledAt('copilot');
+  return !toolCaptureGloballyDisabled('copilot') && current === automaticCaptureSince;
 }
 
 /** Trim milliseconds from an ISO timestamp for friendlier output. */
@@ -148,7 +181,17 @@ export async function runImportCopilot(
   // Headless/no-folder capture: route by edited-file paths into each project,
   // rather than into one `cwd`-derived trail. No `.showtail/` need enclose cwd.
   if (options.auto) {
-    await runImportCopilotAuto(target, options);
+    // `--auto` is extension-driven capture, not a deliberate import. A bare
+    // disconnect is a machine-wide consent boundary; stop before reading the
+    // transcript or touching the ledger. The ordinary import path below stays
+    // available so the student can still import a file explicitly.
+    if (!readCopilotAutomaticCaptureWindow()) return;
+    try {
+      await runImportCopilotAuto(target, options);
+    } catch (error) {
+      if (error instanceof CaptureInterruptedError) return;
+      throw error;
+    }
     return;
   }
 
@@ -250,12 +293,10 @@ function sessionIdFromFile(file: string): string {
 }
 
 /**
- * `--auto`: route a session's prompts/replies/edits by edited-file path into each
- * enclosing `.showtail/` project (mirrors `runImportAntigravityIdeAuto`). Edits under
- * a tracked project land there; if no edit resolves to a trail (pure Q&A / untracked
- * scratch), keep the conversation in the machine-local inbox. The full
- * conversation is imported into every touched trail; roots whose author can't be
- * resolved without prompting are skipped.
+ * `--auto`: capture once to the ledger, then project only when the whole session
+ * resolves to one project. This matches live-hook routing: a meaningful prompt may
+ * create a candidate trail when automatic tracking is enabled, while mixed-root or
+ * otherwise unresolved work stays intact in the inbox.
  */
 async function runImportCopilotAuto(
   target: string | undefined,
@@ -271,23 +312,37 @@ async function runImportCopilotAuto(
   if (!existsSync(file)) throw new Error(`File not found: ${file}`);
 
   const session = reconstructSession(readFileSync(file, 'utf8'));
+  // The file read can overlap a disconnect/reconnect. Use the latest consent
+  // epoch, then require it to remain unchanged until each automatic write.
+  const captureWindow = readCopilotAutomaticCaptureWindow();
+  if (!captureWindow) return;
+  const { automaticCaptureSince } = captureWindow;
   const sid = sessionIdFromFile(file);
-  const allEdits = extractCopilotEdits(session, sid);
-
-  // Group edits by the PROJECT `.showtail/` that encloses them. The homedir
-  // `~/.showtail` catch-all is not a project — folderless work belongs in the
-  // inbox (below), not there.
-  const byRoot = new Map<string, typeof allEdits>();
-  for (const e of allEdits) {
-    if (!isAbsolute(e.absPath)) continue;
-    const root = findRoot(dirname(e.absPath));
-    if (!root || isHomedirCatchAll(root)) continue; // no real project trail
-    const list = byRoot.get(root) ?? [];
-    list.push(e);
-    byRoot.set(root, list);
-  }
-
-  const batchId = makeId('imp');
+  const cwd = options.cwd ?? process.cwd();
+  const allEdits = extractCopilotEdits(session, sid, {
+    automaticCaptureSince,
+  }).filter((edit) => isAbsolute(edit.absPath) && !isInternalEditPath(edit.absPath));
+  const sourceContext = resolveProjectContext({
+    cwd,
+    editPaths: allEdits.map((edit) => edit.absPath),
+  });
+  const sourceRoot =
+    sourceContext.state === 'tracked' || sourceContext.state === 'candidate'
+      ? sourceContext.root
+      : undefined;
+  const parsed = parseCopilotSession(session, sourceRoot ?? cwd, {
+    automaticCaptureSince,
+  });
+  const transcript = filterCopilotResponses(parsed, options.withResponses !== false);
+  const ledger = captureCopilotConversationToLedger(
+    sid,
+    transcript,
+    allEdits,
+    options,
+    sourceRoot,
+    sourceContext.state === 'tracked',
+    automaticCaptureSince,
+  );
   const totals: CopilotImportResult = {
     title: '',
     prompts: 0,
@@ -297,69 +352,184 @@ async function runImportCopilotAuto(
     decisions: 0,
     skipped: 0,
   };
-  const importedRoots: string[] = [];
-  const routedRoots: string[] = [];
-  for (const [root, edits] of byRoot) {
-    const paths = pathsForRoot(root);
-    if (!existsSync(paths.config)) continue; // not a tracked project — skip
-    const author = await resolveActiveAuthorForHook(paths, { cwd: root });
-    if (!author) continue; // can't attribute without prompting — skip this root
-    routedRoots.push(root);
-
-    const transcript = parseCopilotSession(session, root);
-    const msg = await importCopilotMessages(author, transcript, {
-      withResponses: options.withResponses,
-      sessionId: options.session,
-      batchId,
-    });
-    // Map this root's absolute edits to in-repo artifacts (skip internal / out-of-repo),
-    // linking each to its prompt turn so it renders inside that turn.
-    const artifacts: CopilotEditArtifact[] = [];
-    for (const e of edits) {
-      const display = displayPath(e.absPath, root);
-      if (display.startsWith('..') || isInternalEditPath(display)) continue;
-      artifacts.push({
-        path: display,
-        diff: e.diff,
-        timestamp: e.timestamp,
-        turnId: msg.turnIds.get(requestIdOf(e.sourceIdBase)),
-        sourceId: `${e.sourceIdBase}#${display}`,
-      });
-    }
-    const editRes = importCopilotEdits(author, artifacts, {
-      sessionId: options.session,
-      batchId,
-    });
-
-    totals.prompts += msg.prompts;
-    totals.responses += msg.responses;
-    totals.edits += editRes.written;
-    totals.plans += msg.plans;
-    totals.decisions += msg.decisions;
-    totals.skipped += msg.skipped + editRes.skipped;
-    if (msg.first && (!totals.first || msg.first < totals.first))
-      totals.first = msg.first;
-    if (msg.last && (!totals.last || msg.last > totals.last)) totals.last = msg.last;
-    if (msg.prompts + msg.responses + msg.plans + msg.decisions + editRes.written > 0)
-      importedRoots.push(root);
-  }
-
-  // No real project trail received this conversation (folderless / empty-window
-  // Copilot chat, or pure Q&A): park it in the inbox via the ledger so
-  // `showtail inbox` can place it — instead of dumping it into ~/.showtail.
-  if (routedRoots.length === 0) {
-    const inboxed = captureCopilotConversationToInbox(sid, session, allEdits, options);
-    if (!options.quiet)
-      printAutoResult(totals, importedRoots, options.withResponses !== false, inboxed);
+  if (!ledger) {
+    if (!options.quiet) printAutoResult(totals, [], options.withResponses !== false);
     return;
   }
 
-  if (options.quiet) return;
-  printAutoResult(
-    totals,
-    importedRoots.length > 0 ? importedRoots : routedRoots,
-    options.withResponses !== false,
+  const current = readLedgerSession(ledger.id) ?? ledger;
+  // A live extension watcher seeds this ledger session through `hook
+  // session-start` first, including every root in a multi-root VS Code window.
+  // Resolve from the complete durable session so a no-edit multi-root chat stays
+  // inbox-only instead of inheriting whichever cwd launched the importer.
+  const context = sessionProjectContext(current);
+  const resolvedRoot =
+    context.state === 'tracked' || context.state === 'candidate'
+      ? context.root
+      : undefined;
+  const safelyContained =
+    resolvedRoot !== undefined &&
+    readLedgerRecords(current.id).every(
+      (record) =>
+        record.kind !== 'edit' ||
+        (record.file !== undefined &&
+          isAbsolute(effectiveLedgerPath(current, record.file)) &&
+          isPathUnder(effectiveLedgerPath(current, record.file), resolvedRoot)),
+    );
+  if (context.state === 'ambiguous' || context.state === 'none' || !safelyContained) {
+    if (!(await parkCopilotLedger(current, automaticCaptureSince))) return;
+    if (!options.quiet)
+      printAutoResult(totals, [], options.withResponses !== false, true);
+    return;
+  }
+
+  const root = context.root;
+  if (context.state === 'candidate') {
+    if (!(await parkCopilotLedger(current, automaticCaptureSince))) return;
+    const meaningfulPrompt = transcript.messages.some(
+      (message) =>
+        message.role === 'user' &&
+        message.text.trim().length > 0 &&
+        !isSyntheticPrompt(message.text),
+    );
+    if (!autoInitEnabled() || !meaningfulPrompt || !isEligibleAnchor(root)) {
+      if (!options.quiet)
+        printAutoResult(totals, [], options.withResponses !== false, true);
+      return;
+    }
+    if (!copilotAutomaticCaptureWindowUnchanged(automaticCaptureSince)) return;
+    await ensureInitialized(root, {
+      ...(context.evidence === 'trail' ? {} : { anchorKind: context.evidence }),
+      initialization: {
+        mode: 'automatic',
+        evidence: context.evidence,
+        ledgerSessionId: current.id,
+      },
+      continueCapture: () =>
+        copilotAutomaticCaptureWindowUnchanged(automaticCaptureSince),
+    });
+  }
+
+  const paths = pathsForRoot(root);
+  if (!existsSync(paths.config)) {
+    if (
+      !(await parkCopilotLedger(
+        readLedgerSession(current.id) ?? current,
+        automaticCaptureSince,
+      ))
+    ) {
+      return;
+    }
+    if (!options.quiet)
+      printAutoResult(totals, [], options.withResponses !== false, true);
+    return;
+  }
+  if (!copilotAutomaticCaptureWindowUnchanged(automaticCaptureSince)) return;
+  const trailId = ensureTrailId(paths, () =>
+    copilotAutomaticCaptureWindowUnchanged(automaticCaptureSince),
   );
+  try {
+    if (!copilotAutomaticCaptureWindowUnchanged(automaticCaptureSince)) return;
+    await clearOtherLedgerProjections(readLedgerSession(current.id) ?? current, trailId, {
+      continueCapture: () =>
+        copilotAutomaticCaptureWindowUnchanged(automaticCaptureSince),
+    });
+  } catch {
+    if (
+      !(await parkCopilotLedger(
+        readLedgerSession(current.id) ?? current,
+        automaticCaptureSince,
+      ))
+    ) {
+      return;
+    }
+    if (!options.quiet)
+      printAutoResult(totals, [], options.withResponses !== false, true);
+    return;
+  }
+  const author = await resolveActiveAuthorForHook(paths, {
+    cwd: root,
+    continueCapture: () => copilotAutomaticCaptureWindowUnchanged(automaticCaptureSince),
+  });
+  if (!author) {
+    if (!copilotAutomaticCaptureWindowUnchanged(automaticCaptureSince)) return;
+    try {
+      markInbox(current.id, {
+        continueCapture: () =>
+          copilotAutomaticCaptureWindowUnchanged(automaticCaptureSince),
+      });
+    } catch {
+      // The ledger remains durable even if placement bookkeeping fails.
+    }
+    if (!options.quiet)
+      printAutoResult(totals, [], options.withResponses !== false, true);
+    return;
+  }
+
+  if (!copilotAutomaticCaptureWindowUnchanged(automaticCaptureSince)) return;
+  const materialized = await materializeLedgerSession(
+    readLedgerSession(current.id) ?? current,
+    author,
+    {
+      continueCapture: () =>
+        copilotAutomaticCaptureWindowUnchanged(automaticCaptureSince),
+    },
+  );
+  if (!materialized.completed) return;
+  if (!copilotAutomaticCaptureWindowUnchanged(automaticCaptureSince)) return;
+  markPlaced(current.id, trailId, root, {
+    continueCapture: () => copilotAutomaticCaptureWindowUnchanged(automaticCaptureSince),
+  });
+  totals.prompts = materialized.prompts;
+  totals.responses = materialized.replies;
+  totals.edits = materialized.edits;
+  totals.plans = materialized.plans;
+  totals.decisions = materialized.decisions;
+  totals.skipped = Math.max(
+    0,
+    readLedgerRecords(current.id).length - materialized.projected,
+  );
+
+  if (!options.quiet) printAutoResult(totals, [root], options.withResponses !== false);
+}
+
+/** Omit response-only content when the import explicitly disables AI responses. */
+function filterCopilotResponses(
+  transcript: HookTranscript,
+  withResponses: boolean,
+): HookTranscript {
+  if (withResponses) return transcript;
+  return {
+    ...transcript,
+    messages: transcript.messages.filter((message) => message.role !== 'assistant'),
+    events: transcript.events?.filter((event) => event.type !== 'assistant_text'),
+  };
+}
+
+/** Remove any old projection and leave the complete session awaiting placement. */
+async function parkCopilotLedger(
+  session: LedgerSession,
+  automaticCaptureSince: string | undefined,
+): Promise<boolean> {
+  if (!copilotAutomaticCaptureWindowUnchanged(automaticCaptureSince)) return false;
+  try {
+    await clearOtherLedgerProjections(session, undefined, {
+      continueCapture: () =>
+        copilotAutomaticCaptureWindowUnchanged(automaticCaptureSince),
+    });
+  } catch {
+    // Best-effort cleanup; the ledger remains the complete source of truth.
+  }
+  if (!copilotAutomaticCaptureWindowUnchanged(automaticCaptureSince)) return false;
+  try {
+    markInbox(session.id, {
+      continueCapture: () =>
+        copilotAutomaticCaptureWindowUnchanged(automaticCaptureSince),
+    });
+  } catch {
+    // A ledger write failure must not make the transcript import destructive.
+  }
+  return copilotAutomaticCaptureWindowUnchanged(automaticCaptureSince);
 }
 
 /** The newest ISO timestamp across a conversation's messages and recovered edits. */
@@ -375,55 +545,65 @@ function newestBackfillTs(
 }
 
 /**
- * Park a folderless Copilot conversation in the inbox (the machine-local ledger),
- * so it surfaces in `showtail inbox` for reattach — instead of the homedir
- * `~/.showtail` catch-all. Idempotent: keyed by the stable chat-session id, records
- * dedup by sourceId, so the watcher re-running `--auto` adds nothing new. Returns
- * whether anything is now captured for this session.
+ * Capture one Copilot conversation into the machine-local ledger. Candidate and
+ * inbox work obeys the watch-forward watermark; an already-tracked destination
+ * preserves the historical import behavior and may back-fill older content.
  */
-function captureCopilotConversationToInbox(
+function captureCopilotConversationToLedger(
   sid: string,
-  session: unknown,
+  transcript: HookTranscript,
   edits: CopilotAbsEdit[],
   options: ImportCopilotOptions,
-): boolean {
-  // Conversation only (prompts/replies/plans/decisions). Edits are appended below
-  // from the recovered ABSOLUTE list so a reattach can re-relativize them against
-  // the target repo; the transcript's own relativized edit messages are dropped to
-  // avoid double-counting.
-  const parsed = parseCopilotSession(session, options.cwd ?? process.cwd());
+  sourceRoot: string | undefined,
+  allowHistoricalBackfill: boolean,
+  automaticCaptureSince: string | undefined,
+): LedgerSession | null {
+  if (!copilotAutomaticCaptureWindowUnchanged(automaticCaptureSince)) return null;
+  // Conversation only. Recovered absolute edits are appended separately so a
+  // later placement can safely re-relativize them against its selected root.
   const convo: HookTranscript = {
-    sessionId: parsed.sessionId,
-    messages: parsed.messages.filter((m) => m.role !== 'edit'),
-    events: parsed.events,
+    sessionId: transcript.sessionId,
+    messages: transcript.messages.filter((message) => message.role !== 'edit'),
+    events: transcript.events,
   };
+  if (
+    convo.messages.length === 0 &&
+    (convo.events?.length ?? 0) === 0 &&
+    edits.length === 0
+  ) {
+    return null;
+  }
   // Watch-forward: don't resurrect a chat that finished before Showtail began
-  // capturing here. Establish the set-once watermark (only once tracking is on;
-  // `setup` normally sets it — this is the migration net for pre-feature setups),
-  // then skip stale history BEFORE creating any ledger session, so no empty shard is
-  // left behind. Explicit `import copilot` (not `--auto`) never reaches here, so
-  // on-purpose history imports are unaffected.
-  if (autoInitEnabled()) ensureCaptureSince();
-  if (isStaleForAutoBackfill(newestBackfillTs(convo.messages, edits))) return false;
+  // capturing here, except when a real tracked trail is the explicit destination.
+  if (!allowHistoricalBackfill) {
+    if (autoInitEnabled()) ensureCaptureSince();
+    if (isStaleForAutoBackfill(newestBackfillTs(convo.messages, edits))) return null;
+  }
 
   const identity = readMachineIdentity();
+  if (!copilotAutomaticCaptureWindowUnchanged(automaticCaptureSince)) return null;
   const ledger = ensureLedgerSession({
     tool: 'github-copilot',
     nativeSessionId: sid,
     machineId: identity?.machineId,
     slug: identity?.slug,
     cwd: options.cwd ?? process.cwd(),
+    continueCapture: () => copilotAutomaticCaptureWindowUnchanged(automaticCaptureSince),
   });
   // `backfill`: an after-the-fact import of an already-finished conversation whose
   // prompts predate the just-created ledger session.
-  captureTranscriptToLedger(ledger, convo, 'github-copilot', [], { backfill: true });
-  appendCopilotEditsToLedger(ledger.id, edits);
-  try {
-    markInbox(ledger.id);
-  } catch {
-    /* best-effort — new ledger sessions already default to inbox */
+  if (!copilotAutomaticCaptureWindowUnchanged(automaticCaptureSince)) return null;
+  const captured = captureTranscriptToLedger(ledger, convo, 'github-copilot', [], {
+    backfill: true,
+    automaticCaptureSince,
+    continueCapture: () => copilotAutomaticCaptureWindowUnchanged(automaticCaptureSince),
+  });
+  if (!captured) return null;
+  if (!copilotAutomaticCaptureWindowUnchanged(automaticCaptureSince)) return null;
+  if (!appendCopilotEditsToLedger(ledger.id, edits, sourceRoot, automaticCaptureSince)) {
+    return null;
   }
-  return readLedgerRecords(ledger.id).length > 0;
+  return readLedgerSession(ledger.id) ?? ledger;
 }
 
 /**
@@ -431,17 +611,42 @@ function captureCopilotConversationToInbox(
  * records, deduped by sourceId. The conversation capture above does not record
  * edits (the transcript's edit messages are dropped), so these are the edit source.
  */
-function appendCopilotEditsToLedger(sessionId: string, edits: CopilotAbsEdit[]): void {
+function appendCopilotEditsToLedger(
+  sessionId: string,
+  edits: CopilotAbsEdit[],
+  sourceRoot?: string,
+  automaticCaptureSince?: string,
+): boolean {
+  const session = readLedgerSession(sessionId);
+  const records = readLedgerRecords(sessionId);
   const seen = new Set(
-    readLedgerRecords(sessionId)
-      .map((r) => r.sourceId)
-      .filter((s): s is string => !!s),
+    records.flatMap((record) => (record.sourceId ? [record.sourceId] : [])),
   );
   for (const e of edits) {
     if (!isAbsolute(e.absPath)) continue;
-    const sourceId = `${e.sourceIdBase}#${e.absPath}`;
+    const effectiveEditPath = session
+      ? effectiveLedgerPath(session, e.absPath)
+      : e.absPath;
+    if (
+      records.some(
+        (record) =>
+          record.kind === 'edit' &&
+          record.file !== undefined &&
+          pathKey(session ? effectiveLedgerPath(session, record.file) : record.file) ===
+            pathKey(effectiveEditPath) &&
+          record.sourceId?.startsWith(`${e.sourceIdBase}#`),
+      )
+    ) {
+      continue;
+    }
+    const suffix =
+      sourceRoot && isPathUnder(effectiveEditPath, sourceRoot)
+        ? displayPath(effectiveEditPath, sourceRoot)
+        : effectiveEditPath.replace(/\\/g, '/');
+    const sourceId = `${e.sourceIdBase}#${suffix}`;
     if (seen.has(sourceId)) continue;
-    appendLedgerRecord(sessionId, {
+    if (!copilotAutomaticCaptureWindowUnchanged(automaticCaptureSince)) return false;
+    const record = appendLedgerRecord(sessionId, {
       kind: 'edit',
       tool: 'github-copilot',
       file: e.absPath,
@@ -449,8 +654,10 @@ function appendCopilotEditsToLedger(sessionId: string, edits: CopilotAbsEdit[]):
       ts: e.timestamp,
       sourceId,
     });
+    records.push(record);
     seen.add(sourceId);
   }
+  return true;
 }
 
 /**
@@ -466,8 +673,8 @@ function printAutoResult(
 ): void {
   if (roots.length === 0 && inboxed) {
     console.log(
-      'Captured native Copilot Chat to the Showtail inbox (folderless work — ' +
-        'no project to file it under).',
+      'Captured native Copilot Chat to the Showtail inbox ' +
+        '(not attached to one project trail yet).',
     );
     console.log('Place it in a project:  showtail inbox');
     return;

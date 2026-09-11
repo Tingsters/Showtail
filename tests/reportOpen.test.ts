@@ -148,4 +148,25 @@ describe('reportTargets', () => {
       cleanup(dir);
     }
   });
+
+  test('rejects author selectors that are not safe folder slugs', () => {
+    const dir = makeTempDir();
+    try {
+      const paths = pathsForRoot(dir);
+      for (const author of [
+        '.',
+        '..',
+        'alice/bob',
+        'alice\\bob',
+        'alice\0bob',
+        ' alice',
+      ]) {
+        expect(() => reportTargets(paths, { author }, [author])).toThrow(
+          'Invalid author slug',
+        );
+      }
+    } finally {
+      cleanup(dir);
+    }
+  });
 });

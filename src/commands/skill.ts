@@ -1,11 +1,13 @@
 import { existsSync } from 'node:fs';
 import {
+  autoCaptureActive,
   installHooks,
   removeSkill,
   resolveTarget,
   uninstallHooks,
   writeSkill,
 } from '../core/skill.ts';
+import type { ConnectUninstallResult } from '../plugins/types.ts';
 import {
   printHooksEnabled,
   printInstallHeader,
@@ -38,10 +40,18 @@ export async function runSkillInstall(options: SkillInstallOptions): Promise<voi
     printHooksEnabled(target.settingsFile);
     printPrivacyNote({ editSubject: 'Claude', disconnectName: 'claude', scope });
   } else {
-    console.log('Auto-capture hooks were SKIPPED (--no-hooks).');
-    console.log('  The skill will instead log prompts and snapshot edits itself as you');
-    console.log('  pair with Claude. That capture is model-driven, so it may be less');
-    console.log('  complete than the hooks. Re-run without --no-hooks to enable them.');
+    const removed = uninstallHooks(target);
+    console.log(
+      `Auto-capture hooks are OFF at ${scope} scope${removed ? ' (existing Showtail hooks removed)' : ''}.`,
+    );
+    console.log('  The current managed skill remains installed, but routine prompts');
+    console.log(
+      '  and edits will not be captured automatically. Re-run without --no-hooks',
+    );
+    console.log('  to restore hands-free capture.');
+    if (autoCaptureActive(options.cwd)) {
+      console.log('  Automatic capture remains active through the other scope.');
+    }
   }
 
   console.log('');
@@ -51,23 +61,33 @@ export async function runSkillInstall(options: SkillInstallOptions): Promise<voi
 
 export interface SkillUninstallOptions {
   user?: boolean;
+  all?: boolean;
   cwd?: string;
 }
 
 /** Remove the Showtail skill and any hooks we installed. */
-export async function runSkillUninstall(options: SkillUninstallOptions): Promise<void> {
-  const scope = scopeOf(options);
-  const target = resolveTarget(scope, options.cwd);
+export async function runSkillUninstall(
+  options: SkillUninstallOptions,
+): Promise<ConnectUninstallResult> {
+  const scopes = options.all
+    ? (['project', 'user'] as const)
+    : ([scopeOf(options)] as const);
+  const removedLines: Array<string | null> = [];
 
-  const removedSkill = removeSkill(target);
-  const touchedSettings = uninstallHooks(target);
+  for (const scope of scopes) {
+    const target = resolveTarget(scope, options.cwd);
+    const removedSkill = removeSkill(target);
+    const touchedSettings = uninstallHooks(target);
+    removedLines.push(
+      removedSkill ? `Removed skill: ${target.skillDir}` : null,
+      touchedSettings ? `Removed Showtail hooks from: ${target.settingsFile}` : null,
+    );
+  }
 
   printUninstallResult({
     nothingMessage:
-      'Nothing to remove — no Showtail skill or hooks found for this scope.',
-    removedLines: [
-      removedSkill ? `Removed skill: ${target.skillDir}` : null,
-      touchedSettings ? `Removed Showtail hooks from: ${target.settingsFile}` : null,
-    ],
+      'Nothing to remove — no Showtail skill or hooks found in the selected scope(s).',
+    removedLines,
   });
+  return { captureStopped: !autoCaptureActive(options.cwd) };
 }

@@ -2,19 +2,21 @@
 
 1. **Teacher:** Ask students to install Showtail, use it for a project, and commit
    `.showtail/` with their work. **Tip: have students install their AI tool *before*
-   Showtail** (or just install Showtail last). Installing Showtail turns tracking on and
-   connects the tools it finds; if a student installs a tool *afterward*, it's connected
-   automatically the next time they use any already-connected tool — so installing the AI
-   tool first is the surest path.
-2. **Student:** Install Showtail. That's it — tracking is on, no command to run. (To turn
-   it off: `showtail setup --off`.)
+   Showtail** (or just install Showtail last). Installing Showtail turns automatic project
+   tracking on and connects the tools it finds. A later sweep can connect a tool installed
+   afterward, but first-session capture is not guaranteed; run
+   `showtail connect <tool>` before that session when first-turn capture matters.
+2. **Student:** Install Showtail. For a successfully connected tool, that's it — there is no
+   project setup command to run. To stop creating new project trails automatically, use
+   `showtail setup --off`; to stop capture from a tool, use
+   `showtail disconnect <tool>`.
 3. **Student:** Work on the project as usual — prompts and edits are captured for
    you. On a group project, each teammate's trail lands in their own
    `authors/<slug>/` folder and merges through git without conflicts.
 4. **Student:** Before submitting, run `showtail verify`, then commit everything,
    including `.showtail/`. (Reports are regenerable and git-ignored by default —
    no need to commit them.)
-5. **Teacher:** Run `showtail report` to (re)generate the trail, then open
+5. **Teacher:** Run `showtail report` to generate or refresh the report from the trail, then open
    `.showtail/reports/report-team-*.html` for the whole group, or a
    `report-<student>-*.html` for one student. The Markdown source sits beside
    each.
@@ -30,12 +32,16 @@ trail is verified on push, with a pass/fail summary in the Checks tab.
 
 ## Which tools are covered
 
-Installing Showtail turns on capture automatically for these, hands-off (it installs the
-VS Code / Antigravity extension for you when it finds those editors):
+The installer attempts hands-off capture setup for these tools (including the VS Code and
+Antigravity extensions when it finds those editors):
 
-- **Claude Code**, **OpenAI Codex**, **Gemini CLI**, **GitHub Copilot CLI**
+- **Claude Code**, **OpenAI Codex**, **GitHub Copilot CLI**
 - **GitHub Copilot in VS Code** (via the auto-installed Showtail extension)
 - **Antigravity** (CLI and IDE)
+
+The installer reports integrations that are connected, pending, or failed instead of
+claiming success for an extension it could not install. Students can confirm one tool with
+`showtail status --tool <tool>` and retry it with `showtail connect <tool>`.
 
 **Not yet covered** (they need their own integration — capture won't happen automatically):
 **Cursor**, **Windsurf**, **JetBrains** IDEs, **Zed**, and similar. **ChatGPT** and **Gemini**
@@ -47,12 +53,11 @@ uncovered tools, let us know.
 can't do these for them — they're the tool's own gates):
 
 - **OpenAI Codex** — approves ("trusts") Showtail's hooks the first time `codex` runs.
-- **Gemini CLI** — the student signs in to Gemini and trusts the working directory (their
-  normal Gemini setup).
 - **Antigravity IDE** — reload/reopen the IDE once so the just-installed extension activates.
 
-After that one step, capture is automatic. **No student ever needs to run a Showtail command
-to start** — capture and identity are handled for them (see below).
+After a successful connection and any host approval, capture is automatic. The project
+itself needs no `init`, `track`, or `start` command: its trail is created by the first
+meaningful prompt.
 
 ## Identity — students don't need to set up git first
 
@@ -72,8 +77,8 @@ Attribution is automatic and never blocks capture:
 
 - **If an AI tool update ever breaks capture**, the fix ships in a newer Showtail. Have
   students re-run the install command to upgrade — Showtail re-applies its integration to
-  the updated tool on upgrade (and again the next time any `showtail` command runs), so the
-  fix lands without students touching anything tool-specific.
+  the updated tool on a later sweep. Pending or failed refreshes remain retryable and are
+  surfaced rather than recorded as successful; `showtail connect <tool>` retries directly.
 - **`showtail` must be on PATH** for the AI tools to invoke it. The installer sets this up
   automatically (it adds the bin dir to the shell profile); students may need to open a new
   terminal once for it to take effect.

@@ -1,8 +1,8 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-// Single source of truth: committed under assets/ AND embedded into the binary.
-import COPILOT_INSTRUCTIONS from '../../assets/copilot/copilot-instructions.md' with { type: 'text' };
-import SHOWTAIL_PATH_INSTRUCTIONS from '../../assets/copilot/showtail.instructions.md' with { type: 'text' };
+// Host-specific guidance plus one shared project-targeting policy are embedded.
+import COPILOT_HOST_INSTRUCTIONS from '../../assets/copilot/copilot-instructions.md' with { type: 'text' };
+import SHOWTAIL_PATH_HOST_INSTRUCTIONS from '../../assets/copilot/showtail.instructions.md' with { type: 'text' };
 import {
   applyManagedBlock,
   classify,
@@ -12,8 +12,14 @@ import {
   START_RE,
 } from './managedBlock.ts';
 import { findRoot } from './storage.ts';
+import { withProjectTargetingInstructions } from './projectTargetingInstructions.ts';
 
-export { COPILOT_INSTRUCTIONS, SHOWTAIL_PATH_INSTRUCTIONS };
+export const COPILOT_INSTRUCTIONS = withProjectTargetingInstructions(
+  COPILOT_HOST_INSTRUCTIONS,
+);
+export const SHOWTAIL_PATH_INSTRUCTIONS = withProjectTargetingInstructions(
+  SHOWTAIL_PATH_HOST_INSTRUCTIONS,
+);
 
 // Copilot requires frontmatter at the very top of the path-specific file, so it
 // sits OUTSIDE the managed block as a small preamble; the body is what Showtail

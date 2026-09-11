@@ -1,6 +1,7 @@
 import { existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import type { Artifact, JournalEntry, Tool } from '../types.ts';
+import { requireCaptureContinuation } from './captureGuard.ts';
 import { maybeCurrentCommit } from './git.ts';
 import { sha256OfFile } from './hash.ts';
 import { makeId } from './ids.ts';
@@ -44,6 +45,12 @@ export interface AddArtifactInput {
   turnId?: string;
   /** AI-suggested code/diff that produced this snapshot, if captured. */
   diff?: string;
+  /** Stable source id when this snapshot is a ledger projection. */
+  sourceId?: string;
+  /** Projection/import batch used to remove a whole routed session atomically. */
+  batchId?: string;
+  /** Recheck an automatic caller's capture window at each write boundary. */
+  continueCapture?: () => boolean;
 }
 
 /** The result of recording an artifact. */
@@ -132,6 +139,7 @@ export async function addArtifact(
 
   const config = readConfig(paths);
   const sha256 = await sha256OfFile(absPath);
+  requireCaptureContinuation(input.continueCapture);
 
   // Dedupe: if the most recent snapshot of this path (in this author's trail) has
   // the same hash, the file hasn't changed since — don't record it again.
@@ -142,6 +150,7 @@ export async function addArtifact(
   }
 
   const gitCommit = await maybeCurrentCommit(paths.root, config.settings.git);
+  requireCaptureContinuation(input.continueCapture);
 
   const entry: JournalEntry = {
     v: JOURNAL_ENTRY_VERSION,
@@ -159,6 +168,8 @@ export async function addArtifact(
   if (gitCommit) entry.gitCommit = gitCommit;
   if (input.tool) entry.tool = input.tool;
   if (input.turnId) entry.turn = input.turnId;
+  if (input.sourceId) entry.sourceId = input.sourceId;
+  if (input.batchId) entry.batch = input.batchId;
 
   // Capture the AI-suggested code into the (shared) object store (scrubbed, capped).
   if (input.diff && config.settings.captureCode !== false) {
@@ -167,11 +178,13 @@ export async function addArtifact(
       diff = diff.slice(0, MAX_DIFF_BYTES) + '\n… (diff truncated)';
     }
     const { text: cleaned, hits } = redact(diff, config.settings.redact);
+    requireCaptureContinuation(input.continueCapture);
     entry.diffHash = writeObject(paths, cleaned);
     entry.diffLines = countDiffLines(cleaned);
     if (hits > 0) entry.redacted = hits;
   }
 
+  requireCaptureContinuation(input.continueCapture);
   appendJournal(author, entry);
   return { artifact: artifactFromEntry(entry), created: true };
 }
@@ -204,6 +217,8 @@ export interface ImportEditArtifactInput {
   sha256?: string;
   /** Git commit captured live, carried through a projection (see {@link sha256}). */
   gitCommit?: string;
+  /** Recheck an automatic caller's capture window at each write boundary. */
+  continueCapture?: () => boolean;
 }
 
 /**
@@ -232,6 +247,7 @@ export function importEditArtifact(
   author: AuthorPaths,
   input: ImportEditArtifactInput,
 ): boolean {
+  requireCaptureContinuation(input.continueCapture);
   const paths = author.shared;
   const config = readConfig(paths);
   if (config.settings.captureCode === false || !input.diff) return false;
@@ -241,6 +257,8 @@ export function importEditArtifact(
     diff = diff.slice(0, MAX_DIFF_BYTES) + '\n… (diff truncated)';
   }
   const { text: cleaned, hits } = redact(diff, config.settings.redact);
+  requireCaptureContinuation(input.continueCapture);
+  const diffHash = writeObject(paths, cleaned);
 
   const entry: JournalEntry = {
     v: JOURNAL_ENTRY_VERSION,
@@ -251,7 +269,7 @@ export function importEditArtifact(
     conv: input.sessionId,
     actorSlug: author.slug,
     path: input.path,
-    diffHash: writeObject(paths, cleaned),
+    diffHash,
     diffLines: countDiffLines(cleaned),
   };
   // A live capture's hash/commit, carried through the projection (a plain import
@@ -264,6 +282,7 @@ export function importEditArtifact(
   if (input.batchId) entry.batch = input.batchId;
   if (hits > 0) entry.redacted = hits;
 
+  requireCaptureContinuation(input.continueCapture);
   appendJournal(author, entry);
   return true;
 }
@@ -285,6 +304,7 @@ export function importEditStub(
   author: AuthorPaths,
   input: Omit<ImportEditArtifactInput, 'diff'>,
 ): boolean {
+  requireCaptureContinuation(input.continueCapture);
   const entry: JournalEntry = {
     v: JOURNAL_ENTRY_VERSION,
     kind: 'artifact',
@@ -302,6 +322,7 @@ export function importEditStub(
   if (input.sourceId) entry.sourceId = input.sourceId;
   if (input.batchId) entry.batch = input.batchId;
 
+  requireCaptureContinuation(input.continueCapture);
   appendJournal(author, entry);
   return true;
 }

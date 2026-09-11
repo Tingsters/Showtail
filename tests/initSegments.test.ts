@@ -1,0 +1,352 @@
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
+import { existsSync, mkdirSync, renameSync, writeFileSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
+import { claimPendingWork, pendingWorkForRoot, runInit } from '../src/commands/init.ts';
+import { readAllEvents } from '../src/core/events.ts';
+import { sha256OfString } from '../src/core/hash.ts';
+import {
+  appendLedgerRecord,
+  ensureLedgerSegments,
+  ensureLedgerSession,
+  markLedgerSegmentPlaced,
+  readLedgerSession,
+} from '../src/core/ledger.ts';
+import { materializeLedgerSegment } from '../src/core/materialize.ts';
+import { pathsForRoot, readConfig } from '../src/core/storage.ts';
+import { authorFor, cleanup, makeTempDir } from './helpers.ts';
+
+let home: string;
+let previousHome: string | undefined;
+const roots: string[] = [];
+
+function project(): string {
+  const root = makeTempDir();
+  mkdirSync(join(root, '.git'), { recursive: true });
+  roots.push(root);
+  return root;
+}
+
+function seedFile(root: string, relative: string, content: string): string {
+  const file = join(root, relative);
+  mkdirSync(dirname(file), { recursive: true });
+  writeFileSync(file, content, 'utf8');
+  return file;
+}
+
+function writeDiffFor(content: string): string {
+  return content
+    .split('\n')
+    .map((line) => `+ ${line}`)
+    .join('\n');
+}
+
+function appendTurn(
+  sessionId: string,
+  text: string,
+  file: string,
+  content: string,
+  staleContextRoot?: string,
+): void {
+  const prompt = appendLedgerRecord(sessionId, {
+    kind: 'prompt',
+    tool: 'github-copilot',
+    text,
+    ...(staleContextRoot
+      ? {
+          context: {
+            cwd: staleContextRoot,
+            workspacePaths: [staleContextRoot],
+            scope: 'session' as const,
+          },
+        }
+      : {}),
+  });
+  appendLedgerRecord(sessionId, {
+    kind: 'edit',
+    tool: 'github-copilot',
+    file,
+    diff: writeDiffFor(content),
+    sha256: sha256OfString(content),
+    turnKey: prompt.id,
+  });
+}
+
+async function claimResolved(root: string) {
+  return claimPendingWork(root, {
+    mode: 'resolved',
+    initialization: {
+      anchorKind: 'cwd',
+      initialization: { mode: 'report', evidence: 'cwd' },
+    },
+    provisionalAuthor: true,
+  });
+}
+
+beforeEach(() => {
+  previousHome = process.env.SHOWTAIL_HOME;
+  home = makeTempDir();
+  process.env.SHOWTAIL_HOME = home;
+});
+
+afterEach(() => {
+  if (previousHome === undefined) delete process.env.SHOWTAIL_HOME;
+  else process.env.SHOWTAIL_HOME = previousHome;
+  for (const root of roots.splice(0)) cleanup(root);
+  cleanup(home);
+});
+
+describe('segment-aware pending work claims', () => {
+  test('claims A and later B independently from one mixed native chat', async () => {
+    const first = project();
+    const second = project();
+    const firstContent = 'export const fairy = "sparkle";\n';
+    const secondContent = 'export const word = "sparkle";\n';
+    const firstFile = seedFile(first, join('src', 'fairy.ts'), firstContent);
+    const secondFile = seedFile(second, join('src', 'word.ts'), secondContent);
+    const session = ensureLedgerSession({
+      tool: 'github-copilot',
+      nativeSessionId: 'mixed-chat-claims',
+      cwd: first,
+      workspacePaths: [first],
+    });
+    appendTurn(session.id, 'build Fairy Sparkle', firstFile, firstContent, first);
+    appendTurn(session.id, 'now build Word Sparkle', secondFile, secondContent, first);
+    const [firstSegment, secondSegment] = ensureLedgerSegments(session).segments;
+    const firstId = `${session.id}:${firstSegment!.id}`;
+    const secondId = `${session.id}:${secondSegment!.id}`;
+
+    const firstPreview = await pendingWorkForRoot(first);
+    expect(firstPreview.ranges).toEqual([
+      expect.objectContaining({
+        id: firstId,
+        sessionId: session.id,
+        rangeId: firstSegment!.id,
+        segmentIds: [firstSegment!.id],
+      }),
+    ]);
+    expect(firstPreview.sessions).toEqual([expect.objectContaining({ id: session.id })]);
+    expect(firstPreview.safeSegmentRelocations).toEqual([]);
+
+    const firstClaim = await claimResolved(first);
+    expect(firstClaim.placed).toBe(1);
+    expect(firstClaim.claimedSegments).toEqual([
+      expect.objectContaining({
+        id: firstId,
+        sessionId: session.id,
+        rangeId: firstSegment!.id,
+        segmentIds: [firstSegment!.id],
+      }),
+    ]);
+    expect(firstClaim.claimedSessions).toEqual([session.id]);
+    expect(readAllEvents(pathsForRoot(first)).map((event) => event.text)).toEqual([
+      'build Fairy Sparkle',
+    ]);
+    expect(existsSync(join(second, '.showtail'))).toBe(false);
+
+    const afterFirst = ensureLedgerSegments(readLedgerSession(session.id)!);
+    expect(afterFirst.segments.find((item) => item.id === firstSegment!.id)?.status).toBe(
+      'placed',
+    );
+    expect(
+      afterFirst.segments.find((item) => item.id === secondSegment!.id)?.status,
+    ).toBe('inbox');
+
+    const staleFolderRetry = await claimPendingWork(first, {
+      mode: 'explicit',
+      provisionalAuthor: true,
+    });
+    expect(staleFolderRetry.placed).toBe(0);
+    expect(staleFolderRetry.claimedSegments).toEqual([]);
+
+    const secondPreview = await pendingWorkForRoot(second);
+    expect(secondPreview.ranges).toEqual([
+      expect.objectContaining({
+        id: secondId,
+        sessionId: session.id,
+        rangeId: secondSegment!.id,
+        segmentIds: [secondSegment!.id],
+      }),
+    ]);
+    expect(secondPreview.sessions).toEqual([expect.objectContaining({ id: session.id })]);
+
+    const secondClaim = await claimResolved(second);
+    expect(secondClaim.placed).toBe(1);
+    expect(secondClaim.claimedSegments).toEqual([
+      expect.objectContaining({
+        id: secondId,
+        sessionId: session.id,
+        rangeId: secondSegment!.id,
+        segmentIds: [secondSegment!.id],
+      }),
+    ]);
+    expect(secondClaim.claimedSessions).toEqual([session.id]);
+    expect(readAllEvents(pathsForRoot(first)).map((event) => event.text)).toEqual([
+      'build Fairy Sparkle',
+    ]);
+    expect(readAllEvents(pathsForRoot(second)).map((event) => event.text)).toEqual([
+      'now build Word Sparkle',
+    ]);
+  });
+
+  test('does not claim one atomic turn that edits A and B', async () => {
+    const first = project();
+    const second = project();
+    const firstContent = 'export const first = true;\n';
+    const secondContent = 'export const second = true;\n';
+    const firstFile = seedFile(first, join('src', 'first.ts'), firstContent);
+    const secondFile = seedFile(second, join('src', 'second.ts'), secondContent);
+    const session = ensureLedgerSession({
+      tool: 'github-copilot',
+      nativeSessionId: 'atomic-multi-root-turn',
+    });
+    const prompt = appendLedgerRecord(session.id, {
+      kind: 'prompt',
+      tool: 'github-copilot',
+      text: 'change both games in one turn',
+    });
+    for (const [file, content] of [
+      [firstFile, firstContent],
+      [secondFile, secondContent],
+    ] as const) {
+      appendLedgerRecord(session.id, {
+        kind: 'edit',
+        tool: 'github-copilot',
+        file,
+        diff: writeDiffFor(content),
+        sha256: sha256OfString(content),
+        turnKey: prompt.id,
+      });
+    }
+    const [segment] = ensureLedgerSegments(session).segments;
+    const id = `${session.id}:${segment!.id}`;
+
+    const preview = await pendingWorkForRoot(first);
+    expect(preview.ranges).toEqual([]);
+    expect(preview.safeSegmentRelocations).toEqual([]);
+    expect(preview.segmentRelocationCandidates).toEqual([]);
+    expect(preview.pendingAmbiguousRanges).toEqual([
+      expect.objectContaining({
+        id,
+        sessionId: session.id,
+        rangeId: segment!.id,
+        segmentIds: [segment!.id],
+        candidates: expect.arrayContaining([resolve(first), resolve(second)]),
+      }),
+    ]);
+    expect(preview.pendingAmbiguous).toEqual([
+      expect.objectContaining({
+        id: session.id,
+        candidates: expect.arrayContaining([resolve(first), resolve(second)]),
+      }),
+    ]);
+
+    const claimed = await claimResolved(first);
+    expect(claimed.placed).toBe(0);
+    expect(claimed.claimedSegments).toEqual([]);
+    expect(claimed.relocatedSegments).toEqual([]);
+    expect(claimed.pendingAmbiguousRanges).toEqual([
+      expect.objectContaining({ id, sessionId: session.id }),
+    ]);
+    expect(existsSync(join(first, '.showtail'))).toBe(false);
+    expect(existsSync(join(second, '.showtail'))).toBe(false);
+    expect(ensureLedgerSegments(readLedgerSession(session.id)!).segments[0]?.status).toBe(
+      'inbox',
+    );
+  });
+
+  test('relocates only A from a placed A+B chat and leaves B untouched', async () => {
+    const first = project();
+    const moved = project();
+    const second = project();
+    await runInit({ cwd: first });
+    await runInit({ cwd: second });
+
+    const firstContent = 'export const fairyLevel = 7;\n';
+    const secondContent = 'export const wordLevel = 9;\n';
+    const firstFile = seedFile(first, join('src', 'fairy.ts'), firstContent);
+    const secondFile = seedFile(second, join('src', 'word.ts'), secondContent);
+    const session = ensureLedgerSession({
+      tool: 'github-copilot',
+      nativeSessionId: 'mixed-chat-segment-relocation',
+    });
+    appendTurn(session.id, 'build the fairy game', firstFile, firstContent);
+    appendTurn(session.id, 'build the word game', secondFile, secondContent);
+    const [firstSegment, secondSegment] = ensureLedgerSegments(session).segments;
+    const firstPaths = pathsForRoot(first);
+    const secondPaths = pathsForRoot(second);
+
+    await materializeLedgerSegment(session, firstSegment!, authorFor(firstPaths));
+    markLedgerSegmentPlaced(
+      session.id,
+      firstSegment!.id,
+      readConfig(firstPaths).trailId!,
+      first,
+    );
+    await materializeLedgerSegment(session, secondSegment!, authorFor(secondPaths));
+    markLedgerSegmentPlaced(
+      session.id,
+      secondSegment!.id,
+      readConfig(secondPaths).trailId!,
+      second,
+    );
+    const secondEventsBefore = readAllEvents(secondPaths).map((event) => event.text);
+
+    const movedFile = join(moved, 'src', 'fairy.ts');
+    mkdirSync(dirname(movedFile), { recursive: true });
+    renameSync(firstFile, movedFile);
+
+    const preview = await pendingWorkForRoot(moved);
+    const firstId = `${session.id}:${firstSegment!.id}`;
+    expect(preview.ranges).toEqual([]);
+    expect(preview.safeSegmentRelocations).toEqual([
+      expect.objectContaining({
+        id: firstId,
+        sessionId: session.id,
+        rangeId: firstSegment!.id,
+        segmentIds: [firstSegment!.id],
+        from: resolve(first),
+        to: resolve(moved),
+        tier: 'A',
+      }),
+    ]);
+    expect(preview.safeRelocations).toEqual([]);
+    expect(preview.segmentRelocationCandidates).toEqual([]);
+
+    const claimed = await claimResolved(moved);
+    expect(claimed.placed).toBe(1);
+    expect(claimed.claimedSegments).toEqual([]);
+    expect(claimed.relocatedSegments).toEqual([
+      expect.objectContaining({
+        id: firstId,
+        sessionId: session.id,
+        rangeId: firstSegment!.id,
+        segmentIds: [firstSegment!.id],
+        from: resolve(first),
+        to: resolve(moved),
+        tier: 'A',
+      }),
+    ]);
+    expect(claimed.relocatedSessions).toEqual([]);
+
+    expect(readAllEvents(firstPaths).map((event) => event.text)).toEqual([]);
+    expect(readAllEvents(pathsForRoot(moved)).map((event) => event.text)).toEqual([
+      'build the fairy game',
+    ]);
+    expect(readAllEvents(secondPaths).map((event) => event.text)).toEqual(
+      secondEventsBefore,
+    );
+    expect(secondEventsBefore).toEqual(['build the word game']);
+    expect(existsSync(join(first, '.showtail', 'config.json'))).toBe(true);
+
+    const stored = ensureLedgerSegments(readLedgerSession(session.id)!);
+    expect(stored.segments.find((item) => item.id === firstSegment!.id)?.targets).toEqual(
+      [expect.objectContaining({ path: resolve(moved) })],
+    );
+    expect(
+      stored.segments.find((item) => item.id === secondSegment!.id)?.targets,
+    ).toEqual([expect.objectContaining({ path: resolve(second) })]);
+    expect(
+      stored.segments.find((item) => item.id === secondSegment!.id)?.pathRebases,
+    ).toBeUndefined();
+  });
+});

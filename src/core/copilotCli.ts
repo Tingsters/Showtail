@@ -36,9 +36,9 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { homedir, platform } from 'node:os';
 import { join } from 'node:path';
-// Single source of truth: committed under assets/ AND embedded into the binary,
-// so `showtail connect copilot-cli` is fully self-contained (no files to ship).
-import COPILOT_BODY from '../../assets/copilot-cli/showtail.showtail.md' with { type: 'text' };
+// Host guidance plus the shared project-targeting policy are embedded, so
+// `showtail connect copilot-cli` remains fully self-contained.
+import COPILOT_HOST_BODY from '../../assets/copilot-cli/showtail.showtail.md' with { type: 'text' };
 import { hostHome } from './hostHome.ts';
 import {
   hasOurHooks,
@@ -56,8 +56,9 @@ import {
 import { findRoot, readJson, writeJson } from './storage.ts';
 import { dirOf } from './text.ts';
 import { commandOnPath } from './detect.ts';
+import { withProjectTargetingInstructions } from './projectTargetingInstructions.ts';
 
-export { COPILOT_BODY };
+export const COPILOT_BODY = withProjectTargetingInstructions(COPILOT_HOST_BODY);
 
 export type InstallScope = 'user' | 'project';
 

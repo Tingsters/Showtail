@@ -13,6 +13,7 @@
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { requireCaptureContinuation } from './captureGuard.ts';
 import { asString, prop } from './parse.ts';
 import { redact } from './redact.ts';
 import { readConfig, type ShowtailPaths } from './storage.ts';
@@ -87,6 +88,8 @@ export interface MaterializePlanInput {
   text: string;
   /** Stable id used for the filename + dedup (a plan tool_use id, `agy-plan:<id>`, …). */
   sourceId: string;
+  /** Recheck an automatic caller's capture window immediately before writing. */
+  continueCapture?: () => boolean;
 }
 
 /** Where a materialized plan lives, as a trail-relative path for the report link. */
@@ -120,6 +123,7 @@ export function materializePlan(
   const file = join(paths.plansDir, `${planFileStem(input.sourceId)}.md`);
   const planPath = `plans/${planFileStem(input.sourceId)}.md`;
   if (!existsSync(file) || readFileSync(file, 'utf8') !== text) {
+    requireCaptureContinuation(input.continueCapture);
     mkdirSync(paths.plansDir, { recursive: true });
     writeFileSync(file, text, 'utf8');
   }

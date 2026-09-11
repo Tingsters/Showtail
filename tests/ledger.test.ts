@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { CaptureInterruptedError } from '../src/core/captureGuard.ts';
 import {
   allLedgerSessions,
   appendLedgerRecord,
@@ -12,6 +13,7 @@ import {
   readLedgerRecords,
   readLedgerSession,
   resolveLedgerSessionId,
+  setLedgerTranscriptPath,
   setLedgerTurn,
   unlinkPlacement,
   unplacedSessions,
@@ -56,6 +58,113 @@ describe('ledger session keying', () => {
     const b = ensureLedgerSession({ tool: 'claude-code', nativeSessionId: 's1' });
     expect(b.id).not.toBe(a.id);
     expect(readLedgerSession(a.id)?.endedAt).toBeTruthy();
+  });
+});
+
+describe('ledger capture guards', () => {
+  test('revocation before index persistence removes the staged session', () => {
+    let checks = 0;
+
+    expect(() =>
+      ensureLedgerSession({
+        tool: 'claude-code',
+        nativeSessionId: 'interrupted-new-session',
+        cwd: 'C:/work/private-project',
+        continueCapture: () => {
+          checks += 1;
+          return checks < 4;
+        },
+      }),
+    ).toThrow(CaptureInterruptedError);
+
+    expect(checks).toBe(4);
+    expect(allLedgerSessions()).toEqual([]);
+    expect(readLedgerIndex()).toEqual({
+      version: 1,
+      byKey: {},
+      trails: {},
+      sessions: {},
+    });
+  });
+
+  test('revocation before an existing-session update preserves its metadata', () => {
+    const session = ensureLedgerSession({
+      tool: 'claude-code',
+      nativeSessionId: 'interrupted-refresh',
+    });
+    const before = readLedgerSession(session.id);
+    let checks = 0;
+
+    expect(() =>
+      ensureLedgerSession({
+        tool: 'claude-code',
+        nativeSessionId: 'interrupted-refresh',
+        cwd: 'C:/work/must-not-persist',
+        workspacePaths: ['C:/work/must-not-persist'],
+        continueCapture: () => {
+          checks += 1;
+          return checks < 2;
+        },
+      }),
+    ).toThrow(CaptureInterruptedError);
+
+    expect(checks).toBe(2);
+    expect(readLedgerSession(session.id)).toEqual(before);
+  });
+
+  test('revocation before placement indexing rolls back the session placement', () => {
+    const session = ensureLedgerSession({
+      tool: 'claude-code',
+      nativeSessionId: 'interrupted-placement',
+    });
+    const before = readLedgerSession(session.id);
+    let checks = 0;
+
+    expect(() =>
+      markPlaced(session.id, 'trl_interrupted', 'C:/work/project', {
+        continueCapture: () => {
+          checks += 1;
+          return checks < 3;
+        },
+      }),
+    ).toThrow(CaptureInterruptedError);
+
+    expect(checks).toBe(3);
+    expect(readLedgerSession(session.id)).toEqual(before);
+    expect(readLedgerIndex().trails['trl_interrupted']).toBeUndefined();
+    expect(readLedgerIndex().sessions[session.id]).toBeUndefined();
+  });
+
+  test('a revoked inbox update leaves the session untouched', () => {
+    const session = ensureLedgerSession({
+      tool: 'claude-code',
+      nativeSessionId: 'interrupted-inbox',
+    });
+    const before = readLedgerSession(session.id);
+
+    expect(() => markInbox(session.id, { continueCapture: () => false })).toThrow(
+      CaptureInterruptedError,
+    );
+    expect(readLedgerSession(session.id)).toEqual(before);
+  });
+
+  test('revocation before transcript-path persistence preserves metadata', () => {
+    const session = ensureLedgerSession({
+      tool: 'claude-code',
+      nativeSessionId: 'interrupted-transcript-path',
+    });
+    const before = readLedgerSession(session.id);
+    let checks = 0;
+
+    expect(() =>
+      setLedgerTranscriptPath(session.id, 'C:/work/private-transcript.jsonl', () => {
+        checks += 1;
+        return checks < 2;
+      }),
+    ).toThrow(CaptureInterruptedError);
+
+    expect(checks).toBe(2);
+    expect(readLedgerSession(session.id)).toEqual(before);
   });
 });
 

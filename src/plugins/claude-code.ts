@@ -55,7 +55,7 @@ export const claudeCodePlugin: EnvironmentPlugin = {
       {
         name: 'hooks',
         flag: '--no-hooks',
-        description: 'skip auto-capture hooks; log prompts/edits yourself via the skill',
+        description: 'skip automatic prompt/edit capture hooks',
       },
       {
         name: 'force',
@@ -89,7 +89,8 @@ export const claudeCodePlugin: EnvironmentPlugin = {
         cwd: opts.cwd,
       }),
 
-    uninstall: (opts) => runSkillUninstall({ user: opts.user, cwd: opts.cwd }),
+    uninstall: (opts) =>
+      runSkillUninstall({ user: opts.user, all: opts.all, cwd: opts.cwd }),
 
     status(cwd) {
       const hooksActive = autoCaptureActive(cwd);

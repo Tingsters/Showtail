@@ -5,13 +5,15 @@ import {
   readdirSync,
   realpathSync,
   renameSync,
+  statSync,
   rmSync,
   writeFileSync,
   appendFileSync,
 } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
-import { dirname, join, relative, resolve, sep } from 'node:path';
+import { dirname, join, parse, relative, resolve, sep } from 'node:path';
 import type { Config, Session, State } from '../types.ts';
+import { requireCaptureContinuation } from './captureGuard.ts';
 import { makeId } from './ids.ts';
 
 export const SHOWTAIL_DIR = '.showtail';
@@ -32,11 +34,40 @@ const DEV_MARKERS = [
   'Makefile',
 ];
 /**
- * Bumped to 4 for the stable `trailId` (the global ledger links sessions to a
- * trail by id, not by its movable path). Older trails are upgraded on read by
- * {@link ensureTrailId}.
+ * Bumped to 5 for project-evidence and initialization provenance. The new
+ * fields are optional, so older trails remain readable and upgrade lazily.
  */
-export const CONFIG_VERSION = 4;
+export const CONFIG_VERSION = 5;
+
+export type ProjectEvidence =
+  | 'trail'
+  | 'git'
+  | 'marker'
+  | 'workspace'
+  | 'edit'
+  | 'attachment'
+  | 'control'
+  | 'cwd'
+  | 'explicit';
+
+export type ProjectContext =
+  | {
+      state: 'tracked' | 'candidate';
+      root: string;
+      evidence: ProjectEvidence;
+    }
+  | {
+      state: 'ambiguous';
+      root: null;
+      evidence: null;
+      candidates: string[];
+    }
+  | {
+      state: 'none';
+      root: null;
+      evidence: null;
+      candidates: [];
+    };
 
 /**
  * A resolved view of a project's *shared* `.showtail/` layout. All paths are
@@ -100,10 +131,8 @@ export interface AuthorPaths {
 
 /** Error thrown when a command needs an initialized project but none is found. */
 export class NotInitializedError extends Error {
-  constructor() {
-    super(
-      'No .showtail/ folder found. Run `showtail track` first to start tracking your work.',
-    );
+  constructor(message = 'No Showtail project trail exists for this folder yet.') {
+    super(message);
     this.name = 'NotInitializedError';
   }
 }
@@ -149,7 +178,7 @@ export function authorPaths(
 /**
  * Find the existing `.showtail/` for the project containing `startDir`.
  * A broad ancestor trail cannot cross a nearer Git or development-workspace
- * boundary, and HOME is never treated as a project trail.
+ * boundary. A HOME trail is local to HOME itself and never absorbs descendants.
  *
  * `SHOWTAIL_ROOT_CEILING` (when set) caps the upward walk at that directory:
  * a `.showtail/` *at* the ceiling is still found, but discovery never climbs
@@ -159,8 +188,8 @@ export function authorPaths(
  * normal use, so real users see the unchanged walk-to-filesystem-root behavior.
  */
 export function findRoot(startDir: string = process.cwd()): string | null {
-  const root = projectAnchor(startDir);
-  return root && existsSync(join(root, SHOWTAIL_DIR)) ? root : null;
+  const boundary = projectBoundary(startDir);
+  return boundary && existsSync(join(boundary.root, SHOWTAIL_DIR)) ? boundary.root : null;
 }
 
 /**
@@ -179,43 +208,44 @@ export function requirePaths(startDir: string = process.cwd()): ShowtailPaths {
  * evidence exists, callers receive `cwd` and decide whether it is eligible.
  */
 export async function resolveAnchor(cwd: string = process.cwd()): Promise<string> {
-  return projectAnchor(cwd) ?? resolve(cwd);
+  return projectBoundary(cwd)?.root ?? resolve(cwd);
 }
 
 /**
- * Whether `dir` is somewhere automatic tracking should create a trail: a real
- * project folder (git repo or one carrying a dev marker), and never the user's
- * HOME (which would turn every subfolder into one shared trail). Keeps silent
- * auto-init from littering `.showtail/` into arbitrary unrelated directories.
+ * Whether `dir` can hold a project trail. Creation is triggered only by a real
+ * prompt (or an explicit command), so path-name heuristics do not decide whether
+ * a student's folder is legitimate. The actual mkdir/write remains the final
+ * writability check.
  */
 export function isEligibleAnchor(dir: string): boolean {
-  const resolved = resolve(dir);
-  const ceiling = rootCeiling();
-  if (isHomedirCatchAll(resolved)) return false;
-  if (!ceiling && isTempPath(resolved)) return false;
-  return (
-    existsSync(join(resolved, '.git')) ||
-    DEV_MARKERS.some((marker) => existsSync(join(resolved, marker)))
-  );
+  try {
+    return statSync(resolve(dir)).isDirectory();
+  } catch {
+    return false;
+  }
 }
 
 /**
  * Whether `dir` is the user's HOME — i.e. an existing `~/.showtail` is the
- * machine-wide catch-all, not a real project trail. Routing should never *place*
- * folderless work here (it belongs in the inbox). `track` and `ensure` also
- * refuse to create a trail here, so HOME can never become a project boundary.
+ * user's HOME. HOME may be a project for work launched exactly there, but its
+ * trail is deliberately ignored while resolving any descendant folder.
  */
 export function isHomedirCatchAll(dir: string): boolean {
   return existingPathKey(dir) === existingPathKey(homedir());
 }
 
 /** Resolve aliases such as macOS `/var` -> `/private/var` for existing paths. */
-function existingPathKey(p: string): string {
+export function existingPathKey(p: string): string {
   try {
     return pathKey(realpathSync.native(p));
   } catch {
     return pathKey(p);
   }
+}
+
+/** Whether two spellings resolve to the same existing path. */
+export function samePath(a: string, b: string): boolean {
+  return existingPathKey(a) === existingPathKey(b);
 }
 
 /**
@@ -233,28 +263,28 @@ export function pathKey(p: string): string {
 export function isPathUnder(child: string, parent: string): boolean {
   const c = pathKey(child);
   const p = pathKey(parent);
-  return c === p || c.startsWith(p + sep);
+  const prefix = p.endsWith(sep) ? p : p + sep;
+  return c === p || c.startsWith(prefix);
 }
 
 /**
- * Whether `dir` lives in a throwaway temp location (the OS temp dir, or a literal
- * `/tmp` / `\tmp`). Work in temp is scratch by default — a real case in the ledger
- * is a Maven project the AI scaffolded under `\tmp`. A pure path predicate; callers
- * decide when to apply it (see {@link eligibleProjectRoot}, which skips it under a
- * test ceiling so fixtures created in the OS temp dir aren't all treated as scratch).
+ * Whether `dir` lives under the OS temp directory (or a literal `/tmp` / `\tmp`).
+ * This is informational only: temp folders are valid project roots and are not
+ * excluded from automatic tracking or inbox surfacing by location.
  */
 export function isTempPath(dir: string): boolean {
   return [tmpdir(), '/tmp', '\\tmp'].some((t) => isPathUnder(dir, t));
 }
 
 /**
- * The eligible project root enclosing `dir`, or null when `dir` is scratch.
+ * The strong project root enclosing `dir`, or null when no existing trail, Git
+ * root, or development marker supplies a boundary.
  * Git roots outrank package markers so a monorepo stays one project. An explicit
  * nested trail may scope part of a Git repo; outside Git, a nearer package marker
- * outranks a broad ancestor trail. HOME and production temp paths never qualify.
+ * outranks a broad ancestor trail. HOME qualifies only when `dir` itself is HOME.
  */
 export function eligibleProjectRoot(dir: string): string | null {
-  return projectAnchor(dir);
+  return projectBoundary(dir)?.root ?? null;
 }
 
 interface ProjectCandidates {
@@ -283,33 +313,247 @@ function projectCandidates(startDir: string): ProjectCandidates {
   return { ceiling, trail, git, marker };
 }
 
+interface ProjectBoundary {
+  root: string;
+  evidence: Extract<ProjectEvidence, 'trail' | 'git' | 'marker'>;
+}
+
 /** Select the real project boundary from the candidates found on one path. */
-function projectAnchor(startDir: string): string | null {
+function projectBoundary(startDir: string): ProjectBoundary | null {
   const candidates = projectCandidates(startDir);
-  const { ceiling } = candidates;
+  const startKey = existingPathKey(startDir);
   const usable = (candidate: string | null): string | null => {
-    if (!candidate || isHomedirCatchAll(candidate)) return null;
-    if (!ceiling && isTempPath(candidate)) return null;
+    if (!candidate) return null;
+    // HOME is a valid exact project but never a catch-all for child folders.
+    if (isHomedirCatchAll(candidate) && startKey !== existingPathKey(homedir()))
+      return null;
     return candidate;
   };
   const trail = usable(candidates.trail);
   const git = usable(candidates.git);
   const marker = usable(candidates.marker);
-  let root: string | null;
 
   if (git) {
     // A trail inside the repository is an intentional nested scope. A trail above
     // the repository is a container/catch-all and must not absorb the repo.
-    root = trail && isPathUnder(trail, git) ? trail : git;
-  } else if (trail && marker) {
+    return trail && isPathUnder(trail, git)
+      ? { root: trail, evidence: 'trail' }
+      : { root: git, evidence: 'git' };
+  }
+  if (trail && marker) {
     // Both lie on the same ancestor chain; whichever is deeper is the actual
     // project boundary. Equality chooses the already-initialized trail.
-    root = isPathUnder(trail, marker) ? trail : marker;
-  } else {
-    root = trail ?? marker;
+    return isPathUnder(trail, marker)
+      ? { root: trail, evidence: 'trail' }
+      : { root: marker, evidence: 'marker' };
+  }
+  if (trail) return { root: trail, evidence: 'trail' };
+  if (marker) return { root: marker, evidence: 'marker' };
+  return null;
+}
+
+/** Lowest common directory for absolute directory paths on one volume. */
+function commonDirectory(dirs: string[]): string | null {
+  if (dirs.length === 0) return null;
+  let common = resolve(dirs[0]!);
+  for (const raw of dirs.slice(1)) {
+    const dir = resolve(raw);
+    if (parse(common).root.toLowerCase() !== parse(dir).root.toLowerCase()) return null;
+    while (!isPathUnder(dir, common)) {
+      const parent = dirname(common);
+      if (parent === common) return common;
+      common = parent;
+    }
+  }
+  return common;
+}
+
+function uniquePaths(paths: string[]): string[] {
+  const seen = new Map<string, string>();
+  for (const path of paths) seen.set(existingPathKey(path), resolve(path));
+  return [...seen.values()];
+}
+
+function contextFor(root: string, evidence: ProjectEvidence): ProjectContext {
+  return {
+    state: existsSync(join(root, SHOWTAIL_DIR, 'config.json')) ? 'tracked' : 'candidate',
+    root: resolve(root),
+    evidence,
+  };
+}
+
+export interface ResolveProjectContextOptions {
+  /** `null` disables the process-cwd fallback for persisted/imported evidence. */
+  cwd?: string | null;
+  editPaths?: string[];
+  workspacePaths?: string[];
+  /** An explicit command path is authoritative when no stronger boundary exists. */
+  explicitPath?: boolean;
+}
+
+/**
+ * Resolve one deterministic project context from tool/work evidence. Strong
+ * boundaries win; plain folders use workspace/edit evidence and finally cwd.
+ * Every edited path participates, so mixed-root work is never projected through
+ * an escaping relative path.
+ */
+export function resolveProjectContext(
+  options: ResolveProjectContextOptions = {},
+): ProjectContext {
+  const cwd = options.cwd === null ? null : resolve(options.cwd ?? process.cwd());
+  const launchedAtHome = cwd !== null && isHomedirCatchAll(cwd);
+  const edits = uniquePaths(options.editPaths ?? []);
+  const workspaces = uniquePaths(options.workspacePaths ?? []).filter(
+    (workspace) => launchedAtHome || !isHomedirCatchAll(workspace),
+  );
+  const cwdExists = cwd !== null && isEligibleAnchor(cwd);
+  if (!cwdExists && edits.length === 0 && workspaces.length === 0) {
+    return { state: 'none', root: null, evidence: null, candidates: [] };
   }
 
-  return root;
+  if (edits.length > 0) {
+    const resolvedEdits = edits.map((file) => ({
+      file,
+      boundary: (() => {
+        const boundary = projectBoundary(dirname(file));
+        return boundary && isHomedirCatchAll(boundary.root) && !launchedAtHome
+          ? null
+          : boundary;
+      })(),
+    }));
+    const strongRoots = uniquePaths(
+      resolvedEdits.flatMap(({ boundary }) => (boundary ? [boundary.root] : [])),
+    );
+    if (strongRoots.length > 1) {
+      return { state: 'ambiguous', root: null, evidence: null, candidates: strongRoots };
+    }
+    if (strongRoots.length === 1) {
+      const root = strongRoots[0]!;
+      const unresolvedOutside = resolvedEdits.some(
+        ({ file, boundary }) => !boundary && !isPathUnder(file, root),
+      );
+      if (unresolvedOutside) {
+        const outside = resolvedEdits.flatMap(({ file, boundary }) =>
+          boundary || isPathUnder(file, root) ? [] : [dirname(file)],
+        );
+        return {
+          state: 'ambiguous',
+          root: null,
+          evidence: null,
+          candidates: uniquePaths([root, ...outside]),
+        };
+      }
+      const evidence =
+        resolvedEdits.find((item) => item.boundary)?.boundary?.evidence ?? 'edit';
+      return contextFor(root, evidence);
+    }
+
+    const workspaceOwnership = edits.map((file) => {
+      const containing = workspaces
+        .filter((workspace) => isPathUnder(file, workspace))
+        .sort((a, b) => b.length - a.length);
+      return { file, owner: containing[0] ?? null };
+    });
+    const workspaceOwners = workspaceOwnership.flatMap(({ owner }) =>
+      owner ? [owner] : [],
+    );
+    if (workspaceOwners.length > 0 && workspaceOwners.length < edits.length) {
+      const ownedRoots = workspaceOwners.map(
+        (workspace) => projectBoundary(workspace)?.root ?? workspace,
+      );
+      const unresolvedRoots = workspaceOwnership.flatMap(({ file, owner }) =>
+        owner ? [] : [dirname(file)],
+      );
+      return {
+        state: 'ambiguous',
+        root: null,
+        evidence: null,
+        candidates: uniquePaths([...ownedRoots, ...unresolvedRoots]),
+      };
+    }
+    if (workspaceOwners.length === edits.length) {
+      const roots = uniquePaths(
+        workspaceOwners.map((workspace) => projectBoundary(workspace)?.root ?? workspace),
+      );
+      if (roots.length > 1) {
+        return { state: 'ambiguous', root: null, evidence: null, candidates: roots };
+      }
+      const workspace = roots[0]!;
+      const boundary = projectBoundary(workspace);
+      return contextFor(boundary?.root ?? workspace, boundary?.evidence ?? 'workspace');
+    }
+
+    // A normal tool cwd is the most stable fallback: editing `cwd/src/x.ts`
+    // must not accidentally turn `src/` into the project. HOME is different—its
+    // trail is local-only, so edits beneath it reveal a more specific project.
+    if (
+      cwd !== null &&
+      cwdExists &&
+      !isHomedirCatchAll(cwd) &&
+      edits.every((file) => isPathUnder(file, cwd))
+    ) {
+      const boundary = projectBoundary(cwd);
+      return contextFor(boundary?.root ?? cwd, boundary?.evidence ?? 'cwd');
+    }
+
+    const common = commonDirectory(edits.map((file) => dirname(file)));
+    if (!common) {
+      return {
+        state: 'ambiguous',
+        root: null,
+        evidence: null,
+        candidates: uniquePaths(edits.map((file) => dirname(file))),
+      };
+    }
+    // HOME, the OS temp container, and a filesystem root commonly hold unrelated
+    // sibling projects. They remain valid when supplied as cwd/workspace evidence,
+    // but must not be inferred merely because unrelated edit paths share them.
+    if (isHomedirCatchAll(common) && !launchedAtHome) {
+      const candidates = uniquePaths(
+        edits.flatMap((file) => (samePath(dirname(file), common) ? [] : [dirname(file)])),
+      );
+      return candidates.length > 0
+        ? { state: 'ambiguous', root: null, evidence: null, candidates }
+        : { state: 'none', root: null, evidence: null, candidates: [] };
+    }
+    if (
+      (isHomedirCatchAll(common) ||
+        samePath(common, tmpdir()) ||
+        common === parse(common).root) &&
+      edits.some((file) => !samePath(dirname(file), common))
+    ) {
+      return {
+        state: 'ambiguous',
+        root: null,
+        evidence: null,
+        candidates: uniquePaths(edits.map((file) => dirname(file))),
+      };
+    }
+    return contextFor(common, 'edit');
+  }
+
+  if (workspaces.length > 0) {
+    const roots = uniquePaths(
+      workspaces.map((workspace) => projectBoundary(workspace)?.root ?? workspace),
+    );
+    if (roots.length > 1) {
+      const deepest = roots.find((candidate) =>
+        roots.every((other) => isPathUnder(candidate, other)),
+      );
+      if (deepest) return contextFor(deepest, 'workspace');
+      return { state: 'ambiguous', root: null, evidence: null, candidates: roots };
+    }
+    const workspace = roots[0]!;
+    const boundary = projectBoundary(workspace);
+    return contextFor(boundary?.root ?? workspace, boundary?.evidence ?? 'workspace');
+  }
+
+  if (!cwdExists || cwd === null) {
+    return { state: 'none', root: null, evidence: null, candidates: [] };
+  }
+  const boundary = projectBoundary(cwd);
+  if (boundary) return contextFor(boundary.root, boundary.evidence);
+  return contextFor(cwd, options.explicitPath ? 'explicit' : 'cwd');
 }
 
 function rootCeiling(): string | null {
@@ -380,7 +624,10 @@ export function writeConfig(paths: ShowtailPaths, config: Config): void {
  * of a concurrent writer — both would mint, and the last write wins; the loser's
  * id simply isn't the one recorded, which the ledger reconciles on next sight.
  */
-export function ensureTrailId(paths: ShowtailPaths): string {
+export function ensureTrailId(
+  paths: ShowtailPaths,
+  continueCapture?: () => boolean,
+): string {
   const config = readConfig(paths);
   // Keep `anchor` honest while we're here. It is informational only — `findRoot`
   // drives resolution — but a path frozen at init silently becomes wrong the moment
@@ -394,6 +641,7 @@ export function ensureTrailId(paths: ShowtailPaths): string {
   config.trailId = trailId;
   if (anchorStale) config.anchor = anchor;
   if (config.version < CONFIG_VERSION) config.version = CONFIG_VERSION;
+  requireCaptureContinuation(continueCapture);
   writeConfig(paths, config);
   return trailId;
 }
@@ -453,6 +701,18 @@ export function setTurnForNativeSession(
     ...state.turnByNativeSession,
     [nativeSessionId]: promptId,
   };
+  writeState(paths, { ...state, turnByNativeSession });
+}
+
+/** Clear stale turn linkage after an uncaptured user boundary. */
+export function clearTurnForNativeSession(
+  paths: ShowtailPaths,
+  nativeSessionId: string,
+): void {
+  const state = readState(paths);
+  if (!state.turnByNativeSession?.[nativeSessionId]) return;
+  const turnByNativeSession = { ...state.turnByNativeSession };
+  delete turnByNativeSession[nativeSessionId];
   writeState(paths, { ...state, turnByNativeSession });
 }
 
@@ -527,7 +787,10 @@ export function writeSessions(author: AuthorPaths, sessions: Session[]): void {
  * another machine's sessions, and claiming them would mis-attribute them — there we
  * leave it read-only (it still merges into reports via {@link readSessions}).
  */
-export function migrateLegacySessions(author: AuthorPaths): void {
+export function migrateLegacySessions(
+  author: AuthorPaths,
+  continueCapture?: () => boolean,
+): void {
   if (!author.machineId || !existsSync(author.sessionsIndex)) return;
   // Sole-contributor gate: bail if another machine has a journal shard.
   if (existsSync(author.journalDir)) {
@@ -556,7 +819,9 @@ export function migrateLegacySessions(author: AuthorPaths): void {
     }
     if (!byId.has(s.id)) byId.set(s.id, { ...s, machineId: author.machineId });
   }
+  requireCaptureContinuation(continueCapture);
   writeJson(shardFile, [...byId.values()]);
+  requireCaptureContinuation(continueCapture);
   rmSync(author.sessionsIndex, { force: true });
 }
 

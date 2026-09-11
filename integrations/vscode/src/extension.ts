@@ -1,13 +1,42 @@
 import * as vscode from 'vscode';
 import { execFile, spawn } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
+import {
+  ProjectControlController,
+  registerProjectControlTool,
+  type ProjectControlExecution,
+} from './projectControl';
+import {
+  antigravitySaveReconcileInput,
+  automaticCaptureSucceeded,
+  captureConsentFromStatus,
+  captureStatusArgs,
+  chatCommandRequiresProject,
+  chatSessionId,
+  copilotImportArgs,
+  copilotManagedRefreshArgs,
+  extensionHookArgs,
+  extensionHookPayload,
+  latestProjectControlClaimId,
+  latestReportProjectControlClaimId,
+  managedRefreshSucceeded,
+  type AssistantCapture,
+  type CliResult,
+  type CaptureConsent,
+  type ExtensionHookContext,
+  type ExtensionHookEvent,
+  type ExtensionHookTool,
+} from './showtailProtocol';
 
 const execFileAsync = promisify(execFile);
 
 let output: vscode.OutputChannel;
+let extensionSessionId = `vscode-extension-${randomUUID()}`;
+let antigravitySaveContext: ExtensionHookContext | undefined;
 
 /** The configured `showtail` binary (on PATH by default). */
 function showtailBin(): string {
@@ -16,15 +45,49 @@ function showtailBin(): string {
   );
 }
 
+function processOutput(value: unknown): string {
+  if (typeof value === 'string') return value;
+  return Buffer.isBuffer(value) ? value.toString('utf8') : '';
+}
+
 /** Run the showtail CLI; never throw — capture must never disrupt the editor. */
-async function runShowtail(args: string[], cwd: string): Promise<string | undefined> {
+async function runShowtailResult(args: string[], cwd: string): Promise<CliResult> {
   try {
-    const { stdout } = await execFileAsync(showtailBin(), args, { cwd });
-    return stdout;
+    const { stdout, stderr } = await execFileAsync(showtailBin(), args, { cwd });
+    return {
+      stdout: processOutput(stdout),
+      stderr: processOutput(stderr),
+      exitCode: 0,
+    };
   } catch (err) {
-    output.appendLine(`showtail ${args.join(' ')} failed: ${(err as Error).message}`);
-    return undefined;
+    const failure = err as Error & {
+      code?: number | string;
+      stdout?: string | Buffer;
+      stderr?: string | Buffer;
+    };
+    const stdout = processOutput(failure.stdout);
+    const stderr = processOutput(failure.stderr);
+    const exitCode = typeof failure.code === 'number' ? failure.code : 1;
+    output.appendLine(
+      `showtail ${args.join(' ')} failed (${exitCode}): ${
+        stderr.trim() || failure.message
+      }`,
+    );
+    return { stdout, stderr, exitCode };
   }
+}
+
+async function runShowtail(args: string[], cwd: string): Promise<string | undefined> {
+  const result = await runShowtailResult(args, cwd);
+  return result.exitCode === 0 ? result.stdout : undefined;
+}
+
+/** Read tool-specific capture consent before any extension-driven work. */
+async function captureConsent(
+  tool: ExtensionHookTool,
+  cwd: string,
+): Promise<CaptureConsent> {
+  return captureConsentFromStatus(await runShowtailResult(captureStatusArgs(tool), cwd));
 }
 
 /**
@@ -40,12 +103,28 @@ function runShowtailStdin(
     try {
       const cp = spawn(showtailBin(), args, { cwd });
       let out = '';
+      let errOut = '';
+      let settled = false;
       cp.stdout.on('data', (d) => (out += d.toString()));
+      cp.stderr.on('data', (d) => (errOut += d.toString()));
       cp.on('error', (err) => {
+        if (settled) return;
+        settled = true;
         output.appendLine(`showtail ${args.join(' ')} failed: ${err.message}`);
         resolve(undefined);
       });
-      cp.on('close', () => resolve(out));
+      cp.on('close', (code) => {
+        if (settled) return;
+        settled = true;
+        if (code !== 0) {
+          output.appendLine(
+            `showtail ${args.join(' ')} failed (${code ?? 1}): ${errOut.trim()}`,
+          );
+          resolve(undefined);
+          return;
+        }
+        resolve(out);
+      });
       cp.stdin.end(input);
     } catch (err) {
       output.appendLine(`showtail ${args.join(' ')} failed: ${(err as Error).message}`);
@@ -54,18 +133,76 @@ function runShowtailStdin(
   });
 }
 
-/** Pull the logged event id out of `runLog`'s output ("Logged prompt (evt_…)"). */
-function loggedEventId(out: string | undefined): string | undefined {
-  return out?.match(/\((evt_[A-Za-z0-9_]+)\)/)?.[1];
+/** The workspace folder a file belongs to. Never guess the first multi-root folder. */
+function folderFor(uri: vscode.Uri | undefined): string | undefined {
+  if (!uri) return undefined;
+  return vscode.workspace.getWorkspaceFolder(uri)?.uri.fsPath;
 }
 
-/** The workspace folder a file belongs to (or the first folder as a fallback). */
-function folderFor(uri: vscode.Uri | undefined): string | undefined {
-  if (uri) {
-    const wf = vscode.workspace.getWorkspaceFolder(uri);
-    if (wf) return wf.uri.fsPath;
-  }
-  return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+function workspaceRoots(): string[] {
+  return [
+    ...new Set(
+      (vscode.workspace.workspaceFolders ?? []).map((folder) => folder.uri.fsPath),
+    ),
+  ];
+}
+
+function activeFileFolder(): string | undefined {
+  const uri = vscode.window.activeTextEditor?.document.uri;
+  if (!uri || uri.scheme !== 'file') return undefined;
+  return folderFor(uri) ?? dirname(uri.fsPath);
+}
+
+function implicitProjectFolder(): string | undefined {
+  const active = activeFileFolder();
+  if (active) return active;
+  const roots = workspaceRoots();
+  return roots.length === 1 ? roots[0] : undefined;
+}
+
+async function pickProjectFolder(): Promise<string | undefined> {
+  const implicit = implicitProjectFolder();
+  if (implicit) return implicit;
+  const roots = workspaceRoots();
+  if (roots.length === 0) return undefined;
+  const selected = await vscode.window.showQuickPick(
+    roots.map((root) => ({ label: root, root })),
+    { placeHolder: 'Choose the project for this Showtail command' },
+  );
+  return selected?.root;
+}
+
+function hookContext(preferredCwd?: string): ExtensionHookContext {
+  const roots = workspaceRoots();
+  const projectCwd = preferredCwd ?? (roots.length === 1 ? roots[0]! : null);
+  return {
+    // A child process still needs a real cwd. `projectCwd: null` tells the CLI
+    // that this fallback is operational only and is not project evidence.
+    cwd: projectCwd ?? homedir(),
+    projectCwd,
+    workspacePaths: roots,
+  };
+}
+
+async function runExtensionHook(
+  tool: ExtensionHookTool,
+  event: ExtensionHookEvent,
+  input: {
+    sessionId: string;
+    cwd: string;
+    projectCwd: string | null;
+    workspacePaths: string[];
+    prompt?: string;
+    editedFiles?: string[];
+    assistant?: AssistantCapture;
+  },
+): Promise<string | undefined> {
+  if ((await captureConsent(tool, input.cwd)) !== 'enabled') return undefined;
+  return runShowtailStdin(
+    extensionHookArgs(tool, event),
+    input.cwd,
+    JSON.stringify(extensionHookPayload(input)),
+  );
 }
 
 /** Skip Showtail/Git/dependency bookkeeping files. */
@@ -83,42 +220,91 @@ function isAntigravityHost(): boolean {
 }
 
 /** The tool tag captures are recorded under, based on the host editor. */
-function captureTool(): string {
+function captureTool(): ExtensionHookTool {
   return isAntigravityHost() ? 'antigravity-ide' : 'github-copilot';
 }
 
 /**
  * Capture the Antigravity conversation by running `showtail import antigravity-ide
  * --auto`, debounced. `--auto` routes prompts/replies/edits by the transcript's
- * own file paths into each project (and a dedicated scratch trail), so this needs
- * no open folder — the IDE's extension host frequently has none. Idempotent, so
- * firing it on every transcript change converges on the full conversation.
+ * own file paths into one project, leaving unresolved or mixed-project work in
+ * the local inbox. This needs no open folder, and repeated imports are idempotent.
  */
 let importTimer: NodeJS.Timeout | undefined;
-function scheduleAntigravityImport(): void {
+let importScheduleGeneration = 0;
+async function scheduleAntigravityImport(): Promise<void> {
+  const generation = ++importScheduleGeneration;
   if (importTimer) clearTimeout(importTimer);
+  importTimer = undefined;
+  const cwd = homedir();
+  if ((await captureConsent('antigravity-ide', cwd)) !== 'enabled') return;
+  if (generation !== importScheduleGeneration) return;
+
   importTimer = setTimeout(() => {
     importTimer = undefined;
-    void runShowtail(['import', 'antigravity-ide', '--auto'], homedir()).then(() => {
-      output.appendLine('Captured the Antigravity conversation (auto-routed by edit paths).');
-    });
+    if (generation !== importScheduleGeneration) return;
+    void (async () => {
+      if ((await captureConsent('antigravity-ide', cwd)) !== 'enabled') return;
+      const imported = await runShowtailResult(
+        ['import', 'antigravity-ide', '--auto'],
+        cwd,
+      );
+      const consentAfter =
+        imported.exitCode === 0
+          ? await captureConsent('antigravity-ide', cwd)
+          : 'unknown';
+      if (!automaticCaptureSucceeded(imported, consentAfter)) return;
+
+      output.appendLine(
+        'Captured the Antigravity conversation (auto-routed by edit paths).',
+      );
+
+      // The transcript and editor-save watchers use different native session IDs.
+      // Re-opening the save ledger after import lets it discover the trail the
+      // transcript prompt just created and project any earlier saved files there.
+      const reconcile = antigravitySaveReconcileInput(
+        extensionSessionId,
+        antigravitySaveContext,
+      );
+      if (!reconcile) return;
+      const captured = await runExtensionHook(
+        'antigravity-ide',
+        'session-start',
+        reconcile,
+      );
+      if (captured !== undefined) {
+        output.appendLine('Reconciled saved files with the Antigravity conversation.');
+      }
+    })();
   }, 3000);
 }
 
 export function activate(context: vscode.ExtensionContext): void {
+  extensionSessionId = `vscode-extension-${randomUUID()}`;
+  antigravitySaveContext = undefined;
+  importScheduleGeneration = 0;
   output = vscode.window.createOutputChannel('Showtail');
   context.subscriptions.push(output, {
     dispose: () => {
       if (importTimer) clearTimeout(importTimer);
       importTimer = undefined;
+      importScheduleGeneration += 1;
+      antigravitySaveContext = undefined;
     },
   });
   const host = isAntigravityHost() ? 'Antigravity IDE' : 'GitHub Copilot';
-  output.appendLine(`Showtail is capturing your ${host} work trail.`);
+  output.appendLine(`Showtail extension is active for ${host}.`);
 
-  registerChatParticipant(context);
-  registerSaveCapture(context);
-  registerCommands(context);
+  const projectControl = new ProjectControlController(
+    context,
+    runShowtailResult,
+    output,
+    captureTool,
+  );
+  registerProjectControlTool(context, projectControl, output);
+  registerChatParticipant(context, projectControl);
+  registerSaveCapture(context, projectControl);
+  registerCommands(context, projectControl);
   if (isAntigravityHost()) {
     registerAntigravity(context);
   } else {
@@ -132,51 +318,74 @@ export function activate(context: vscode.ExtensionContext): void {
  * persists every native turn (the normal chat box, not the `@showtail` participant)
  * as a `.jsonl` patch-journal (older builds: a single `.json`). We watch two places:
  *
- *  (a) **Folder chats** — `…/workspaceStorage/<hash>/chatSessions/*.{json,jsonl}`.
+ *  (a) **Workspace chats** — `…/workspaceStorage/<hash>/chatSessions/*.{json,jsonl}`.
  *      `context.storageUri` points at this extension's own folder inside that same
- *      `<hash>` dir, so `chatSessions` is its sibling — no hash→folder mapping. These
- *      import into the open project's trail (`--file`).
+ *      `<hash>` dir, so `chatSessions` is its sibling — no hash→folder mapping.
  *  (b) **Empty-window chats** (no folder open) — `…/globalStorage/
- *      emptyWindowChatSessions/*.jsonl`. These have no project, so they import with
- *      `--auto`, which routes each turn by its edited-file paths into the enclosing
- *      `.showtail/` project (falling back to a machine-wide `~/.showtail`).
+ *      emptyWindowChatSessions/*.jsonl`.
  *
- * Each change runs `showtail import copilot --file <path> [--auto] --quiet`, feeding
- * the new turns through the *same* parser + `sourceId` dedupe as the back-fill
- * command — so re-firing on every turn only appends what's new, and a later manual
- * `import copilot` never double-counts. This is what makes native chat — long assumed
- * uncapturable through the extension API — land in the trail.
+ * Every change seeds the session's complete workspace context through the hook
+ * ledger, then runs `showtail import copilot --file <path> --auto --quiet`. The CLI
+ * owns project resolution: one-root work lands there, mixed-root work stays in the
+ * inbox, and re-firing only appends new transcript records through `sourceId` dedupe.
  */
 function registerCopilotChatCapture(context: vscode.ExtensionContext): void {
   const timers = new Map<string, NodeJS.Timeout>();
+  const scheduleGenerations = new Map<string, number>();
   context.subscriptions.push({
     dispose: () => {
       for (const t of timers.values()) clearTimeout(t);
       timers.clear();
+      scheduleGenerations.clear();
     },
   });
 
-  // Debounced import of one changed chat-session file. `auto` routes no-folder
-  // chats by edited-file path; otherwise the chat imports into `cwd`'s trail.
-  const scheduleImport = (file: string, cwd: string, auto: boolean): void => {
+  // Debounced import of one changed chat-session file. The session-start hook is
+  // ledger-only: it carries all workspace roots but cannot initialize a trail.
+  const scheduleImport = (file: string): void => {
+    const generation = (scheduleGenerations.get(file) ?? 0) + 1;
+    scheduleGenerations.set(file, generation);
     const existing = timers.get(file);
     if (existing) clearTimeout(existing);
-    timers.set(
-      file,
-      setTimeout(() => {
-        timers.delete(file);
-        // Replies import by default (the importer's --no-responses opts out), so we
-        // pass neither. --quiet suppresses the human summary; --auto routes by path.
-        const args = ['import', 'copilot', '--file', file, '--quiet'];
-        if (auto) args.push('--auto');
-        void runShowtail(args, cwd).then(() => {
-          output.appendLine(`Captured native Copilot Chat from ${file}`);
-        });
-      }, 2000),
-    );
+    timers.delete(file);
+    const capture = hookContext();
+    void (async () => {
+      if ((await captureConsent('github-copilot', capture.cwd)) !== 'enabled') return;
+      if (scheduleGenerations.get(file) !== generation) return;
+      timers.set(
+        file,
+        setTimeout(() => {
+          timers.delete(file);
+          if (scheduleGenerations.get(file) !== generation) return;
+          const sessionId = chatSessionId(file);
+          void (async () => {
+            const seeded = await runExtensionHook('github-copilot', 'session-start', {
+              sessionId,
+              ...capture,
+            });
+            if (seeded === undefined) return;
+            const imported = await runShowtailResult(
+              copilotImportArgs(file),
+              capture.cwd,
+            );
+            const consentAfter =
+              imported.exitCode === 0
+                ? await captureConsent('github-copilot', capture.cwd)
+                : 'unknown';
+            if (!automaticCaptureSucceeded(imported, consentAfter)) return;
+            output.appendLine(`Captured native Copilot Chat from ${file}`);
+            await maybeAutoInstallCopilot(context);
+          })();
+        }, 2000),
+      );
+    })();
   };
 
-  const watch = (dir: string, onChange: (uri: vscode.Uri) => void, label: string): void => {
+  const watch = (
+    dir: string,
+    onChange: (uri: vscode.Uri) => void,
+    label: string,
+  ): void => {
     try {
       const watcher = vscode.workspace.createFileSystemWatcher(
         new vscode.RelativePattern(vscode.Uri.file(dir), '*.{json,jsonl}'),
@@ -186,24 +395,17 @@ function registerCopilotChatCapture(context: vscode.ExtensionContext): void {
       context.subscriptions.push(watcher);
       output.appendLine(`Watching ${label} under ${dir}`);
     } catch (err) {
-      output.appendLine(`Copilot Chat watch unavailable (${label}): ${(err as Error).message}`);
+      output.appendLine(
+        `Copilot Chat watch unavailable (${label}): ${(err as Error).message}`,
+      );
     }
   };
 
-  // (a) This workspace's chat sessions → the open folder's trail.
+  // (a) Workspace chat sessions, resolved from the complete session evidence.
   const storage = context.storageUri?.fsPath;
   if (storage) {
     const chatDir = join(dirname(storage), 'chatSessions');
-    watch(
-      chatDir,
-      (uri) => {
-        const cwd = folderFor(undefined);
-        // Only import into a tracked project; otherwise the CLI would just error out.
-        if (!cwd || !existsSync(join(cwd, '.showtail'))) return;
-        scheduleImport(uri.fsPath, cwd, false);
-      },
-      'native Copilot Chat sessions',
-    );
+    watch(chatDir, (uri) => scheduleImport(uri.fsPath), 'native Copilot Chat sessions');
   } else {
     output.appendLine(
       'No workspace storage yet — folder Copilot Chat capture starts once a folder is open.',
@@ -216,7 +418,7 @@ function registerCopilotChatCapture(context: vscode.ExtensionContext): void {
     const emptyDir = join(dirname(global), 'emptyWindowChatSessions');
     watch(
       emptyDir,
-      (uri) => scheduleImport(uri.fsPath, homedir(), true),
+      (uri) => scheduleImport(uri.fsPath),
       'empty-window Copilot Chat sessions',
     );
   }
@@ -224,12 +426,10 @@ function registerCopilotChatCapture(context: vscode.ExtensionContext): void {
 
 /**
  * Antigravity capture — host-independent. The agent runs in an extension host that
- * frequently has no workspace folder, and it edits files in the IDE's scratch
- * sandbox or an arbitrary project; relying on `workspace.workspaceFolders` misses
- * that work. Instead we watch the IDE's on-disk transcript (a global path) and run
- * `import antigravity-ide --auto`, which routes prompts/replies/edits by the
- * transcript's own file paths into each enclosing project (and a dedicated scratch
- * trail). Editor saves still snapshot files when a folder is open.
+ * frequently has no workspace folder and can edit an arbitrary project. We watch
+ * the IDE's on-disk transcript and use the auto importer for the full conversation;
+ * editor saves also go through the ledger-first hook path. Unresolved or mixed-root
+ * work stays in the local inbox instead of being assigned by guesswork.
  */
 function registerAntigravity(context: vscode.ExtensionContext): void {
   const brain = join(homedir(), '.gemini', 'antigravity-ide', 'brain');
@@ -237,88 +437,71 @@ function registerAntigravity(context: vscode.ExtensionContext): void {
     const watcher = vscode.workspace.createFileSystemWatcher(
       new vscode.RelativePattern(vscode.Uri.file(brain), '**/transcript*.jsonl'),
     );
-    watcher.onDidChange(() => scheduleAntigravityImport());
-    watcher.onDidCreate(() => scheduleAntigravityImport());
+    watcher.onDidChange(() => void scheduleAntigravityImport());
+    watcher.onDidCreate(() => void scheduleAntigravityImport());
     context.subscriptions.push(watcher);
     output.appendLine(`Watching Antigravity transcripts under ${brain}`);
   } catch (err) {
     output.appendLine(`transcript watch unavailable: ${(err as Error).message}`);
   }
-  scheduleAntigravityImport(); // capture anything already on disk at startup
-}
-
-/**
- * Make sure this workspace is a tracked Showtail project, honoring the global
- * opt-in. Returns true if a `.showtail/` exists (already, or after a silent
- * auto-init). When the folder is untracked, asks the CLI what to do via
- * `capabilities --json`: if automatic tracking is on, run `showtail ensure` to
- * start a trail at the right anchor; if it's off, do nothing (return false) so
- * we never create folders for a student who hasn't run `showtail setup`.
- */
-async function ensureTracked(cwd: string): Promise<boolean> {
-  if (existsSync(join(cwd, '.showtail'))) return true;
-  const capsRaw = await runShowtail(['capabilities', '--json'], cwd);
-  if (!capsRaw) return false;
-  let caps: { initialized?: boolean; autoInit?: boolean };
-  try {
-    caps = JSON.parse(capsRaw);
-  } catch {
-    return false;
-  }
-  if (caps.initialized) return true;
-  if (!caps.autoInit) return false; // opt-in off — respect it
-  await runShowtail(['ensure'], cwd);
-  if (!existsSync(join(cwd, '.showtail'))) return false;
-  output.appendLine(
-    'Showtail started a trail for this project (automatic tracking is on).',
-  );
-  return true;
+  void scheduleAntigravityImport(); // capture anything already on disk at startup
 }
 
 /**
  * Keep the Copilot instructions (`.github/copilot-instructions.md`) set up and
- * current, so opening the project in VS Code is all the student needs to do:
+ * current once capture has created the project-local trail:
  *   - if the instructions are already present, refresh them to the latest
  *     (a no-op when already current — `showtail connect copilot` only rewrites
  *     on change), so updates ship automatically on the next open;
  *   - if they're absent, install them the first time only (tracked in
  *     workspaceState) so we never fight a later manual `disconnect copilot`.
- * Only acts inside a `.showtail/` project.
+ * Activation itself is read-only for untracked folders. The first meaningful
+ * prompt goes through the hook/import ledger and creates the trail; capture then
+ * calls this again to install instructions without a separate setup command.
  */
 async function maybeAutoInstallCopilot(context: vscode.ExtensionContext): Promise<void> {
-  const cwd = folderFor(undefined);
-  if (!cwd) return;
-  // Automatic tracking: if the student has opted in (via `showtail setup`),
-  // silently start a trail on first open of an untracked project, mirroring the
-  // hook auto-init in editor tools. Gated on the opt-in so we never create
-  // folders for someone who hasn't run setup.
-  if (!(await ensureTracked(cwd))) return; // not tracked and not opted in
-
-  const KEY = 'showtail.autoInstalledCopilot';
-  // Sentinel: our path-specific instructions file. If present, it's installed.
-  const sentinel = join(cwd, '.github', 'instructions', 'showtail.instructions.md');
-
-  if (existsSync(sentinel)) {
-    // Installed already — refresh untouched blocks to the latest (edit-aware:
-    // a block you've customized is kept, not overwritten).
-    await runShowtail(['connect', 'copilot', '--no-extension'], cwd);
-    await context.workspaceState.update(KEY, true);
-    output.appendLine(
-      'Showtail Copilot instructions checked (untouched blocks refreshed).',
-    );
-    await maybeNotifyUpdate(context, cwd);
+  const roots = workspaceRoots();
+  if ((await captureConsent('github-copilot', roots[0] ?? homedir())) !== 'enabled') {
     return;
   }
+  for (const cwd of roots) {
+    if (!existsSync(join(cwd, '.showtail', 'config.json'))) continue;
 
-  // Absent: only auto-install the first time, to respect a manual uninstall.
-  if (context.workspaceState.get<boolean>(KEY)) return;
+    const key = `showtail.autoInstalledCopilot:${cwd}`;
+    const sentinel = join(cwd, '.github', 'instructions', 'showtail.instructions.md');
 
-  const out = await runShowtail(['connect', 'copilot', '--no-extension'], cwd);
-  await context.workspaceState.update(KEY, true);
-  if (out !== undefined) {
-    output.appendLine('Auto-installed Showtail Copilot instructions in .github/.');
-    vscode.window.showInformationMessage(
-      'Showtail set up Copilot instructions for this project (.github/copilot-instructions.md).',
+    if (existsSync(sentinel)) {
+      const refreshed = await runShowtailResult(copilotManagedRefreshArgs(), cwd);
+      const consentAfter =
+        refreshed.exitCode === 0
+          ? await captureConsent('github-copilot', cwd)
+          : 'unknown';
+      if (!managedRefreshSucceeded(refreshed, existsSync(sentinel), consentAfter)) {
+        continue;
+      }
+      await context.workspaceState.update(key, true);
+      output.appendLine(
+        `Showtail Copilot instructions checked for ${cwd} (untouched blocks refreshed).`,
+      );
+      await maybeNotifyUpdate(context, cwd);
+      continue;
+    }
+
+    // An absent sentinel after a successful install means the student explicitly
+    // disconnected this project. Remember per root so a multi-root window never
+    // lets one project's choice control another's.
+    if (context.workspaceState.get<boolean>(key)) continue;
+
+    const installed = await runShowtailResult(copilotManagedRefreshArgs(), cwd);
+    const consentAfter =
+      installed.exitCode === 0 ? await captureConsent('github-copilot', cwd) : 'unknown';
+    if (!managedRefreshSucceeded(installed, existsSync(sentinel), consentAfter)) {
+      continue;
+    }
+    await context.workspaceState.update(key, true);
+    output.appendLine(`Auto-installed Showtail Copilot instructions in ${cwd}.`);
+    void vscode.window.showInformationMessage(
+      `Showtail set up Copilot instructions for ${cwd}.`,
     );
   }
 }
@@ -331,8 +514,8 @@ async function maybeNotifyUpdate(
   context: vscode.ExtensionContext,
   cwd: string,
 ): Promise<void> {
-  const NOTIFY_KEY = 'showtail.copilotUpdateNotified';
-  const status = await runShowtail(['status', '--json'], cwd);
+  const NOTIFY_KEY = `showtail.copilotUpdateNotified:${cwd}`;
+  const status = await runShowtail(captureStatusArgs('github-copilot'), cwd);
   let updateAvailable = false;
   try {
     const parsed = status ? JSON.parse(status) : null;
@@ -357,7 +540,13 @@ async function maybeNotifyUpdate(
     'Keep mine',
   );
   if (choice === 'Apply update') {
-    await runShowtail(['connect', 'copilot', '--no-extension', '--force'], cwd);
+    const sentinel = join(cwd, '.github', 'instructions', 'showtail.instructions.md');
+    const refreshed = await runShowtailResult(copilotManagedRefreshArgs(true), cwd);
+    const consentAfter =
+      refreshed.exitCode === 0 ? await captureConsent('github-copilot', cwd) : 'unknown';
+    if (!managedRefreshSucceeded(refreshed, existsSync(sentinel), consentAfter)) {
+      return;
+    }
     await context.workspaceState.update(NOTIFY_KEY, false);
     output.appendLine('Applied the latest Showtail Copilot instructions.');
   }
@@ -365,11 +554,50 @@ async function maybeNotifyUpdate(
 
 /**
  * `@showtail` — the Showtail control surface in chat. It is NOT a coding agent
- * (use native Copilot for that — your edits are captured on save). It:
- *   - `/report` `/verify` `/status` `/trace <file>` — run those Showtail commands
+ * (use native Copilot for that — Showtail can capture edits on save when connected). It:
+ *   - `/report` `/open_report` `/verify` `/status` `/trace <file>` — run Showtail
  *   - plain text — records your prompt verbatim and gives a quick answer
  */
-function registerChatParticipant(context: vscode.ExtensionContext): void {
+function previousProjectControlClaim(
+  context: vscode.ChatContext,
+  action: 'report' | 'open_report' | 'status' | 'verify',
+): string | undefined {
+  const markers = context.history.map((turn) => {
+    const result = (turn as { result?: vscode.ChatResult }).result;
+    return result?.metadata?.showtailProjectControl;
+  });
+  return action === 'open_report'
+    ? (latestReportProjectControlClaimId(markers) ?? latestProjectControlClaimId(markers))
+    : latestProjectControlClaimId(markers);
+}
+
+function renderProjectControlExecution(execution: ProjectControlExecution): string {
+  if (!execution.ok) return execution.message;
+  const sections: string[] = [];
+  if (execution.selection.crossWorkspace) {
+    sections.push(
+      `Showtail selected **${execution.selection.displayName}** at ` +
+        `\`${execution.selection.root}\`, outside the open workspace.`,
+    );
+  }
+  if (execution.action === 'status' || execution.action === 'verify') {
+    sections.push(`\`\`\`json\n${execution.text}\n\`\`\``);
+  } else {
+    sections.push(execution.text);
+  }
+  return sections.join('\n\n');
+}
+
+function controlChatResult(execution: ProjectControlExecution): vscode.ChatResult {
+  return execution.ok
+    ? { metadata: { showtailProjectControl: execution.marker } }
+    : { errorDetails: { message: execution.message } };
+}
+
+function registerChatParticipant(
+  context: vscode.ExtensionContext,
+  projectControl: ProjectControlController,
+): void {
   // VS Code forks (e.g. Antigravity) may not expose the chat API. Feature-detect
   // so activation still succeeds there and the save-capture path keeps working.
   if (typeof vscode.chat?.createChatParticipant !== 'function') {
@@ -377,53 +605,73 @@ function registerChatParticipant(context: vscode.ExtensionContext): void {
     return;
   }
   const tool = captureTool();
-  const handler: vscode.ChatRequestHandler = async (request, _ctx, stream, token) => {
-    const cwd = folderFor(undefined);
-    if (!cwd) {
-      stream.markdown('Open a folder to use Showtail.');
-      return;
+  const handler: vscode.ChatRequestHandler = async (
+    request,
+    chatContext,
+    stream,
+    token,
+  ) => {
+    const implicit = implicitProjectFolder();
+    let promptCaptured = false;
+
+    if (
+      request.command === 'report' ||
+      request.command === 'open_report' ||
+      request.command === 'verify' ||
+      request.command === 'status'
+    ) {
+      const action = request.command;
+      stream.progress(
+        action === 'report' || action === 'open_report'
+          ? 'Resolving the project and preparing its Showtail report...'
+          : `Resolving the project and running Showtail ${action}...`,
+      );
+      const execution = await projectControl.execute(
+        {
+          action,
+          ...(request.prompt.trim() ? { selector: request.prompt } : {}),
+          ...(!request.prompt.trim()
+            ? { priorClaimId: previousProjectControlClaim(chatContext, action) }
+            : {}),
+        },
+        token,
+      );
+      stream.markdown(renderProjectControlExecution(execution));
+      return controlChatResult(execution);
     }
 
-    // Slash commands map straight to the CLI and show the output in chat.
-    if (request.command === 'report') {
-      stream.progress('Generating your Showtail report…');
-      const out = await runShowtail(['report'], cwd);
-      const m = out?.match(/Wrote report:\s*(.+)/);
-      stream.markdown(
-        m
-          ? `Report written to \`${m[1].trim()}\`.`
-          : 'Could not generate a report. Run `showtail track` in this project first.',
-      );
-      return;
-    }
-    if (request.command === 'verify' || request.command === 'status') {
-      const args = request.command === 'verify' ? ['verify'] : ['status'];
-      const out = await runShowtail(args, cwd);
-      stream.markdown(
-        '```\n' + (out ?? 'showtail was not found on your PATH.').trim() + '\n```',
-      );
-      return;
-    }
-    if (request.command === 'trace') {
+    if (request.command === 'trace' && chatCommandRequiresProject(request.command)) {
+      const project = await pickProjectFolder();
+      if (!project) {
+        stream.markdown('Focus a project file or choose one project folder first.');
+        return;
+      }
       const file = request.prompt.trim();
       if (!file) {
         stream.markdown('Pass a file path, e.g. `@showtail /trace src/app.ts`.');
         return;
       }
-      const out = await runShowtail(['trace', file], cwd);
+      const out = await runShowtail(['trace', file], project);
       stream.markdown('```\n' + (out ?? 'No trail found.').trim() + '\n```');
       return;
     }
 
-    // Plain text: record the prompt verbatim, then give a quick answer.
-    let turnId: string | undefined;
+    // Plain text: capture the prompt through the same durable hook ledger, then
+    // give a quick answer. This also works before a project trail exists.
     if (request.prompt.trim().length > 0) {
-      const logged = await runShowtail(
-        ['log', '--type', 'prompt', '--text', request.prompt, '--tool', tool],
-        cwd,
-      );
-      turnId = loggedEventId(logged);
-      stream.markdown('_Recorded your prompt in your Showtail trail._\n\n');
+      const capture = hookContext(implicit);
+      const captured = await runExtensionHook(tool, 'user-prompt', {
+        sessionId: extensionSessionId,
+        ...capture,
+        prompt: request.prompt,
+      });
+      if (captured !== undefined) {
+        promptCaptured = true;
+        if (tool === 'github-copilot') {
+          await maybeAutoInstallCopilot(context);
+        }
+        stream.markdown('_Captured your prompt with Showtail._\n\n');
+      }
     }
 
     try {
@@ -438,14 +686,18 @@ function registerChatParticipant(context: vscode.ExtensionContext): void {
           full += chunk;
         }
         // Capture the model's reply as ai_output, linked to the prompt's turn.
-        if (full.trim().length > 0) {
-          const args = ['log', '--type', 'ai_output', '--tool', tool];
-          if (turnId) args.push('--turn', turnId);
-          // Record which model produced the reply (e.g. "gpt-4o"); `family` is the
-          // stable coarse id, falling back to the exact deployed `id`.
+        if (promptCaptured && full.trim().length > 0) {
           const modelId = model.family ?? model.id;
-          if (modelId) args.push('--model', modelId);
-          await runShowtailStdin(args, cwd, full);
+          const capture = hookContext(implicit);
+          await runExtensionHook(tool, 'stop', {
+            sessionId: extensionSessionId,
+            ...capture,
+            assistant: {
+              text: full,
+              sourceId: `vscode-participant:${extensionSessionId}:${randomUUID()}`,
+              ...(modelId ? { model: modelId } : {}),
+            },
+          });
         }
       }
     } catch (err) {
@@ -453,8 +705,8 @@ function registerChatParticipant(context: vscode.ExtensionContext): void {
     }
 
     stream.markdown(
-      '\n\n_For hands-on file edits, use Copilot agent mode — your saved edits are captured ' +
-        'automatically. Try `@showtail /report` or `/verify` anytime._',
+      '\n\n_For hands-on file edits, use Copilot agent mode — Showtail can capture saved ' +
+        'edits when connected. Try `@showtail /report` or `/verify` anytime._',
     );
   };
 
@@ -462,9 +714,13 @@ function registerChatParticipant(context: vscode.ExtensionContext): void {
   context.subscriptions.push(participant);
 }
 
-/** Snapshot files as artifacts when saved (debounced per file). */
-function registerSaveCapture(context: vscode.ExtensionContext): void {
+/** Send saved files through the ledger-first hook path (debounced per file). */
+function registerSaveCapture(
+  context: vscode.ExtensionContext,
+  projectControl: ProjectControlController,
+): void {
   const timers = new Map<string, NodeJS.Timeout>();
+  const scheduleGenerations = new Map<string, number>();
 
   const sub = vscode.workspace.onDidSaveTextDocument((doc) => {
     const captureOnSave = vscode.workspace
@@ -474,61 +730,104 @@ function registerSaveCapture(context: vscode.ExtensionContext): void {
 
     const file = doc.uri.fsPath;
     if (isInternalPath(file)) return;
-    const cwd = folderFor(doc.uri);
-    if (!cwd) return;
-
-    // Collapse rapid saves of the same file into one snapshot.
+    const preferredCwd = folderFor(doc.uri) ?? dirname(file);
     const tool = captureTool();
+    const capture = hookContext(preferredCwd);
+    const generation = (scheduleGenerations.get(file) ?? 0) + 1;
+    scheduleGenerations.set(file, generation);
+
+    // Collapse rapid saves of the same file into one hook event.
     const existing = timers.get(file);
     if (existing) clearTimeout(existing);
-    timers.set(
-      file,
-      setTimeout(() => {
-        timers.delete(file);
-        void runShowtail(['artifact', file, '--tool', tool], cwd).then(() => {
-          output.appendLine(`snapshotted ${file}`);
-          // On Antigravity, a save means the agent/you just did work — pull the
-          // conversation transcript so prompts/replies land alongside the edit.
-          if (isAntigravityHost()) scheduleAntigravityImport();
-        });
-      }, 1500),
-    );
+    timers.delete(file);
+    void (async () => {
+      // Snapshot consent when the save occurs. A file saved while capture is
+      // stopped must not be queued and then picked up by a quick reconnect.
+      if ((await captureConsent(tool, capture.cwd)) !== 'enabled') return;
+      if (scheduleGenerations.get(file) !== generation) return;
+      timers.set(
+        file,
+        setTimeout(() => {
+          timers.delete(file);
+          if (scheduleGenerations.get(file) !== generation) return;
+          void runExtensionHook(tool, 'post-edit', {
+            sessionId: extensionSessionId,
+            ...capture,
+            editedFiles: [file],
+          }).then(async (captured) => {
+            if (captured === undefined) return;
+            output.appendLine(`Captured saved file ${file}`);
+            await projectControl.noteEditProject(file);
+            if (tool === 'antigravity-ide') {
+              antigravitySaveContext = capture;
+              void scheduleAntigravityImport();
+            } else {
+              await maybeAutoInstallCopilot(context);
+            }
+          });
+        }, 1500),
+      );
+    })();
   });
 
   context.subscriptions.push(sub, {
     dispose: () => {
       for (const t of timers.values()) clearTimeout(t);
       timers.clear();
+      scheduleGenerations.clear();
     },
   });
 }
 
-function registerCommands(context: vscode.ExtensionContext): void {
+async function runProjectControlCommand(
+  projectControl: ProjectControlController,
+  action: 'open_report' | 'status' | 'verify',
+  selector?: string,
+): Promise<void> {
+  const execution = await projectControl.execute({
+    action,
+    ...(typeof selector === 'string' && selector.trim() ? { selector } : {}),
+  });
+  if (!execution.ok) {
+    output.appendLine(`Showtail ${action}: ${execution.message}`);
+    void vscode.window.showWarningMessage(`Showtail: ${execution.message}`);
+    return;
+  }
+
+  output.appendLine(`Showtail ${action}: ${execution.text}`);
+  if (execution.selection.crossWorkspace) {
+    void vscode.window.showInformationMessage(
+      `Showtail selected ${execution.selection.displayName} outside the open workspace: ${execution.selection.root}`,
+    );
+  }
+  if (action === 'status' || action === 'verify') {
+    output.show(true);
+    return;
+  }
+  if (execution.opened === false) {
+    void vscode.window.showWarningMessage(
+      `Showtail generated the report at ${execution.reportPath}, but VS Code could not open it.`,
+    );
+  }
+}
+
+function registerCommands(
+  context: vscode.ExtensionContext,
+  projectControl: ProjectControlController,
+): void {
   context.subscriptions.push(
-    vscode.commands.registerCommand('showtail.report', async () => {
-      const cwd = folderFor(undefined);
-      if (!cwd) {
-        vscode.window.showWarningMessage('Showtail: open a folder first.');
-        return;
-      }
-      const out = await runShowtail(['report'], cwd);
-      const match = out?.match(/Wrote report:\s*(.+)/);
-      if (match) {
-        const doc = await vscode.workspace.openTextDocument(match[1].trim());
-        await vscode.window.showTextDocument(doc);
-      } else {
-        vscode.window.showWarningMessage(
-          'Showtail: could not generate a report. Run `showtail track` in this project first.',
-        );
-      }
-    }),
-    vscode.commands.registerCommand('showtail.status', async () => {
-      const cwd = folderFor(undefined);
-      if (!cwd) return;
-      const out = await runShowtail(['status'], cwd);
-      output.show(true);
-      output.appendLine(out ?? 'showtail not found on PATH.');
-    }),
+    vscode.commands.registerCommand('showtail.report', (selector?: string) =>
+      runProjectControlCommand(projectControl, 'open_report', selector),
+    ),
+    vscode.commands.registerCommand('showtail.openReport', (selector?: string) =>
+      runProjectControlCommand(projectControl, 'open_report', selector),
+    ),
+    vscode.commands.registerCommand('showtail.status', (selector?: string) =>
+      runProjectControlCommand(projectControl, 'status', selector),
+    ),
+    vscode.commands.registerCommand('showtail.verify', (selector?: string) =>
+      runProjectControlCommand(projectControl, 'verify', selector),
+    ),
   );
 }
 

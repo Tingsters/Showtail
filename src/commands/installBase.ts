@@ -43,7 +43,9 @@ export function printHooksEnabled(hooksFile: string): void {
 /**
  * The shared privacy note printed while hooks are active. `editSubject` is the
  * tool name in "snapshots each file <editSubject> edits"; `disconnectName` is
- * the `disconnect <name>` argument (a `--user` suffix is added at user scope).
+ * the `disconnect <name>` argument. The opt-out stays deliberately unscoped so
+ * it establishes the durable machine-wide capture stop; `scope` only supplies
+ * the narrower-cleanup hint.
  */
 export function printPrivacyNote(opts: {
   editSubject: string;
@@ -52,21 +54,23 @@ export function printPrivacyNote(opts: {
 }): void {
   console.log('  Privacy note: while these hooks are active, Showtail automatically');
   console.log(
-    `  logs each prompt you submit and snapshots each file ${opts.editSubject} edits, into`,
+    `  logs each prompt you submit and snapshots each file ${opts.editSubject} edits. Capture`,
   );
-  console.log('  your local .showtail/ folder. Nothing leaves your machine. Review it');
-  console.log('  anytime with `showtail report`. To opt out, re-run with --no-hooks, or');
+  console.log('  stays local: resolved work is projected into the project .showtail/;');
+  console.log('  unresolved work waits in the local inbox. Nothing leaves your machine.');
+  console.log('  Review with `showtail report`. To opt out, re-run with --no-hooks, or');
   console.log(
-    `  remove them with \`showtail disconnect ${opts.disconnectName}\`` +
-      (opts.scope === 'user' ? ' --user' : '') +
-      '.',
+    `  stop this tool everywhere with \`showtail disconnect ${opts.disconnectName}\`.`,
+  );
+  console.log(
+    `  Use \`--${opts.scope}\` only if you intentionally want a scope-limited removal.`,
   );
 }
 
 /**
- * Print the result of an uninstall: each removed component's line (nulls are
- * skipped), then "Done. Auto-capture is off." and an optional trailer. If
- * nothing was removed, print `nothingMessage` and stop.
+ * Print the files/components removed by an uninstall. Capture state is reported
+ * centrally by `disconnect`, after every scope and native component has been
+ * checked; a scope-local helper cannot honestly claim that all capture is off.
  */
 export function printUninstallResult(opts: {
   nothingMessage: string;
@@ -79,6 +83,6 @@ export function printUninstallResult(opts: {
     return;
   }
   for (const line of lines) console.log(line);
-  console.log('Done. Auto-capture is off.');
+  console.log('Done removing the selected Showtail integration.');
   if (opts.trailer) console.log(opts.trailer);
 }

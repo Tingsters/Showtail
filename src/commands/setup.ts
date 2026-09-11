@@ -1,6 +1,8 @@
 import {
   autoInitEnabled,
   detectHistoryUpgrade,
+  enableToolAutoConnect,
+  enableToolCapture,
   readGlobalConfig,
   writeGlobalConfig,
 } from '../core/globalConfig.ts';
@@ -11,6 +13,7 @@ import { connectPlugins } from '../plugins/registry.ts';
 import {
   autoConnectNewlyDetected,
   type SweepConnectResult,
+  type SweepIssue,
 } from '../core/autoConnectSweep.ts';
 import {
   ensureMachineId,
@@ -44,13 +47,13 @@ async function seedRealIdentityAtInstall(cwd: string): Promise<void> {
 export interface SetupOptions {
   /** Run without any prompts (setup is non-interactive regardless; kept for symmetry). */
   yes?: boolean;
-  /** Turn automatic tracking back off (leaves connected tools in place). */
+  /** Stop hook-driven creation of new project trails (leaves connected tools in place). */
   off?: boolean;
   /**
    * The automatic install/first-run bootstrap (invoked by the installers): turn
-   * tracking on, connect installed tools, and pre-seed the tools confirmed safe to wire
-   * before install (`prewireSafe`) so a student never loses work to one they install
-   * later. Once only. See {@link ensureFirstRunSetup}.
+   * tracking on, connect installed tools, and pre-seed integrations confirmed safe to
+   * wire before their host exists (`prewireSafe`). Once only. See
+   * {@link ensureFirstRunSetup}.
    */
   firstRun?: boolean;
   json?: boolean;
@@ -91,21 +94,31 @@ export interface FirstRunResult {
   ran: boolean;
   /** Tools whose capture hooks were wired this call. */
   connected: SweepConnectResult[];
+  /** Retryable integrations that did not complete during bootstrap. */
+  pending: SweepIssue[];
+  /** Integrations whose bootstrap operation failed. */
+  failed: SweepIssue[];
   /** Guidance for tools that can't be auto-connected (e.g. Copilot's VS Code extension). */
   guidance: string[];
 }
 
 /**
  * The one-time, no-command bootstrap that makes Showtail "just work" on install:
- * turn automatic tracking on, connect installed tools, and pre-seed the capture hooks
- * for the tools confirmed safe to wire before install (`prewireSafe`) so one the student
- * adds later never loses work. Idempotent and once-only:
+ * turn automatic tracking on, connect installed tools, and pre-seed capture hooks for
+ * integrations confirmed safe to wire before their host exists (`prewireSafe`).
+ * Idempotent and once-only:
  * a no-op if setup has ever completed, which also means it never re-enables tracking a
  * student turned off with `showtail setup --off` (that path stamps `setupCompletedAt`
  * too). Wrapped so it can never disrupt a command or a host session.
  */
 export function ensureFirstRunSetup(options: { cwd?: string } = {}): FirstRunResult {
-  const noop: FirstRunResult = { ran: false, connected: [], guidance: [] };
+  const noop: FirstRunResult = {
+    ran: false,
+    connected: [],
+    pending: [],
+    failed: [],
+    guidance: [],
+  };
   try {
     // Escape hatch (also how the test suite keeps CLI runs hermetic): never bootstrap
     // when this is set. Lets an environment opt out of auto-on entirely.
@@ -121,23 +134,33 @@ export function ensureFirstRunSetup(options: { cwd?: string } = {}): FirstRunRes
     markAutoTrackingOn();
     // Connect installed tools + pre-seed the ones confirmed safe to wire before install
     // (see `prewireSafe`); the rest are caught by the sweep once they're detected.
-    const connected = autoConnectNewlyDetected(options.cwd, undefined, {
+    const sweep = autoConnectNewlyDetected(options.cwd, undefined, {
       connectAll: true,
-    }).connected;
+    });
     // Tools that can't be auto-connected but ARE present (Copilot's VS Code extension)
     // contribute guidance so they're not silently absent.
     const guidance: string[] = [];
     for (const plugin of connectPlugins()) {
-      if (plugin.connect.autoConnect || !plugin.connect.setupGuidance) continue;
+      if (!plugin.connect.setupGuidance) continue;
       let detected = false;
       try {
         detected = plugin.connect.detect();
       } catch {
         detected = false;
       }
-      if (detected) guidance.push(...plugin.connect.setupGuidance);
+      const needsGuidance =
+        !plugin.connect.autoConnect ||
+        sweep.pending.some((issue) => issue.tool === plugin.cliName) ||
+        sweep.failed.some((issue) => issue.tool === plugin.cliName);
+      if (detected && needsGuidance) guidance.push(...plugin.connect.setupGuidance);
     }
-    return { ran: true, connected, guidance };
+    return {
+      ran: true,
+      connected: sweep.connected,
+      pending: sweep.pending,
+      failed: sweep.failed,
+      guidance,
+    };
   } catch {
     return noop; // the bootstrap must never break a command or a hook
   }
@@ -152,17 +175,34 @@ export function ensureFirstRunSetup(options: { cwd?: string } = {}): FirstRunRes
 export function autoTrackingNotice(
   connected: SweepConnectResult[],
   guidance: string[] = [],
+  pending: SweepIssue[] = [],
+  failed: SweepIssue[] = [],
 ): string[] {
+  const incomplete = pending.length > 0 || failed.length > 0 || guidance.length > 0;
   const lines: string[] = [
-    'Showtail is on — your work with AI is captured automatically from now on.',
+    incomplete
+      ? 'Showtail project tracking is on, but automatic AI capture still needs attention.'
+      : 'Showtail is on — your work with AI is captured automatically from now on.',
   ];
   if (connected.length > 0) {
     lines.push(`  Ready to capture from: ${connected.map((c) => c.label).join(', ')}.`);
   }
+  for (const issue of [...pending, ...failed]) {
+    const verb = issue.operation === 'refresh' ? 'refresh' : 'connection';
+    lines.push(
+      `  ${issue.label}: ${verb} ${issue.state}; run \`showtail connect ${issue.tool}\` to retry.`,
+    );
+  }
   for (const g of guidance) lines.push(`  ${g}`);
-  lines.push('  Everything stays local under .showtail/ — nothing leaves your machine,');
-  lines.push('  and secrets/personal data are scrubbed before storage.');
-  lines.push('  Turn it off anytime with `showtail setup --off`.');
+  lines.push('  Capture stays local: resolved work is projected into project .showtail/');
+  lines.push(
+    '  folders; unresolved or multi-project work waits in the local inbox/ledger.',
+  );
+  lines.push('  Secrets and personal data are scrubbed before storage.');
+  lines.push(
+    '  Stop creating new project trails with `showtail setup --off`; stop one tool with',
+  );
+  lines.push('  `showtail disconnect <tool>`.');
   return lines;
 }
 
@@ -185,15 +225,17 @@ export async function runSetup(options: SetupOptions = {}): Promise<void> {
       emitJson({ autoInit: false });
       return;
     }
-    console.log('Automatic tracking is now OFF.');
-    console.log('Existing trails are untouched; connected tools stay connected.');
-    console.log('Turn it back on anytime with `showtail setup`.');
+    console.log('Automatic creation of new project trails is now OFF.');
+    console.log('Connected tools still capture in existing trails.');
+    console.log('Use `showtail disconnect <tool>` to stop a tool, or `showtail setup`');
+    console.log('to resume automatic project creation.');
     return;
   }
 
-  // The installers call `showtail setup --first-run`: the once-only, pre-wire-every-tool
-  // bootstrap (so a tool installed later never loses work). A no-op if tracking was
-  // already decided, so re-running an installer never fights a `--off`/`disconnect`.
+  // The installers call `showtail setup --first-run`: the once-only bootstrap that
+  // connects detected tools and pre-wires only integrations marked `prewireSafe`.
+  // A no-op if tracking was already decided, so re-running an installer never fights
+  // a `--off`/`disconnect`.
   if (options.firstRun) {
     // Honor the opt-out BEFORE seeding anything. `ensureFirstRunSetup` checks
     // SHOWTAIL_DISABLE_FIRST_RUN itself, but it is called below — so seeding here first
@@ -218,6 +260,8 @@ export async function runSetup(options: SetupOptions = {}): Promise<void> {
     // on the tool's own (possibly broken) hooks to fire. Best-effort.
     let refreshed: string[] = [];
     let lateConnected = result.connected;
+    let pending = result.pending;
+    let failed = result.failed;
     if (!result.ran && autoInitEnabled()) {
       try {
         const sweep = autoConnectNewlyDetected(options.cwd, undefined, {
@@ -225,6 +269,8 @@ export async function runSetup(options: SetupOptions = {}): Promise<void> {
         });
         refreshed = sweep.refreshed;
         lateConnected = sweep.connected;
+        pending = sweep.pending;
+        failed = sweep.failed;
       } catch {
         /* refresh is best-effort */
       }
@@ -234,17 +280,35 @@ export async function runSetup(options: SetupOptions = {}): Promise<void> {
         ran: result.ran,
         connected: result.ran ? result.connected : lateConnected,
         refreshed,
+        pending,
+        failed,
         autoInit: readGlobalConfig().autoInit ?? false,
       });
       return;
     }
     if (result.ran) {
-      for (const line of autoTrackingNotice(result.connected, result.guidance)) {
+      for (const line of autoTrackingNotice(
+        result.connected,
+        result.guidance,
+        result.pending,
+        result.failed,
+      )) {
         console.log(line);
       }
-    } else if (refreshed.length > 0 || lateConnected.length > 0) {
+    } else if (
+      refreshed.length > 0 ||
+      lateConnected.length > 0 ||
+      pending.length > 0 ||
+      failed.length > 0
+    ) {
       if (lateConnected.length > 0) {
-        for (const line of autoTrackingNotice(lateConnected)) console.log(line);
+        for (const line of autoTrackingNotice(lateConnected, [], pending, failed)) {
+          console.log(line);
+        }
+      } else if (pending.length > 0 || failed.length > 0) {
+        for (const line of autoTrackingNotice([], [], pending, failed)) {
+          console.log(line);
+        }
       }
       if (refreshed.length > 0) {
         console.log(
@@ -258,24 +322,56 @@ export async function runSetup(options: SetupOptions = {}): Promise<void> {
     return;
   }
 
-  const detected = connectPlugins().map((plugin) => ({
-    plugin,
-    installed: plugin.connect.detect(),
-  }));
+  const detected = connectPlugins().map((plugin) => {
+    try {
+      return { plugin, installed: plugin.connect.detect() };
+    } catch {
+      return { plugin, installed: false };
+    }
+  });
 
   const connected: ConnectedTool[] = [];
   const guidance: string[] = [];
+  const pending: SweepIssue[] = [];
+  const failed: SweepIssue[] = [];
   for (const { plugin, installed } of detected) {
     if (!installed) continue;
-    const result = plugin.connect.autoConnect?.(options.cwd);
-    if (result) {
-      connected.push({
+    try {
+      const result = plugin.connect.autoConnect?.(options.cwd);
+      if (result) {
+        enableToolAutoConnect(plugin.cliName);
+        // This is the explicit `showtail setup` path, not an automatic sweep:
+        // a successful reconnect is consent to resume this tool's capture.
+        enableToolCapture(plugin.cliName);
+        connected.push({
+          tool: plugin.cliName,
+          label: plugin.label,
+          scope: 'user',
+          hooks: result.hooks,
+        });
+      } else if (plugin.connect.autoConnect) {
+        pending.push({
+          tool: plugin.cliName,
+          label: plugin.label,
+          operation: 'connect',
+          state: 'pending',
+        });
+      }
+    } catch (error) {
+      failed.push({
         tool: plugin.cliName,
         label: plugin.label,
-        scope: 'user',
-        hooks: result.hooks,
+        operation: 'connect',
+        state: 'failed',
+        reason: error instanceof Error ? error.message : String(error),
       });
-    } else if (plugin.connect.setupGuidance) {
+    }
+    if (
+      plugin.connect.setupGuidance &&
+      (pending.some((issue) => issue.tool === plugin.cliName) ||
+        failed.some((issue) => issue.tool === plugin.cliName) ||
+        !plugin.connect.autoConnect)
+    ) {
       guidance.push(...plugin.connect.setupGuidance);
     }
   }
@@ -287,6 +383,8 @@ export async function runSetup(options: SetupOptions = {}): Promise<void> {
     emitJson({
       detected: detected.map((d) => ({ tool: d.plugin.cliName, installed: d.installed })),
       connected,
+      pending,
+      failed,
       autoInit: true,
       setupCompletedAt,
     });
@@ -298,9 +396,9 @@ export async function runSetup(options: SetupOptions = {}): Promise<void> {
   if (connected.length > 0) {
     console.log('Connected your AI tools (for all projects):');
     for (const c of connected) {
-      console.log(`  ${c.label} · hooks ${c.hooks ? 'on' : 'off'}`);
+      console.log(`  ${c.label} · automatic capture on`);
     }
-  } else {
+  } else if (pending.length === 0 && failed.length === 0) {
     const names = connectPlugins()
       .filter((p) => p.connect.autoConnect)
       .map((p) => p.cliName);
@@ -308,22 +406,35 @@ export async function runSetup(options: SetupOptions = {}): Promise<void> {
     console.log('No AI tools were detected to connect automatically.');
     console.log(`  Connect one anytime with \`showtail connect ${example}\`.`);
   }
+  for (const issue of [...pending, ...failed]) {
+    const verb = issue.operation === 'refresh' ? 'refresh' : 'connection';
+    console.log(
+      `  ${issue.label}: ${verb} ${issue.state}; run \`showtail connect ${issue.tool}\` to retry.`,
+    );
+  }
   if (guidance.length > 0) {
     console.log('');
     for (const line of guidance) console.log(line);
   }
   console.log('');
-  console.log('Automatic tracking is ON. From now on, just work:');
+  if (pending.length > 0 || failed.length > 0 || guidance.length > 0) {
+    console.log(
+      'Automatic project tracking is ON, but finish the integration above before relying on hands-free capture.',
+    );
+  } else {
+    console.log('Automatic tracking is ON. From now on, just work:');
+  }
   console.log(
     '  • The first time you use AI in a project, Showtail starts a trail for you.',
   );
   console.log('  • Sessions open and close around your tasks — no commands to run.');
   console.log('  • Ask your AI to "generate a Showtail report" whenever you want one.');
   console.log('');
-  console.log('Privacy: everything stays local under .showtail/. Secrets and personal');
-  console.log('data are scrubbed before storage, and nothing ever leaves your machine.');
+  console.log('Privacy: capture stays local. Resolved sessions are projected into each');
+  console.log("project's .showtail/ folder; unresolved or multi-project work waits in");
+  console.log('the machine-local inbox/ledger. Secrets and personal data are scrubbed.');
   console.log(
-    'Turn automatic tracking off anytime with `showtail setup --off`' +
-      ' or `showtail disconnect <tool>`.',
+    'Stop creating new project trails with `showtail setup --off`; stop one tool',
   );
+  console.log('everywhere with `showtail disconnect <tool>`.');
 }

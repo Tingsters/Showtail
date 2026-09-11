@@ -21,7 +21,7 @@ import {
   readSync,
   statSync,
 } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { importedPromptIds, importedSourceIds, logEvent } from './events.ts';
 import {
   conversationEventEnabled,
@@ -39,7 +39,7 @@ import {
   prop,
   type ToolResult,
 } from './parse.ts';
-import { readConfig, toRepoRelative, type AuthorPaths } from './storage.ts';
+import { isPathUnder, readConfig, toRepoRelative, type AuthorPaths } from './storage.ts';
 import {
   collectDecisionAnswers,
   parseDecisionQuestions,
@@ -378,12 +378,21 @@ function isDir(path: string): boolean {
 
 // --- Parsing ---------------------------------------------------------------
 
+export interface ClaudeTranscriptOptions {
+  /** Preserve absolute outside-root edit paths so the ledger can route the whole session. */
+  includeOutsideEdits?: boolean;
+}
+
 /** Read a transcript file from disk and parse it. */
-export function readTranscriptFile(path: string, root: string): ClaudeTranscript {
+export function readTranscriptFile(
+  path: string,
+  root: string,
+  options: ClaudeTranscriptOptions = {},
+): ClaudeTranscript {
   if (!existsSync(path)) {
     throw new Error(`Transcript not found: ${path}`);
   }
-  return parseClaudeTranscript(readFileSync(path, 'utf8'), root);
+  return parseClaudeTranscript(readFileSync(path, 'utf8'), root, options);
 }
 
 /** A `turn_duration` system line seen but not yet paired with an `away_summary`. */
@@ -461,10 +470,16 @@ function rawToolResult(
 
 /**
  * Parse a Claude Code JSONL transcript into normalized messages. Edits are
- * reported relative to `root` (and edits outside the repo, or to internal
- * `.showtail`/`.claude` files, are dropped). Malformed lines are skipped.
+ * reported relative to `root`. Outside-root edits are normally dropped, but a
+ * ledger catch-up can retain their absolute paths so project routing sees the
+ * complete session. Internal `.showtail`/`.claude` files are always dropped.
+ * Malformed lines are skipped.
  */
-export function parseClaudeTranscript(content: string, root: string): ClaudeTranscript {
+export function parseClaudeTranscript(
+  content: string,
+  root: string,
+  options: ClaudeTranscriptOptions = {},
+): ClaudeTranscript {
   const messages: ClaudeMessage[] = [];
   const events: HookTranscriptEvent[] = [];
   let eventSequence = 0;
@@ -650,7 +665,7 @@ export function parseClaudeTranscript(content: string, root: string): ClaudeTran
           }
         }
       });
-      messages.push(...handleAssistant(obj, root));
+      messages.push(...handleAssistant(obj, root, options));
       accumulateUsage(turnTokens, prop(obj, 'message'), countedMessageIds);
     } else if (type === 'system') {
       const subtype = prop(obj, 'subtype');
@@ -830,7 +845,11 @@ function handleUser(obj: unknown): ClaudeMessage | null {
 }
 
 /** Assistant turns: text parts become one reply; Edit/Write/MultiEdit become edits. */
-function handleAssistant(obj: unknown, root: string): ClaudeMessage[] {
+function handleAssistant(
+  obj: unknown,
+  root: string,
+  options: ClaudeTranscriptOptions,
+): ClaudeMessage[] {
   const msg = prop(obj, 'message');
   const model = asString(prop(msg, 'model'));
   if (!msg || model === '<synthetic>') return [];
@@ -851,7 +870,11 @@ function handleAssistant(obj: unknown, root: string): ClaudeMessage[] {
     if (type === 'text' && partText !== undefined && partText.trim()) {
       texts.push(partText.trim());
     } else if (type === 'tool_use' && typeof name === 'string' && EDIT_TOOLS.has(name)) {
-      const rel = relForEdit(prop(prop(part, 'input'), 'file_path'), root);
+      const rel = relForEdit(
+        prop(prop(part, 'input'), 'file_path'),
+        root,
+        options.includeOutsideEdits === true,
+      );
       if (!rel) continue;
       const partId = asString(prop(part, 'id'));
       out.push({
@@ -920,11 +943,18 @@ function handleAssistant(obj: unknown, root: string): ClaudeMessage[] {
   return out;
 }
 
-/** Repo-relative path for an edited file, or null if outside the repo / internal. */
-function relForEdit(filePath: unknown, root: string): string | null {
+/** A repo-relative edit path, or an absolute outside path when routing requested it. */
+function relForEdit(
+  filePath: unknown,
+  root: string,
+  includeOutside: boolean,
+): string | null {
   if (typeof filePath !== 'string' || !filePath) return null;
-  const rel = toRepoRelative(root, filePath);
-  if (rel.startsWith('..') || isInternalPath(rel)) return null;
+  const abs = resolve(root, filePath);
+  if (isInternalPath(abs)) return null;
+  if (!isPathUnder(abs, root)) return includeOutside ? abs : null;
+  const rel = toRepoRelative(root, abs);
+  if (isInternalPath(rel)) return null;
   return rel;
 }
 

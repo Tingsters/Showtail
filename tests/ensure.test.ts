@@ -17,7 +17,7 @@ describe('ensure', () => {
       const out = JSON.parse(r.stdout);
       expect(out.created).toBe(true);
       expect(out.initialized).toBe(true);
-      expect(out.anchorKind).toBe('cwd');
+      expect(out.anchorKind).toBe('marker');
       expect(out.sessionId).toMatch(/^ses_/);
       expect(existsSync(join(dir, '.showtail', 'config.json'))).toBe(true);
 

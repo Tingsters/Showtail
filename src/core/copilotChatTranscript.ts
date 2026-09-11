@@ -40,13 +40,13 @@
  * with Gemini and writes a different "brain" transcript, so it has its own reader
  * (`antigravityCliTranscript.ts`). Only the import/routing machinery is shared.
  *
- * Everything is local and best-effort: a malformed file/line/request is skipped,
- * never thrown.
+ * Everything is local and best-effort: malformed requests are skipped, while an
+ * unsupported or malformed file reconstructs as empty and is never thrown.
  */
 
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { importEditArtifact, importedArtifactSourceIds } from './artifacts.ts';
 import {
@@ -65,6 +65,13 @@ import { readConfig, toRepoRelative, type AuthorPaths } from './storage.ts';
 import type { EditedFile } from './hookInput.ts';
 import type { HookTranscriptEvent } from '../plugins/types.ts';
 import type { JsonValue } from '../types.ts';
+import type {
+  LedgerProjectAttachment,
+  LedgerProjectControlAction,
+  LedgerProjectControlInput,
+} from './ledger.ts';
+
+export const SHOWTAIL_PROJECT_CONTROL_PROTOCOL = 'showtail-project-control/v1';
 
 /** A normalized message recovered from a Copilot Chat session. */
 export interface CopilotMessage {
@@ -79,6 +86,12 @@ export interface CopilotMessage {
   timestamp?: string;
   /** A stable id so re-imports (and the live watcher) dedupe. */
   sourceId: string;
+  /** Native request id shared by the prompt and every child of this turn. */
+  requestId?: string;
+  /** Explicit student attachments on this exact native request. */
+  attachments?: LedgerProjectAttachment[];
+  /** Validated result from Showtail's registered local project-control tool. */
+  projectControl?: LedgerProjectControlInput;
   /** For edits: the repo-relative file path(s) Copilot touched. */
   files?: string[];
   /** For edits: best-effort per-file diffs (added lines) so they render like Claude's. */
@@ -91,6 +104,11 @@ export interface CopilotTranscript {
   title: string;
   messages: CopilotMessage[];
   events: HookTranscriptEvent[];
+}
+
+/** Automatic recovery options. Explicit imports omit these and keep full history. */
+export interface CopilotAutomaticCaptureOptions {
+  automaticCaptureSince?: string;
 }
 
 /** A chat-session file found on disk. */
@@ -122,6 +140,9 @@ export interface CopilotAbsEdit {
   timestamp?: string;
   /** `copilot:edit:<sid>:<requestId>`; the router appends `#<displayPath>`. */
   sourceIdBase: string;
+  /** Explicit linkage back to this request's prompt, independent of array order. */
+  requestId: string;
+  promptSourceId: string;
 }
 
 /** A back-dated edit artifact ready to import (display path + stable id). */
@@ -148,6 +169,147 @@ export function isInternalEditPath(p: string): boolean {
 /** Our own chat participant — skip it on file import; the extension logs it live. */
 function isOwnAgent(extensionId: string | undefined): boolean {
   return (extensionId ?? '').toLowerCase().includes('showtail');
+}
+
+function explicitRequestAttachments(request: unknown): LedgerProjectAttachment[] {
+  const variables = asArray(prop(prop(request, 'variableData'), 'variables')) ?? [];
+  const found = new Map<string, LedgerProjectAttachment>();
+  for (const variable of variables) {
+    if (!isObject(variable)) continue;
+    const kind = asString(prop(variable, 'kind'));
+    if (kind !== 'file' && kind !== 'folder') continue;
+    if (prop(variable, 'automaticallyAdded') === true) continue;
+    const id = asString(prop(variable, 'id')) ?? '';
+    if (id.toLowerCase().startsWith('vscode.implicit.')) continue;
+    const value = prop(variable, 'value');
+    const fsPath =
+      asString(prop(value, 'fsPath')) ?? asString(prop(prop(value, 'uri'), 'fsPath'));
+    if (!fsPath || !isAbsolute(fsPath) || /[\0\r\n]/.test(fsPath)) continue;
+    const path = resolve(fsPath);
+    const key = `${kind}\t${process.platform === 'win32' ? path.toLowerCase() : path}`;
+    found.set(key, { kind, path });
+  }
+  return [...found.values()];
+}
+
+function optionalMarkerString(
+  marker: Record<string, unknown>,
+  key: string,
+  maxLength: number,
+): string | null | undefined {
+  const value = marker[key];
+  if (value === undefined) return undefined;
+  if (
+    typeof value !== 'string' ||
+    value.length === 0 ||
+    value.length > maxLength ||
+    /[\0\r\n]/.test(value)
+  ) {
+    return null;
+  }
+  return value;
+}
+
+/** Parse only the compact JSON emitted by Showtail's registered LM tool. */
+export function parseShowtailProjectControlMarker(
+  text: string,
+): LedgerProjectControlInput | null {
+  let marker: unknown;
+  try {
+    marker = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  if (!isObject(marker)) return null;
+  if (prop(marker, 'showtailProjectControl') !== SHOWTAIL_PROJECT_CONTROL_PROTOCOL) {
+    return null;
+  }
+  const claimId = asString(prop(marker, 'claimId'));
+  const action = asString(prop(marker, 'action'));
+  const trailId = asString(prop(marker, 'trailId'));
+  const root = asString(prop(marker, 'root'));
+  const mode = asString(prop(marker, 'mode'));
+  const evidenceRaw = asArray(prop(marker, 'evidence'));
+  if (
+    !claimId ||
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+      claimId,
+    ) ||
+    (action !== 'report' &&
+      action !== 'open_report' &&
+      action !== 'status' &&
+      action !== 'verify') ||
+    !trailId ||
+    !/^trl_[A-Za-z0-9_-]+$/.test(trailId) ||
+    !root ||
+    root !== root.trim() ||
+    !isAbsolute(root) ||
+    /[\0\r\n]/.test(root) ||
+    (mode !== 'authoritative' && mode !== 'corroborated') ||
+    !evidenceRaw ||
+    evidenceRaw.length === 0 ||
+    evidenceRaw.length > 16 ||
+    !evidenceRaw.every(
+      (item) =>
+        typeof item === 'string' &&
+        item.length > 0 &&
+        item.length <= 80 &&
+        !/[\0\r\n]/.test(item),
+    )
+  ) {
+    return null;
+  }
+
+  const displayName = optionalMarkerString(marker, 'displayName', 200);
+  const reportPath = optionalMarkerString(marker, 'reportPath', 4096);
+  if (displayName === null || reportPath === null) return null;
+  if (reportPath !== undefined && !isAbsolute(reportPath)) return null;
+  const crossWorkspace = prop(marker, 'crossWorkspace');
+  if (crossWorkspace !== undefined && typeof crossWorkspace !== 'boolean') return null;
+
+  return {
+    claimId,
+    action: action as LedgerProjectControlAction,
+    trailId,
+    root: resolve(root),
+    ...(displayName ? { displayName } : {}),
+    mode,
+    evidence: [...new Set(evidenceRaw as string[])],
+    ...(crossWorkspace === undefined ? {} : { crossWorkspace }),
+    ...(reportPath ? { reportPath: resolve(reportPath) } : {}),
+  };
+}
+
+function projectControlFromRequest(
+  request: unknown,
+): LedgerProjectControlInput | undefined {
+  const metadata = prop(prop(request, 'result'), 'metadata');
+  const results = prop(metadata, 'toolCallResults');
+  let selected: LedgerProjectControlInput | undefined;
+  for (const round of asArray(prop(metadata, 'toolCallRounds')) ?? []) {
+    for (const call of asArray(prop(round, 'toolCalls')) ?? []) {
+      if (asString(prop(call, 'name')) !== 'showtail_project_control') continue;
+      const callId = asString(prop(call, 'id'));
+      const rawArguments = asString(prop(call, 'arguments'));
+      if (!callId || !rawArguments) continue;
+      let argumentsValue: unknown;
+      try {
+        argumentsValue = JSON.parse(rawArguments);
+      } catch {
+        continue;
+      }
+      const requestedAction = asString(prop(argumentsValue, 'action'));
+      const result = prop(results, callId);
+      if (prop(result, 'isError') === true) continue;
+      for (const part of asArray(prop(result, 'content')) ?? []) {
+        const value = asString(prop(part, 'value')) ?? asString(prop(part, 'text'));
+        if (!value) continue;
+        const marker = parseShowtailProjectControlMarker(value);
+        if (marker && marker.action === requestedAction) selected = marker;
+      }
+    }
+  }
+  return selected;
 }
 
 // --- Locating sessions on disk ---------------------------------------------
@@ -261,43 +423,83 @@ export function findProjectChatSessions(root: string): CopilotSessionInfo[] {
 
 // --- Reconstructing the session (format detect + delta replay) -------------
 
+const SUPPORTED_SESSION_VERSIONS = new Set([3]);
+const UNSAFE_DELTA_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+
+function supportedSessionState(value: unknown, allowUnversioned: boolean): boolean {
+  if (
+    !isObject(value) ||
+    Array.isArray(value) ||
+    !Array.isArray(prop(value, 'requests'))
+  ) {
+    return false;
+  }
+  if (prop(value, 'schemaVersion') !== undefined) return false;
+  const version = prop(value, 'version');
+  return (
+    (version === undefined && allowUnversioned) ||
+    (typeof version === 'number' && SUPPORTED_SESSION_VERSIONS.has(version))
+  );
+}
+
+function validDeltaPath(path: unknown[]): path is Array<string | number> {
+  return (
+    path.length > 0 &&
+    path.every(
+      (part) =>
+        (typeof part === 'string' && part.length > 0 && !UNSAFE_DELTA_KEYS.has(part)) ||
+        (typeof part === 'number' && Number.isSafeInteger(part) && part >= 0),
+    )
+  );
+}
+
 /** Walk `path` into `node`, returning the value there or null if unreachable. */
-function navTo(node: unknown, path: unknown[]): unknown {
+function navTo(node: unknown, path: Array<string | number>): unknown {
   let cur: unknown = node;
   for (const p of path) {
     if (cur == null) return null;
-    if (Array.isArray(cur) && typeof p === 'number') cur = cur[p];
-    else if (isObject(cur)) cur = (cur as Record<string, unknown>)[p as string];
-    else return null;
+    if (Array.isArray(cur)) {
+      if (typeof p !== 'number') return null;
+      cur = cur[p];
+    } else if (isObject(cur)) {
+      if (typeof p !== 'string') return null;
+      cur = cur[p];
+    } else return null;
   }
   return cur;
 }
 
-/** Apply one `{kind,k,v}` delta to the in-progress session state (best-effort). */
+/** Apply one validated set/append delta to the in-progress session state. */
 function applyDelta(
   state: unknown,
-  path: unknown[],
-  kind: number | undefined,
+  path: Array<string | number>,
+  kind: 1 | 2,
   v: unknown,
-): void {
+): boolean {
   const parent = navTo(state, path.slice(0, -1));
-  if (parent == null || (!isObject(parent) && !Array.isArray(parent))) return;
-  const last = path[path.length - 1] as string | number;
+  if (parent == null || !isObject(parent)) return false;
+  const last = path[path.length - 1]!;
+  if (
+    (Array.isArray(parent) && typeof last !== 'number') ||
+    (!Array.isArray(parent) && typeof last !== 'string')
+  ) {
+    return false;
+  }
   const container = parent as Record<string | number, unknown>;
   try {
     if (kind === 2) {
       // Append array elements at the path (creating the array if absent).
-      if (v == null) return;
+      if (!Array.isArray(v)) return false;
       const cur = container[last];
-      const items = Array.isArray(v) ? v : [v];
-      if (Array.isArray(cur)) cur.push(...items);
-      else container[last] = [...items];
+      if (Array.isArray(cur)) cur.push(...v);
+      else if (cur === undefined) container[last] = [...v];
+      else return false;
     } else {
-      // kind 1 (and any other) — replace the value at the path.
       container[last] = v;
     }
+    return true;
   } catch {
-    /* unreachable path / frozen value — skip this delta */
+    return false;
   }
 }
 
@@ -305,20 +507,22 @@ function applyDelta(
  * Normalize a chat-session file's raw content to a single session object, whether
  * it's the legacy single `.json` document or the current `.jsonl` patch journal.
  * For the journal we replay the deltas (kind 0 snapshot → kind 1 set → kind 2
- * append, by path `k`) into the final session. Best-effort: bad lines are skipped.
+ * append, by path `k`) into the final session. Unknown versions, delta kinds, or
+ * malformed journal lines invalidate the reconstruction so partial evidence is
+ * never mistaken for a known transcript shape.
  */
 export function reconstructSession(content: string): unknown {
   // Legacy single-doc: the whole file is one JSON object with a `requests` array.
   try {
     const whole = JSON.parse(content);
-    if (isObject(whole) && Array.isArray((whole as Record<string, unknown>).requests)) {
-      return whole;
-    }
+    if (supportedSessionState(whole, true)) return whole;
+    if (isObject(whole) && Array.isArray(prop(whole, 'requests'))) return {};
   } catch {
     /* not a single JSON document — fall through to the JSONL replay */
   }
 
   let state: unknown;
+  let sawSnapshot = false;
   for (const rawLine of content.split(/\r?\n/)) {
     const line = rawLine.trim();
     if (!line) continue;
@@ -326,21 +530,34 @@ export function reconstructSession(content: string): unknown {
     try {
       o = JSON.parse(line);
     } catch {
-      continue;
+      return {};
     }
-    if (!isObject(o)) continue;
+    if (!isObject(o) || Array.isArray(o)) return {};
     const kind = asNumber(prop(o, 'kind'));
-    const path = asArray(prop(o, 'k'));
+    if (kind !== 0 && kind !== 1 && kind !== 2) return {};
+    if (!Object.prototype.hasOwnProperty.call(o, 'v')) return {};
+    const rawPath = prop(o, 'k');
+    const path = rawPath === undefined ? [] : asArray(rawPath);
+    if (!path) return {};
     const v = prop(o, 'v');
-    // No path → a whole-state set (the kind:0 initial snapshot).
-    if (path === undefined || path.length === 0) {
+    if (kind === 0) {
+      if (sawSnapshot || path.length !== 0 || !supportedSessionState(v, false)) {
+        return {};
+      }
       state = v;
+      sawSnapshot = true;
       continue;
     }
-    if (state === undefined) state = {};
-    applyDelta(state, path, kind, v);
+    if (
+      !sawSnapshot ||
+      !validDeltaPath(path) ||
+      (kind === 2 && !Array.isArray(v)) ||
+      !applyDelta(state, path, kind, v)
+    ) {
+      return {};
+    }
   }
-  return state ?? {};
+  return sawSnapshot && supportedSessionState(state, false) ? state : {};
 }
 
 // --- Parsing ---------------------------------------------------------------
@@ -359,6 +576,22 @@ function isoFromMs(ms: number | undefined): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+/**
+ * Native Copilot gives every request one base timestamp, then Showtail assigns tiny
+ * offsets to its children for display ordering. Apply an automatic-capture cutoff
+ * to that base timestamp once so an old request cannot leak through via an offset.
+ */
+function requestInAutomaticCaptureWindow(
+  request: unknown,
+  automaticCaptureSince: string | undefined,
+): boolean {
+  if (!automaticCaptureSince) return true;
+  const cutoff = Date.parse(automaticCaptureSince);
+  const timestamp = isoFromMs(asNumber(prop(request, 'timestamp')));
+  const observed = timestamp ? Date.parse(timestamp) : Number.NaN;
+  return Number.isFinite(cutoff) && Number.isFinite(observed) && observed >= cutoff;
 }
 
 /**
@@ -574,7 +807,11 @@ function decisionsFromRequest(request: unknown): { text: string; callId: string 
  * answered by our own `@showtail` participant are skipped (the extension logs those
  * live).
  */
-export function parseCopilotSession(session: unknown, root: string): CopilotTranscript {
+export function parseCopilotSession(
+  session: unknown,
+  root: string,
+  options: CopilotAutomaticCaptureOptions = {},
+): CopilotTranscript {
   const sessionId = asString(prop(session, 'sessionId'));
   const requests = asArray(prop(session, 'requests')) ?? [];
   const messages: CopilotMessage[] = [];
@@ -584,11 +821,16 @@ export function parseCopilotSession(session: unknown, root: string): CopilotTran
 
   requests.forEach((request, i) => {
     if (!isObject(request)) return;
+    if (!requestInAutomaticCaptureWindow(request, options.automaticCaptureSince)) {
+      return;
+    }
     // `agent.extensionId` is `{ value, _lower }`; key off its `value`.
     const extId = asString(prop(prop(prop(request, 'agent'), 'extensionId'), 'value'));
     if (isOwnAgent(extId)) return;
 
     const requestId = asString(prop(request, 'requestId')) ?? String(i);
+    const attachments = explicitRequestAttachments(request);
+    const projectControl = projectControlFromRequest(request);
     // A request records ONE epoch-ms `timestamp`, but its parts happen in sequence:
     // the user prompts, Copilot may ask questions (decisions) mid-turn, then replies,
     // then edits. Stamp them with strictly increasing sub-timestamps (tiny ms offsets
@@ -607,6 +849,9 @@ export function parseCopilotSession(session: unknown, root: string): CopilotTran
         text: promptText,
         timestamp: tsAt(0),
         sourceId,
+        requestId,
+        ...(attachments.length > 0 ? { attachments } : {}),
+        ...(projectControl ? { projectControl } : {}),
       });
       events.push({
         sequence: eventSequence++,
@@ -624,6 +869,9 @@ export function parseCopilotSession(session: unknown, root: string): CopilotTran
         const callId = asString(prop(call, 'id'));
         if (!callId) continue;
         const toolName = asString(prop(call, 'name'));
+        // The validated marker is retained only as machine-local routing metadata.
+        // Do not project its absolute paths/claim id into the student's report.
+        if (toolName === 'showtail_project_control') continue;
         const rawArguments = asString(prop(call, 'arguments'));
         let input: JsonValue | undefined = rawArguments;
         if (rawArguments) {
@@ -671,6 +919,7 @@ export function parseCopilotSession(session: unknown, root: string): CopilotTran
         text: d.text,
         timestamp: tsAt(1 + k),
         sourceId: `copilot:decision:${sid}:${d.callId}`,
+        requestId,
       });
     });
 
@@ -682,6 +931,7 @@ export function parseCopilotSession(session: unknown, root: string): CopilotTran
         text: reply,
         timestamp: tsAt(1 + decisions.length),
         sourceId,
+        requestId,
       });
       events.push({
         sequence: eventSequence++,
@@ -700,6 +950,7 @@ export function parseCopilotSession(session: unknown, root: string): CopilotTran
         text: plan,
         timestamp: tsAt(2 + decisions.length),
         sourceId: `copilot:plan:${sid}:${requestId}`,
+        requestId,
       });
       events.push({
         sequence: eventSequence++,
@@ -720,6 +971,7 @@ export function parseCopilotSession(session: unknown, root: string): CopilotTran
         edits,
         timestamp: tsAt(3 + decisions.length),
         sourceId: `copilot:edit:${sid}:${requestId}`,
+        requestId,
       });
     }
   });
@@ -751,12 +1003,16 @@ export function parseCopilotChatTranscript(
 export function extractCopilotEdits(
   session: unknown,
   sessionId: string,
+  options: CopilotAutomaticCaptureOptions = {},
 ): CopilotAbsEdit[] {
   const sid = asString(prop(session, 'sessionId')) ?? sessionId;
   const requests = asArray(prop(session, 'requests')) ?? [];
   const out: CopilotAbsEdit[] = [];
   requests.forEach((request, i) => {
     if (!isObject(request)) return;
+    if (!requestInAutomaticCaptureWindow(request, options.automaticCaptureSince)) {
+      return;
+    }
     const extId = asString(prop(prop(prop(request, 'agent'), 'extensionId'), 'value'));
     if (isOwnAgent(extId)) return;
     const requestId = asString(prop(request, 'requestId')) ?? String(i);
@@ -767,6 +1023,8 @@ export function extractCopilotEdits(
         diff: g.diff,
         timestamp,
         sourceIdBase: `copilot:edit:${sid}:${requestId}`,
+        requestId,
+        promptSourceId: `copilot:user:${sid}:${requestId}`,
       });
     }
   });

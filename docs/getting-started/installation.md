@@ -9,8 +9,10 @@ or want to build from source.
 These scripts download a standalone `showtail` binary from the latest GitHub
 Release. You do not need Node, Bun, or any other runtime installed. The installer
 also **turns tracking on for you** — it connects the AI tools it finds and pre-wires
-the ones it supports, so you never run a setup command and never lose work to a tool
-you install later. (Turn it off anytime with `showtail setup --off`.)
+integrations that are safe to configure before their host exists, so there is no setup
+command. If you add an AI tool later, install it before Showtail when possible or run
+`showtail connect <tool>` before that tool's first session. Use `showtail setup --off` to
+disable automatic creation of new project trails; disconnect a tool to stop its capture.
 
 Before running the installer, note the user-level changes it makes:
 
@@ -146,6 +148,6 @@ anywhere.
 
 ## Next steps
 
-- [Quickstart](quickstart.md) — connect a tool and start capturing in a couple of minutes.
+- [Quickstart](quickstart.md) — open a project, work normally, and generate your first report.
 - [Integrations](../integrations/index.md) — set up Showtail for your specific AI tool.
 - [Uninstallation](uninstallation.md) — remove integrations, the executable, and optional local state.

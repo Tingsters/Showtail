@@ -6,7 +6,10 @@ import {
   addArtifact,
   artifactsForPath,
   checkArtifactHashes,
+  readAllArtifacts,
 } from '../src/core/artifacts.ts';
+import { CaptureInterruptedError } from '../src/core/captureGuard.ts';
+import { addressOf, objectExists } from '../src/core/objects.ts';
 import { pathsForRoot, type AuthorPaths } from '../src/core/storage.ts';
 import { authorFor, cleanup, makeTempDir } from './helpers.ts';
 
@@ -61,6 +64,35 @@ describe('artifacts', () => {
       expect(a.created).toBe(true);
       expect(b.created).toBe(false);
       expect(artifactsForPath(author, 'essay.md').length).toBe(1);
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('automatic capture stops at every live artifact write boundary', async () => {
+    const { dir, paths, author } = await initProject();
+    try {
+      for (const stopAt of [1, 2, 3, 4]) {
+        const file = `guarded-${stopAt}.ts`;
+        const diff = `+ export const guarded${stopAt} = true;`;
+        writeFileSync(join(dir, file), `export const guarded${stopAt} = true;`);
+        let checks = 0;
+
+        await expect(
+          addArtifact(author, {
+            filePath: file,
+            diff,
+            continueCapture: () => {
+              checks += 1;
+              return checks < stopAt;
+            },
+          }),
+        ).rejects.toBeInstanceOf(CaptureInterruptedError);
+
+        expect(checks).toBe(stopAt);
+        expect(objectExists(paths, addressOf(diff))).toBe(stopAt === 4);
+        expect(readAllArtifacts(paths)).toHaveLength(0);
+      }
     } finally {
       cleanup(dir);
     }

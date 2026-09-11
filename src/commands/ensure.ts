@@ -2,13 +2,8 @@ import { resolve } from 'node:path';
 import { resolveActiveAuthorForHook } from '../core/authors.ts';
 import { resolveOrStartSession } from '../core/events.ts';
 import { emitJson } from '../core/output.ts';
-import {
-  findRoot,
-  isHomedirCatchAll,
-  pathsForRoot,
-  readConfig,
-  resolveAnchor,
-} from '../core/storage.ts';
+import { pathsForRoot, readConfig, resolveProjectContext } from '../core/storage.ts';
+import { ShowtailError } from '../core/errors.ts';
 import { ensureInitialized } from './init.ts';
 
 export interface EnsureOptions {
@@ -19,36 +14,48 @@ export interface EnsureOptions {
 /**
  * Make the current working folder ready to capture, idempotently: find (or
  * create) the trail at the right anchor and make sure a session is open. This is
- * the single command an agent — or the VS Code extension on first open — can
- * call blindly at the start of a task. Safe to run repeatedly.
+ * the explicit repair/bootstrap command an integration or power user can call
+ * when they intentionally want a trail now. Safe to run repeatedly.
  *
- * Anchoring matches automatic init: an existing trail above `cwd` is reused;
- * otherwise the git repo root (or `cwd`) becomes the anchor. Refuses to create a
- * trail directly in HOME, which would turn every subfolder into one shared trail.
- * Identity is resolved silently (cache / git-config, never prompting); if it
- * can't be settled, the trail is still created but no session is opened.
+ * Anchoring matches automatic init: an existing trail or strong project boundary
+ * is reused; otherwise `cwd` becomes the anchor. HOME and temp are valid when the
+ * command is invoked there, and a HOME trail is never inherited by descendants.
+ * Identity is resolved silently (cache / git-config, never prompting); if it can't
+ * be settled, the trail is still created but no session is opened.
  */
 export async function runEnsure(options: EnsureOptions = {}): Promise<void> {
   const cwd = resolve(options.cwd ?? process.cwd());
-
-  if (isHomedirCatchAll(cwd)) {
-    if (options.json) {
-      emitJson({
-        created: false,
-        initialized: false,
-        reason: 'home-directory',
-        nextAction: 'open-project',
-      });
-    } else {
-      console.log('Showtail is ready — open a project folder and start working.');
-    }
-    return;
+  const context = resolveProjectContext({ cwd });
+  if (context.state === 'none') {
+    throw new ShowtailError(
+      `Folder does not exist: ${cwd}`,
+      2,
+      {
+        root: null,
+        candidates: [],
+      },
+      'PATH_NOT_FOUND',
+      'choose-existing-path',
+    );
   }
+  if (context.state === 'ambiguous') {
+    throw new ShowtailError(
+      'No single project could be selected.',
+      2,
+      {
+        root: null,
+        candidates: context.candidates,
+      },
+      'AMBIGUOUS_PROJECT',
+      'review-inbox',
+    );
+  }
+  const root = context.root;
 
-  const existing = findRoot(cwd);
-  const root = existing ?? (await resolveAnchor(cwd));
-
-  const { created } = await ensureInitialized(root);
+  const { created } = await ensureInitialized(root, {
+    ...(context.evidence === 'trail' ? {} : { anchorKind: context.evidence }),
+    initialization: { mode: 'ensure', evidence: context.evidence },
+  });
   const paths = pathsForRoot(root);
   const author = await resolveActiveAuthorForHook(paths, { cwd });
   const session = author ? resolveOrStartSession(author) : null;

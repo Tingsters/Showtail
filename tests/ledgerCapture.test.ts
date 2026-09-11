@@ -37,14 +37,28 @@ function editFile(
 }
 
 /**
- * Parse `showtail inbox --all --json` run with this env. These tests exercise
- * capture/placement of folderless *scratch* work, which the default view now hides;
- * `--all` reveals it (surfacing is covered separately in inboxSurface.test.ts).
+ * Parse `showtail inbox --all --json` run with this env. Automatically placed
+ * sessions are absent; ambiguous, unplaced, or target-missing sessions remain.
  */
 function inbox(cwd: string, env: NodeJS.ProcessEnv): any {
   const r = runCli(cwd, ['inbox', '--all', '--json'], { env });
   expect(r.code).toBe(0);
   return JSON.parse(r.stdout);
+}
+
+/** Every ledger session, including sessions already placed in an automatic trail. */
+function moveSessions(cwd: string, env: NodeJS.ProcessEnv): any[] {
+  const r = runCli(cwd, ['move', '--json'], { env });
+  expect(r.code).toBe(0);
+  return JSON.parse(r.stdout).sessions;
+}
+
+function sessionForPrompt(cwd: string, env: NodeJS.ProcessEnv, prompt: string): any {
+  const session = moveSessions(cwd, env).find((item) =>
+    item.firstPrompt?.includes(prompt),
+  );
+  expect(session).toBeTruthy();
+  return session;
 }
 
 /**
@@ -95,8 +109,8 @@ function writeTranscript(
 }
 
 describe('ledger capture: nothing is dropped', () => {
-  test('a folderless (scratch) session lands in the inbox, not on disk', () => {
-    const scratch = makeTempDir(); // empty: not a git repo, no dev markers
+  test('the first meaningful prompt creates and places an automatic local trail', () => {
+    const scratch = makeTempDir(); // empty: no git repo or dev markers
     const home = makeTempDir();
     try {
       enableAutoInit(home);
@@ -115,15 +129,13 @@ describe('ledger capture: nothing is dropped', () => {
         }).code,
       ).toBe(0);
 
-      // Nothing was written into the scratch folder...
-      expect(existsSync(join(scratch, '.showtail'))).toBe(false);
-      // ...but the work is captured and visible in the inbox.
-      const data = inbox(scratch, env);
-      expect(data.sessions.length).toBe(1);
-      expect(data.sessions[0].prompts).toBe(1);
-      expect(data.sessions[0].edits).toBe(1);
-      expect(data.sessions[0].status).toBe('inbox');
-      expect(data.sessions[0].firstPrompt).toContain('scratch parser');
+      expect(existsSync(join(scratch, '.showtail'))).toBe(true);
+      expect(inbox(scratch, env).sessions).toHaveLength(0);
+      const session = sessionForPrompt(scratch, env, 'scratch parser');
+      expect(session.prompts).toBe(1);
+      expect(session.edits).toBe(1);
+      expect(session.status).toBe('placed');
+      expect(session.paths.map((path: string) => join(path))).toContain(join(scratch));
     } finally {
       cleanup(scratch);
       cleanup(home);
@@ -155,10 +167,9 @@ describe('ledger capture: nothing is dropped', () => {
         }).code,
       ).toBe(0);
 
-      const data = inbox(scratch, env);
-      expect(data.sessions.length).toBe(1);
-      expect(data.sessions[0].prompts).toBe(1); // only the genuine prompt
-      expect(data.sessions[0].firstPrompt).toContain('real thing');
+      expect(inbox(scratch, env).sessions).toHaveLength(0);
+      const session = sessionForPrompt(scratch, env, 'real thing');
+      expect(session.prompts).toBe(1); // only the genuine prompt
     } finally {
       cleanup(scratch);
       cleanup(home);
@@ -190,10 +201,9 @@ describe('ledger capture: nothing is dropped', () => {
         }).code,
       ).toBe(0);
 
-      const data = inbox(scratch, env);
-      expect(data.sessions.length).toBe(1);
-      expect(data.sessions[0].prompts).toBe(1); // only the genuine prompt
-      expect(data.sessions[0].firstPrompt).toContain('real thing');
+      expect(inbox(scratch, env).sessions).toHaveLength(0);
+      const session = sessionForPrompt(scratch, env, 'real thing');
+      expect(session.prompts).toBe(1); // only the genuine prompt
     } finally {
       cleanup(scratch);
       cleanup(home);
@@ -230,7 +240,7 @@ describe('ledger capture: nothing is dropped', () => {
 });
 
 describe('reattach: placing and correcting attribution', () => {
-  test('reattach projects a scratch session into a repo and is idempotent', () => {
+  test('reattach moves an automatically placed session into a repo and is idempotent', () => {
     const scratch = makeTempDir();
     const repo = makeTempDir();
     const home = makeTempDir();
@@ -247,7 +257,7 @@ describe('reattach: placing and correcting attribution', () => {
         input: editFile(scratch, 'a.ts', 'x', 'y'),
         env,
       });
-      const id = inbox(scratch, env).sessions[0].id;
+      const id = sessionForPrompt(scratch, env, 'scratch work to place').id;
 
       const first = runCli(repo, ['reattach', id, '--to', repo], { env });
       expect(first.code).toBe(0);
@@ -281,7 +291,7 @@ describe('reattach: placing and correcting attribution', () => {
         input: userPrompt(scratch, 'movable work'),
         env,
       });
-      const id = inbox(scratch, env).sessions[0].id;
+      const id = sessionForPrompt(scratch, env, 'movable work').id;
 
       runCli(repoA, ['reattach', id, '--to', repoA], { env });
       expect(promptTexts(repoA, env)).toContain('movable work');
@@ -310,7 +320,7 @@ describe('reattach: placing and correcting attribution', () => {
       const env = envWithHome(home);
       const sid = 'sess-replies';
 
-      // Prompt in a folderless scratch dir → ledger only.
+      // Prompt in a plain folder → automatic local trail plus the durable ledger.
       runCli(scratch, ['hook', 'user-prompt'], {
         input: userPrompt(scratch, 'explain the parser', sid),
         env,
@@ -334,7 +344,7 @@ describe('reattach: placing and correcting attribution', () => {
         }).code,
       ).toBe(0);
 
-      const id = inbox(scratch, env).sessions[0].id;
+      const id = sessionForPrompt(scratch, env, 'explain the parser').id;
       runCli(repo, ['reattach', id, '--to', repo], { env });
 
       // The reattached trail shows the prompt AND the AI reply, linked as one turn.
@@ -362,7 +372,8 @@ describe('reattach: placing and correcting attribution', () => {
       const env = envWithHome(home);
       const sid = 'cdx-1';
 
-      // Codex prompt (folderless) — the ledger is tool-agnostic, keyed by native id.
+      // Codex prompt in a plain folder — the ledger is tool-agnostic and the
+      // automatic trail is rooted at that folder.
       runCli(scratch, ['hook', 'user-prompt', '--tool', 'codex'], {
         input: JSON.stringify({
           cwd: scratch,
@@ -386,12 +397,12 @@ describe('reattach: placing and correcting attribution', () => {
         env,
       });
 
-      const data = inbox(scratch, env);
-      expect(data.sessions.length).toBe(1);
-      expect(data.sessions[0].prompts).toBe(1);
-      expect(data.sessions[0].edits).toBe(1);
+      expect(inbox(scratch, env).sessions).toHaveLength(0);
+      const session = sessionForPrompt(scratch, env, 'codex: add a helper');
+      expect(session.prompts).toBe(1);
+      expect(session.edits).toBe(1);
 
-      const id = data.sessions[0].id;
+      const id = session.id;
       runCli(repo, ['reattach', id, '--to', repo], { env });
 
       const turn = freshReport(repo, env).turns.find(
@@ -421,7 +432,7 @@ describe('reattach: placing and correcting attribution', () => {
         input: userPrompt(scratch, 'work that outlives its repo'),
         env,
       });
-      const id = inbox(scratch, env).sessions[0].id;
+      const id = sessionForPrompt(scratch, env, 'work that outlives its repo').id;
       runCli(repo, ['reattach', id, '--to', repo], { env });
       expect(inbox(repo, env).sessions.length).toBe(0); // placed
 

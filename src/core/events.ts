@@ -1,4 +1,5 @@
 import type { Event, EventType, JournalEntry, Session, Tool } from '../types.ts';
+import { CaptureInterruptedError, requireCaptureContinuation } from './captureGuard.ts';
 import { maybeCurrentCommit } from './git.ts';
 import { makeId } from './ids.ts';
 import { readObject, writeObject } from './objects.ts';
@@ -71,6 +72,8 @@ export interface NewEventInput {
   cacheCreationTokens?: number;
   /** Force a specific session; otherwise the current/started session is used. */
   sessionId?: string;
+  /** Recheck an automatic caller's capture window at each write boundary. */
+  continueCapture?: () => boolean;
 }
 
 /**
@@ -96,7 +99,10 @@ export async function logEvent(
   input: NewEventInput,
 ): Promise<{ event: Event; session: Session }> {
   const paths = author.shared;
-  const session = resolveOrStartSession(author, input.sessionId);
+  requireCaptureContinuation(input.continueCapture);
+  const session = resolveOrStartSession(author, input.sessionId, {
+    continueCapture: input.continueCapture,
+  });
 
   const config = readConfig(paths);
   // Imported (back-dated) events don't auto-capture a git commit — a past
@@ -107,9 +113,11 @@ export async function logEvent(
     (input.timestamp
       ? undefined
       : await maybeCurrentCommit(paths.root, config.settings.git));
+  requireCaptureContinuation(input.continueCapture);
 
   // Scrub before anything touches disk, then hash the *redacted* text.
   const { text, hits } = redact(input.text, config.settings.redact);
+  requireCaptureContinuation(input.continueCapture);
   const ref = writeObject(paths, text);
 
   const timestamp = input.timestamp ?? new Date().toISOString();
@@ -121,9 +129,11 @@ export async function logEvent(
   // saved here — so plans captured live, by import, or manually all get a link.
   let planPath = input.planPath;
   if (input.type === 'plan' && !planPath) {
+    requireCaptureContinuation(input.continueCapture);
     planPath = materializePlan(paths, {
       text: input.text,
       sourceId: input.sourceId ?? id,
+      continueCapture: input.continueCapture,
     }).planPath;
   }
 
@@ -160,6 +170,7 @@ export async function logEvent(
     entry.cacheCreationTokens = input.cacheCreationTokens;
   }
 
+  requireCaptureContinuation(input.continueCapture);
   appendJournal(author, entry);
   return { event: eventFromEntry(paths, entry, author.slug), session };
 }
@@ -233,7 +244,12 @@ function eventEntries(author: AuthorPaths): JournalEntry[] {
  *  2. The current session recorded in state.
  *  3. A freshly auto-started session.
  */
-export function resolveOrStartSession(author: AuthorPaths, explicitId?: string): Session {
+export function resolveOrStartSession(
+  author: AuthorPaths,
+  explicitId?: string,
+  opts: { continueCapture?: () => boolean } = {},
+): Session {
+  requireCaptureContinuation(opts.continueCapture);
   const sessions = readSessions(author);
 
   if (explicitId) {
@@ -256,8 +272,19 @@ export function resolveOrStartSession(author: AuthorPaths, explicitId?: string):
   const session = makeSession();
   session.machineId = author.machineId;
   sessions.push(session);
+  requireCaptureContinuation(opts.continueCapture);
   writeSessions(author, sessions);
-  updateState(author.shared, { currentSessionId: session.id, currentPromptId: null });
+  try {
+    requireCaptureContinuation(opts.continueCapture);
+    updateState(author.shared, { currentSessionId: session.id, currentPromptId: null });
+  } catch (error) {
+    if (error instanceof CaptureInterruptedError) {
+      const latest = readSessions(author);
+      const withoutNew = latest.filter((candidate) => candidate.id !== session.id);
+      if (withoutNew.length !== latest.length) writeSessions(author, withoutNew);
+    }
+    throw error;
+  }
   return session;
 }
 
@@ -281,9 +308,12 @@ export function sweepIdleSessions(
   author: AuthorPaths,
   idleMs: number,
   now: number,
+  opts: { continueCapture?: () => boolean } = {},
 ): string[] {
+  requireCaptureContinuation(opts.continueCapture);
   const closed: string[] = [];
   for (const session of readSessions(author)) {
+    requireCaptureContinuation(opts.continueCapture);
     if (session.endedAt) continue;
     // A machine only closes its own sessions — closing another machine's session
     // can't persist (its shard isn't ours to write) and would churn every sweep.
@@ -297,7 +327,7 @@ export function sweepIdleSessions(
     const lastMs = Date.parse(lastTs);
     if (Number.isNaN(lastMs)) continue;
     if (now - lastMs > idleMs) {
-      closeSession(author, session.id, lastTs);
+      closeSession(author, session.id, lastTs, opts);
       closed.push(session.id);
     }
   }
@@ -331,16 +361,11 @@ export function importedPromptIds(author: AuthorPaths): Map<string, string> {
  * import you just did", which is what `showtail import undo` removes.
  */
 export function latestBatchId(author: AuthorPaths): string | undefined {
-  const migrationBatches = new Set(
-    readJournal(author)
-      .filter((entry) => entry.kind === 'enrichment' && entry.batch)
-      .map((entry) => entry.batch!),
-  );
   let latest: string | undefined;
   for (const e of readJournal(author)) {
-    if (e.batch && !e.batch.startsWith('mig_') && !migrationBatches.has(e.batch)) {
-      latest = e.batch;
-    }
+    // `import undo` owns only explicit import batches. Ledger projections use
+    // `ledger:*`; routing migration must never make them the next undo target.
+    if (e.batch?.startsWith('imp_')) latest = e.batch;
   }
   return latest;
 }
@@ -373,6 +398,27 @@ export function removeEventsByBatch(author: AuthorPaths, batchId: string): numbe
 }
 
 /**
+ * Remove an exact set of projected records and declare the routing rewrite.
+ * Source ids, unlike legacy session batches, let one turn move without touching
+ * neighboring turns that share the same native chat and repo session.
+ */
+export function removeJournalEntriesBySourceIds(
+  author: AuthorPaths,
+  sourceIds: ReadonlySet<string>,
+  markerBatch: string,
+): number {
+  if (sourceIds.size === 0) return 0;
+  const removed = rewriteJournal(
+    author,
+    (entry) => !entry.sourceId || !sourceIds.has(entry.sourceId),
+  );
+  if (removed > 0) {
+    recordUndoMarker(author, markerBatch, removed, 'routing-reprojection');
+  }
+  return removed;
+}
+
+/**
  * Append the `import-undo` rewrite marker. Written *after* the rewrite so its
  * `prev` links to the re-chained tail. Best-effort: a read-only author view (no
  * machineId, so nothing can be appended) must not turn an undo into an error —
@@ -382,7 +428,7 @@ function recordUndoMarker(
   author: AuthorPaths,
   batchId: string,
   removed: number,
-  reason: 'import-undo' | 'migration-undo',
+  reason: 'import-undo' | 'migration-undo' | 'routing-reprojection',
 ): void {
   if (!author.machineId) return;
   const marker: JournalEntry = {

@@ -52,6 +52,34 @@ describe('capabilities', () => {
     }
   });
 
+  test('reuses the same project and capture snapshot as status', () => {
+    const dir = makeTempDir();
+    const home = makeTempDir();
+    try {
+      enableAutoInit(home);
+      const env = envWith(home);
+      const status = JSON.parse(run(dir, ['status', '--json'], env).stdout);
+      const capabilities = JSON.parse(run(dir, ['capabilities', '--json'], env).stdout);
+      for (const key of [
+        'initialized',
+        'root',
+        'candidateRoot',
+        'evidence',
+        'autoInit',
+        'setupCompleted',
+        'inbox',
+        'nextAction',
+        'hooksActive',
+      ]) {
+        expect(capabilities[key]).toEqual(status[key]);
+      }
+      expect(capabilities.tools).toEqual(status.tools);
+    } finally {
+      cleanup(dir);
+      cleanup(home);
+    }
+  });
+
   test('after a prompt is captured, next action is to report', () => {
     const dir = makeTempDir();
     const home = makeTempDir();

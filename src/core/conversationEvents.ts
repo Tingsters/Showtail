@@ -1,6 +1,7 @@
 /** Durable storage for the provider-neutral structured conversation stream. */
 import type { Config, ConversationEvent, JsonValue, Tool } from '../types.ts';
 import { authorSlugs } from './authors.ts';
+import { requireCaptureContinuation } from './captureGuard.ts';
 import { resolveOrStartSession } from './events.ts';
 import { makeId } from './ids.ts';
 import { appendJournal, JOURNAL_ENTRY_VERSION, readJournal } from './journal.ts';
@@ -19,6 +20,8 @@ export interface NewConversationEventInput {
   turnId?: string;
   sessionId?: string;
   batchId?: string;
+  /** Recheck an automatic caller's capture window at each write boundary. */
+  continueCapture?: () => boolean;
 }
 
 export interface ConversationEventWithSession {
@@ -130,9 +133,13 @@ export function logConversationEvent(
   author: AuthorPaths,
   input: NewConversationEventInput,
 ): ConversationEvent {
-  const session = resolveOrStartSession(author, input.sessionId);
+  requireCaptureContinuation(input.continueCapture);
+  const session = resolveOrStartSession(author, input.sessionId, {
+    continueCapture: input.continueCapture,
+  });
   const sanitized = sanitizeEvent(author.shared, input.event);
   const serialized = JSON.stringify(sanitized.event);
+  requireCaptureContinuation(input.continueCapture);
   const ref = writeObject(author.shared, serialized);
   const entry = {
     v: JOURNAL_ENTRY_VERSION,
@@ -152,6 +159,7 @@ export function logConversationEvent(
     ...(input.batchId ? { batch: input.batchId } : {}),
     ...(sanitized.hits > 0 ? { redacted: sanitized.hits } : {}),
   };
+  requireCaptureContinuation(input.continueCapture);
   appendJournal(author, entry);
   return sanitized.event;
 }

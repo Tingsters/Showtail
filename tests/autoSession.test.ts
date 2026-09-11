@@ -1,8 +1,9 @@
 import { describe, expect, test } from 'bun:test';
-import { writeFileSync } from 'node:fs';
+import { existsSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { cleanup, makeTempDir, runCli, seedAuthor, TEST_EMAIL } from './helpers.ts';
 import { ensureInitialized } from '../src/commands/init.ts';
+import { CaptureInterruptedError } from '../src/core/captureGuard.ts';
 import { logEvent, sweepIdleSessions } from '../src/core/events.ts';
 import { readSessions } from '../src/core/storage.ts';
 
@@ -13,6 +14,29 @@ function run(cwd: string, args: string[], input = '') {
 }
 
 describe('automatic session lifecycle', () => {
+  test('automatic initialization stops when consent changes during Git discovery', async () => {
+    const dir = makeTempDir();
+    try {
+      let enabled = true;
+      const pending = ensureInitialized(dir, {
+        initialization: {
+          mode: 'automatic',
+          evidence: 'cwd',
+          ledgerSessionId: 'led_guard_test',
+        },
+        continueCapture: () => enabled,
+      });
+      queueMicrotask(() => {
+        enabled = false;
+      });
+
+      await expect(pending).rejects.toBeInstanceOf(CaptureInterruptedError);
+      expect(existsSync(join(dir, '.showtail'))).toBe(false);
+    } finally {
+      cleanup(dir);
+    }
+  });
+
   test('idle sweep closes a stale session, stamped at its last event (not now)', async () => {
     const dir = makeTempDir();
     try {

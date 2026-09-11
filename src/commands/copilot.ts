@@ -5,6 +5,11 @@ import {
   writeCopilotInstructions,
 } from '../core/copilot.ts';
 import { refreshExistingCopilotCliInstructions } from '../core/copilotCli.ts';
+import {
+  uninstallVsCodeExtension,
+  VSCODE_EXTENSION_ID,
+} from '../core/vscodeExtension.ts';
+import type { ConnectUninstallResult } from '../plugins/types.ts';
 
 export interface CopilotInstallOptions {
   /** Show the VS Code extension install guidance. Defaults to true. */
@@ -84,21 +89,45 @@ export async function runCopilotInstall(options: CopilotInstallOptions): Promise
 }
 
 export interface CopilotUninstallOptions {
+  /** Also remove the user-wide native extension that performs capture. */
+  all?: boolean;
   cwd?: string;
 }
 
-/** Remove the Showtail Copilot instructions (leaves the extension alone). */
+/** Remove the Showtail Copilot instructions and, for a full disconnect, its extension. */
 export async function runCopilotUninstall(
   options: CopilotUninstallOptions = {},
-): Promise<void> {
+): Promise<ConnectUninstallResult> {
   const target = resolveCopilotTarget(options.cwd);
   const removed = removeCopilotInstructions(target);
-  if (!removed) {
-    console.log('Nothing to remove — no Showtail Copilot instructions found.');
-    return;
+  const extension = options.all ? uninstallVsCodeExtension() : undefined;
+
+  if (removed) {
+    console.log('Removed the Showtail Copilot instructions from .github/.');
   }
-  console.log('Removed the Showtail Copilot instructions from .github/.');
-  console.log(
-    'To also remove the extension: code --uninstall-extension ' + MARKETPLACE_ID,
-  );
+  if (extension?.wasInstalled) {
+    console.log(`Removed the Showtail VS Code extension (${VSCODE_EXTENSION_ID}).`);
+    console.log('Reload any open VS Code windows to unload the running extension.');
+  }
+  if (!removed && !extension?.wasInstalled) {
+    console.log('Nothing to remove — no Showtail Copilot instructions found.');
+  }
+
+  const warnings: string[] = [];
+  if (extension && !extension.uninstalled) {
+    warnings.push(
+      `Could not remove or verify the VS Code extension (${extension.reason ?? 'unknown error'}). ` +
+        `Run \`code --uninstall-extension ${VSCODE_EXTENSION_ID}\` to remove the dormant component, then reload open VS Code windows.`,
+    );
+  } else if (!options.all) {
+    warnings.push(
+      `Only project instructions were removed; the user-wide VS Code extension was left in place. ` +
+        `Run \`showtail disconnect copilot\` without a scope flag to stop it.`,
+    );
+  }
+
+  return {
+    captureStopped: options.all ? extension?.uninstalled === true : false,
+    ...(warnings.length > 0 ? { warnings } : {}),
+  };
 }

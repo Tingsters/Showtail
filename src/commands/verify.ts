@@ -2,6 +2,7 @@ import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { checkArtifactHashes } from '../core/artifacts.ts';
 import { authorSlugs } from '../core/authors.ts';
+import { ShowtailError } from '../core/errors.ts';
 import { eventFromEntry } from '../core/events.ts';
 import {
   fileHistoryNumstat,
@@ -14,8 +15,16 @@ import {
 import { buildReportData, renderMarkdown } from '../core/report.ts';
 import { validateEvent } from '../core/schema.ts';
 import { checkObjects, objectExists } from '../core/objects.ts';
+import { emitJson } from '../core/output.ts';
+import {
+  assertProjectCommandIdentity,
+  pinProjectCommandIdentity,
+  resolveProjectCommandTarget,
+  type ProjectSelection,
+} from '../core/projectCatalog.ts';
 import {
   authorPaths,
+  isEligibleAnchor,
   readConfig,
   requirePaths,
   trailIsNewerThanBinary,
@@ -31,8 +40,14 @@ import type { JournalEntry } from '../types.ts';
 
 export interface VerifyOptions {
   cwd?: string;
+  /** True when cwd came from the optional `verify [path]` argument. */
+  explicitPath?: boolean;
+  /** Select a live trail by path, trail id, or corroborated project name. */
+  project?: string;
   /** Print the structured result as JSON instead of the human summary. */
   json?: boolean;
+  /** Include each check's full detail text in JSON. */
+  verboseJson?: boolean;
 }
 
 interface CheckResult {
@@ -129,6 +144,13 @@ function describeMarker(entry: JournalEntry): string {
       `trail repair at ${entry.ts} (${r.entries} entr` +
       `${r.entries === 1 ? 'y' : 'ies'} removed` +
       `${r.labels?.length ? `; ${r.labels.join(', ')}` : ''})`
+    );
+  }
+  if (r?.reason === 'routing-reprojection') {
+    return (
+      `routing reprojection at ${entry.ts} (${r.entries} entr` +
+      `${r.entries === 1 ? 'y' : 'ies'} moved to the corrected project` +
+      `${r.batch ? `; segment ${r.batch}` : ''})`
     );
   }
   if (r?.reason === 'import-undo' || r?.reason === 'migration-undo') {
@@ -291,10 +313,10 @@ async function checkJournalHistory(
   }
 
   // Reconcile against what the trail says it did to itself. Redaction, supported
-  // import/migration undo commands, and guarded repairs legitimately rewrite lines,
-  // and each records a
-  // dated marker; one marker accounts for one rewrite, oldest first, so the
-  // rewrites left over are the ones nothing declares.
+  // import/migration undo commands, routing reprojection, and guarded repairs
+  // legitimately rewrite lines, and each records a dated marker; one marker
+  // accounts for one rewrite, oldest first, so the rewrites left over are the
+  // ones nothing declares.
   const declared = journals
     .flatMap((journal) => journal.entries.filter((e) => e.kind === 'redaction'))
     .sort((a, b) => a.ts.localeCompare(b.ts));
@@ -329,7 +351,7 @@ async function checkJournalHistory(
   check.details.push(
     `${unexplained.length} of ${rewrites.length} rewrite(s) unexplained: the trail ` +
       `declares ${declared.length} deliberate rewrite(s) (redaction, repair, ` +
-      'import undo, or migration undo), which does not account for them.',
+      'import undo, migration undo, or routing reprojection), which does not account for them.',
   );
   check.details.push(
     'This says the recorded history was rewritten, not that anyone cheated. A ' +
@@ -360,7 +382,9 @@ export async function verifyProject(paths: ShowtailPaths): Promise<VerifyResult>
     details: [],
   };
   if (!existsSync(paths.config)) {
-    configCheck.details.push('config.json is missing — run `showtail init`.');
+    configCheck.details.push(
+      'config.json is missing — run `showtail track .` to repair it.',
+    );
   } else {
     try {
       readConfig(paths);
@@ -478,6 +502,7 @@ export async function verifyProject(paths: ShowtailPaths): Promise<VerifyResult>
   const passes: JournalEntry[] = [];
   const undos: JournalEntry[] = [];
   const repairs: JournalEntry[] = [];
+  const routingReprojections: JournalEntry[] = [];
   for (const journal of journals) {
     if (journal.error !== undefined) continue; // Already reported by check 2.
     for (const shard of journal.shards) {
@@ -488,6 +513,8 @@ export async function verifyProject(paths: ShowtailPaths): Promise<VerifyResult>
         if (entry.kind !== 'redaction') continue;
         if (entry.redaction?.reason === 'repair') {
           repairs.push(entry);
+        } else if (entry.redaction?.reason === 'routing-reprojection') {
+          routingReprojections.push(entry);
         } else if (
           entry.redaction?.reason === 'import-undo' ||
           entry.redaction?.reason === 'migration-undo'
@@ -568,6 +595,19 @@ export async function verifyProject(paths: ShowtailPaths): Promise<VerifyResult>
       chainCheck.details.push(
         `  ${entry.ts} — ${r?.entries ?? 0} entr${r?.entries === 1 ? 'y' : 'ies'} removed` +
           `${r?.labels?.length ? ` (${r.labels.join(', ')})` : ''}.`,
+      );
+    }
+  }
+  if (routingReprojections.length > 0) {
+    chainCheck.details.push(
+      `${routingReprojections.length} recorded routing reprojection${routingReprojections.length === 1 ? '' : 's'} ` +
+        '(captured records moved to the project selected by later path evidence and the chain was re-linked):',
+    );
+    for (const entry of routingReprojections) {
+      const r = entry.redaction;
+      chainCheck.details.push(
+        `  ${entry.ts} — ${r?.entries ?? 0} entr${r?.entries === 1 ? 'y' : 'ies'} moved` +
+          `${r?.batch ? ` (segment ${r.batch})` : ''}.`,
       );
     }
   }
@@ -739,12 +779,50 @@ export async function verifyProject(paths: ShowtailPaths): Promise<VerifyResult>
 
 /** CLI entry: verify the project and print a clear pass/fail summary. */
 export async function runVerify(options: VerifyOptions = {}): Promise<boolean> {
-  const paths = requirePaths(options.cwd);
+  const callerCwd = resolve(options.cwd ?? process.cwd());
+  const target = options.project
+    ? resolveProjectCommandTarget(options.project, { cwd: callerCwd })
+    : null;
+  const requested = resolve(target?.root ?? callerCwd);
+  if ((options.explicitPath || options.project) && !isEligibleAnchor(requested)) {
+    throw new ShowtailError(
+      `Folder does not exist: ${requested}`,
+      2,
+      {
+        requestedRoot: requested,
+        root: null,
+        candidateRoot: null,
+        candidates: [],
+      },
+      'PATH_NOT_FOUND',
+      'choose-existing-path',
+    );
+  }
+  const paths = requirePaths(requested);
+  const identityPin = pinProjectCommandIdentity(paths.root, target?.selection);
+  assertProjectCommandIdentity(identityPin);
   const result = await verifyProject(paths);
+  assertProjectCommandIdentity(identityPin);
+  const trailId = readConfig(paths).trailId ?? null;
 
   if (options.json) {
-    // Stable machine-readable shape: { ok, checks: [{ name, ok, details }] }.
-    console.log(JSON.stringify(result));
+    // Keep the default envelope compact; full diagnostic prose is opt-in.
+    emitJson({
+      ok: result.ok,
+      root: paths.root,
+      trailId,
+      ...(target?.selection
+        ? { selection: target.selection satisfies ProjectSelection }
+        : {}),
+      checks: options.verboseJson
+        ? result.checks
+        : result.checks.map(({ name, ok, skipped, details }) => ({
+            name,
+            ok,
+            ...(skipped ? { skipped } : {}),
+            detailsCount: details.length,
+          })),
+    });
     return result.ok;
   }
 

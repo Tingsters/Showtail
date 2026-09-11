@@ -22,19 +22,22 @@
  * `index.json` use the atomic temp+rename + re-read-before-write tolerance the
  * rest of the codebase uses. No lock is needed — materialize is idempotent.
  */
-import { existsSync, mkdirSync, readdirSync, realpathSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { existsSync, readdirSync, realpathSync, rmSync } from 'node:fs';
+import { dirname, isAbsolute, join, resolve } from 'node:path';
 import type { ConversationEvent, Tool } from '../types.ts';
+import { CaptureInterruptedError, requireCaptureContinuation } from './captureGuard.ts';
 import { ledgerDir, readInboxMinSignal, readScratchPaths } from './globalConfig.ts';
 import { makeId } from './ids.ts';
+import { applyPathRebases, type PathRebase } from './pathRebase.ts';
 import {
   appendJsonl,
-  eligibleProjectRoot,
   isPathUnder,
   pathKey,
   readJson,
   readJsonl,
+  resolveProjectContext,
   writeJson,
+  type ProjectContext,
 } from './storage.ts';
 
 /** Cap a single captured diff stored inline so one huge edit can't bloat the ledger. */
@@ -61,8 +64,18 @@ export interface LedgerSession {
   machineId?: string;
   /** Author slug, when this machine's identity is known (for projection attribution). */
   slug?: string;
-  /** Working directory at capture time — the cwd-fallback target when no edit-path root resolves. */
-  cwd?: string;
+  /**
+   * Working directory at capture time — the cwd-fallback target when no edit-path
+   * root resolves. `null` means the host explicitly had no project cwd.
+   */
+  cwd?: string | null;
+  /** Workspace roots reported by the host tool, accumulated across hook events. */
+  workspacePaths?: string[];
+  /**
+   * Ordered project moves applied to capture-time paths when routing and
+   * materializing this session. Raw ledger records stay unchanged provenance.
+   */
+  pathRebases?: PathRebase[];
   startedAt: string;
   endedAt?: string;
   lastSeenAt: string;
@@ -138,6 +151,17 @@ export interface LedgerRecord {
   sha256?: string;
   /** Upstream source id (e.g. a transcript message id), when one exists. */
   sourceId?: string;
+  /**
+   * Project context observed for this record. New writers may attach it to a
+   * prompt when the host reports a workspace/cwd change. Older records omit it;
+   * an edit-less turn then inherits only the preceding unambiguous turn.
+   */
+  context?: {
+    cwd?: string | null;
+    workspacePaths?: string[];
+    /** Only turn-scoped context may override an already-resolved preceding turn. */
+    scope?: 'turn' | 'session';
+  };
   /** Provider-neutral structured event for a `conversation_event` record. */
   conversationEvent?: ConversationEvent;
   /** For a `tool_call` record: the tool's name (e.g. `Bash`, `Read`, `Grep`). */
@@ -156,6 +180,124 @@ export interface LedgerRecord {
   cacheReadTokens?: number;
   /** For a `recap` record: cache-creation tokens used across the turn. */
   cacheCreationTokens?: number;
+}
+
+/** Current on-disk schema for a session's derived turn-routing sidecar. */
+export const LEDGER_SEGMENTS_VERSION = 2;
+
+/** Current schema for a trusted Showtail control result bound to one native turn. */
+export const LEDGER_PROJECT_BINDING_VERSION = 1;
+
+export type LedgerProjectControlAction = 'report' | 'open_report' | 'status' | 'verify';
+
+/** An explicit file or folder attached by the student to one native request. */
+export interface LedgerProjectAttachment {
+  kind: 'file' | 'folder';
+  path: string;
+}
+
+/**
+ * A validated Showtail-owned project selection. The trail id is identity; `root`
+ * is a moveable hint that must still resolve to that exact trail before routing.
+ */
+export interface LedgerProjectControlTarget {
+  schemaVersion: typeof LEDGER_PROJECT_BINDING_VERSION;
+  source: 'showtail-project-control';
+  nativeSessionId: string;
+  nativeRequestId: string;
+  claimId: string;
+  action: LedgerProjectControlAction;
+  trailId: string;
+  root: string;
+  displayName?: string;
+  mode: 'authoritative' | 'corroborated';
+  evidence: string[];
+  crossWorkspace?: boolean;
+  reportPath?: string;
+  boundAt: string;
+}
+
+/** Validated marker data before it is associated with a ledger session/turn. */
+export type LedgerProjectControlInput = Omit<
+  LedgerProjectControlTarget,
+  'schemaVersion' | 'source' | 'nativeSessionId' | 'nativeRequestId' | 'boundAt'
+>;
+
+/** A routeable prompt turn (or the leading records before the first prompt). */
+export interface LedgerSegment {
+  /** Stable id derived from the opening prompt record id. */
+  id: string;
+  /** Prompt record that opened this turn; absent only for leading orphan records. */
+  promptRecordId?: string;
+  /** Immutable ledger record ids assigned to this turn, in ledger write order. */
+  recordIds: string[];
+  /** Native provider request id, when the transcript exposes one. */
+  nativeRequestId?: string;
+  /** Explicit student attachments observed on this exact request. */
+  attachments?: LedgerProjectAttachment[];
+  /** Trusted Showtail control target for this exact request. */
+  controlTarget?: LedgerProjectControlTarget;
+  startedAt: string;
+  endedAt: string;
+  status: LedgerStatus;
+  targets?: LedgerTarget[];
+  dismissedAt?: string;
+  /** Project moves apply to this turn only, so moving A never rebases B. */
+  pathRebases?: PathRebase[];
+  /** Crash-resumable state for destination-first routing reprojection. */
+  migration?: LedgerSegmentMigration;
+}
+
+export type LedgerSegmentMigrationPhase =
+  | 'planned'
+  | 'destination-materialized'
+  | 'obsolete-projections-removed'
+  | 'complete';
+
+export interface LedgerSegmentMigration {
+  phase: LedgerSegmentMigrationPhase;
+  destination: LedgerTarget;
+  /** Placements observed before the destination write; retained for retries. */
+  sourceTargets: LedgerTarget[];
+  startedAt: string;
+  updatedAt: string;
+  completedAt?: string;
+}
+
+/** Versioned, rebuildable sidecar stored beside records.jsonl. */
+export interface LedgerSegmentsDocument {
+  version: typeof LEDGER_SEGMENTS_VERSION;
+  recordCount: number;
+  lastRecordId?: string;
+  segments: LedgerSegment[];
+}
+
+/** Segment route plus whether it was inherited from the preceding turn. */
+export type LedgerSegmentProjectContext =
+  | (Extract<ProjectContext, { state: 'tracked' | 'candidate' }> & {
+      inheritedFrom?: string;
+    })
+  | Extract<ProjectContext, { state: 'ambiguous' | 'none' }>;
+
+/** Command-friendly view of one independently routeable turn range. */
+export interface LedgerSegmentView {
+  selector: string;
+  session: LedgerSession;
+  segment: LedgerSegment;
+  route: LedgerSegmentProjectContext;
+  targetMissing: boolean;
+  targetPaths: string[];
+  prompts: number;
+  edits: number;
+  firstPrompt?: string;
+  hiddenReason: HiddenReason | null;
+}
+
+/** Consecutive pending turns that can be acted on as one command-level range. */
+export interface LedgerRangeView extends LedgerSegmentView {
+  /** Stable ids of every persisted segment represented by this range. */
+  memberSegmentIds: string[];
+  segments: LedgerSegment[];
 }
 
 /** The global cross-session index: trail locations and where each session was placed. */
@@ -185,6 +327,9 @@ function sessionFile(id: string): string {
 }
 function recordsFile(id: string): string {
   return join(sessionDir(id), 'records.jsonl');
+}
+function segmentsFile(id: string): string {
+  return join(sessionDir(id), 'segments.json');
 }
 
 /**
@@ -219,9 +364,14 @@ export function readLedgerIndex(): LedgerIndex {
 }
 
 /** Read-modify-write the index atomically (tolerant of a concurrent writer). */
-function updateLedgerIndex(mutate: (idx: LedgerIndex) => void): LedgerIndex {
+function updateLedgerIndex(
+  mutate: (idx: LedgerIndex) => void,
+  continueCapture?: () => boolean,
+): LedgerIndex {
+  requireCaptureContinuation(continueCapture);
   const idx = readLedgerIndex();
   mutate(idx);
+  requireCaptureContinuation(continueCapture);
   writeJson(indexFile(), idx);
   return idx;
 }
@@ -239,9 +389,43 @@ export function readLedgerSession(id: string): LedgerSession | null {
   }
 }
 
+function samePathRebase(a: PathRebase, b: PathRebase): boolean {
+  return (
+    pathKey(resolve(a.fromRoot)) === pathKey(resolve(b.fromRoot)) &&
+    pathKey(resolve(a.toRoot)) === pathKey(resolve(b.toRoot))
+  );
+}
+
+function isRebasePrefix(
+  prefix: readonly PathRebase[],
+  complete: readonly PathRebase[],
+): boolean {
+  return (
+    prefix.length <= complete.length &&
+    prefix.every((rebase, index) => samePathRebase(rebase, complete[index]!))
+  );
+}
+
 /** Persist one ledger session's metadata (atomic temp+rename). */
-export function writeLedgerSession(session: LedgerSession): void {
-  writeJson(sessionFile(session.id), session);
+export function writeLedgerSession(
+  session: LedgerSession,
+  continueCapture?: () => boolean,
+  opts: { preservePathRebases?: boolean } = {},
+): void {
+  requireCaptureContinuation(continueCapture);
+  let next = session;
+  if (opts.preservePathRebases !== false) {
+    const persisted = readLedgerSession(session.id);
+    const incoming = session.pathRebases ?? [];
+    const current = persisted?.pathRebases ?? [];
+    if (current.length > incoming.length && isRebasePrefix(incoming, current)) {
+      next = {
+        ...session,
+        pathRebases: current.map((rebase) => ({ ...rebase })),
+      };
+    }
+  }
+  writeJson(sessionFile(session.id), next);
 }
 
 /** Fields needed to find or open a ledger session. */
@@ -252,7 +436,20 @@ export interface EnsureLedgerSessionInput {
   /** The capturing machine's id when known (informational; not part of the key). */
   machineId?: string;
   slug?: string;
-  cwd?: string;
+  /** `null` preserves an explicit folderless host context. */
+  cwd?: string | null;
+  workspacePaths?: string[];
+  /** Recheck an automatic caller's capture window at each ledger write. */
+  continueCapture?: () => boolean;
+}
+
+function mergePathHints(current: string[] | undefined, incoming: string[]): string[] {
+  const merged = new Map<string, string>();
+  for (const value of [...(current ?? []), ...incoming]) {
+    const absolute = resolve(value);
+    merged.set(pathKey(absolute), absolute);
+  }
+  return [...merged.values()];
 }
 
 /**
@@ -263,6 +460,7 @@ export interface EnsureLedgerSessionInput {
  * shrink the window a concurrent first-hook could clobber the push.
  */
 export function ensureLedgerSession(input: EnsureLedgerSessionInput): LedgerSession {
+  requireCaptureContinuation(input.continueCapture);
   const key = sessionKey(input.tool, input.nativeSessionId);
   const now = new Date().toISOString();
 
@@ -273,10 +471,18 @@ export function ensureLedgerSession(input: EnsureLedgerSessionInput): LedgerSess
     if (existing && !existing.endedAt) {
       // Refresh the cheap, mutable hints; keep the rest as-is.
       existing.lastSeenAt = now;
-      if (input.cwd && !existing.cwd) existing.cwd = input.cwd;
+      if (input.cwd !== undefined && existing.cwd === undefined) {
+        existing.cwd = input.cwd;
+      }
       if (input.slug && !existing.slug) existing.slug = input.slug;
-      writeLedgerSession(existing);
-      return existing;
+      if (input.workspacePaths && input.workspacePaths.length > 0) {
+        existing.workspacePaths = mergePathHints(
+          existing.workspacePaths,
+          input.workspacePaths,
+        );
+      }
+      writeLedgerSession(existing, input.continueCapture);
+      return readLedgerSession(existing.id) ?? existing;
     }
   }
 
@@ -287,26 +493,37 @@ export function ensureLedgerSession(input: EnsureLedgerSessionInput): LedgerSess
     machineId: input.machineId,
     slug: input.slug,
     cwd: input.cwd,
+    ...(input.workspacePaths && input.workspacePaths.length > 0
+      ? { workspacePaths: mergePathHints(undefined, input.workspacePaths) }
+      : {}),
     startedAt: now,
     lastSeenAt: now,
     status: 'inbox',
   };
-  mkdirSync(sessionDir(session.id), { recursive: true });
-  writeLedgerSession(session);
   // Claim the key under a fresh read: if a concurrent hook just opened a session
   // for the same triple, adopt theirs and leave ours an unindexed orphan dir
-  // (harmless — never listed). Otherwise take the slot.
+  // (harmless — never listed). Otherwise take the slot. If consent changes after
+  // the session file is staged but before the index write, remove our unindexed
+  // directory so an interrupted automatic capture leaves no ghost session.
   let winnerId = session.id;
-  updateLedgerIndex((i) => {
-    const open = i.byKey[key];
-    const openSession = open ? readLedgerSession(open) : null;
-    if (openSession && !openSession.endedAt) {
-      winnerId = open!;
-    } else {
-      i.byKey[key] = session.id;
-      winnerId = session.id;
+  try {
+    writeLedgerSession(session, input.continueCapture);
+    updateLedgerIndex((i) => {
+      const open = i.byKey[key];
+      const openSession = open ? readLedgerSession(open) : null;
+      if (openSession && !openSession.endedAt) {
+        winnerId = open!;
+      } else {
+        i.byKey[key] = session.id;
+        winnerId = session.id;
+      }
+    }, input.continueCapture);
+  } catch (error) {
+    if (error instanceof CaptureInterruptedError) {
+      rmSync(sessionDir(session.id), { recursive: true, force: true });
     }
-  });
+    throw error;
+  }
   if (winnerId !== session.id) {
     return readLedgerSession(winnerId) ?? session;
   }
@@ -321,11 +538,12 @@ export function endLedgerSession(id: string): void {
   writeLedgerSession(session);
 }
 
-/** Record the prompt record id that opens the current turn (for replay linkage). */
-export function setLedgerTurn(id: string, turnKey: string): void {
+/** Record or clear the prompt record id that opens the current turn. */
+export function setLedgerTurn(id: string, turnKey: string | undefined): void {
   const session = readLedgerSession(id);
   if (!session) return;
-  session.currentTurnKey = turnKey;
+  if (turnKey) session.currentTurnKey = turnKey;
+  else delete session.currentTurnKey;
   writeLedgerSession(session);
 }
 
@@ -334,11 +552,16 @@ export function setLedgerTurn(id: string, turnKey: string): void {
  * re-read it later (see {@link LedgerSession.transcriptPath}). No-op when the
  * path is already recorded, so the common case costs nothing.
  */
-export function setLedgerTranscriptPath(id: string, transcriptPath: string): void {
+export function setLedgerTranscriptPath(
+  id: string,
+  transcriptPath: string,
+  continueCapture?: () => boolean,
+): void {
+  requireCaptureContinuation(continueCapture);
   const session = readLedgerSession(id);
   if (!session || session.transcriptPath === transcriptPath) return;
   session.transcriptPath = transcriptPath;
-  writeLedgerSession(session);
+  writeLedgerSession(session, continueCapture);
 }
 
 /** Every ledger session, newest activity first. */
@@ -355,13 +578,30 @@ export function allLedgerSessions(): LedgerSession[] {
 
 // --- inbox surfacing (triage) --------------------------------------------
 
-/** Prompt/edit counts, first prompt text, and absolute edit paths — one records read. */
-function sessionFacts(id: string): {
+/** Resolve a capture-time path through every project move recorded for the session. */
+export function effectiveLedgerPath(
+  session: LedgerSession,
+  path: string,
+  additionalRebase?: PathRebase,
+): string {
+  const effective = applyPathRebases(session.pathRebases, path);
+  const previous = session.pathRebases?.at(-1);
+  if (additionalRebase && (!previous || !samePathRebase(previous, additionalRebase))) {
+    return applyPathRebases([additionalRebase], effective);
+  }
+  return effective;
+}
+
+/** Prompt/edit counts, first prompt text, and effective absolute edit paths. */
+function sessionFacts(sessionOrId: LedgerSession | string): {
   prompts: number;
   edits: number;
   firstPrompt?: string;
   editPaths: string[];
 } {
+  const session =
+    typeof sessionOrId === 'string' ? readLedgerSession(sessionOrId) : sessionOrId;
+  const id = typeof sessionOrId === 'string' ? sessionOrId : sessionOrId.id;
   let prompts = 0;
   let edits = 0;
   let firstPrompt: string | undefined;
@@ -369,13 +609,96 @@ function sessionFacts(id: string): {
   for (const rec of readLedgerRecords(id)) {
     if (rec.kind === 'edit') {
       edits += 1;
-      if (rec.file) editPaths.push(rec.file);
+      if (rec.file)
+        editPaths.push(session ? effectiveLedgerPath(session, rec.file) : rec.file);
     } else if (rec.kind === 'prompt') {
       prompts += 1;
       if (!firstPrompt && rec.text) firstPrompt = rec.text;
     }
   }
   return { prompts, edits, firstPrompt, editPaths };
+}
+
+/** Whether recorded edit files remain at their capture-time paths. */
+export type SessionEditPresence = 'none' | 'all-present' | 'all-absent' | 'mixed';
+
+/** Unique absolute file paths edited by a session, in first-capture order. */
+export function sessionEditPaths(session: LedgerSession | string): string[] {
+  const seen = new Set<string>();
+  const paths: string[] = [];
+  for (const file of sessionFacts(session).editPaths) {
+    const key = pathKey(file);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    paths.push(file);
+  }
+  return paths;
+}
+
+/** Classify a session as a move, copy, or partial move without changing the ledger. */
+export function sessionEditPresence(
+  session: LedgerSession | string,
+): SessionEditPresence {
+  const paths = sessionEditPaths(session);
+  if (paths.length === 0) return 'none';
+  const present = paths.reduce((count, file) => count + Number(existsSync(file)), 0);
+  if (present === paths.length) return 'all-present';
+  if (present === 0) return 'all-absent';
+  return 'mixed';
+}
+
+/** One session worth considering for content-lineage relocation into a new root. */
+export interface RelocationSessionSource {
+  session: LedgerSession;
+  /** Best known capture-time project location, for review output. */
+  from?: string;
+  /** `all-present` copies and edit-less sessions never enter relocation matching. */
+  editPresence: 'all-absent' | 'mixed';
+}
+
+/**
+ * Read-only source set for moved-work discovery.
+ *
+ * Inbox and target-missing sessions were already recoverable; this deliberately
+ * widens discovery to a session whose old trail is still alive after the student
+ * moved only the visible project files. A placed session is eligible only when it
+ * has one prior target. Sessions already placed here, multi-target sessions, and
+ * copies whose original files still exist are excluded before content matching.
+ */
+export function relocationSessionSources(targetRoot: string): RelocationSessionSource[] {
+  const target = resolve(targetRoot);
+  const sources: RelocationSessionSource[] = [];
+  for (const session of allLedgerSessions()) {
+    const editPresence = sessionEditPresence(session);
+    if (editPresence === 'none' || editPresence === 'all-present') continue;
+
+    // Relocation is session-atomic. A single recorded placement does not make
+    // edits spanning several project roots safe to move as one unit.
+    const context = sessionProjectContext(session);
+    if (context.state === 'ambiguous') continue;
+
+    const targets = session.targets ?? [];
+    let from: string | undefined;
+    if (session.status === 'placed') {
+      if (targets.length !== 1) continue;
+      const prior = targets[0]!;
+      from = knownTrailPath(prior.trailId) ?? prior.path;
+      if (sameDirectory(from, target)) continue;
+    } else {
+      // A malformed/stale inbox record with several placements is no safer to
+      // relocate than an explicitly multi-target placed session.
+      if (targets.length > 1) continue;
+      if (context.state === 'tracked' || context.state === 'candidate') {
+        from = context.root;
+        if (sameDirectory(from, target)) continue;
+      } else if (typeof session.cwd === 'string') {
+        from = effectiveLedgerPath(session, session.cwd);
+      }
+    }
+
+    sources.push({ session, from, editPresence });
+  }
+  return sources;
 }
 
 /** Prompt/edit counts for a session — the surfacing signal. */
@@ -394,24 +717,66 @@ export function sessionSummary(id: string): {
   return { prompts, edits, firstPrompt };
 }
 
-/** Distinct eligible project roots for a set of edit paths (cwd fallback when edit-less). */
-function workRootsFrom(editPaths: string[], cwd?: string): string[] {
-  const dirs = editPaths.length ? editPaths.map((p) => dirname(p)) : cwd ? [cwd] : [];
-  const roots = new Set<string>();
-  for (const d of dirs) {
-    const root = eligibleProjectRoot(d);
-    if (root) roots.add(root);
+/** Resolve the deterministic project context represented by one ledger session. */
+export function sessionProjectContext(session: LedgerSession): ProjectContext {
+  const facts = sessionFacts(session);
+  if (isNativeEditorSession(session)) {
+    const document = ensureLedgerSegments(session);
+    const routes = [...ledgerSegmentProjectContexts(session, document).values()];
+    const ambiguous = routes.flatMap((route) =>
+      route.state === 'ambiguous' ? route.candidates : [],
+    );
+    const resolved = routes.flatMap((route) =>
+      route.state === 'tracked' || route.state === 'candidate' ? [route] : [],
+    );
+    const roots = new Map<string, string>();
+    for (const route of resolved) roots.set(pathKey(route.root), route.root);
+    for (const root of ambiguous) roots.set(pathKey(root), root);
+    if (ambiguous.length > 0 || roots.size > 1) {
+      return {
+        state: 'ambiguous',
+        root: null,
+        evidence: null,
+        candidates: [...roots.values()],
+      };
+    }
+    if (resolved.length > 0) {
+      const route =
+        resolved.find((candidate) => candidate.state === 'tracked') ?? resolved[0]!;
+      return { state: route.state, root: route.root, evidence: route.evidence };
+    }
+    return { state: 'none', root: null, evidence: null, candidates: [] };
   }
-  return [...roots];
+  if (
+    !session.cwd &&
+    facts.editPaths.length === 0 &&
+    (!session.workspacePaths || session.workspacePaths.length === 0)
+  ) {
+    return { state: 'none', root: null, evidence: null, candidates: [] };
+  }
+  return resolveProjectContext({
+    // A ledger session must resolve only from evidence captured with that
+    // session, never from whichever folder this Showtail process happens to use.
+    cwd:
+      typeof session.cwd === 'string'
+        ? effectiveLedgerPath(session, session.cwd)
+        : (session.cwd ?? null),
+    editPaths: facts.editPaths,
+    workspacePaths: session.workspacePaths?.map((path) =>
+      effectiveLedgerPath(session, path),
+    ),
+  });
 }
 
 /**
- * The eligible project roots a session's work resolves to (via `.showtail/`/git,
- * excluding home + temp). Non-empty ⇒ the work lives in a real project. Used by the
- * surface predicate and to group the inbox listing.
+ * The project roots a session resolves to. A deterministic session has one root;
+ * ambiguous multi-project work returns every candidate so callers keep it in the
+ * inbox rather than silently dropping the unresolved paths.
  */
 export function sessionWorkRoots(session: LedgerSession): string[] {
-  return workRootsFrom(sessionFacts(session.id).editPaths, session.cwd);
+  const context = sessionProjectContext(session);
+  if (context.state === 'tracked' || context.state === 'candidate') return [context.root];
+  return context.state === 'ambiguous' ? context.candidates : [];
 }
 
 /**
@@ -421,7 +786,13 @@ export function sessionWorkRoots(session: LedgerSession): string[] {
  * list and `track`'s backfill.
  */
 export function sessionTouchesPath(session: LedgerSession, folder: string): boolean {
-  const targets = recordedPaths(sessionFacts(session.id), session.cwd);
+  const targets = recordedPaths(
+    sessionFacts(session),
+    typeof session.cwd === 'string'
+      ? effectiveLedgerPath(session, session.cwd)
+      : session.cwd,
+    session.workspacePaths?.map((path) => effectiveLedgerPath(session, path)),
+  );
   return targets.some((p) => isPathUnder(p, folder));
 }
 
@@ -430,8 +801,14 @@ export function sessionTouchesPath(session: LedgerSession, folder: string): bool
  * it made no edits. These are absolute and machine-local (see the module note), so
  * they are exactly what goes stale when the student moves their files.
  */
-function recordedPaths(facts: { editPaths: string[] }, cwd?: string): string[] {
-  return facts.editPaths.length ? facts.editPaths : cwd ? [cwd] : [];
+function recordedPaths(
+  facts: { editPaths: string[] },
+  cwd?: string | null,
+  workspacePaths?: string[],
+): string[] {
+  if (facts.editPaths.length > 0) return facts.editPaths;
+  if (workspacePaths && workspacePaths.length > 0) return workspacePaths;
+  return cwd ? [cwd] : [];
 }
 
 /**
@@ -442,7 +819,7 @@ function recordedPaths(facts: { editPaths: string[] }, cwd?: string): string[] {
  * work that must stay visible so it can be recovered (see {@link hiddenReason}).
  */
 export function sessionPathsGone(session: LedgerSession): boolean {
-  const { editPaths } = sessionFacts(session.id);
+  const { editPaths } = sessionFacts(session);
   if (editPaths.length > 0) {
     if (editPaths.some((p) => existsSync(p))) return false;
     // The *location* has to be gone, not merely the file. A missing file inside a
@@ -455,7 +832,10 @@ export function sessionPathsGone(session: LedgerSession): boolean {
   // An edit-less session records only its `cwd`, and that directory IS the location
   // — so its own absence is the signal (checking its parent would ask about the
   // wrong folder entirely).
-  return session.cwd !== undefined && !existsSync(session.cwd);
+  return (
+    typeof session.cwd === 'string' &&
+    !existsSync(effectiveLedgerPath(session, session.cwd))
+  );
 }
 
 /** Why a session is hidden from the default inbox, or null when it surfaces. */
@@ -465,7 +845,7 @@ export type HiddenReason = 'dismissed' | 'not-in-project' | 'low-signal' | 'igno
  * The reason a never-placed session is hidden (see {@link isSurfaced}), or null.
  *
  * Note the deliberate asymmetry fix: when a session's recorded paths have all
- * vanished, `workRootsFrom` cannot resolve a root and would report
+ * vanished, project resolution cannot resolve a root and would report
  * `'not-in-project'` — hiding moved work in the one view the student is told to
  * check. Gone paths therefore skip that verdict and fall through to the ordinary
  * signal/scratch filters, mirroring the guarantee `unplacedSessions` already gives
@@ -474,15 +854,18 @@ export type HiddenReason = 'dismissed' | 'not-in-project' | 'low-signal' | 'igno
  */
 export function hiddenReason(session: LedgerSession): HiddenReason | null {
   if (session.dismissedAt) return 'dismissed';
-  const facts = sessionFacts(session.id);
-  if (
-    workRootsFrom(facts.editPaths, session.cwd).length === 0 &&
-    !sessionPathsGone(session)
-  )
+  const facts = sessionFacts(session);
+  if (sessionWorkRoots(session).length === 0 && !sessionPathsGone(session))
     return 'not-in-project';
   const min = readInboxMinSignal();
   if (!(facts.edits >= min.edits || facts.prompts >= min.prompts)) return 'low-signal';
-  const targets = recordedPaths(facts, session.cwd);
+  const targets = recordedPaths(
+    facts,
+    typeof session.cwd === 'string'
+      ? effectiveLedgerPath(session, session.cwd)
+      : session.cwd,
+    session.workspacePaths?.map((path) => effectiveLedgerPath(session, path)),
+  );
   const scratch = readScratchPaths();
   if (scratch.some((s) => targets.some((p) => isPathUnder(p, s)))) return 'ignored-path';
   return null;
@@ -498,13 +881,13 @@ export function isSurfaced(session: LedgerSession): boolean {
  * has since gone missing (a deleted repo, or a moved one not yet re-seen). The
  * `targetMissing` flag tells the two apart for the `inbox` listing.
  *
- * By default only *surfaced* inbox sessions are returned (real-project, signal-
- * bearing, not scratch/dismissed); `includeHidden` returns every inbox session so
+ * By default only *surfaced* inbox sessions are returned (project-resolved,
+ * signal-bearing, not ignored/dismissed); `includeHidden` returns every inbox session so
  * `showtail inbox --all` can reveal the rest. `target-missing` sessions always
  * surface — they are placed real work whose repo vanished.
  */
 export function unplacedSessions(
-  opts: { includeHidden?: boolean } = {},
+  opts: { includeHidden?: boolean; repairTargets?: boolean } = {},
 ): Array<LedgerSession & { targetMissing?: boolean; pathGone?: boolean }> {
   const out: Array<LedgerSession & { targetMissing?: boolean; pathGone?: boolean }> = [];
   for (const session of allLedgerSessions()) {
@@ -518,11 +901,15 @@ export function unplacedSessions(
       continue;
     }
     // Placed: surface it only if every recorded target is now missing. The
-    // alive-check repoints a trailId that diverged under a merge (CC2), so a valid
-    // trail at the path is never mistaken for a missing one.
+    // Mutating callers may repair a trailId that diverged under a merge (CC2), so
+    // a valid trail at the path is never mistaken for a missing one. Read-only
+    // probes explicitly disable that repair and only observe whether a trail is
+    // present at the recorded location.
     const targets = session.targets ?? [];
     if (targets.length === 0) continue;
-    const anyAlive = targets.some((t) => targetAlive(session.id, t));
+    const anyAlive = targets.some((t) =>
+      targetAlive(session.id, t, opts.repairTargets !== false),
+    );
     if (!anyAlive) out.push({ ...session, targetMissing: true });
   }
   return out;
@@ -538,16 +925,20 @@ export interface LedgerSessionView extends LedgerSession {
 
 /**
  * Every ledger session annotated with placement — placed (with its current
- * folder), inbox, or target-missing. Powers `showtail move`'s full listing. The
- * alive-check self-heals a trailId that diverged under a merge (CC2).
+ * folder), inbox, or target-missing. Mutating callers may self-heal a trailId
+ * that diverged under a merge; read-only listings disable that repair.
  */
-export function allLedgerSessionViews(): LedgerSessionView[] {
+export function allLedgerSessionViews(
+  opts: { repairTargets?: boolean } = {},
+): LedgerSessionView[] {
   return allLedgerSessions().map((session) => {
     const targets = session.targets ?? [];
     const targetPaths = targets.map((t) => knownTrailPath(t.trailId) ?? t.path);
     let targetMissing = false;
     if (session.status === 'placed' && targets.length > 0) {
-      targetMissing = !targets.some((t) => targetAlive(session.id, t));
+      targetMissing = !targets.some((t) =>
+        targetAlive(session.id, t, opts.repairTargets !== false),
+      );
     }
     return { ...session, targetMissing, targetPaths };
   });
@@ -583,6 +974,15 @@ export function appendLedgerRecord(id: string, input: NewLedgerRecord): LedgerRe
   if (input.gitCommit) record.gitCommit = input.gitCommit;
   if (input.sha256) record.sha256 = input.sha256;
   if (input.sourceId) record.sourceId = input.sourceId;
+  if (input.context) {
+    record.context = {
+      ...(input.context.cwd !== undefined ? { cwd: input.context.cwd } : {}),
+      ...(input.context.workspacePaths
+        ? { workspacePaths: [...input.context.workspacePaths] }
+        : {}),
+      ...(input.context.scope ? { scope: input.context.scope } : {}),
+    };
+  }
   if (input.conversationEvent) record.conversationEvent = input.conversationEvent;
   if (input.toolName) record.toolName = input.toolName;
   if (input.isError) record.isError = input.isError;
@@ -601,6 +1001,1207 @@ export function appendLedgerRecord(id: string, input: NewLedgerRecord): LedgerRe
 /** Read every capture record for a session, in write order. */
 export function readLedgerRecords(id: string): LedgerRecord[] {
   return readJsonl<LedgerRecord>(recordsFile(id));
+}
+
+// --- turn segments ---------------------------------------------------------
+
+/** Refuse to overwrite a sidecar written by a newer Showtail binary. */
+export class UnsupportedLedgerSegmentsVersionError extends Error {
+  constructor(readonly version: number) {
+    super(
+      `Ledger segment data uses schema ${version}; this Showtail supports ${LEDGER_SEGMENTS_VERSION}.`,
+    );
+    this.name = 'UnsupportedLedgerSegmentsVersionError';
+  }
+}
+
+function cloneTarget(target: LedgerTarget): LedgerTarget {
+  return { trailId: target.trailId, path: target.path };
+}
+
+function cloneMigration(
+  migration: LedgerSegmentMigration | undefined,
+): LedgerSegmentMigration | undefined {
+  return migration
+    ? {
+        ...migration,
+        destination: cloneTarget(migration.destination),
+        sourceTargets: migration.sourceTargets.map(cloneTarget),
+      }
+    : undefined;
+}
+
+function cloneControlTarget(
+  target: LedgerProjectControlTarget | undefined,
+): LedgerProjectControlTarget | undefined {
+  return target
+    ? {
+        ...target,
+        evidence: [...target.evidence],
+      }
+    : undefined;
+}
+
+function cloneSegment(segment: LedgerSegment): LedgerSegment {
+  return {
+    ...segment,
+    recordIds: [...segment.recordIds],
+    ...(segment.attachments
+      ? { attachments: segment.attachments.map((attachment) => ({ ...attachment })) }
+      : {}),
+    ...(segment.controlTarget
+      ? { controlTarget: cloneControlTarget(segment.controlTarget) }
+      : {}),
+    ...(segment.targets ? { targets: segment.targets.map(cloneTarget) } : {}),
+    ...(segment.pathRebases
+      ? { pathRebases: segment.pathRebases.map((rebase) => ({ ...rebase })) }
+      : {}),
+    ...(segment.migration ? { migration: cloneMigration(segment.migration) } : {}),
+  };
+}
+
+function segmentIdForPrompt(promptRecordId: string): string {
+  return `seg_${promptRecordId}`;
+}
+
+const LEADING_SEGMENT_ID = 'seg_unassigned';
+
+/** Stable composite selector accepted by inbox/move/report command surfaces. */
+export function ledgerSegmentSelector(sessionId: string, segmentId: string): string {
+  return `${sessionId}:${segmentId}`;
+}
+
+/** Stable projection source id; unchanged when a record moves between segments. */
+export function ledgerRecordProjectionSourceId(
+  sessionId: string,
+  record: LedgerRecord,
+): string {
+  return record.sourceId ?? `ledger:${sessionId}:${record.id}`;
+}
+
+/** Copilot embeds its request id in every prompt/reply/edit source id. */
+function copilotRequestIdentity(
+  sourceId: string | undefined,
+): { nativeSessionId: string; nativeRequestId: string; key: string } | undefined {
+  if (!sourceId) return undefined;
+  let value = sourceId.startsWith('conversation:')
+    ? sourceId.slice('conversation:'.length)
+    : sourceId;
+  const fragment = value.indexOf('#');
+  if (fragment >= 0) value = value.slice(0, fragment);
+  const parts = value.split(':');
+  if (
+    parts.length < 4 ||
+    parts[0] !== 'copilot' ||
+    !['user', 'asst', 'edit', 'plan'].includes(parts[1] ?? '')
+  ) {
+    return undefined;
+  }
+  const requestId = parts.at(-1);
+  const nativeSessionId = parts.slice(2, -1).join(':');
+  return requestId && nativeSessionId
+    ? {
+        nativeSessionId,
+        nativeRequestId: requestId,
+        key: `${nativeSessionId}\t${requestId}`,
+      }
+    : undefined;
+}
+
+interface LoadedLedgerSegments {
+  document: LedgerSegmentsDocument;
+  persistedVersion: number;
+}
+
+function loadSegmentsDocument(id: string): LoadedLedgerSegments | null {
+  const file = segmentsFile(id);
+  if (!existsSync(file)) return null;
+  let raw: Omit<Partial<LedgerSegmentsDocument>, 'version'> & { version?: number };
+  try {
+    raw = readJson<
+      Omit<Partial<LedgerSegmentsDocument>, 'version'> & { version?: number }
+    >(file);
+  } catch {
+    return null;
+  }
+  if (typeof raw.version === 'number' && raw.version > LEDGER_SEGMENTS_VERSION) {
+    throw new UnsupportedLedgerSegmentsVersionError(raw.version);
+  }
+  if (
+    (raw.version !== 1 && raw.version !== LEDGER_SEGMENTS_VERSION) ||
+    typeof raw.recordCount !== 'number' ||
+    !Array.isArray(raw.segments)
+  ) {
+    return null;
+  }
+  return {
+    document: {
+      ...(raw as LedgerSegmentsDocument),
+      version: LEDGER_SEGMENTS_VERSION,
+    },
+    persistedVersion: raw.version,
+  };
+}
+
+function readSegmentsDocument(id: string): LedgerSegmentsDocument | null {
+  return loadSegmentsDocument(id)?.document ?? null;
+}
+
+/** Read the persisted sidecar without deriving it. Primarily useful for diagnostics. */
+export function readPersistedLedgerSegments(
+  sessionId: string,
+): LedgerSegmentsDocument | null {
+  const document = readSegmentsDocument(sessionId);
+  return document ? { ...document, segments: document.segments.map(cloneSegment) } : null;
+}
+
+function segmentMetadata(
+  session: LedgerSession,
+  prior: LedgerSegment | undefined,
+  legacy: boolean,
+): Pick<
+  LedgerSegment,
+  | 'status'
+  | 'targets'
+  | 'dismissedAt'
+  | 'pathRebases'
+  | 'migration'
+  | 'nativeRequestId'
+  | 'attachments'
+  | 'controlTarget'
+> {
+  const status = prior?.status ?? (legacy ? session.status : 'inbox');
+  const targets = prior?.targets ?? (legacy ? session.targets : undefined);
+  const dismissedAt = prior?.dismissedAt ?? (legacy ? session.dismissedAt : undefined);
+  const pathRebases = prior?.pathRebases ?? (legacy ? session.pathRebases : undefined);
+  return {
+    status,
+    ...(targets ? { targets: targets.map(cloneTarget) } : {}),
+    ...(dismissedAt ? { dismissedAt } : {}),
+    ...(pathRebases ? { pathRebases: pathRebases.map((rebase) => ({ ...rebase })) } : {}),
+    ...(prior?.migration ? { migration: cloneMigration(prior.migration) } : {}),
+    ...(prior?.nativeRequestId ? { nativeRequestId: prior.nativeRequestId } : {}),
+    ...(prior?.attachments
+      ? { attachments: prior.attachments.map((attachment) => ({ ...attachment })) }
+      : {}),
+    ...(prior?.controlTarget
+      ? { controlTarget: cloneControlTarget(prior.controlTarget) }
+      : {}),
+  };
+}
+
+/** Derive prompt turns while preserving placement metadata from an older sidecar. */
+function deriveLedgerSegments(
+  session: LedgerSession,
+  records: LedgerRecord[],
+  prior: LedgerSegmentsDocument | null,
+): LedgerSegmentsDocument {
+  const priorById = new Map(
+    (prior?.segments ?? []).map((segment) => [segment.id, segment]),
+  );
+  const legacy = prior === null;
+  const segments = new Map<string, LedgerSegment>();
+  const promptSegmentByRecordId = new Map<string, string>();
+  const promptSegmentByCopilotRequest = new Map<string, string>();
+
+  for (const record of records) {
+    if (record.kind !== 'prompt') continue;
+    const id = segmentIdForPrompt(record.id);
+    const segment: LedgerSegment = {
+      id,
+      promptRecordId: record.id,
+      recordIds: [],
+      startedAt: record.ts,
+      endedAt: record.ts,
+      ...segmentMetadata(session, priorById.get(id), legacy),
+    };
+    const request = copilotRequestIdentity(record.sourceId);
+    if (request?.nativeSessionId === session.nativeSessionId) {
+      segment.nativeRequestId = request.nativeRequestId;
+    }
+    segments.set(id, segment);
+    promptSegmentByRecordId.set(record.id, id);
+    if (request) promptSegmentByCopilotRequest.set(request.key, id);
+  }
+
+  let currentSegmentId: string | undefined;
+  for (const record of records) {
+    let segmentId: string | undefined;
+    if (record.kind === 'prompt') {
+      segmentId = promptSegmentByRecordId.get(record.id);
+      currentSegmentId = segmentId;
+    } else if (record.turnKey) {
+      segmentId = promptSegmentByRecordId.get(record.turnKey);
+    } else {
+      const request = copilotRequestIdentity(record.sourceId);
+      segmentId = request
+        ? promptSegmentByCopilotRequest.get(request.key)
+        : currentSegmentId;
+    }
+
+    if (!segmentId) {
+      segmentId = LEADING_SEGMENT_ID;
+      if (!segments.has(segmentId)) {
+        segments.set(segmentId, {
+          id: segmentId,
+          recordIds: [],
+          startedAt: record.ts,
+          endedAt: record.ts,
+          ...segmentMetadata(session, priorById.get(segmentId), legacy),
+        });
+      }
+    }
+    const segment = segments.get(segmentId)!;
+    segment.recordIds.push(record.id);
+    if (record.ts < segment.startedAt) segment.startedAt = record.ts;
+    if (record.ts > segment.endedAt) segment.endedAt = record.ts;
+  }
+
+  if (prior) {
+    for (const segment of segments.values()) {
+      if (priorById.has(segment.id)) continue;
+      const ids = new Set(segment.recordIds);
+      const predecessor = prior.segments
+        .map((candidate) => ({
+          candidate,
+          overlap: candidate.recordIds.reduce(
+            (count, recordId) => count + Number(ids.has(recordId)),
+            0,
+          ),
+        }))
+        .sort((a, b) => b.overlap - a.overlap)[0];
+      if (!predecessor || predecessor.overlap === 0) continue;
+      Object.assign(segment, segmentMetadata(session, predecessor.candidate, false));
+    }
+  }
+
+  const ordered = [...segments.values()]
+    .filter((segment) => segment.recordIds.length > 0)
+    .sort((a, b) => {
+      const firstA = records.findIndex((record) => record.id === a.recordIds[0]);
+      const firstB = records.findIndex((record) => record.id === b.recordIds[0]);
+      return firstA - firstB;
+    });
+  return {
+    version: LEDGER_SEGMENTS_VERSION,
+    recordCount: records.length,
+    ...(records.at(-1) ? { lastRecordId: records.at(-1)!.id } : {}),
+    segments: ordered,
+  };
+}
+
+function segmentsCurrent(
+  document: LedgerSegmentsDocument,
+  records: LedgerRecord[],
+): boolean {
+  return (
+    document.recordCount === records.length &&
+    document.lastRecordId === records.at(-1)?.id
+  );
+}
+
+/**
+ * Read or lazily derive the versioned turn sidecar. Raw records are never
+ * rewritten; a late transcript append simply refreshes segment membership.
+ */
+export function ensureLedgerSegments(
+  sessionOrId: LedgerSession | string,
+  opts: { continueCapture?: () => boolean; persist?: boolean } = {},
+): LedgerSegmentsDocument {
+  requireCaptureContinuation(opts.continueCapture);
+  const session =
+    typeof sessionOrId === 'string' ? readLedgerSession(sessionOrId) : sessionOrId;
+  if (!session) {
+    return { version: LEDGER_SEGMENTS_VERSION, recordCount: 0, segments: [] };
+  }
+  const records = readLedgerRecords(session.id);
+  const loaded = loadSegmentsDocument(session.id);
+  const persisted = loaded?.document ?? null;
+  if (
+    persisted &&
+    loaded?.persistedVersion === LEDGER_SEGMENTS_VERSION &&
+    segmentsCurrent(persisted, records)
+  ) {
+    return { ...persisted, segments: persisted.segments.map(cloneSegment) };
+  }
+
+  // Re-read immediately before the atomic replace so a concurrent placement is
+  // merged into the fresh derivation rather than clobbered by a stale snapshot.
+  requireCaptureContinuation(opts.continueCapture);
+  const latest = loadSegmentsDocument(session.id)?.document ?? persisted;
+  const derived = deriveLedgerSegments(session, records, latest);
+  if (opts.persist === false) {
+    return { ...derived, segments: derived.segments.map(cloneSegment) };
+  }
+  requireCaptureContinuation(opts.continueCapture);
+  writeJson(segmentsFile(session.id), derived);
+  return { ...derived, segments: derived.segments.map(cloneSegment) };
+}
+
+function writeLedgerSegments(
+  sessionId: string,
+  document: LedgerSegmentsDocument,
+  continueCapture?: () => boolean,
+): void {
+  requireCaptureContinuation(continueCapture);
+  writeJson(segmentsFile(sessionId), document);
+}
+
+/** Records belonging to one segment, preserving immutable ledger order. */
+export function readLedgerSegmentRecords(
+  sessionId: string,
+  segmentOrId: LedgerSegment | string,
+): LedgerRecord[] {
+  const segment =
+    typeof segmentOrId === 'string'
+      ? ensureLedgerSegments(sessionId).segments.find((item) => item.id === segmentOrId)
+      : segmentOrId;
+  if (!segment) return [];
+  const wanted = new Set(segment.recordIds);
+  return readLedgerRecords(sessionId).filter((record) => wanted.has(record.id));
+}
+
+/** Resolve a capture-time path through only this turn's project moves. */
+export function effectiveLedgerSegmentPath(
+  segment: LedgerSegment,
+  path: string,
+  additionalRebase?: PathRebase,
+): string {
+  const effective = applyPathRebases(segment.pathRebases, path);
+  const previous = segment.pathRebases?.at(-1);
+  if (additionalRebase && (!previous || !samePathRebase(previous, additionalRebase))) {
+    return applyPathRebases([additionalRebase], effective);
+  }
+  return effective;
+}
+
+export interface LedgerTurnProjectMetadataInput {
+  nativeRequestId?: string;
+  attachments?: LedgerProjectAttachment[];
+  controlTarget?: LedgerProjectControlInput;
+  /** Prefer the native request timestamp; falls back to capture time. */
+  observedAt?: string;
+  continueCapture?: () => boolean;
+}
+
+function validControlInput(control: LedgerProjectControlInput): boolean {
+  return (
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+      control.claimId,
+    ) &&
+    ['report', 'open_report', 'status', 'verify'].includes(control.action) &&
+    /^trl_[A-Za-z0-9_-]+$/.test(control.trailId) &&
+    isAbsolute(control.root) &&
+    (control.mode === 'authoritative' || control.mode === 'corroborated') &&
+    Array.isArray(control.evidence) &&
+    control.evidence.length > 0 &&
+    control.evidence.every(
+      (item) =>
+        typeof item === 'string' &&
+        item.length > 0 &&
+        item.length <= 80 &&
+        !/[\r\n]/.test(item),
+    ) &&
+    (control.reportPath === undefined || isAbsolute(control.reportPath))
+  );
+}
+
+/**
+ * Associate trusted transcript metadata with the exact prompt segment. Re-reading
+ * an append-only native transcript is idempotent; one claim cannot be replayed
+ * onto a different request in the same session.
+ */
+export function setLedgerTurnProjectMetadata(
+  sessionId: string,
+  promptRecordId: string,
+  input: LedgerTurnProjectMetadataInput,
+): boolean {
+  requireCaptureContinuation(input.continueCapture);
+  const session = readLedgerSession(sessionId);
+  if (!session) return false;
+  const document = ensureLedgerSegments(session, {
+    continueCapture: input.continueCapture,
+  });
+  const segment = document.segments.find(
+    (item) => item.promptRecordId === promptRecordId,
+  );
+  if (!segment) return false;
+
+  let changed = false;
+  const nativeRequestId = input.nativeRequestId?.trim();
+  if (nativeRequestId && segment.nativeRequestId !== nativeRequestId) {
+    segment.nativeRequestId = nativeRequestId;
+    changed = true;
+  }
+
+  if (input.attachments && input.attachments.length > 0) {
+    const attachments = new Map<string, LedgerProjectAttachment>();
+    for (const attachment of [...(segment.attachments ?? []), ...input.attachments]) {
+      if (
+        (attachment.kind !== 'file' && attachment.kind !== 'folder') ||
+        !isAbsolute(attachment.path)
+      ) {
+        continue;
+      }
+      const path = resolve(attachment.path);
+      attachments.set(`${attachment.kind}\t${pathKey(path)}`, {
+        kind: attachment.kind,
+        path,
+      });
+    }
+    const next = [...attachments.values()];
+    if (JSON.stringify(next) !== JSON.stringify(segment.attachments ?? [])) {
+      segment.attachments = next;
+      changed = true;
+    }
+  }
+
+  const control = input.controlTarget;
+  if (control && nativeRequestId && validControlInput(control)) {
+    const replayedElsewhere = document.segments.some(
+      (item) => item.id !== segment.id && item.controlTarget?.claimId === control.claimId,
+    );
+    if (!replayedElsewhere) {
+      const observedAt = input.observedAt;
+      const boundAt =
+        observedAt && Number.isFinite(Date.parse(observedAt))
+          ? new Date(observedAt).toISOString()
+          : new Date().toISOString();
+      const target: LedgerProjectControlTarget = {
+        schemaVersion: LEDGER_PROJECT_BINDING_VERSION,
+        source: 'showtail-project-control',
+        nativeSessionId: session.nativeSessionId,
+        nativeRequestId,
+        claimId: control.claimId,
+        action: control.action,
+        trailId: control.trailId,
+        root: resolve(control.root),
+        ...(control.displayName ? { displayName: control.displayName } : {}),
+        mode: control.mode,
+        evidence: [...new Set(control.evidence)],
+        ...(control.crossWorkspace === undefined
+          ? {}
+          : { crossWorkspace: control.crossWorkspace }),
+        ...(control.reportPath ? { reportPath: resolve(control.reportPath) } : {}),
+        boundAt,
+      };
+      if (JSON.stringify(target) !== JSON.stringify(segment.controlTarget)) {
+        segment.controlTarget = target;
+        changed = true;
+      }
+    }
+  }
+
+  if (!changed) return true;
+  requireCaptureContinuation(input.continueCapture);
+  writeLedgerSegments(sessionId, document, input.continueCapture);
+  return true;
+}
+
+function segmentRecordContext(records: LedgerRecord[]): LedgerRecord['context'] {
+  return records.find((record) => record.context !== undefined)?.context;
+}
+
+function attachmentProjectContext(
+  attachments: readonly LedgerProjectAttachment[],
+): LedgerSegmentProjectContext {
+  const context = resolveProjectContext({
+    cwd: null,
+    editPaths: attachments
+      .filter((attachment) => attachment.kind === 'file')
+      .map((attachment) => attachment.path),
+    workspacePaths: attachments
+      .filter((attachment) => attachment.kind === 'folder')
+      .map((attachment) => attachment.path),
+  });
+  return context.state === 'tracked' || context.state === 'candidate'
+    ? { ...context, evidence: 'attachment' }
+    : context;
+}
+
+function controlTargetProjectContext(
+  target: LedgerProjectControlTarget,
+): LedgerSegmentProjectContext {
+  const live = new Map<string, string>();
+  for (const path of [knownTrailPath(target.trailId), target.root]) {
+    if (!path) continue;
+    const root = resolve(path);
+    if (trailExistsAt(root, target.trailId)) live.set(pathKey(root), root);
+  }
+  const roots = [...live.values()];
+  if (roots.length === 1) {
+    return { state: 'tracked', root: roots[0]!, evidence: 'control' };
+  }
+  return roots.length > 1
+    ? { state: 'ambiguous', root: null, evidence: null, candidates: roots }
+    : { state: 'none', root: null, evidence: null, candidates: [] };
+}
+
+function isNativeEditorSession(session: LedgerSession): boolean {
+  return session.tool === 'github-copilot' || session.tool === 'antigravity-ide';
+}
+
+/** Compute every turn's independent route, including no-edit inheritance. */
+export function ledgerSegmentProjectContexts(
+  session: LedgerSession,
+  document: LedgerSegmentsDocument = ensureLedgerSegments(session),
+): Map<string, LedgerSegmentProjectContext> {
+  const allRecords = readLedgerRecords(session.id);
+  const byId = new Map(allRecords.map((record) => [record.id, record]));
+  const contexts = new Map<string, LedgerSegmentProjectContext>();
+  let preceding: LedgerSegmentProjectContext | undefined;
+  let precedingSegmentId: string | undefined;
+  let precedingTrusted = false;
+
+  for (const segment of document.segments) {
+    const records = segment.recordIds.flatMap((id) => {
+      const record = byId.get(id);
+      return record ? [record] : [];
+    });
+    const contextHint = segmentRecordContext(records);
+    const editPaths = records.flatMap((record) =>
+      record.kind === 'edit' && record.file
+        ? [effectiveLedgerSegmentPath(segment, record.file)]
+        : [],
+    );
+    let context: LedgerSegmentProjectContext;
+    let trusted = false;
+    if (editPaths.length > 0) {
+      // Edits are direct work evidence. Do not let a stale terminal/workspace
+      // hint drag them to another project. The session cwd is used only as a
+      // containing anchor so one unmarked `project/src/file` edit does not invent
+      // a nested `src` project; an edit outside that cwd still resolves itself.
+      context = resolveProjectContext({
+        cwd:
+          typeof session.cwd === 'string'
+            ? effectiveLedgerSegmentPath(segment, session.cwd)
+            : null,
+        editPaths,
+      });
+      trusted = context.state === 'tracked' || context.state === 'candidate';
+    } else if (segment.attachments && segment.attachments.length > 0) {
+      context = attachmentProjectContext(segment.attachments);
+      trusted = context.state === 'tracked' || context.state === 'candidate';
+    } else if (segment.controlTarget) {
+      context = controlTargetProjectContext(segment.controlTarget);
+      trusted = context.state === 'tracked' || context.state === 'candidate';
+    } else if (
+      contextHint?.scope === 'turn' &&
+      contextHint.cwd === null &&
+      (!contextHint.workspacePaths || contextHint.workspacePaths.length === 0)
+    ) {
+      // An explicit empty-window transition ends trusted focus. A path-bearing
+      // workspace/cwd hint remains ambient and cannot override real work evidence.
+      context = { state: 'none', root: null, evidence: null, candidates: [] };
+    } else if (
+      precedingTrusted &&
+      (preceding?.state === 'tracked' || preceding?.state === 'candidate')
+    ) {
+      context = {
+        state: preceding.state,
+        root: preceding.root,
+        evidence: preceding.evidence,
+        ...(precedingSegmentId ? { inheritedFrom: precedingSegmentId } : {}),
+      };
+      trusted = true;
+    } else if (contextHint !== undefined && !isNativeEditorSession(session)) {
+      // Non-editor integrations retain their legacy context fallback, but that
+      // ambient route is never inherited by a later zero-edit turn.
+      context = resolveProjectContext({
+        cwd: contextHint.cwd ?? null,
+        workspacePaths: contextHint.workspacePaths?.map((path) =>
+          effectiveLedgerSegmentPath(segment, path),
+        ),
+      });
+    } else {
+      context = { state: 'none', root: null, evidence: null, candidates: [] };
+    }
+    contexts.set(segment.id, context);
+    preceding = context;
+    precedingSegmentId = segment.id;
+    precedingTrusted = trusted;
+  }
+  return contexts;
+}
+
+/** Resolve one segment's route in the context of the turns before it. */
+export function ledgerSegmentProjectContext(
+  session: LedgerSession,
+  segmentOrId: LedgerSegment | string,
+): LedgerSegmentProjectContext {
+  const segmentId = typeof segmentOrId === 'string' ? segmentOrId : segmentOrId.id;
+  return (
+    ledgerSegmentProjectContexts(session).get(segmentId) ?? {
+      state: 'none',
+      root: null,
+      evidence: null,
+      candidates: [],
+    }
+  );
+}
+
+function segmentFacts(
+  sessionId: string,
+  segment: LedgerSegment,
+): { prompts: number; edits: number; firstPrompt?: string; editPaths: string[] } {
+  let prompts = 0;
+  let edits = 0;
+  let firstPrompt: string | undefined;
+  const editPaths: string[] = [];
+  for (const record of readLedgerSegmentRecords(sessionId, segment)) {
+    if (record.kind === 'prompt') {
+      prompts += 1;
+      if (!firstPrompt && record.text) firstPrompt = record.text;
+    } else if (record.kind === 'edit') {
+      edits += 1;
+      if (record.file) editPaths.push(effectiveLedgerSegmentPath(segment, record.file));
+    }
+  }
+  return { prompts, edits, firstPrompt, editPaths };
+}
+
+function segmentHiddenReason(
+  segment: LedgerSegment,
+  route: LedgerSegmentProjectContext,
+  facts: ReturnType<typeof segmentFacts>,
+  hasProjectWitness: boolean,
+): HiddenReason | null {
+  if (segment.dismissedAt) return 'dismissed';
+  const pathsGone =
+    facts.editPaths.length > 0 &&
+    facts.editPaths.every((path) => !existsSync(path)) &&
+    facts.editPaths.some((path) => !existsSync(dirname(path)));
+  const unresolvedProjectCompanion =
+    route.state === 'none' && hasProjectWitness && (facts.prompts > 0 || facts.edits > 0);
+  if (route.state === 'none' && !pathsGone && !unresolvedProjectCompanion) {
+    return 'not-in-project';
+  }
+  // A context-free turn beside resolved project work needs human placement even
+  // when it is individually small. Otherwise the opening or closing turn of a
+  // mixed native chat disappears from the default inbox as low-signal scratch.
+  const min = readInboxMinSignal();
+  if (
+    !unresolvedProjectCompanion &&
+    !(facts.edits >= min.edits || facts.prompts >= min.prompts)
+  ) {
+    return 'low-signal';
+  }
+  const routePaths =
+    route.state === 'tracked' || route.state === 'candidate'
+      ? [route.root]
+      : route.state === 'ambiguous'
+        ? route.candidates
+        : facts.editPaths;
+  const scratch = readScratchPaths();
+  if (scratch.some((root) => routePaths.some((path) => isPathUnder(path, root)))) {
+    return 'ignored-path';
+  }
+  return null;
+}
+
+function segmentTargetAlive(target: LedgerTarget): boolean {
+  const path = knownTrailPath(target.trailId) ?? target.path;
+  return trailIdAt(path) !== undefined;
+}
+
+/** List routeable turn ranges with composite selectors for command surfaces. */
+export function listLedgerSegmentViews(
+  opts: {
+    includeHidden?: boolean;
+    pendingOnly?: boolean;
+    sessionId?: string;
+    /** Read-only probes derive stale/missing sidecars in memory only. */
+    persist?: boolean;
+  } = {},
+): LedgerSegmentView[] {
+  const views: LedgerSegmentView[] = [];
+  for (const session of allLedgerSessions()) {
+    if (opts.sessionId && session.id !== opts.sessionId) continue;
+    const document = ensureLedgerSegments(session, { persist: opts.persist });
+    const contexts = ledgerSegmentProjectContexts(session, document);
+    const ignoredRoots = readScratchPaths();
+    const isIgnoredWitness = (path: string): boolean =>
+      ignoredRoots.some((root) => isPathUnder(path, root));
+    const hasProjectWitness = document.segments.some((segment) => {
+      const context = contexts.get(segment.id);
+      const witnessPaths = (segment.targets ?? []).map(
+        (target) => knownTrailPath(target.trailId) ?? target.path,
+      );
+      if (context?.state === 'tracked' || context?.state === 'candidate') {
+        witnessPaths.push(context.root);
+      }
+      return witnessPaths.some((path) => !isIgnoredWitness(path));
+    });
+    for (const segment of document.segments) {
+      const facts = segmentFacts(session.id, segment);
+      const route = contexts.get(segment.id)!;
+      const targets = segment.targets ?? [];
+      const targetPaths = targets.map(
+        (target) => knownTrailPath(target.trailId) ?? target.path,
+      );
+      const targetMissing =
+        segment.status === 'placed' &&
+        targets.length > 0 &&
+        !targets.some(segmentTargetAlive);
+      const hiddenReason = segmentHiddenReason(segment, route, facts, hasProjectWitness);
+      if (!opts.includeHidden && hiddenReason !== null && !targetMissing) continue;
+      if (opts.pendingOnly && segment.status === 'placed' && !targetMissing) continue;
+      views.push({
+        selector: ledgerSegmentSelector(session.id, segment.id),
+        session,
+        segment,
+        route,
+        targetMissing,
+        targetPaths,
+        prompts: facts.prompts,
+        edits: facts.edits,
+        ...(facts.firstPrompt ? { firstPrompt: facts.firstPrompt } : {}),
+        hiddenReason,
+      });
+    }
+  }
+  return views.sort((a, b) => b.segment.endedAt.localeCompare(a.segment.endedAt));
+}
+
+/**
+ * Lazily derived routing changes for legacy or late-growing sessions. A
+ * deterministic turn is returned when none of its recorded targets matches its
+ * current route; an edit-bearing ambiguous turn is returned while still placed.
+ */
+export function listLedgerSegmentsNeedingReprojection(
+  opts: { sessionId?: string; persist?: boolean } = {},
+): LedgerSegmentView[] {
+  return listLedgerSegmentViews({
+    includeHidden: true,
+    sessionId: opts.sessionId,
+    persist: opts.persist,
+  }).filter((view) => {
+    const targets = view.targetPaths;
+    if (targets.length === 0) return false;
+    if (view.route.state === 'ambiguous') return true;
+    if (view.route.state === 'none') return false;
+    const routedRoot = view.route.root;
+    return !targets.some(
+      (target) => pathKey(resolve(target)) === pathKey(resolve(routedRoot)),
+    );
+  });
+}
+
+function pendingSegmentView(view: LedgerSegmentView): boolean {
+  return view.segment.status === 'inbox' || view.targetMissing;
+}
+
+function unresolvedRangeKey(view: LedgerSegmentView): string | null {
+  if (!pendingSegmentView(view)) return null;
+  if (view.route.state === 'none') return `none:${view.hiddenReason ?? 'pending'}`;
+  if (view.route.state === 'ambiguous' && view.edits === 0) {
+    return `ambiguous:${view.route.candidates
+      .map((candidate) => pathKey(candidate))
+      .sort()
+      .join('|')}:${view.hiddenReason ?? 'pending'}`;
+  }
+  // A turn that itself edits A+B is never merged with its neighbors.
+  return null;
+}
+
+function asRange(members: LedgerSegmentView[]): LedgerRangeView {
+  const first = members[0]!;
+  const targetPaths = [
+    ...new Map(
+      members.flatMap((member) =>
+        member.targetPaths.map((path) => [pathKey(path), path] as const),
+      ),
+    ).values(),
+  ];
+  return {
+    ...first,
+    memberSegmentIds: members.map((member) => member.segment.id),
+    segments: members.map((member) => cloneSegment(member.segment)),
+    targetMissing: members.some((member) => member.targetMissing),
+    targetPaths,
+    prompts: members.reduce((count, member) => count + member.prompts, 0),
+    edits: members.reduce((count, member) => count + member.edits, 0),
+    firstPrompt: members.find((member) => member.firstPrompt)?.firstPrompt,
+  };
+}
+
+/**
+ * List command-level ranges. Consecutive unresolved pending turns from one
+ * native chat collapse into one stable selector, while storage/projection stays
+ * per segment and edit-bearing multi-root turns remain atomic.
+ */
+export function listActionableLedgerRanges(
+  opts: Parameters<typeof listLedgerSegmentViews>[0] = {},
+): LedgerRangeView[] {
+  const all = listLedgerSegmentViews({
+    includeHidden: true,
+    sessionId: opts.sessionId,
+    persist: opts.persist,
+  });
+  const viewsBySession = new Map<string, Map<string, LedgerSegmentView>>();
+  for (const view of all) {
+    const bySegment = viewsBySession.get(view.session.id) ?? new Map();
+    bySegment.set(view.segment.id, view);
+    viewsBySession.set(view.session.id, bySegment);
+  }
+
+  const ranges: LedgerRangeView[] = [];
+  for (const session of allLedgerSessions()) {
+    if (opts.sessionId && session.id !== opts.sessionId) continue;
+    const bySegment = viewsBySession.get(session.id);
+    if (!bySegment) continue;
+    let pendingGroup: LedgerSegmentView[] = [];
+    let pendingKey: string | null = null;
+    const flush = (): void => {
+      if (pendingGroup.length > 0) ranges.push(asRange(pendingGroup));
+      pendingGroup = [];
+      pendingKey = null;
+    };
+    for (const segment of ensureLedgerSegments(session, { persist: opts.persist })
+      .segments) {
+      const view = bySegment.get(segment.id);
+      if (!view) continue;
+      const key = unresolvedRangeKey(view);
+      if (key && key === pendingKey) {
+        pendingGroup.push(view);
+      } else {
+        flush();
+        if (key) {
+          pendingGroup = [view];
+          pendingKey = key;
+        } else {
+          ranges.push(asRange([view]));
+        }
+      }
+    }
+    flush();
+  }
+
+  return ranges
+    .filter(
+      (range) =>
+        (opts.includeHidden || range.hiddenReason === null || range.targetMissing) &&
+        (!opts.pendingOnly || pendingSegmentView(range)),
+    )
+    .sort((a, b) => b.segment.endedAt.localeCompare(a.segment.endedAt));
+}
+
+/** Resolve `led_…:seg_…`, or a unique prefix of both halves. */
+export function resolveLedgerSegmentSelector(selector: string): LedgerSegmentView | null {
+  const views = listLedgerSegmentViews({ includeHidden: true });
+  const exact = views.find((view) => view.selector === selector);
+  if (exact) return exact;
+
+  const colon = selector.indexOf(':');
+  if (colon >= 0) {
+    const sessionPrefix = selector.slice(0, colon);
+    const segmentPrefix = selector.slice(colon + 1);
+    const matches = views.filter(
+      (view) =>
+        view.session.id.startsWith(sessionPrefix) &&
+        view.segment.id.startsWith(segmentPrefix),
+    );
+    return matches.length === 1 ? matches[0]! : null;
+  }
+
+  const matches = views.filter(
+    (view) =>
+      view.selector.startsWith(selector) ||
+      view.segment.id.startsWith(selector) ||
+      (view.session.id.startsWith(selector) &&
+        ensureLedgerSegments(view.session).segments.length === 1),
+  );
+  return matches.length === 1 ? matches[0]! : null;
+}
+
+/** Resolve a stable range selector or any unambiguous member-segment prefix. */
+export function resolveLedgerRangeSelector(selector: string): LedgerRangeView | null {
+  const ranges = listActionableLedgerRanges({ includeHidden: true });
+  const exact = ranges.find(
+    (range) =>
+      range.selector === selector ||
+      range.memberSegmentIds.some(
+        (segmentId) =>
+          segmentId === selector ||
+          ledgerSegmentSelector(range.session.id, segmentId) === selector,
+      ),
+  );
+  if (exact) return exact;
+
+  const colon = selector.indexOf(':');
+  const matches = ranges.filter((range) => {
+    if (colon >= 0) {
+      const sessionPrefix = selector.slice(0, colon);
+      const segmentPrefix = selector.slice(colon + 1);
+      return (
+        range.session.id.startsWith(sessionPrefix) &&
+        range.memberSegmentIds.some((id) => id.startsWith(segmentPrefix))
+      );
+    }
+    return (
+      range.selector.startsWith(selector) ||
+      range.memberSegmentIds.some((id) => id.startsWith(selector)) ||
+      (range.session.id.startsWith(selector) &&
+        ranges.filter((item) => item.session.id === range.session.id).length === 1)
+    );
+  });
+  return matches.length === 1 ? matches[0]! : null;
+}
+
+function updateLedgerSegment(
+  sessionId: string,
+  segmentId: string,
+  mutate: (segment: LedgerSegment) => void,
+  continueCapture?: () => boolean,
+): LedgerSegmentsDocument | null {
+  requireCaptureContinuation(continueCapture);
+  const session = readLedgerSession(sessionId);
+  if (!session) return null;
+  const document = ensureLedgerSegments(session, { continueCapture });
+  const segment = document.segments.find((item) => item.id === segmentId);
+  if (!segment) return null;
+  mutate(segment);
+  requireCaptureContinuation(continueCapture);
+  writeLedgerSegments(sessionId, document, continueCapture);
+  syncLedgerSessionAggregate(sessionId, document, continueCapture);
+  return document;
+}
+
+/** Refresh the legacy session/index caches from per-segment placement state. */
+export function syncLedgerSessionAggregate(
+  sessionId: string,
+  document: LedgerSegmentsDocument = ensureLedgerSegments(sessionId),
+  continueCapture?: () => boolean,
+): void {
+  requireCaptureContinuation(continueCapture);
+  const session = readLedgerSession(sessionId);
+  if (!session || document.segments.length === 0) return;
+  const targets = new Map<string, LedgerTarget>();
+  for (const segment of document.segments) {
+    for (const target of segment.targets ?? []) targets.set(target.trailId, target);
+  }
+  session.targets = [...targets.values()].map(cloneTarget);
+  session.status = document.segments.every((segment) => segment.status === 'placed')
+    ? 'placed'
+    : 'inbox';
+  const dismissed = document.segments
+    .filter((segment) => segment.status === 'inbox')
+    .map((segment) => segment.dismissedAt);
+  if (dismissed.length > 0 && dismissed.every((value) => value !== undefined)) {
+    session.dismissedAt = dismissed.sort().at(0);
+  } else {
+    delete session.dismissedAt;
+  }
+  writeLedgerSession(session, continueCapture);
+  const now = new Date().toISOString();
+  updateLedgerIndex((index) => {
+    index.sessions[sessionId] = [...targets.keys()];
+    for (const target of targets.values()) {
+      index.trails[target.trailId] = { path: target.path, lastSeenAt: now };
+    }
+  }, continueCapture);
+}
+
+/** Mark one turn placed; existing targets remain until cleanup commits. */
+export function markLedgerSegmentPlaced(
+  sessionId: string,
+  segmentId: string,
+  trailId: string,
+  path: string,
+  opts: { continueCapture?: () => boolean; pathRebase?: PathRebase } = {},
+): void {
+  updateLedgerSegment(
+    sessionId,
+    segmentId,
+    (segment) => {
+      const targets = segment.targets ?? [];
+      const existing = targets.find((target) => target.trailId === trailId);
+      if (existing) existing.path = path;
+      else targets.push({ trailId, path });
+      segment.targets = targets;
+      segment.status = 'placed';
+      delete segment.dismissedAt;
+      if (opts.pathRebase) {
+        const candidate = {
+          fromRoot: resolve(opts.pathRebase.fromRoot),
+          toRoot: resolve(opts.pathRebase.toRoot),
+        };
+        const rebases = segment.pathRebases ?? [];
+        const previous = rebases.at(-1);
+        if (
+          pathKey(candidate.fromRoot) !== pathKey(candidate.toRoot) &&
+          (!previous || !samePathRebase(previous, candidate))
+        ) {
+          rebases.push(candidate);
+        }
+        if (rebases.length > 0) segment.pathRebases = rebases;
+      }
+    },
+    opts.continueCapture,
+  );
+}
+
+function ledgerRangeMemberIds(
+  sessionId: string,
+  rangeOrSegment: LedgerRangeView | LedgerSegment | string,
+): string[] {
+  if (typeof rangeOrSegment !== 'string') {
+    return 'memberSegmentIds' in rangeOrSegment
+      ? [...rangeOrSegment.memberSegmentIds]
+      : [rangeOrSegment.id];
+  }
+  const range = listActionableLedgerRanges({
+    includeHidden: true,
+    sessionId,
+  }).find(
+    (candidate) =>
+      candidate.selector === rangeOrSegment ||
+      candidate.segment.id === rangeOrSegment ||
+      candidate.memberSegmentIds.includes(rangeOrSegment),
+  );
+  return range?.memberSegmentIds ?? [rangeOrSegment];
+}
+
+/** Place every persisted member of one command-level range. */
+export function placeLedgerRange(
+  sessionId: string,
+  rangeOrSegment: LedgerRangeView | LedgerSegment | string,
+  trailId: string,
+  path: string,
+  opts: { continueCapture?: () => boolean; pathRebase?: PathRebase } = {},
+): void {
+  for (const segmentId of ledgerRangeMemberIds(sessionId, rangeOrSegment)) {
+    markLedgerSegmentPlaced(sessionId, segmentId, trailId, path, opts);
+  }
+}
+
+/** Return one segment to the inbox, optionally clearing stale placements. */
+export function markLedgerSegmentInbox(
+  sessionId: string,
+  segmentId: string,
+  opts: { continueCapture?: () => boolean; clearTargets?: boolean } = {},
+): void {
+  updateLedgerSegment(
+    sessionId,
+    segmentId,
+    (segment) => {
+      segment.status = 'inbox';
+      if (opts.clearTargets) segment.targets = [];
+    },
+    opts.continueCapture,
+  );
+}
+
+/** Dismiss one pending turn without hiding neighboring turns in the same chat. */
+export function dismissLedgerSegment(sessionId: string, segmentId: string): void {
+  updateLedgerSegment(sessionId, segmentId, (segment) => {
+    if (segment.status === 'inbox' && !segment.dismissedAt) {
+      segment.dismissedAt = new Date().toISOString();
+    }
+  });
+}
+
+/** Dismiss every segment represented by one collapsed pending range. */
+export function dismissLedgerRange(
+  sessionId: string,
+  rangeOrSegment: LedgerRangeView | LedgerSegment | string,
+): void {
+  for (const segmentId of ledgerRangeMemberIds(sessionId, rangeOrSegment)) {
+    dismissLedgerSegment(sessionId, segmentId);
+  }
+}
+
+/** Undo one range dismissal. */
+export function undismissLedgerSegment(sessionId: string, segmentId: string): void {
+  updateLedgerSegment(sessionId, segmentId, (segment) => {
+    delete segment.dismissedAt;
+  });
+}
+
+export function undismissLedgerRange(
+  sessionId: string,
+  rangeOrSegment: LedgerRangeView | LedgerSegment | string,
+): void {
+  for (const segmentId of ledgerRangeMemberIds(sessionId, rangeOrSegment)) {
+    undismissLedgerSegment(sessionId, segmentId);
+  }
+}
+
+/** Return every member of a collapsed range to the inbox. */
+export function markLedgerRangeInbox(
+  sessionId: string,
+  rangeOrSegment: LedgerRangeView | LedgerSegment | string,
+  opts: { continueCapture?: () => boolean; clearTargets?: boolean } = {},
+): void {
+  for (const segmentId of ledgerRangeMemberIds(sessionId, rangeOrSegment)) {
+    markLedgerSegmentInbox(sessionId, segmentId, opts);
+  }
+}
+
+/** Remove one target from one turn after its projection cleanup commits. */
+export function unlinkLedgerSegmentPlacement(
+  sessionId: string,
+  segmentId: string,
+  trailId: string,
+  opts: { continueCapture?: () => boolean } = {},
+): void {
+  updateLedgerSegment(
+    sessionId,
+    segmentId,
+    (segment) => {
+      segment.targets = (segment.targets ?? []).filter(
+        (target) => target.trailId !== trailId,
+      );
+      if (segment.targets.length === 0) segment.status = 'inbox';
+    },
+    opts.continueCapture,
+  );
+}
+
+export function unlinkLedgerRangePlacement(
+  sessionId: string,
+  rangeOrSegment: LedgerRangeView | LedgerSegment | string,
+  trailId: string,
+  opts: { continueCapture?: () => boolean } = {},
+): void {
+  for (const segmentId of ledgerRangeMemberIds(sessionId, rangeOrSegment)) {
+    unlinkLedgerSegmentPlacement(sessionId, segmentId, trailId, opts);
+  }
+}
+
+/** Persist a crash-resumable migration phase for one independently routed turn. */
+export function setLedgerSegmentMigration(
+  sessionId: string,
+  segmentId: string,
+  migration: LedgerSegmentMigration | undefined,
+  continueCapture?: () => boolean,
+): void {
+  updateLedgerSegment(
+    sessionId,
+    segmentId,
+    (segment) => {
+      if (migration) segment.migration = cloneMigration(migration);
+      else delete segment.migration;
+    },
+    continueCapture,
+  );
+}
+
+/** Pending, deterministically routed turns claimable by one project root. */
+export function pendingLedgerRangesForRoot(
+  root: string,
+  opts: { includeHidden?: boolean; persist?: boolean } = {},
+): LedgerRangeView[] {
+  const wanted = pathKey(resolve(root));
+  return listActionableLedgerRanges({
+    includeHidden: opts.includeHidden,
+    pendingOnly: true,
+    persist: opts.persist,
+  }).filter(
+    (view) =>
+      (view.route.state === 'tracked' || view.route.state === 'candidate') &&
+      pathKey(resolve(view.route.root)) === wanted,
+  );
 }
 
 // --- placement ------------------------------------------------------------
@@ -630,11 +2231,17 @@ function trailIdAt(root: string): string | undefined {
  * session + index are repointed to it, so the session isn't falsely flagged
  * target-missing after a merge. Returns false only when no trail exists there.
  */
-function targetAlive(sessionId: string, target: LedgerTarget): boolean {
+function targetAlive(
+  sessionId: string,
+  target: LedgerTarget,
+  repairTarget = true,
+): boolean {
   const path = knownTrailPath(target.trailId) ?? target.path;
   const current = trailIdAt(path);
   if (!current) return false;
-  if (current !== target.trailId) repointTarget(sessionId, target.trailId, current, path);
+  if (repairTarget && current !== target.trailId) {
+    repointTarget(sessionId, target.trailId, current, path);
+  }
   return true;
 }
 
@@ -672,24 +2279,100 @@ function repointTarget(
  * trail's current location (so a later move is recognized by id) and the
  * session→trail link (so `reattach` can find and undo a wrong placement).
  */
-export function markPlaced(sessionId: string, trailId: string, path: string): void {
+export function markPlaced(
+  sessionId: string,
+  trailId: string,
+  path: string,
+  opts: { continueCapture?: () => boolean; pathRebase?: PathRebase } = {},
+): void {
+  requireCaptureContinuation(opts.continueCapture);
   const session = readLedgerSession(sessionId);
+  const originalSession = session
+    ? {
+        ...session,
+        ...(session.targets
+          ? { targets: session.targets.map((target) => ({ ...target })) }
+          : {}),
+        ...(session.pathRebases
+          ? { pathRebases: session.pathRebases.map((rebase) => ({ ...rebase })) }
+          : {}),
+      }
+    : null;
+  let wroteSession = false;
   if (session) {
     const targets = session.targets ?? [];
     if (!targets.some((t) => t.trailId === trailId)) targets.push({ trailId, path });
     else targets.find((t) => t.trailId === trailId)!.path = path;
     session.targets = targets;
     session.status = 'placed';
+    if (opts.pathRebase) {
+      const candidate = {
+        fromRoot: resolve(opts.pathRebase.fromRoot),
+        toRoot: resolve(opts.pathRebase.toRoot),
+      };
+      const rebases = session.pathRebases ?? [];
+      const previous = rebases.at(-1);
+      const isNoOp = pathKey(candidate.fromRoot) === pathKey(candidate.toRoot);
+      const repeatsTail =
+        previous !== undefined &&
+        pathKey(resolve(previous.fromRoot)) === pathKey(candidate.fromRoot) &&
+        pathKey(resolve(previous.toRoot)) === pathKey(candidate.toRoot);
+      if (!isNoOp && !repeatsTail) rebases.push(candidate);
+      if (rebases.length > 0) session.pathRebases = rebases;
+    }
     delete session.dismissedAt; // placement re-surfaces it; a stale dismissal shouldn't linger
-    writeLedgerSession(session);
+    writeLedgerSession(session, opts.continueCapture);
+    wroteSession = true;
   }
   const now = new Date().toISOString();
-  updateLedgerIndex((idx) => {
-    idx.trails[trailId] = { path, lastSeenAt: now };
-    const list = idx.sessions[sessionId] ?? [];
-    if (!list.includes(trailId)) list.push(trailId);
-    idx.sessions[sessionId] = list;
-  });
+  try {
+    updateLedgerIndex((idx) => {
+      idx.trails[trailId] = { path, lastSeenAt: now };
+      const list = idx.sessions[sessionId] ?? [];
+      if (!list.includes(trailId)) list.push(trailId);
+      idx.sessions[sessionId] = list;
+    }, opts.continueCapture);
+  } catch (error) {
+    if (error instanceof CaptureInterruptedError && wroteSession && originalSession) {
+      writeLedgerSession(originalSession, undefined, { preservePathRebases: false });
+    }
+    throw error;
+  }
+
+  // Compatibility wrapper: legacy callers still place a whole native session.
+  // New command surfaces call markLedgerSegmentPlaced for one turn instead.
+  try {
+    const document = ensureLedgerSegments(sessionId);
+    if (document.segments.length > 0) {
+      for (const segment of document.segments) {
+        const targets = segment.targets ?? [];
+        const existing = targets.find((target) => target.trailId === trailId);
+        if (existing) existing.path = path;
+        else targets.push({ trailId, path });
+        segment.targets = targets;
+        segment.status = 'placed';
+        delete segment.dismissedAt;
+        if (opts.pathRebase) {
+          const candidate = {
+            fromRoot: resolve(opts.pathRebase.fromRoot),
+            toRoot: resolve(opts.pathRebase.toRoot),
+          };
+          const rebases = segment.pathRebases ?? [];
+          const previous = rebases.at(-1);
+          if (
+            pathKey(candidate.fromRoot) !== pathKey(candidate.toRoot) &&
+            (!previous || !samePathRebase(previous, candidate))
+          ) {
+            rebases.push(candidate);
+          }
+          if (rebases.length > 0) segment.pathRebases = rebases;
+        }
+      }
+      writeLedgerSegments(sessionId, document);
+    }
+  } catch {
+    // The session/index remain the compatibility source if sidecar refresh fails.
+  }
 }
 
 /**
@@ -780,11 +2463,22 @@ export function noteTrailAt(root: string): TrailLocationUpdate | null {
 }
 
 /** Mark a session as awaiting placement (root-less scratch / no eligible anchor). */
-export function markInbox(sessionId: string): void {
+export function markInbox(
+  sessionId: string,
+  opts: { continueCapture?: () => boolean } = {},
+): void {
+  requireCaptureContinuation(opts.continueCapture);
   const session = readLedgerSession(sessionId);
   if (!session || session.status === 'placed') return;
   session.status = 'inbox';
-  writeLedgerSession(session);
+  writeLedgerSession(session, opts.continueCapture);
+  try {
+    const document = ensureLedgerSegments(sessionId);
+    for (const segment of document.segments) segment.status = 'inbox';
+    writeLedgerSegments(sessionId, document);
+  } catch {
+    // Compatibility metadata was already persisted above.
+  }
 }
 
 /**
@@ -797,6 +2491,17 @@ export function dismissLedgerSession(id: string): void {
   if (!session || session.status === 'placed' || session.dismissedAt) return;
   session.dismissedAt = new Date().toISOString();
   writeLedgerSession(session);
+  try {
+    const document = ensureLedgerSegments(session);
+    for (const segment of document.segments) {
+      if (segment.status === 'inbox' && !segment.dismissedAt) {
+        segment.dismissedAt = session.dismissedAt;
+      }
+    }
+    writeLedgerSegments(id, document);
+  } catch {
+    // Compatibility metadata was already persisted above.
+  }
 }
 
 /** Undo a dismissal, so the session can surface again if it otherwise qualifies. */
@@ -805,6 +2510,13 @@ export function undismissLedgerSession(id: string): void {
   if (!session || !session.dismissedAt) return;
   delete session.dismissedAt;
   writeLedgerSession(session);
+  try {
+    const document = ensureLedgerSegments(session);
+    for (const segment of document.segments) delete segment.dismissedAt;
+    writeLedgerSegments(id, document);
+  } catch {
+    // Compatibility metadata was already persisted above.
+  }
 }
 
 /** Forget a session's placement into one trail (used when `reattach` moves it). */
@@ -820,6 +2532,18 @@ export function unlinkPlacement(sessionId: string, trailId: string): void {
       idx.sessions[sessionId] = idx.sessions[sessionId].filter((t) => t !== trailId);
     }
   });
+  try {
+    const document = ensureLedgerSegments(sessionId);
+    for (const segment of document.segments) {
+      segment.targets = (segment.targets ?? []).filter(
+        (target) => target.trailId !== trailId,
+      );
+      if (segment.targets.length === 0) segment.status = 'inbox';
+    }
+    writeLedgerSegments(sessionId, document);
+  } catch {
+    // Compatibility metadata was already persisted above.
+  }
 }
 
 /** Resolve a ledger session by a full or unambiguous prefix id (for the CLI). */

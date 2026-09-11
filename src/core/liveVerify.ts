@@ -159,8 +159,14 @@ function missingGithubToken(integration: string): boolean {
  * and certify a broken build as passing. Filenames embed an ISO stamp, so
  * sorting them lexicographically sorts them chronologically.
  */
-function readReport(dir: string): any {
-  showtail(dir, ['report', '--format', 'json']);
+type ShowtailRunner = typeof showtail;
+
+export function readReport(
+  dir: string,
+  env: NodeJS.ProcessEnv,
+  runShowtail: ShowtailRunner = showtail,
+): any {
+  runShowtail(dir, ['report', '--format', 'json'], env);
   const reportsDir = join(dir, '.showtail', 'reports');
   if (!existsSync(reportsDir)) throw new Error('no report produced');
   const file = readdirSync(reportsDir)
@@ -312,7 +318,7 @@ export function verifyToolLive(integration: string): LiveResult {
     });
     if (drive.error) throw new Error(`could not run ${spec.bin}: ${drive.error.message}`);
 
-    const report = readReport(dir);
+    const report = readReport(dir, env);
     const blob = JSON.stringify(report);
     const capturedPrompt = (report.turns?.length ?? 0) > 0 || blob.includes(marker);
     const capturedArtifact = (report.summary?.artifacts ?? 0) >= 1;

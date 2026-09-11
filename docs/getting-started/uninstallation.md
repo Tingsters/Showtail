@@ -4,35 +4,48 @@ Showtail's installer changes only the current user's files and configuration.
 Removing the executable alone does not remove capture hooks or editor extensions,
 so disconnect those first.
 
-## 1. Stop automatic capture
+## 1. Stop capture
+
+First disable automatic creation of new project trails:
 
 ```powershell
 showtail setup --off
 ```
 
-Disconnect any user-level integrations you enabled:
+This does **not** remove capture hooks or stop connected tools from writing to
+existing trails. Disconnect each integration to stop its capture. With no scope
+flag, `disconnect` records a durable machine-wide stop for that tool and removes
+the user- and current-project wiring it can reach. A stale hook or extension left
+in another project becomes dormant and exits before reading or writing capture data:
 
 ```powershell
-showtail disconnect claude --user
-showtail disconnect codex --user
-showtail disconnect copilot-cli --user
-showtail disconnect antigravity-cli --user
-showtail disconnect antigravity-ide --user
-```
-
-Run the corresponding command without `--user` inside any project where you
-installed project-level integration files. For Copilot project instructions, run:
-
-```powershell
+showtail disconnect claude
+showtail disconnect codex
 showtail disconnect copilot
+showtail disconnect copilot-cli
+showtail disconnect antigravity-cli
+showtail disconnect antigravity-ide
 ```
 
-Remove installed editor extensions when applicable:
+Use an explicit `--user` or `--project` flag only when you intentionally want to
+remove one scope and leave the other connected. A scoped disconnect does not set
+the machine-wide runtime stop.
+
+For extension-backed integrations, `disconnect` also asks the editor's command-line
+tool to uninstall the Showtail extension. If that command-line tool is unavailable
+or removal fails, the warning means the native component remains installed, not that
+Showtail capture is still running: the bare disconnect's machine-wide stop still
+applies. Use the native fallback command shown in the warning to finish cleanup
+before removing the Showtail executable, for example:
 
 ```powershell
 code --uninstall-extension Tingsters.showtail
 antigravity-ide --uninstall-extension tingsters.showtail
 ```
+
+Reload or close any open VS Code or Antigravity IDE windows after disconnecting
+or updating Showtail. An extension process loaded before the change stays in
+memory until the editor reloads, even after its files have been removed.
 
 Commands for tools that are not installed may fail harmlessly.
 

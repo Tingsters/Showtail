@@ -3,7 +3,8 @@
 This project uses [Showtail](https://github.com/Tingsters/Showtail) to keep a local,
 reviewable trail of the student's prompts, AI replies, and changed files. It is the
 student's record of their own work, not AI detection and not a narration of what the
-assistant did. Everything stays under `.showtail/`; never send it anywhere.
+assistant did. Capture stays on this machine: resolved work lives in the project's
+`.showtail/`, while unresolved work waits in Showtail's local inbox. Never send it anywhere.
 
 ## Capture is automatic in Copilot CLI
 
@@ -18,5 +19,8 @@ disabled, mention once that the student can reconnect it with
 `showtail connect copilot-cli`; then continue helping without repeated prompts.
 
 When the student explicitly asks to generate a report, show their work, verify the trail,
-or check status, you may run `showtail report`, `showtail verify`, or `showtail status` for
-them. Never record secrets.
+or check status, copy their project wording into
+`showtail projects "<student-project-wording>" --json`. Continue only when it selects one
+trail, then run the requested command with `--project <trail-id>`; never construct an absolute
+path from the shell cwd or workspace. If Showtail reports an ambiguity, conflict, or confirmation
+requirement, ask the student to choose. Never record secrets.

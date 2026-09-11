@@ -1,5 +1,6 @@
 import { existsSync } from 'node:fs';
 import {
+  antigravityIdeAutoCaptureActive,
   removeAntigravityIdeInstructions,
   resolveAntigravityIdeTarget,
   uninstallAntigravityIdeHooks,
@@ -8,8 +9,10 @@ import {
 import {
   ANTIGRAVITY_EXTENSION_ID,
   installAntigravityIdeExtension,
+  uninstallAntigravityIdeExtension,
 } from '../core/antigravityIdeExtension.ts';
 import { printInstallHeader, printUninstallResult, scopeOf } from './installBase.ts';
+import type { ConnectUninstallResult } from '../plugins/types.ts';
 
 export interface AntigravityIdeInstallOptions {
   user?: boolean;
@@ -61,36 +64,86 @@ export async function runAntigravityIdeInstall(
   }
 
   console.log('');
-  console.log(
-    'Privacy: Showtail records your prompts and snapshots edits into your local',
-  );
-  console.log('  .showtail/ folder — nothing leaves your machine. Review with `showtail');
-  console.log('  report`; stop anytime with `showtail disconnect antigravity-ide`.');
-  console.log('');
-  console.log('Then just work in Antigravity IDE — your prompts and edits are captured.');
+  if (ext.installed) {
+    console.log(
+      'Privacy: Showtail records your prompts and snapshots edits into your local',
+    );
+    console.log(
+      '  .showtail/ folder — nothing leaves your machine. Review with `showtail',
+    );
+    console.log('  report`; stop anytime with `showtail disconnect antigravity-ide`.');
+    console.log('');
+    console.log(
+      'Then just work in Antigravity IDE — your prompts and edits are captured.',
+    );
+  } else {
+    console.log(
+      'The instructions are installed, but automatic capture is not active yet.',
+    );
+    console.log(
+      'Install the extension and restart Antigravity IDE before you begin working.',
+    );
+    console.log(
+      'Once enabled, capture stays local and resolves into project .showtail/ trails.',
+    );
+  }
 }
 
 export interface AntigravityIdeUninstallOptions {
   user?: boolean;
+  all?: boolean;
   cwd?: string;
 }
 
 /** Remove the Showtail Antigravity IDE instructions and any hooks we installed. */
 export async function runAntigravityIdeUninstall(
   options: AntigravityIdeUninstallOptions,
-): Promise<void> {
-  const scope = scopeOf(options);
-  const target = resolveAntigravityIdeTarget(scope, options.cwd);
+): Promise<ConnectUninstallResult> {
+  const scopes = options.all
+    ? (['project', 'user'] as const)
+    : ([scopeOf(options)] as const);
+  const removedLines: Array<string | null> = [];
 
-  const removedInstructions = removeAntigravityIdeInstructions(target);
-  const removedHooks = uninstallAntigravityIdeHooks(target);
+  for (const scope of scopes) {
+    const target = resolveAntigravityIdeTarget(scope, options.cwd);
+    const removedInstructions = removeAntigravityIdeInstructions(target);
+    const removedHooks = uninstallAntigravityIdeHooks(target);
+    removedLines.push(
+      removedInstructions ? `Removed instructions from: ${target.contextFile}` : null,
+      removedHooks ? `Removed legacy Showtail hooks from: ${target.hooksFile}` : null,
+    );
+  }
+
+  const removeNativeCapture = options.all || scopes.includes('user');
+  const extension = removeNativeCapture ? uninstallAntigravityIdeExtension() : undefined;
+  if (extension?.wasInstalled) {
+    removedLines.push(
+      `Removed the Showtail extension from Antigravity IDE (${ANTIGRAVITY_EXTENSION_ID}).`,
+      'Reload any open Antigravity IDE windows to unload the running extension.',
+    );
+  }
 
   printUninstallResult({
     nothingMessage:
-      'Nothing to remove — no Showtail Antigravity IDE integration found for this scope.',
-    removedLines: [
-      removedInstructions ? `Removed instructions from: ${target.contextFile}` : null,
-      removedHooks ? `Removed Showtail hooks from: ${target.hooksFile}` : null,
-    ],
+      'Nothing to remove — no Showtail Antigravity IDE integration found in the selected scope(s).',
+    removedLines,
   });
+
+  const warnings: string[] = [];
+  if (extension && !extension.uninstalled) {
+    warnings.push(
+      `Could not remove or verify the Antigravity IDE extension (${extension.reason ?? 'unknown error'}). ` +
+        `Remove ${ANTIGRAVITY_EXTENSION_ID} in the IDE, then reload open Antigravity IDE windows.`,
+    );
+  } else if (!removeNativeCapture) {
+    warnings.push(
+      'Only the project integration was removed; the user-wide Antigravity IDE extension was left in place. ' +
+        'Run `showtail disconnect antigravity-ide` without a scope flag to stop it.',
+    );
+  }
+  const extensionStopped = removeNativeCapture ? extension?.uninstalled === true : false;
+  return {
+    captureStopped: !antigravityIdeAutoCaptureActive(options.cwd) && extensionStopped,
+    ...(warnings.length > 0 ? { warnings } : {}),
+  };
 }

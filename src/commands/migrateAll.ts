@@ -2,14 +2,13 @@
 import { existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { activeAuthorPaths } from '../core/authors.ts';
-import { noteKnownProject, showtailHome } from '../core/globalConfig.ts';
+import { showtailHome } from '../core/globalConfig.ts';
 import { makeId } from '../core/ids.ts';
 import { migrateProject, type ProjectMigrationResult } from '../core/migration.ts';
 import { discoverShowtailProjects, projectLabel } from '../core/projectDiscovery.ts';
 import { emitJson } from '../core/output.ts';
 import {
   pathsForRoot,
-  readConfig,
   readJson,
   trailIsNewerThanBinary,
   writeJson,
@@ -79,7 +78,6 @@ async function previewRoot(root: string): Promise<BulkProjectResult> {
   const author = activeAuthorPaths(paths);
   if (!author) return { root, status: 'skipped', reason: 'no active local author' };
   try {
-    noteKnownProject(root, readConfig(paths).trailId);
     const migration = await migrateProject(author, { dryRun: true });
     const eligible = migration.sessions.some((session) => session.status === 'planned');
     return {

@@ -1,5 +1,6 @@
 import { existsSync } from 'node:fs';
 import {
+  copilotCliAutoCaptureActive,
   copilotCliHooksGloballyDisabled,
   copilotCliHooksInstalledAt,
   copilotCliInstructionsState,
@@ -9,6 +10,7 @@ import {
   uninstallCopilotCliHooks,
   writeCopilotCliInstructions,
 } from '../core/copilotCli.ts';
+import type { ConnectUninstallResult } from '../plugins/types.ts';
 import {
   printHooksEnabled,
   printInstallHeader,
@@ -98,27 +100,35 @@ export async function runCopilotCliInstall(
 
 export interface CopilotCliUninstallOptions {
   user?: boolean;
+  all?: boolean;
   cwd?: string;
 }
 
 /** Remove the Showtail GitHub Copilot CLI instructions and any hooks we installed. */
 export async function runCopilotCliUninstall(
   options: CopilotCliUninstallOptions,
-): Promise<void> {
-  const scope = scopeOf(options);
-  const target = resolveCopilotCliTarget(scope, options.cwd);
+): Promise<ConnectUninstallResult> {
+  const scopes = options.all
+    ? (['project', 'user'] as const)
+    : ([scopeOf(options)] as const);
+  const removedLines: Array<string | null> = [];
 
-  const removedInstructions = removeCopilotCliInstructions(target);
-  const removedHooks = uninstallCopilotCliHooks(target);
-
-  printUninstallResult({
-    nothingMessage:
-      'Nothing to remove — no Showtail GitHub Copilot CLI integration found for this scope.',
-    removedLines: [
+  for (const scope of scopes) {
+    const target = resolveCopilotCliTarget(scope, options.cwd);
+    const removedInstructions = removeCopilotCliInstructions(target);
+    const removedHooks = uninstallCopilotCliHooks(target);
+    removedLines.push(
       removedInstructions
         ? `Removed instructions from: ${target.instructionsFile}`
         : null,
       removedHooks ? `Removed Showtail hooks from: ${target.hooksFile}` : null,
-    ],
+    );
+  }
+
+  printUninstallResult({
+    nothingMessage:
+      'Nothing to remove — no Showtail GitHub Copilot CLI integration found in the selected scope(s).',
+    removedLines,
   });
+  return { captureStopped: !copilotCliAutoCaptureActive(options.cwd) };
 }

@@ -54,6 +54,8 @@ export interface ConnectStatus {
   connected: boolean;
   /** Auto-capture hooks active (tools that install hooks). Undefined = N/A. */
   hooksActive?: boolean;
+  /** Automatic capture supplied by a native integration rather than hooks. */
+  captureActive?: boolean;
   /** Managed instructions are behind the latest shipped version. */
   updateAvailable?: boolean;
 }
@@ -71,7 +73,16 @@ export interface ConnectInstallOptions {
 
 export interface ConnectUninstallOptions {
   user?: boolean;
+  /** Remove every supported scope plus any native capture component. */
+  all?: boolean;
   cwd?: string;
+}
+
+export interface ConnectUninstallResult {
+  /** True only when automatic capture is confirmed stopped for this tool. */
+  captureStopped: boolean;
+  /** Actionable warnings when a native component could not be removed or verified. */
+  warnings?: string[];
 }
 
 export interface ConnectCapability {
@@ -85,8 +96,8 @@ export interface ConnectCapability {
   detect(): boolean;
   /**
    * Quiet user-scope connect performed by `showtail setup` for every detected
-   * tool. Returns whether hooks were enabled, or null if this tool isn't
-   * auto-connected at setup (e.g. Copilot, which is project-scoped).
+   * tool. Returns whether hooks were enabled, or null when the integration could
+   * not be completed and should remain eligible for a later retry.
    */
   autoConnect?(cwd?: string): { hooks: boolean } | null;
   /**
@@ -111,7 +122,7 @@ export interface ConnectCapability {
   /** Install (or refresh) the integration. Prints its own user-facing output. */
   install(opts: ConnectInstallOptions): Promise<void>;
   /** Remove the integration. Prints its own user-facing output. */
-  uninstall(opts: ConnectUninstallOptions): Promise<void>;
+  uninstall(opts: ConnectUninstallOptions): Promise<ConnectUninstallResult | void>;
   /** Current installed state for `status`. */
   status(cwd?: string): ConnectStatus;
   /**
@@ -133,10 +144,17 @@ export interface ConnectCapability {
 export interface NormalizedHookEvent {
   /** The host tool's own session id (Claude/Gemini `session_id`, …), if any. */
   nativeSessionId?: string;
+  /**
+   * Project cwd reported by the host. `null` explicitly means the host has no
+   * project cwd; the hook process cwd must not become routing evidence.
+   */
+  projectCwd?: string | null;
   /** The submitted prompt text (user-prompt event), if any. */
   prompt?: string;
   /** Repo paths the edit tool touched (post-edit event). */
   editedFiles: string[];
+  /** Workspace roots reported by the host, when available. */
+  workspacePaths?: string[];
   /** AI-suggested diff/code for the edit, if captured. */
   suggestedDiff?: string;
   /** The AI model in effect for this event, if the tool exposes one (raw id). */

@@ -6,6 +6,7 @@ import {
   COPILOT_CLI_HOOK_EVENTS,
   copilotCliHooksJson,
 } from '../src/core/copilotCli.ts';
+import { PROJECT_TARGETING_INSTRUCTIONS } from '../src/core/projectTargetingInstructions.ts';
 
 const REPO = join(import.meta.dir, '..');
 
@@ -14,9 +15,9 @@ function readAsset(...parts: string[]): string {
 }
 
 describe('copilot-cli assets stay in sync with the single source of truth', () => {
-  test('embedded instructions body matches the committed asset', () => {
+  test('embedded instructions body includes the shared targeting policy', () => {
     expect(COPILOT_BODY.replace(/\r\n/g, '\n')).toBe(
-      readAsset('assets', 'copilot-cli', 'showtail.showtail.md'),
+      `${readAsset('assets', 'copilot-cli', 'showtail.showtail.md').trimEnd()}\n\n${PROJECT_TARGETING_INSTRUCTIONS.trim()}\n`,
     );
   });
 
@@ -41,5 +42,15 @@ describe('copilot-cli assets stay in sync with the single source of truth', () =
     expect(COPILOT_BODY).not.toContain('showtail log');
     expect(COPILOT_BODY).not.toContain('showtail artifact');
     expect(COPILOT_BODY).toContain('lifecycle hooks own routine capture');
+    expect(COPILOT_BODY).toContain(
+      'showtail projects "<student-project-wording>" --json',
+    );
+    expect(COPILOT_BODY).toContain('--project <trail-id>');
+    expect(COPILOT_BODY).toContain('Never choose from the terminal working directory');
+    expect(COPILOT_BODY).toContain('returned `trailId`');
+    expect(COPILOT_BODY).not.toMatch(
+      /^\s*showtail (?:report|verify|status)(?:\s+#.*)?\s*$/m,
+    );
+    expect(COPILOT_BODY).not.toMatch(/`showtail (?:report|verify|status)`/);
   });
 });

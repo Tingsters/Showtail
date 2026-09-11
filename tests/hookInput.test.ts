@@ -1,7 +1,10 @@
 import { describe, expect, test } from 'bun:test';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import {
   applyPatchEdits,
   extractAntigravityEditedFiles,
+  extractAgyWorkspacePaths,
   extractApplyPatchFiles,
   extractCopilotCliEditedFiles,
   extractCopilotCliPrompt,
@@ -12,6 +15,8 @@ import {
   extractShellCommandFiles,
   extractSuggestedCode,
 } from '../src/core/hookInput.ts';
+import { codexPlugin } from '../src/plugins/codex.ts';
+import { cleanup, makeTempDir } from './helpers.ts';
 
 describe('extractSuggestedCode', () => {
   test('Edit becomes a +/- diff', () => {
@@ -163,54 +168,165 @@ describe('hookInput', () => {
         }),
       ).toEqual(['a.ts']);
     });
+
+    test('rejects multiline, control-character, code-shaped, and oversized paths', () => {
+      const oversized = `${'a'.repeat(4097)}.ts`;
+      const payload = {
+        tool_input: {
+          changes: {
+            'src/ok file.ts': {},
+            'src/bad\nfile.ts': {},
+            'src/bad\u0000file.ts': {},
+            'const value = writeFile();': {},
+            [oversized]: {},
+          },
+        },
+      };
+      expect(extractApplyPatchFiles(payload)).toEqual(['src/ok file.ts']);
+      expect(applyPatchEdits(payload)).toEqual([{ file: 'src/ok file.ts' }]);
+    });
   });
 
   describe('extractShellCommandFiles (Codex raw shell)', () => {
-    const cmd = (command: string, cwd = '/proj') =>
-      extractShellCommandFiles({
-        tool_name: 'shell_command',
-        cwd,
-        tool_input: { command },
-      });
+    const cmd = (command: string, existingFiles: string[] = []) => {
+      const cwd = makeTempDir();
+      try {
+        for (const file of existingFiles) {
+          const absolute = join(cwd, file);
+          mkdirSync(dirname(absolute), { recursive: true });
+          writeFileSync(absolute, 'captured\n', 'utf8');
+        }
+        return extractShellCommandFiles({
+          tool_name: 'shell_command',
+          cwd,
+          tool_input: { command },
+        });
+      } finally {
+        cleanup(cwd);
+      }
+    };
 
     test('PowerShell Set-Content with a literal -LiteralPath/-Path', () => {
-      expect(cmd("Set-Content -LiteralPath 'notes.txt' -Value 'hi'")).toEqual([
-        'notes.txt',
+      expect(
+        cmd("Set-Content -LiteralPath 'notes.txt' -Value 'hi'", ['notes.txt']),
+      ).toEqual(['notes.txt']);
+      expect(cmd('Out-File -FilePath out.log -Encoding ASCII', ['out.log'])).toEqual([
+        'out.log',
       ]);
-      expect(cmd('Out-File -FilePath out.log -Encoding ASCII')).toEqual(['out.log']);
-      expect(cmd('Add-Content -Path "logs/app.txt" -Value x')).toEqual(['logs/app.txt']);
+      expect(cmd('Add-Content -Path "logs/app.txt" -Value x', ['logs/app.txt'])).toEqual([
+        'logs/app.txt',
+      ]);
     });
 
     test('redirects and tee', () => {
-      expect(cmd('echo hi > result.txt')).toEqual(['result.txt']);
-      expect(cmd('cat a | tee -a combined.log')).toEqual(['combined.log']);
+      expect(cmd('echo hi > result.txt', ['result.txt'])).toEqual(['result.txt']);
+      expect(cmd('cat a | tee -a combined.log', ['combined.log'])).toEqual([
+        'combined.log',
+      ]);
     });
 
     test('apply_patch run through the shell', () => {
       expect(
         cmd(
           'apply_patch <<EOF\n*** Begin Patch\n*** Add File: gen.ts\n*** End Patch\nEOF',
+          ['gen.ts'],
         ),
       ).toEqual(['gen.ts']);
     });
 
     test('reads command from a JSON-string arguments field', () => {
-      expect(
-        extractShellCommandFiles({
-          name: 'shell_command',
-          cwd: '/proj',
-          arguments: JSON.stringify({
-            command: "Set-Content -Path 'z.txt' -Value q",
-            timeout_ms: 1000,
-          }),
-        } as any),
-      ).toEqual(['z.txt']);
+      const cwd = makeTempDir();
+      try {
+        writeFileSync(join(cwd, 'z.txt'), 'captured\n', 'utf8');
+        expect(
+          extractShellCommandFiles({
+            name: 'shell_command',
+            cwd,
+            arguments: JSON.stringify({
+              command: "Set-Content -Path 'z.txt' -Value q",
+              timeout_ms: 1000,
+            }),
+          } as any),
+        ).toEqual(['z.txt']);
+      } finally {
+        cleanup(cwd);
+      }
     });
 
     test('skips paths held in a shell variable (git fallback covers those)', () => {
       // The user's throwaway repro used `$scratch` — unresolvable from text alone.
       expect(cmd('Set-Content -LiteralPath $scratch -Encoding ASCII')).toEqual([]);
       expect(cmd('ls -la')).toEqual([]);
+    });
+
+    test('rejects patch/code arrows, CLI flags, prose, and files that do not exist', () => {
+      expect(cmd('function value() -> str:\n  return "x"')).toEqual([]);
+      expect(cmd('const value = ready => result')).toEqual([]);
+      expect(cmd('showtail report > --json --no-open', ['--json'])).toEqual([]);
+      expect(cmd('Set-Content -Path missing.txt -Value x')).toEqual([]);
+      expect(
+        cmd(
+          'apply_patch <<EOF\n*** Begin Patch\n*** Update File: real.ts\n@@\n-const old = value > prose.txt\n+const next = value > prose.txt\n*** End Patch\nEOF',
+          ['real.ts', 'prose.txt'],
+        ),
+      ).toEqual(['real.ts']);
+    });
+  });
+
+  describe('Codex hook adapter edit-tool allowlist', () => {
+    const parse = codexPlugin.connect!.hooks!.parse;
+
+    test('does not turn path-shaped input from another tool into an edit', () => {
+      expect(
+        parse({
+          cwd: '/repo',
+          name: 'read_file',
+          tool_input: { file_path: 'README.md' },
+        }),
+      ).toEqual(expect.objectContaining({ editedFiles: [], edits: [] }));
+      expect(
+        parse({
+          cwd: '/repo',
+          name: 'exec',
+          input:
+            "const nested = { tool_input: { file_path: 'fake.ts' } };\n" +
+            "const docs = '*** Update File: also-fake.ts';",
+        }),
+      ).toEqual(expect.objectContaining({ editedFiles: [], edits: [] }));
+    });
+
+    test('fails closed when the two tool-name fields conflict', () => {
+      expect(
+        parse({
+          cwd: '/repo',
+          tool_name: 'shell_command',
+          name: 'apply_patch',
+          tool_input: { file_path: 'README.md' },
+        }),
+      ).toEqual(expect.objectContaining({ editedFiles: [], edits: [] }));
+    });
+
+    test('still parses the two allowlisted edit tools', () => {
+      expect(
+        parse({
+          cwd: '/repo',
+          name: 'apply_patch',
+          input: '*** Begin Patch\n*** Update File: src/a.ts\n@@\n-x\n+y\n*** End Patch',
+        }).editedFiles,
+      ).toEqual(['src/a.ts']);
+      const cwd = makeTempDir();
+      try {
+        writeFileSync(join(cwd, 'notes.txt'), 'captured\n', 'utf8');
+        expect(
+          parse({
+            cwd,
+            tool_name: 'shell_command',
+            tool_input: { command: "Set-Content -LiteralPath 'notes.txt' -Value hi" },
+          }).editedFiles,
+        ).toEqual(['notes.txt']);
+      } finally {
+        cleanup(cwd);
+      }
     });
   });
 });
@@ -288,6 +404,21 @@ describe('extractAntigravityEditedFiles (IDE TargetFile shape)', () => {
         toolCall: { args: { Description: '"x"' } },
       } as any),
     ).toEqual([]);
+  });
+});
+
+describe('Antigravity CLI workspace paths', () => {
+  test('keeps every string workspace root and removes duplicates', () => {
+    expect(
+      extractAgyWorkspacePaths({
+        workspacePaths: ['/projects/one', '/projects/two', '/projects/one', 42],
+      }),
+    ).toEqual(['/projects/one', '/projects/two']);
+  });
+
+  test('returns empty for a missing or malformed workspace list', () => {
+    expect(extractAgyWorkspacePaths({})).toEqual([]);
+    expect(extractAgyWorkspacePaths({ workspacePaths: '/projects/one' })).toEqual([]);
   });
 });
 

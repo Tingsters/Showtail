@@ -57,15 +57,30 @@ Captured text is scrubbed for secrets and personal data before it is stored (see
 
 ## Where it goes
 
-Each event is appended to a local, file-based trail under `.showtail/`. See
-[Data layout](data-layout.md) for the exact structure, and
-[Example report](example-report.md) for what the rendered output looks like.
+Each event enters a machine-local ledger first. As soon as one project root is
+clear, Showtail projects the complete session into that project's `.showtail/`
+trail. Unresolved or multi-project sessions remain only in the local inbox until
+they can be placed safely. See [Data layout](data-layout.md) for both storage
+locations, and [Example report](example-report.md) for what the rendered output
+looks like.
 
-Showtail identifies the project from edited files and nearby project boundaries. It
-never treats the user's home folder as a project, and a broad parent trail cannot absorb
-a nested repository or marker-based project. Work with no clear project — including a
-session that edits two projects — stays complete in the machine-local inbox instead of
-being filed on a guess.
+Showtail creates the project-local trail when the first meaningful, project-backed work arrives.
+Stable trail IDs are the identity; paths are validated hints that can move. Exact edit paths,
+explicit file attachments, confirmed project selections, and an existing binding for the same
+native chat are direct evidence. A phrase-only request can resolve automatically only when one
+complete project name matches and an independent edit-backed history corroborates it.
+
+An editor workspace, terminal directory, active file, generated chat title, or recency can help
+rank choices, but none can place a new zero-edit chat by itself. Ambiguous work stays in the local
+inbox instead of being projected into whichever workspace happens to be open.
+
+Plain folders, temporary folders, and the user's home folder are all valid project roots.
+A HOME trail applies only to work launched exactly in HOME and cannot absorb work from a
+child folder. If later binding or edit evidence identifies a more specific project,
+Showtail reroutes the affected turn ranges there and removes an earlier automatically created
+fallback trail only when it is still pristine. Work with no single clear project —
+including a session that edits two projects — stays complete in the machine-local inbox
+instead of being filed on a guess.
 
 ## Why the trail is hard to fake
 

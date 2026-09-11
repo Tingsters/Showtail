@@ -14,7 +14,7 @@
  * core/antigravityIdeTranscript.ts and the shared event logger.
  */
 import { existsSync, readFileSync } from 'node:fs';
-import { basename, dirname, isAbsolute, relative } from 'node:path';
+import { basename, isAbsolute, relative } from 'node:path';
 import {
   antigravityIdePlanFiles,
   findAntigravityIdeTranscripts,
@@ -34,27 +34,44 @@ import { makeId } from '../core/ids.ts';
 import { readMachineIdentity } from '../core/identity.ts';
 import {
   appendLedgerRecord,
+  effectiveLedgerPath,
   ensureLedgerSession,
   markInbox,
+  markPlaced,
   readLedgerRecords,
+  readLedgerSession,
+  sessionProjectContext,
+  type LedgerSession,
 } from '../core/ledger.ts';
-import { captureTranscriptToLedger } from '../core/ledgerCapture.ts';
+import {
+  automaticCaptureTimestampAllowed,
+  captureTranscriptToLedger,
+} from '../core/ledgerCapture.ts';
+import { materializeLedgerSession } from '../core/materialize.ts';
+import { clearOtherLedgerProjections } from '../core/projectionRouting.ts';
+import { CaptureInterruptedError } from '../core/captureGuard.ts';
 import {
   autoInitEnabled,
   ensureCaptureSince,
   isStaleForAutoBackfill,
+  toolCaptureEnabledAt,
+  toolCaptureGloballyDisabled,
 } from '../core/globalConfig.ts';
 import { requireActiveAuthor, resolveActiveAuthorForHook } from '../core/authors.ts';
 import {
-  findRoot,
-  isHomedirCatchAll,
+  ensureTrailId,
+  isEligibleAnchor,
+  isPathUnder,
   pathsForRoot,
   readConfig,
   requirePaths,
+  resolveProjectContext,
   type AuthorPaths,
 } from '../core/storage.ts';
+import { isSyntheticPrompt } from '../core/syntheticPrompt.ts';
 import { oneLine } from '../core/text.ts';
 import type { HookTranscript } from '../plugins/types.ts';
+import { ensureInitialized } from './init.ts';
 
 export interface ImportAntigravityIdeOptions {
   /** List this machine's Antigravity IDE conversations and exit. */
@@ -67,9 +84,8 @@ export interface ImportAntigravityIdeOptions {
   session?: string;
   cwd?: string;
   /**
-   * Route by the transcript's edited-file paths into each enclosing `.showtail/`
-   * project (scratch sandbox edits go to a dedicated scratch trail) instead of
-   * importing into a single `cwd`-derived project. The headless capture path.
+   * Resolve the complete transcript to one project from cwd + edit paths, leaving
+   * ambiguous work in the ledger inbox. The headless capture path.
    */
   auto?: boolean;
 }
@@ -82,6 +98,30 @@ export interface AntigravityIdeImportResult {
   skipped: number;
   first?: string;
   last?: string;
+}
+
+interface AntigravityIdeAutomaticCaptureWindow {
+  automaticCaptureSince?: string;
+}
+
+/** Read a consent epoch only while machine-wide automatic capture is enabled. */
+function readAntigravityIdeAutomaticCaptureWindow(): AntigravityIdeAutomaticCaptureWindow | null {
+  if (toolCaptureGloballyDisabled('antigravity-ide')) return null;
+  const automaticCaptureSince = toolCaptureEnabledAt('antigravity-ide');
+  // Recheck because disconnect and reconnect are separate cross-process writes.
+  if (toolCaptureGloballyDisabled('antigravity-ide')) return null;
+  return { automaticCaptureSince };
+}
+
+/** Stop a sweep if consent was revoked or restarted after its transcript read. */
+function antigravityIdeAutomaticCaptureWindowUnchanged(
+  automaticCaptureSince: string | undefined,
+): boolean {
+  if (toolCaptureGloballyDisabled('antigravity-ide')) return false;
+  const current = toolCaptureEnabledAt('antigravity-ide');
+  return (
+    !toolCaptureGloballyDisabled('antigravity-ide') && current === automaticCaptureSince
+  );
 }
 
 /** An edited file recovered from a transcript: the path + the IDE's edit note. */
@@ -106,6 +146,11 @@ function fileUriToPath(uri: string): string | null {
   } catch {
     return null;
   }
+}
+
+/** Tool/project bookkeeping paths are never student edit artifacts. */
+function isInternalEditPath(path: string): boolean {
+  return /(^|[\\/])\.(showtail|git|vscode|system_generated)([\\/]|$)/.test(path);
 }
 
 /** Make a path repo-relative against `root` when it lives under it; else posix-absolute. */
@@ -149,9 +194,7 @@ export function extractTranscriptEdits(
     for (const m of content.matchAll(/file:\/\/([^\s)'"]+)/g)) {
       const p = fileUriToPath(m[1]!);
       if (!p) continue;
-      // Skip the IDE's own generated state (task logs, etc. under
-      // `.system_generated/`) — it's never the student's work, just execution noise.
-      if (p.includes('/.system_generated/')) continue;
+      if (isInternalEditPath(p)) continue;
       out.push({
         path: p,
         diff: content.trim() || `Antigravity edited ${p}`,
@@ -347,6 +390,10 @@ export async function runImportAntigravityIde(
   target: string | undefined,
   options: ImportAntigravityIdeOptions,
 ): Promise<void> {
+  // `--auto` is background extension capture. Honor a machine-wide disconnect
+  // before even listing or resolving transcript files; explicit imports without
+  // `--auto` remain available to the student.
+  if (options.auto && toolCaptureGloballyDisabled('antigravity-ide')) return;
   if (options.list) {
     listConversations();
     return;
@@ -355,7 +402,12 @@ export async function runImportAntigravityIde(
   // project, rather than into one `cwd`-derived trail (no folder is reliably open
   // in the IDE's extension host).
   if (options.auto) {
-    await runImportAntigravityIdeAuto(target, options);
+    try {
+      await runImportAntigravityIdeAuto(target, options);
+    } catch (error) {
+      if (error instanceof CaptureInterruptedError) return;
+      throw error;
+    }
     return;
   }
 
@@ -419,16 +471,9 @@ async function importIntoRoot(
 }
 
 /**
- * Auto-route a transcript by its edited-file paths — the headless capture path.
- * Each edit is filed under its nearest enclosing **project** `.showtail/` trail
- * (`findRoot`): work under a tracked project lands in that project. Folderless /
- * scratch work — the common case for Antigravity, which edits its own sandbox
- * under `~/.gemini/antigravity-ide/scratch/...` with no project of its own — has
- * NO real enclosing trail (the machine-wide `~/.showtail` at HOME does NOT count;
- * see {@link isHomedirCatchAll}), so the whole conversation is parked in the
- * **inbox** (the ledger) for the user to `showtail inbox` → reattach into a
- * project, instead of being dumped into the homedir catch-all. Never prompts;
- * roots whose author can't be resolved are silently skipped.
+ * Capture once to the ledger, then project only when the complete transcript
+ * resolves to one project. A meaningful prompt can initialize a candidate when
+ * automatic tracking is enabled; mixed-root work remains one inbox session.
  */
 async function runImportAntigravityIdeAuto(
   target: string | undefined,
@@ -439,24 +484,43 @@ async function runImportAntigravityIdeAuto(
     console.log('No Antigravity IDE conversations were found on disk.');
     return;
   }
-  const transcript = readAntigravityIdeTranscript(info, options.cwd ?? process.cwd());
-  const allEdits = safeExtractEdits(info.path, info.sessionId);
+  const cwd = options.cwd ?? process.cwd();
+  const extractedEdits = safeExtractEdits(info.path, info.sessionId);
+  // The file read can overlap a disconnect/reconnect. Use the latest consent
+  // epoch, then require it to remain unchanged until each automatic write.
+  const captureWindow = readAntigravityIdeAutomaticCaptureWindow();
+  if (!captureWindow) return;
+  const { automaticCaptureSince } = captureWindow;
+  const allEdits = extractedEdits.filter((edit) =>
+    automaticCaptureTimestampAllowed(edit.timestamp, automaticCaptureSince),
+  );
+  const sourceContext = resolveProjectContext({
+    cwd,
+    editPaths: allEdits.map((edit) => edit.path),
+  });
+  const sourceRoot =
+    sourceContext.state === 'tracked' || sourceContext.state === 'candidate'
+      ? sourceContext.root
+      : undefined;
+  const parsed = readAntigravityIdeTranscript(info, sourceRoot ?? cwd);
+  const responseFiltered = filterAntigravityResponses(
+    parsed,
+    options.withResponses !== false,
+  );
+  const transcript: HookTranscript = {
+    ...responseFiltered,
+    messages: responseFiltered.messages.filter((message) =>
+      automaticCaptureTimestampAllowed(message.timestamp, automaticCaptureSince),
+    ),
+    events: responseFiltered.events?.filter((event) =>
+      automaticCaptureTimestampAllowed(event.timestamp, automaticCaptureSince),
+    ),
+  };
   if (transcript.messages.length === 0 && allEdits.length === 0) {
     console.log(
       'Nothing to capture — that conversation has no prompts, replies, or edits.',
     );
     return;
-  }
-
-  // Group edits by their enclosing PROJECT trail. The homedir `~/.showtail`
-  // catch-all is not a project — folderless work belongs in the inbox, not there.
-  const byRoot = new Map<string, TranscriptEdit[]>();
-  for (const e of allEdits) {
-    const root = isAbsolute(e.path) ? findRoot(dirname(e.path)) : null;
-    if (!root || isHomedirCatchAll(root)) continue; // no real project trail
-    const list = byRoot.get(root) ?? [];
-    list.push(e);
-    byRoot.set(root, list);
   }
 
   const totals: AntigravityIdeImportResult = {
@@ -466,44 +530,190 @@ async function runImportAntigravityIdeAuto(
     edits: 0,
     skipped: 0,
   };
-  const importedRoots: string[] = [];
-  const routedRoots: string[] = [];
-  for (const [root, edits] of byRoot) {
-    const paths = pathsForRoot(root);
-    if (!existsSync(paths.config)) continue; // not a tracked project — skip
-    const author = await resolveActiveAuthorForHook(paths, { cwd: root });
-    if (!author) continue; // can't attribute without prompting — skip this root
-    routedRoots.push(root);
-    const res = await importIntoRoot(author, root, transcript, edits, options);
-    totals.prompts += res.prompts;
-    totals.responses += res.responses;
-    totals.plans += res.plans;
-    totals.edits += res.edits;
-    totals.skipped += res.skipped;
-    if (res.prompts + res.responses + res.plans + res.edits > 0) importedRoots.push(root);
-  }
-
-  // No real project trail received this conversation (folderless/scratch work, or
-  // a pure-chat conversation): park it in the inbox via the ledger.
-  if (routedRoots.length === 0) {
-    const inboxed = captureConversationToInbox(info, transcript, allEdits, options);
-    printAutoResult(totals, importedRoots, options.withResponses !== false, inboxed);
+  if (!antigravityIdeAutomaticCaptureWindowUnchanged(automaticCaptureSince)) return;
+  const ledger = captureConversationToLedger(
+    info,
+    transcript,
+    allEdits,
+    options,
+    sourceContext.state === 'tracked',
+    automaticCaptureSince,
+  );
+  if (!ledger) {
+    printAutoResult(totals, [], options.withResponses !== false);
     return;
   }
-  printAutoResult(
-    totals,
-    importedRoots.length > 0 ? importedRoots : routedRoots,
-    options.withResponses !== false,
+
+  const current = readLedgerSession(ledger.id) ?? ledger;
+  const context = sessionProjectContext(current);
+  const resolvedRoot =
+    context.state === 'tracked' || context.state === 'candidate'
+      ? context.root
+      : undefined;
+  const safelyContained =
+    resolvedRoot !== undefined &&
+    readLedgerRecords(current.id).every(
+      (record) =>
+        record.kind !== 'edit' ||
+        (record.file !== undefined &&
+          isAbsolute(effectiveLedgerPath(current, record.file)) &&
+          isPathUnder(effectiveLedgerPath(current, record.file), resolvedRoot)),
+    );
+  if (context.state === 'ambiguous' || context.state === 'none' || !safelyContained) {
+    if (!(await parkAntigravityLedger(current, automaticCaptureSince))) return;
+    printAutoResult(totals, [], options.withResponses !== false, true);
+    return;
+  }
+
+  const root = context.root;
+  if (context.state === 'candidate') {
+    if (!(await parkAntigravityLedger(current, automaticCaptureSince))) return;
+    const meaningfulPrompt = transcript.messages.some(
+      (message) =>
+        message.role === 'user' &&
+        message.text.trim().length > 0 &&
+        !isSyntheticPrompt(message.text),
+    );
+    if (!autoInitEnabled() || !meaningfulPrompt || !isEligibleAnchor(root)) {
+      printAutoResult(totals, [], options.withResponses !== false, true);
+      return;
+    }
+    if (!antigravityIdeAutomaticCaptureWindowUnchanged(automaticCaptureSince)) return;
+    await ensureInitialized(root, {
+      ...(context.evidence === 'trail' ? {} : { anchorKind: context.evidence }),
+      initialization: {
+        mode: 'automatic',
+        evidence: context.evidence,
+        ledgerSessionId: current.id,
+      },
+      continueCapture: () =>
+        antigravityIdeAutomaticCaptureWindowUnchanged(automaticCaptureSince),
+    });
+  }
+
+  const paths = pathsForRoot(root);
+  if (!existsSync(paths.config)) {
+    if (
+      !(await parkAntigravityLedger(
+        readLedgerSession(current.id) ?? current,
+        automaticCaptureSince,
+      ))
+    ) {
+      return;
+    }
+    printAutoResult(totals, [], options.withResponses !== false, true);
+    return;
+  }
+  if (!antigravityIdeAutomaticCaptureWindowUnchanged(automaticCaptureSince)) return;
+  const trailId = ensureTrailId(paths, () =>
+    antigravityIdeAutomaticCaptureWindowUnchanged(automaticCaptureSince),
   );
+  try {
+    if (!antigravityIdeAutomaticCaptureWindowUnchanged(automaticCaptureSince)) return;
+    await clearOtherLedgerProjections(readLedgerSession(current.id) ?? current, trailId, {
+      continueCapture: () =>
+        antigravityIdeAutomaticCaptureWindowUnchanged(automaticCaptureSince),
+    });
+  } catch {
+    if (
+      !(await parkAntigravityLedger(
+        readLedgerSession(current.id) ?? current,
+        automaticCaptureSince,
+      ))
+    ) {
+      return;
+    }
+    printAutoResult(totals, [], options.withResponses !== false, true);
+    return;
+  }
+  const author = await resolveActiveAuthorForHook(paths, {
+    cwd: root,
+    continueCapture: () =>
+      antigravityIdeAutomaticCaptureWindowUnchanged(automaticCaptureSince),
+  });
+  if (!author) {
+    if (!antigravityIdeAutomaticCaptureWindowUnchanged(automaticCaptureSince)) return;
+    try {
+      markInbox(current.id, {
+        continueCapture: () =>
+          antigravityIdeAutomaticCaptureWindowUnchanged(automaticCaptureSince),
+      });
+    } catch {
+      // The ledger remains durable even if placement bookkeeping fails.
+    }
+    printAutoResult(totals, [], options.withResponses !== false, true);
+    return;
+  }
+
+  if (!antigravityIdeAutomaticCaptureWindowUnchanged(automaticCaptureSince)) return;
+  const materialized = await materializeLedgerSession(
+    readLedgerSession(current.id) ?? current,
+    author,
+    {
+      continueCapture: () =>
+        antigravityIdeAutomaticCaptureWindowUnchanged(automaticCaptureSince),
+    },
+  );
+  if (!materialized.completed) return;
+  if (!antigravityIdeAutomaticCaptureWindowUnchanged(automaticCaptureSince)) return;
+  markPlaced(current.id, trailId, root, {
+    continueCapture: () =>
+      antigravityIdeAutomaticCaptureWindowUnchanged(automaticCaptureSince),
+  });
+  totals.prompts = materialized.prompts;
+  totals.responses = materialized.replies;
+  totals.plans = materialized.plans;
+  totals.edits = materialized.edits;
+  totals.skipped = Math.max(
+    0,
+    readLedgerRecords(current.id).length - materialized.projected,
+  );
+  printAutoResult(totals, [root], options.withResponses !== false);
+}
+
+/** Omit response-only content when the import explicitly disables AI responses. */
+function filterAntigravityResponses(
+  transcript: HookTranscript,
+  withResponses: boolean,
+): HookTranscript {
+  if (withResponses) return transcript;
+  return {
+    ...transcript,
+    messages: transcript.messages.filter((message) => message.role !== 'assistant'),
+    events: transcript.events?.filter((event) => event.type !== 'assistant_text'),
+  };
+}
+
+/** Remove any old projection and leave the complete session awaiting placement. */
+async function parkAntigravityLedger(
+  session: LedgerSession,
+  automaticCaptureSince: string | undefined,
+): Promise<boolean> {
+  if (!antigravityIdeAutomaticCaptureWindowUnchanged(automaticCaptureSince)) return false;
+  try {
+    await clearOtherLedgerProjections(session, undefined, {
+      continueCapture: () =>
+        antigravityIdeAutomaticCaptureWindowUnchanged(automaticCaptureSince),
+    });
+  } catch {
+    // Best-effort cleanup; the ledger remains the complete source of truth.
+  }
+  if (!antigravityIdeAutomaticCaptureWindowUnchanged(automaticCaptureSince)) return false;
+  try {
+    markInbox(session.id, {
+      continueCapture: () =>
+        antigravityIdeAutomaticCaptureWindowUnchanged(automaticCaptureSince),
+    });
+  } catch {
+    // A ledger write failure must not make the transcript import destructive.
+  }
+  return antigravityIdeAutomaticCaptureWindowUnchanged(automaticCaptureSince);
 }
 
 /**
- * Park a folderless Antigravity conversation in the inbox (the machine-local
- * ledger), so it surfaces in `showtail inbox` for the user to reattach into a
- * project — instead of dumping it into the homedir `~/.showtail` catch-all.
- * Idempotent: the ledger session is keyed by the stable conversation id and
- * records dedup by sourceId, so the extension re-running `--auto` adds nothing new.
- * Returns whether anything (records or edits) is now captured for this session.
+ * Capture one Antigravity conversation into the machine-local ledger. Every
+ * automatic import obeys the explicit resume boundary; candidate and inbox work
+ * also obey the older watch-forward watermark used before per-tool consent epochs.
  */
 function newestBackfillTs(
   messages: Array<{ timestamp?: string }>,
@@ -516,45 +726,65 @@ function newestBackfillTs(
   return newest;
 }
 
-function captureConversationToInbox(
+function captureConversationToLedger(
   info: AntigravityIdeTranscriptInfo,
   transcript: HookTranscript,
   edits: TranscriptEdit[],
   options: ImportAntigravityIdeOptions,
-): boolean {
-  // Watch-forward: don't resurrect a conversation that finished before Showtail began
-  // capturing here. Set-once watermark (only once tracking is on; `setup` normally
-  // sets it — this is the migration net), then skip stale history before creating any
-  // ledger session. Explicit `import antigravity-ide` (non-auto) never reaches here.
-  if (autoInitEnabled()) ensureCaptureSince();
-  if (isStaleForAutoBackfill(newestBackfillTs(transcript.messages, edits))) return false;
+  allowHistoricalBackfill: boolean,
+  automaticCaptureSince: string | undefined,
+): LedgerSession | null {
+  if (!antigravityIdeAutomaticCaptureWindowUnchanged(automaticCaptureSince)) return null;
+  if (
+    transcript.messages.length === 0 &&
+    (transcript.events?.length ?? 0) === 0 &&
+    edits.length === 0
+  ) {
+    return null;
+  }
+  // The legacy watch-forward guard is still needed where no tracked destination
+  // exists. The explicit per-tool resume boundary was already applied above and
+  // remains enforced by captureTranscriptToLedger and the edit append below.
+  if (!allowHistoricalBackfill) {
+    if (autoInitEnabled()) {
+      if (!antigravityIdeAutomaticCaptureWindowUnchanged(automaticCaptureSince))
+        return null;
+      ensureCaptureSince();
+    }
+    if (isStaleForAutoBackfill(newestBackfillTs(transcript.messages, edits))) return null;
+  }
 
   const identity = readMachineIdentity();
+  const cwd = options.cwd ?? process.cwd();
+  if (!antigravityIdeAutomaticCaptureWindowUnchanged(automaticCaptureSince)) return null;
   const ledger = ensureLedgerSession({
     tool: 'antigravity-ide',
     nativeSessionId: info.sessionId,
     machineId: identity?.machineId,
     slug: identity?.slug,
-    cwd: options.cwd ?? process.cwd(),
+    cwd,
+    continueCapture: () =>
+      antigravityIdeAutomaticCaptureWindowUnchanged(automaticCaptureSince),
   });
   // `backfill` because this is an after-the-fact import of an already-finished
   // conversation whose prompts predate the just-created ledger session.
-  captureTranscriptToLedger(
+  if (!antigravityIdeAutomaticCaptureWindowUnchanged(automaticCaptureSince)) return null;
+  const captured = captureTranscriptToLedger(
     ledger,
     transcript,
     'antigravity-ide',
     antigravityIdePlanFiles(info.sessionId),
-    { backfill: true },
+    {
+      backfill: true,
+      automaticCaptureSince,
+      continueCapture: () =>
+        antigravityIdeAutomaticCaptureWindowUnchanged(automaticCaptureSince),
+    },
   );
-  appendImportEditsToLedger(ledger.id, edits);
-  // New ledger sessions are already `inbox`; mark defensively in case a prior run
-  // placed and the trail later vanished. Never let bookkeeping break capture.
-  try {
-    markInbox(ledger.id);
-  } catch {
-    /* best-effort */
-  }
-  return readLedgerRecords(ledger.id).length > 0;
+  if (!captured) return null;
+  if (!antigravityIdeAutomaticCaptureWindowUnchanged(automaticCaptureSince)) return null;
+  if (!appendImportEditsToLedger(ledger.id, edits, automaticCaptureSince)) return null;
+  return readLedgerSession(ledger.id) ?? ledger;
 }
 
 /**
@@ -564,14 +794,26 @@ function captureConversationToInbox(
  * parser doesn't emit — the real edits come from the `CODE_ACTION` recovery, so
  * the import adds them here.
  */
-function appendImportEditsToLedger(sessionId: string, edits: TranscriptEdit[]): void {
+function appendImportEditsToLedger(
+  sessionId: string,
+  edits: TranscriptEdit[],
+  automaticCaptureSince: string | undefined,
+): boolean {
   const seen = new Set(
     readLedgerRecords(sessionId)
       .map((r) => r.sourceId)
       .filter((s): s is string => !!s),
   );
   for (const e of edits) {
-    if (!isAbsolute(e.path) || seen.has(e.sourceId)) continue;
+    if (
+      !automaticCaptureTimestampAllowed(e.timestamp, automaticCaptureSince) ||
+      !isAbsolute(e.path) ||
+      seen.has(e.sourceId)
+    ) {
+      continue;
+    }
+    if (!antigravityIdeAutomaticCaptureWindowUnchanged(automaticCaptureSince))
+      return false;
     appendLedgerRecord(sessionId, {
       kind: 'edit',
       tool: 'antigravity-ide',
@@ -582,6 +824,7 @@ function appendImportEditsToLedger(sessionId: string, edits: TranscriptEdit[]): 
     });
     seen.add(e.sourceId);
   }
+  return true;
 }
 
 /** Print the conversations available to import, so a student can pick one by id. */
@@ -624,7 +867,7 @@ function printAutoResult(
   if (roots.length === 0 && inboxed) {
     console.log(
       'Captured your Antigravity IDE conversation to the Showtail inbox ' +
-        '(folderless/scratch work — no project to file it under).',
+        '(not attached to one project trail yet).',
     );
     console.log('Place it in a project:  showtail inbox');
     return;

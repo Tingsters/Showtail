@@ -44,7 +44,7 @@ function promptTexts(root: string): string[] {
 }
 
 describe('project-aware routing', () => {
-  test('track and ensure treat HOME as a successful no-op', () => {
+  test('explicit track and ensure work at HOME without leaking into descendants', () => {
     const home = makeTempDir();
     const globalHome = makeTempDir();
     try {
@@ -54,19 +54,23 @@ describe('project-aware routing', () => {
 
       expect(tracked.code).toBe(0);
       expect(ensured.code).toBe(0);
-      expect(JSON.parse(tracked.stdout)).toEqual({
-        created: false,
-        initialized: false,
-        reason: 'home-directory',
-        nextAction: 'open-project',
-      });
-      expect(JSON.parse(ensured.stdout)).toEqual({
-        created: false,
-        initialized: false,
-        reason: 'home-directory',
-        nextAction: 'open-project',
-      });
-      expect(existsSync(join(home, '.showtail'))).toBe(false);
+      expect(JSON.parse(tracked.stdout)).toEqual(
+        expect.objectContaining({
+          created: true,
+          root: home,
+          anchorKind: 'explicit',
+          backfilled: 0,
+        }),
+      );
+      expect(JSON.parse(ensured.stdout)).toEqual(
+        expect.objectContaining({
+          created: false,
+          initialized: true,
+          root: home,
+          anchorKind: 'explicit',
+        }),
+      );
+      expect(existsSync(join(home, '.showtail', 'config.json'))).toBe(true);
     } finally {
       cleanup(home);
       cleanup(globalHome);
@@ -96,6 +100,55 @@ describe('project-aware routing', () => {
       expect(existsSync(join(repo, '.showtail', 'config.json'))).toBe(true);
       expect(promptTexts(repo)).toContain('build the parser');
       expect(promptTexts(home)).not.toContain('build the parser');
+    } finally {
+      cleanup(home);
+      cleanup(globalHome);
+    }
+  });
+
+  test('a HOME trail does not claim a direct HOME edit from a child launch', () => {
+    const home = makeTempDir();
+    const globalHome = makeTempDir();
+    try {
+      expect(
+        runCli(home, ['track', '--json'], { env: envWithHome(globalHome) }).code,
+      ).toBe(0);
+      enableAutoInit(globalHome);
+      const launcher = join(home, 'tool-state');
+      mkdirSync(launcher, { recursive: true });
+      const homeFile = join(home, 'notes.ts');
+      writeFileSync(homeFile, 'export const note = true;\n');
+      const env = fakeHomeEnv(home, globalHome);
+      const sessionId = 'child-launch-home-edit';
+
+      expect(
+        runCli(launcher, ['hook', 'user-prompt'], {
+          env,
+          input: prompt(launcher, sessionId, 'update my note'),
+        }).code,
+      ).toBe(0);
+      expect(existsSync(join(launcher, '.showtail', 'config.json'))).toBe(true);
+
+      expect(
+        runCli(launcher, ['hook', 'post-edit'], {
+          env,
+          input: edit(launcher, sessionId, homeFile),
+        }).code,
+      ).toBe(0);
+
+      expect(promptTexts(home)).not.toContain('update my note');
+      expect(existsSync(join(launcher, '.showtail'))).toBe(false);
+      const inbox = JSON.parse(
+        runCli(launcher, ['inbox', '--all', '--json'], { env }).stdout,
+      ).sessions;
+      expect(inbox).toContainEqual(
+        expect.objectContaining({
+          nativeSessionId: sessionId,
+          status: 'inbox',
+          prompts: 1,
+          edits: 1,
+        }),
+      );
     } finally {
       cleanup(home);
       cleanup(globalHome);
@@ -132,7 +185,7 @@ describe('project-aware routing', () => {
     }
   });
 
-  test('status and report do not fall back to a parent trail across a project boundary', () => {
+  test('status stays read-only and report refuses empty work across a project boundary', () => {
     const home = makeTempDir();
     const globalHome = makeTempDir();
     try {
@@ -146,10 +199,17 @@ describe('project-aware routing', () => {
       const status = runCli(repo, ['status', '--json'], { env });
       const report = runCli(repo, ['report', '--format', 'json', '--no-open'], { env });
 
-      expect(status.code).toBe(2);
-      expect(report.code).toBe(2);
-      expect(status.stderr).toContain('No .showtail/ folder found');
-      expect(report.stderr).toContain('No .showtail/ folder found');
+      expect(status.code).toBe(0);
+      expect(JSON.parse(status.stdout)).toEqual(
+        expect.objectContaining({
+          initialized: false,
+          root: null,
+          candidateRoot: repo,
+          evidence: 'git',
+        }),
+      );
+      expect(report.code).toBe(4);
+      expect(report.stderr).toContain('No captured Showtail work resolves');
       expect(existsSync(join(repo, '.showtail'))).toBe(false);
     } finally {
       cleanup(home);
@@ -161,9 +221,6 @@ describe('project-aware routing', () => {
     const home = makeTempDir();
     const globalHome = makeTempDir();
     try {
-      expect(
-        runCli(home, ['track', '--json'], { env: envWithHome(globalHome) }).code,
-      ).toBe(0);
       enableAutoInit(globalHome);
       const repo = join(home, 'school', 'calculator');
       mkdirSync(join(repo, '.git'), { recursive: true });
@@ -178,7 +235,7 @@ describe('project-aware routing', () => {
           input: prompt(home, sessionId, 'make a calculator'),
         }).code,
       ).toBe(0);
-      expect(promptTexts(home)).not.toContain('make a calculator');
+      expect(promptTexts(home)).toContain('make a calculator');
 
       expect(
         runCli(home, ['hook', 'post-edit'], {
@@ -189,7 +246,38 @@ describe('project-aware routing', () => {
 
       expect(existsSync(join(repo, '.showtail', 'config.json'))).toBe(true);
       expect(promptTexts(repo)).toContain('make a calculator');
-      expect(promptTexts(home)).not.toContain('make a calculator');
+      expect(existsSync(join(home, '.showtail'))).toBe(false);
+    } finally {
+      cleanup(home);
+      cleanup(globalHome);
+    }
+  });
+
+  test('rerouting preserves an explicitly tracked HOME trail', () => {
+    const home = makeTempDir();
+    const globalHome = makeTempDir();
+    try {
+      const env = fakeHomeEnv(home, globalHome);
+      expect(runCli(home, ['track', '--json'], { env }).code).toBe(0);
+      enableAutoInit(globalHome);
+      const repo = join(home, 'school', 'explicit-home-child');
+      mkdirSync(join(repo, '.git'), { recursive: true });
+      const file = join(repo, 'index.ts');
+      writeFileSync(file, 'export const value = 1;\n');
+      const sessionId = 'explicit-home-reroute';
+
+      runCli(home, ['hook', 'user-prompt'], {
+        env,
+        input: prompt(home, sessionId, 'work from home'),
+      });
+      runCli(home, ['hook', 'post-edit'], {
+        env,
+        input: edit(home, sessionId, file),
+      });
+
+      expect(existsSync(join(home, '.showtail', 'config.json'))).toBe(true);
+      expect(promptTexts(home)).not.toContain('work from home');
+      expect(promptTexts(repo)).toContain('work from home');
     } finally {
       cleanup(home);
       cleanup(globalHome);

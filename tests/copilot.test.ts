@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { dirname, join } from 'node:path';
 import {
   COPILOT_INSTRUCTIONS,
   SHOWTAIL_PATH_INSTRUCTIONS,
@@ -13,7 +13,8 @@ import {
 } from '../src/core/copilot.ts';
 import { sha256OfString } from '../src/core/hash.ts';
 import { runCopilotInstall, runCopilotUninstall } from '../src/commands/copilot.ts';
-import { cleanup, makeTempDir } from './helpers.ts';
+import { cleanup, makeTempDir, stubInstalledExtensionCli } from './helpers.ts';
+import { VSCODE_EXTENSION_ID } from '../src/core/vscodeExtension.ts';
 
 /** Mirror the core's fingerprint so tests can craft blocks with a chosen stamp. */
 const shortHash = (t: string): string => sha256OfString(t.trim()).slice(0, 12);
@@ -97,6 +98,30 @@ describe('copilot integration', () => {
     }
   });
 
+  test('a full uninstall removes the native capture extension too', async () => {
+    const dir = makeTempDir();
+    const previousCli = process.env.SHOWTAIL_VSCODE_CLI;
+    try {
+      const record = join(dir, 'extension-args.txt');
+      process.env.SHOWTAIL_VSCODE_CLI = stubInstalledExtensionCli(
+        dir,
+        record,
+        VSCODE_EXTENSION_ID,
+        'code',
+      );
+      await runCopilotInstall({ cwd: dir, extension: false });
+
+      const result = await runCopilotUninstall({ cwd: dir, all: true });
+
+      expect(result.captureStopped).toBe(true);
+      expect(readFileSync(record, 'utf8')).toContain('--uninstall-extension');
+    } finally {
+      if (previousCli === undefined) delete process.env.SHOWTAIL_VSCODE_CLI;
+      else process.env.SHOWTAIL_VSCODE_CLI = previousCli;
+      cleanup(dir);
+    }
+  });
+
   test('refresh replaces a stale Showtail block with the current instructions', () => {
     const dir = makeTempDir();
     try {
@@ -150,6 +175,17 @@ describe('copilot integration', () => {
       'automatically imports native Copilot Chat',
     );
     expect(SHOWTAIL_PATH_INSTRUCTIONS).toContain('never run manual');
+    for (const instructions of [COPILOT_INSTRUCTIONS, SHOWTAIL_PATH_INSTRUCTIONS]) {
+      expect(instructions).toContain('showtail_project_control');
+      expect(instructions).toContain('student-project-wording');
+      expect(instructions).toContain('--project <trail-id>');
+      expect(instructions).toContain('stable trail ID');
+      expect(instructions).toContain('returned `trailId`');
+      expect(instructions).not.toMatch(
+        /^\s*showtail (?:report|verify|status)(?:\s+#.*)?\s*$/m,
+      );
+      expect(instructions).not.toMatch(/`showtail (?:report|verify|status)`/);
+    }
   });
 });
 

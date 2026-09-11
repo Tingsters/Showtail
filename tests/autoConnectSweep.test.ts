@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { autoConnectNewlyDetected } from '../src/core/autoConnectSweep.ts';
+import { disableToolCapture } from '../src/core/globalConfig.ts';
+import { MANAGED_INSTRUCTION_REVISION, SHOWTAIL_VERSION } from '../src/core/version.ts';
 import type { ConnectPlugin } from '../src/plugins/registry.ts';
 import { cleanup, enableAutoInit, makeTempDir } from './helpers.ts';
 
@@ -13,15 +15,24 @@ function fakePlugin(opts: {
   hooks?: boolean;
   hasAutoConnect?: boolean;
   prewireSafe?: boolean;
-}): { plugin: ConnectPlugin; calls: () => number } {
+  autoConnectAvailable?: boolean;
+  autoConnectError?: string;
+}): {
+  plugin: ConnectPlugin;
+  calls: () => number;
+  setDetected: (value: boolean) => void;
+  setAutoConnectAvailable: (value: boolean) => void;
+} {
   let calls = 0;
+  let detected = opts.detected;
+  let autoConnectAvailable = opts.autoConnectAvailable ?? true;
   const plugin = {
     id: opts.cliName,
     cliName: opts.cliName,
     label: opts.cliName,
     aliases: [],
     connect: {
-      detect: () => opts.detected,
+      detect: () => detected,
       status: () => ({ connected: opts.connected }),
       prewireSafe: opts.prewireSafe ?? false,
       autoConnect:
@@ -29,11 +40,21 @@ function fakePlugin(opts: {
           ? undefined
           : () => {
               calls++;
-              return { hooks: opts.hooks ?? true };
+              if (opts.autoConnectError) throw new Error(opts.autoConnectError);
+              return autoConnectAvailable ? { hooks: opts.hooks ?? true } : null;
             },
     },
   } as unknown as ConnectPlugin;
-  return { plugin, calls: () => calls };
+  return {
+    plugin,
+    calls: () => calls,
+    setDetected: (value: boolean) => {
+      detected = value;
+    },
+    setAutoConnectAvailable: (value: boolean) => {
+      autoConnectAvailable = value;
+    },
+  };
 }
 
 function handledTools(home: string): string[] {
@@ -136,6 +157,77 @@ describe('autoConnectNewlyDetected sweep', () => {
     expect(afterDisconnect.calls()).toBe(0);
   });
 
+  test('an explicit disconnect remains disabled across later generation bumps', () => {
+    enableAutoInit(home);
+    const f = fakePlugin({ cliName: 'codex', detected: true, connected: false });
+    autoConnectNewlyDetected('/repo', [f.plugin]);
+    expect(f.calls()).toBe(1);
+
+    const cfgPath = join(home, 'config.json');
+    const cfg = JSON.parse(readFileSync(cfgPath, 'utf8'));
+    cfg.managedInstructionRevision = MANAGED_INSTRUCTION_REVISION - 1;
+    cfg.toolIntegrationGenerations.codex = `${SHOWTAIL_VERSION}:${MANAGED_INSTRUCTION_REVISION - 1}`;
+    cfg.autoConnectDisabledTools = ['codex'];
+    writeFileSync(cfgPath, JSON.stringify(cfg));
+
+    autoConnectNewlyDetected('/repo', [f.plugin]);
+    autoConnectNewlyDetected('/repo', [f.plugin]);
+    expect(f.calls()).toBe(1);
+
+    const enabled = JSON.parse(readFileSync(cfgPath, 'utf8'));
+    enabled.autoConnectDisabledTools = [];
+    writeFileSync(cfgPath, JSON.stringify(enabled));
+
+    expect(autoConnectNewlyDetected('/repo', [f.plugin]).refreshed).toEqual(['codex']);
+    expect(f.calls()).toBe(2);
+  });
+
+  test('a machine-wide capture stop excludes a tool from connect and refresh sweeps', () => {
+    enableAutoInit(home);
+    disableToolCapture('codex');
+    const f = fakePlugin({ cliName: 'codex', detected: true, connected: false });
+
+    expect(autoConnectNewlyDetected('/repo', [f.plugin], { connectAll: true })).toEqual({
+      connected: [],
+      refreshed: [],
+      pending: [],
+      failed: [],
+    });
+    expect(f.calls()).toBe(0);
+    expect(handledTools(home)).not.toContain('codex');
+  });
+
+  test('rechecks capture consent after detection before installing', () => {
+    enableAutoInit(home);
+    let calls = 0;
+    const plugin = {
+      id: 'codex',
+      cliName: 'codex',
+      label: 'codex',
+      aliases: [],
+      connect: {
+        detect: () => {
+          disableToolCapture('codex');
+          return true;
+        },
+        status: () => ({ connected: false }),
+        autoConnect: () => {
+          calls += 1;
+          return { hooks: true };
+        },
+      },
+    } as unknown as ConnectPlugin;
+
+    expect(autoConnectNewlyDetected('/repo', [plugin], { connectAll: true })).toEqual({
+      connected: [],
+      refreshed: [],
+      pending: [],
+      failed: [],
+    });
+    expect(calls).toBe(0);
+    expect(handledTools(home)).not.toContain('codex');
+  });
+
   test('connectAll pre-wires an UNinstalled tool ONLY when prewireSafe', () => {
     enableAutoInit(home);
     const safe = fakePlugin({
@@ -180,6 +272,88 @@ describe('autoConnectNewlyDetected sweep', () => {
     expect(installed.calls()).toBe(1);
   });
 
+  test('an incomplete auto-connect stays stale and retries until it succeeds', () => {
+    enableAutoInit(home);
+    const cfgPath = join(home, 'config.json');
+    const legacy = JSON.parse(readFileSync(cfgPath, 'utf8'));
+    legacy.wiringVersion = SHOWTAIL_VERSION;
+    legacy.managedInstructionRevision = MANAGED_INSTRUCTION_REVISION;
+    writeFileSync(cfgPath, JSON.stringify(legacy));
+
+    const f = fakePlugin({
+      cliName: 'copilot',
+      detected: true,
+      connected: false,
+      autoConnectAvailable: false,
+    });
+
+    const first = autoConnectNewlyDetected('/repo', [f.plugin]);
+    expect(first.connected).toEqual([]);
+    expect(first.pending).toEqual([
+      {
+        tool: 'copilot',
+        label: 'copilot',
+        operation: 'connect',
+        state: 'pending',
+      },
+    ]);
+    expect(f.calls()).toBe(1);
+
+    const pending = JSON.parse(readFileSync(cfgPath, 'utf8'));
+    expect(pending.autoConnectedTools).toContain('copilot');
+    expect(pending.toolIntegrationGenerations.copilot).toBeUndefined();
+
+    const retry = autoConnectNewlyDetected('/repo', [f.plugin]);
+    expect(retry.refreshed).toEqual([]);
+    expect(retry.pending[0]).toMatchObject({
+      tool: 'copilot',
+      operation: 'refresh',
+      state: 'pending',
+    });
+    expect(f.calls()).toBe(2);
+
+    f.setAutoConnectAvailable(true);
+    expect(autoConnectNewlyDetected('/repo', [f.plugin]).refreshed).toEqual(['copilot']);
+    expect(f.calls()).toBe(3);
+
+    autoConnectNewlyDetected('/repo', [f.plugin]);
+    expect(f.calls()).toBe(3);
+  });
+
+  test('a thrown connect failure is surfaced and remains stale for retry', () => {
+    enableAutoInit(home);
+    const f = fakePlugin({
+      cliName: 'codex',
+      detected: true,
+      connected: false,
+      autoConnectError: 'permission denied',
+    });
+
+    const first = autoConnectNewlyDetected('/repo', [f.plugin]);
+
+    expect(first.failed).toEqual([
+      {
+        tool: 'codex',
+        label: 'codex',
+        operation: 'connect',
+        state: 'failed',
+        reason: 'permission denied',
+      },
+    ]);
+    expect(
+      JSON.parse(readFileSync(join(home, 'config.json'), 'utf8'))
+        .toolIntegrationGenerations.codex,
+    ).toBeUndefined();
+
+    const retry = autoConnectNewlyDetected('/repo', [f.plugin]);
+    expect(retry.failed[0]).toMatchObject({
+      tool: 'codex',
+      operation: 'refresh',
+      state: 'failed',
+    });
+    expect(f.calls()).toBe(2);
+  });
+
   test('a Showtail version bump refreshes an already-wired tool once, and reports it', () => {
     enableAutoInit(home);
     const f = fakePlugin({ cliName: 'claude', detected: true, connected: false });
@@ -191,6 +365,7 @@ describe('autoConnectNewlyDetected sweep', () => {
     const cfgPath = join(home, 'config.json');
     const cfg = JSON.parse(readFileSync(cfgPath, 'utf8'));
     cfg.wiringVersion = '0.0.0';
+    delete cfg.toolIntegrationGenerations;
     writeFileSync(cfgPath, JSON.stringify(cfg));
 
     // The next sweep re-runs autoConnect once to refresh the hook format, and reports it.
@@ -204,13 +379,141 @@ describe('autoConnectNewlyDetected sweep', () => {
     expect(stable.refreshed).toEqual([]);
   });
 
-  test('records the wiring version so the refresh check is stable', () => {
+  test('a managed-instruction revision bump refreshes without a semver change', () => {
+    enableAutoInit(home);
+    const f = fakePlugin({ cliName: 'codex', detected: true, connected: false });
+
+    autoConnectNewlyDetected('/repo', [f.plugin]);
+    expect(f.calls()).toBe(1);
+
+    const cfgPath = join(home, 'config.json');
+    const cfg = JSON.parse(readFileSync(cfgPath, 'utf8'));
+    cfg.wiringVersion = SHOWTAIL_VERSION;
+    cfg.managedInstructionRevision = MANAGED_INSTRUCTION_REVISION - 1;
+    delete cfg.toolIntegrationGenerations;
+    writeFileSync(cfgPath, JSON.stringify(cfg));
+
+    const refreshedRun = autoConnectNewlyDetected('/repo', [f.plugin]);
+    expect(f.calls()).toBe(2);
+    expect(refreshedRun.refreshed).toEqual(['codex']);
+
+    const refreshedConfig = JSON.parse(readFileSync(cfgPath, 'utf8'));
+    expect(refreshedConfig.wiringVersion).toBe(SHOWTAIL_VERSION);
+    expect(refreshedConfig.managedInstructionRevision).toBe(MANAGED_INSTRUCTION_REVISION);
+
+    autoConnectNewlyDetected('/repo', [f.plugin]);
+    expect(f.calls()).toBe(2);
+  });
+
+  test('current per-tool state repairs stale legacy stamps without refreshing again', () => {
+    enableAutoInit(home);
+    const f = fakePlugin({ cliName: 'codex', detected: true, connected: false });
+
+    autoConnectNewlyDetected('/repo', [f.plugin]);
+    expect(f.calls()).toBe(1);
+
+    const cfgPath = join(home, 'config.json');
+    const cfg = JSON.parse(readFileSync(cfgPath, 'utf8'));
+    cfg.wiringVersion = '0.0.0';
+    writeFileSync(cfgPath, JSON.stringify(cfg));
+
+    const repaired = autoConnectNewlyDetected('/repo', [f.plugin]);
+    expect(repaired.refreshed).toEqual([]);
+    expect(f.calls()).toBe(1);
+    expect(JSON.parse(readFileSync(cfgPath, 'utf8')).wiringVersion).toBe(
+      SHOWTAIL_VERSION,
+    );
+  });
+
+  test('a temporarily undetected handled tool catches up without re-refreshing current tools', () => {
+    enableAutoInit(home);
+    const present = fakePlugin({ cliName: 'codex', detected: true, connected: false });
+    const missing = fakePlugin({
+      cliName: 'antigravity-cli',
+      detected: true,
+      connected: false,
+      prewireSafe: false,
+    });
+    const options = { connectAll: true };
+
+    autoConnectNewlyDetected('/repo', [present.plugin, missing.plugin], options);
+    expect(present.calls()).toBe(1);
+    expect(missing.calls()).toBe(1);
+
+    const cfgPath = join(home, 'config.json');
+    const cfg = JSON.parse(readFileSync(cfgPath, 'utf8'));
+    const staleGeneration = `${SHOWTAIL_VERSION}:${MANAGED_INSTRUCTION_REVISION - 1}`;
+    cfg.managedInstructionRevision = MANAGED_INSTRUCTION_REVISION - 1;
+    cfg.toolIntegrationGenerations = {
+      codex: staleGeneration,
+      'antigravity-cli': staleGeneration,
+    };
+    writeFileSync(cfgPath, JSON.stringify(cfg));
+
+    missing.setDetected(false);
+    const firstRefresh = autoConnectNewlyDetected(
+      '/repo',
+      [present.plugin, missing.plugin],
+      options,
+    );
+    expect(firstRefresh.refreshed).toEqual(['codex']);
+    expect(present.calls()).toBe(2);
+    expect(missing.calls()).toBe(1);
+
+    const partiallyRefreshed = JSON.parse(readFileSync(cfgPath, 'utf8'));
+    expect(partiallyRefreshed.managedInstructionRevision).toBe(
+      MANAGED_INSTRUCTION_REVISION - 1,
+    );
+    expect(partiallyRefreshed.toolIntegrationGenerations.codex).toBe(
+      `${SHOWTAIL_VERSION}:${MANAGED_INSTRUCTION_REVISION}`,
+    );
+    expect(partiallyRefreshed.toolIntegrationGenerations['antigravity-cli']).toBe(
+      staleGeneration,
+    );
+
+    const stillMissing = autoConnectNewlyDetected(
+      '/repo',
+      [present.plugin, missing.plugin],
+      options,
+    );
+    expect(stillMissing.refreshed).toEqual([]);
+    expect(present.calls()).toBe(2);
+    expect(missing.calls()).toBe(1);
+
+    missing.setDetected(true);
+    const returned = autoConnectNewlyDetected(
+      '/repo',
+      [present.plugin, missing.plugin],
+      options,
+    );
+    expect(returned.refreshed).toEqual(['antigravity-cli']);
+    expect(present.calls()).toBe(2);
+    expect(missing.calls()).toBe(2);
+
+    const current = JSON.parse(readFileSync(cfgPath, 'utf8'));
+    expect(current.managedInstructionRevision).toBe(MANAGED_INSTRUCTION_REVISION);
+
+    const stable = autoConnectNewlyDetected(
+      '/repo',
+      [present.plugin, missing.plugin],
+      options,
+    );
+    expect(stable.refreshed).toEqual([]);
+    expect(present.calls()).toBe(2);
+    expect(missing.calls()).toBe(2);
+  });
+
+  test('records the wiring version and instruction revision so refresh is stable', () => {
     enableAutoInit(home);
     const f = fakePlugin({ cliName: 'claude', detected: true, connected: false });
     autoConnectNewlyDetected('/repo', [f.plugin]);
     const cfg = JSON.parse(readFileSync(join(home, 'config.json'), 'utf8'));
     expect(typeof cfg.wiringVersion).toBe('string');
     expect(cfg.wiringVersion.length).toBeGreaterThan(0);
+    expect(cfg.managedInstructionRevision).toBe(MANAGED_INSTRUCTION_REVISION);
+    expect(cfg.toolIntegrationGenerations.claude).toBe(
+      `${SHOWTAIL_VERSION}:${MANAGED_INSTRUCTION_REVISION}`,
+    );
   });
 
   test('skips plugins without an autoConnect (manual-only, e.g. an IDE extension)', () => {

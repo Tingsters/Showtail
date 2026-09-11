@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   cleanup,
@@ -89,7 +89,7 @@ describe('automatic init on first AI use', () => {
     }
   });
 
-  test('opt-in ON but folder is not a project: creates nothing', () => {
+  test('opt-in ON: a meaningful prompt makes an empty working folder a project', () => {
     const dir = makeTempDir(); // empty, no markers, not a git repo
     const home = makeTempDir();
     try {
@@ -97,6 +97,24 @@ describe('automatic init on first AI use', () => {
       const env = envWith(home);
 
       const r = run(dir, ['hook', 'user-prompt'], userPrompt(dir), env);
+      expect(r.code).toBe(0);
+      expect(existsSync(join(dir, '.showtail', 'config.json'))).toBe(true);
+      expect(promptCount(dir, env)).toBe(1);
+    } finally {
+      cleanup(dir);
+      cleanup(home);
+    }
+  });
+
+  test('opt-in ON: session-start alone does not create a trail', () => {
+    const dir = makeTempDir();
+    const home = makeTempDir();
+    try {
+      enableAutoInit(home);
+      const env = envWith(home);
+      const payload = JSON.stringify({ cwd: dir, session_id: 'start-only' });
+
+      const r = run(dir, ['hook', 'session-start'], payload, env);
       expect(r.code).toBe(0);
       expect(existsSync(join(dir, '.showtail'))).toBe(false);
     } finally {
@@ -123,6 +141,37 @@ describe('automatic init on first AI use', () => {
       const r = run(dir, ['hook', 'post-edit'], payload, env);
       expect(r.code).toBe(0);
       expect(existsSync(join(dir, '.showtail'))).toBe(false);
+    } finally {
+      cleanup(dir);
+      cleanup(home);
+    }
+  });
+
+  test('track promotes an automatic fallback trail to an explicit project', () => {
+    const dir = makeTempDir();
+    const home = makeTempDir();
+    try {
+      enableAutoInit(home);
+      const env = envWith(home);
+
+      expect(run(dir, ['hook', 'user-prompt'], userPrompt(dir), env).code).toBe(0);
+      let config = JSON.parse(
+        readFileSync(join(dir, '.showtail', 'config.json'), 'utf8'),
+      );
+      expect(config.initialization).toEqual(
+        expect.objectContaining({
+          mode: 'automatic',
+          evidence: 'cwd',
+          ledgerSessionId: expect.stringMatching(/^led_/),
+        }),
+      );
+
+      expect(runCli(dir, ['track', '--json'], { env }).code).toBe(0);
+      config = JSON.parse(readFileSync(join(dir, '.showtail', 'config.json'), 'utf8'));
+      expect(config.anchorKind).toBe('explicit');
+      expect(config.initialization).toEqual(
+        expect.objectContaining({ mode: 'track', evidence: 'explicit' }),
+      );
     } finally {
       cleanup(dir);
       cleanup(home);

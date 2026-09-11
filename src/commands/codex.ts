@@ -1,6 +1,7 @@
 import { existsSync } from 'node:fs';
 import { createInterface } from 'node:readline/promises';
 import {
+  codexAutoCaptureActive,
   codexHooksFeatureEnabled,
   enableCodexHooksFeature,
   installCodexHooks,
@@ -9,6 +10,7 @@ import {
   uninstallCodexHooks,
   writeCodexInstructions,
 } from '../core/codex.ts';
+import type { ConnectUninstallResult } from '../plugins/types.ts';
 import {
   printHooksEnabled,
   printInstallHeader,
@@ -82,14 +84,20 @@ export async function runCodexInstall(options: CodexInstallOptions): Promise<voi
     console.log('');
     printPrivacyNote({ editSubject: 'Codex', disconnectName: 'codex', scope });
   } else {
-    console.log('Auto-capture hooks were SKIPPED (--no-hooks).');
+    const removed = uninstallCodexHooks(target);
     console.log(
-      '  AGENTS.md still teaches Codex to log prompts and snapshot edits itself',
+      `Auto-capture hooks are OFF at ${scope} scope${removed ? ' (existing Showtail hooks removed)' : ''}.`,
     );
     console.log(
-      '  as you pair. That capture is model-driven, so it may be less complete',
+      '  The current AGENTS.md instructions remain installed, but routine prompts',
     );
-    console.log('  than the hooks. Re-run without --no-hooks to enable them.');
+    console.log(
+      '  and edits will not be captured automatically. Re-run without --no-hooks',
+    );
+    console.log('  to restore hands-free capture.');
+    if (codexAutoCaptureActive(options.cwd)) {
+      console.log('  Automatic capture remains active through the other scope.');
+    }
   }
 
   console.log('');
@@ -100,24 +108,35 @@ export async function runCodexInstall(options: CodexInstallOptions): Promise<voi
 
 export interface CodexUninstallOptions {
   user?: boolean;
+  all?: boolean;
   cwd?: string;
 }
 
 /** Remove the Showtail Codex instructions and any hooks we installed. */
-export async function runCodexUninstall(options: CodexUninstallOptions): Promise<void> {
-  const scope = scopeOf(options);
-  const target = resolveCodexTarget(scope, options.cwd);
+export async function runCodexUninstall(
+  options: CodexUninstallOptions,
+): Promise<ConnectUninstallResult> {
+  const scopes = options.all
+    ? (['project', 'user'] as const)
+    : ([scopeOf(options)] as const);
+  const removedLines: Array<string | null> = [];
 
-  const removedInstructions = removeCodexInstructions(target);
-  const removedHooks = uninstallCodexHooks(target);
+  for (const scope of scopes) {
+    const target = resolveCodexTarget(scope, options.cwd);
+    const removedInstructions = removeCodexInstructions(target);
+    const removedHooks = uninstallCodexHooks(target);
+    removedLines.push(
+      removedInstructions ? `Removed instructions from: ${target.agentsFile}` : null,
+      removedHooks ? `Removed Showtail hooks from: ${target.hooksFile}` : null,
+    );
+  }
 
   printUninstallResult({
     nothingMessage:
-      'Nothing to remove — no Showtail Codex integration found for this scope.',
-    removedLines: [
-      removedInstructions ? `Removed instructions from: ${target.agentsFile}` : null,
-      removedHooks ? `Removed Showtail hooks from: ${target.hooksFile}` : null,
-    ],
-    trailer: `(Left features.hooks in ${target.configToml} alone — it is harmless and may be used by other hooks.)`,
+      'Nothing to remove — no Showtail Codex integration found in the selected scope(s).',
+    removedLines,
+    trailer:
+      '(Left features.hooks in config.toml alone — it is harmless and may be used by other hooks.)',
   });
+  return { captureStopped: !codexAutoCaptureActive(options.cwd) };
 }

@@ -247,7 +247,12 @@ export interface RedactionRecord {
    * `import undo` recorded one, which were all redaction passes — read a missing
    * value as `redact`.
    */
-  reason?: 'redact' | 'import-undo' | 'migration-undo' | 'repair';
+  reason?:
+    | 'redact'
+    | 'import-undo'
+    | 'migration-undo'
+    | 'routing-reprojection'
+    | 'repair';
   /**
    * For a `redact` pass: `rescan` re-ran the configured rules, `pattern`
    * scrubbed one given regex. Absent for other reasons.
@@ -318,8 +323,35 @@ export interface Config {
    * trails created before anchoring was recorded.
    */
   anchor?: string;
-  /** Whether {@link anchor} was chosen from the git repo root or the working dir. */
-  anchorKind?: 'git' | 'cwd';
+  /** Evidence used to choose {@link anchor}. Older trails contain only `git` or `cwd`. */
+  anchorKind?:
+    | 'git'
+    | 'marker'
+    | 'workspace'
+    | 'edit'
+    | 'attachment'
+    | 'control'
+    | 'cwd'
+    | 'explicit';
+  /**
+   * How this trail was created. Automatic fallback trails retain the originating
+   * ledger session so Showtail can remove one later if stronger routing evidence
+   * moves that session and the trail is still provably pristine.
+   */
+  initialization?: {
+    mode: 'automatic' | 'track' | 'report' | 'ensure';
+    evidence:
+      | 'trail'
+      | 'git'
+      | 'marker'
+      | 'workspace'
+      | 'edit'
+      | 'attachment'
+      | 'control'
+      | 'cwd'
+      | 'explicit';
+    ledgerSessionId?: string;
+  };
   /**
    * Stable, generated identifier for this trail (`trl_…`), minted at init and
    * never changed. Unlike {@link anchor} (a path, which moves), this survives the

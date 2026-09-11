@@ -16,11 +16,13 @@
  *     exactly as-is — never rewritten;
  *   - a not-yet-installed, non-`prewireSafe` tool is left UNhandled, so it's connected
  *     the first time it's detected (also covers newly *supported* tools shipped later);
- *   - when the running binary is newer than `wiringVersion`, already-wired tools have
- *     their hooks refreshed once to the current format (idempotent merge) — this is how
- *     a fix in a newer Showtail reaches already-installed hooks, and it runs from any
- *     carrier that calls this (the CLI, the installer, or a still-working tool hook),
- *     not only the tool's own hook (which the tool update may have broken).
+ *   - when the binary version OR managed-instruction revision changes, already-wired
+ *     tools are refreshed once (idempotent merge). The independent revision lets an
+ *     instruction-only fix reach existing installs without relying on a semver bump;
+ *   - refresh generations are tracked per tool, so a temporarily unavailable tool
+ *     catches up when it returns without making available tools refresh every session;
+ *   - a tool the user explicitly disconnects is excluded from both connect and refresh
+ *     sweeps until they explicitly reconnect it.
  *
  * Runs from the session-start hook (which connected tools fire regularly) and from the
  * first-run bootstrap. Gated on the same opt-in (`autoInit`) that `setup` turns on, so
@@ -28,13 +30,27 @@
  * is wrapped so a failure can never disrupt the host session.
  */
 import { type ConnectPlugin, connectPlugins } from '../plugins/registry.ts';
-import { autoInitEnabled, readGlobalConfig, writeGlobalConfig } from './globalConfig.ts';
-import { SHOWTAIL_VERSION } from './version.ts';
+import {
+  autoInitEnabled,
+  readGlobalConfig,
+  toolCaptureGloballyDisabled,
+  writeGlobalConfig,
+} from './globalConfig.ts';
+import { MANAGED_INSTRUCTION_REVISION, SHOWTAIL_VERSION } from './version.ts';
 
 export interface SweepConnectResult {
   tool: string;
   label: string;
   hooks: boolean;
+}
+
+export interface SweepIssue {
+  tool: string;
+  label: string;
+  operation: 'connect' | 'refresh';
+  /** A null result is retryable/pending; a thrown error is an explicit failure. */
+  state: 'pending' | 'failed';
+  reason?: string;
 }
 
 export interface SweepOptions {
@@ -54,14 +70,24 @@ export interface SweepResult {
   connected: SweepConnectResult[];
   /** cliNames of already-wired tools whose hooks were refreshed to the current version. */
   refreshed: string[];
+  /** Retryable integrations that could not be completed on this pass. */
+  pending: SweepIssue[];
+  /** Integrations whose connect/refresh operation threw. */
+  failed: SweepIssue[];
 }
 
-const EMPTY: SweepResult = { connected: [], refreshed: [] };
+const EMPTY: SweepResult = { connected: [], refreshed: [], pending: [], failed: [] };
+const CURRENT_INTEGRATION_GENERATION = `${SHOWTAIL_VERSION}:${MANAGED_INSTRUCTION_REVISION}`;
+
+function failureReason(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
 
 /**
  * Wire up any auto-connect-capable plugin that isn't already handled (see module
- * docstring), refreshing already-wired tools when the binary version moved. Returns the
- * tools newly connected and the tools refreshed, so the caller can surface a notice.
+ * docstring), refreshing already-wired tools when the binary version or managed
+ * instruction revision moved. Returns the tools newly connected and the tools refreshed,
+ * so the caller can surface a notice.
  * `pluginList` is injectable so tests can drive the sweep with controlled fakes
  * (default: the real registry).
  */
@@ -73,18 +99,50 @@ export function autoConnectNewlyDetected(
   if (!autoInitEnabled()) return EMPTY;
 
   const connectAll = options.connectAll ?? false;
-  const plugins = pluginList.filter((p) => p.connect.autoConnect);
   const cfg = readGlobalConfig();
+  const integrationDisabled = (tool: string): boolean => {
+    const current = readGlobalConfig();
+    return (
+      current.autoConnectDisabledTools?.includes(tool) === true ||
+      toolCaptureGloballyDisabled(tool)
+    );
+  };
+  const plugins = pluginList.filter(
+    (plugin) => plugin.connect.autoConnect && !integrationDisabled(plugin.cliName),
+  );
   const handled = new Set(cfg.autoConnectedTools ?? []);
-  // Binary newer (or older) than what last wrote the hooks → refresh their format.
-  const refresh = cfg.wiringVersion !== SHOWTAIL_VERSION;
+  const legacyHandled = new Set(handled);
+  const legacyGenerationCurrent =
+    cfg.wiringVersion === SHOWTAIL_VERSION &&
+    cfg.managedInstructionRevision === MANAGED_INSTRUCTION_REVISION;
+  const hadGenerationMap = cfg.toolIntegrationGenerations !== undefined;
+  const generations = { ...(cfg.toolIntegrationGenerations ?? {}) };
 
-  // Fast path: every plugin already handled and the wiring is current.
-  if (!refresh && plugins.every((p) => handled.has(p.cliName))) return EMPTY;
+  // A missing map is a legacy config: its global stamps remain authoritative until
+  // the first per-tool update is persisted. Once a map exists, a missing entry must
+  // stay stale so an unavailable tool can catch up when detection returns.
+  const generationIsCurrent = (tool: string): boolean => {
+    const generation = generations[tool];
+    if (generation !== undefined) return generation === CURRENT_INTEGRATION_GENERATION;
+    return !hadGenerationMap && legacyGenerationCurrent && legacyHandled.has(tool);
+  };
+
+  // Fast path: every plugin is handled and each integration is current.
+  if (
+    legacyGenerationCurrent &&
+    plugins.every(
+      (plugin) => handled.has(plugin.cliName) && generationIsCurrent(plugin.cliName),
+    )
+  ) {
+    return EMPTY;
+  }
 
   const connected: SweepConnectResult[] = [];
   const refreshed: string[] = [];
+  const pending: SweepIssue[] = [];
+  const failed: SweepIssue[] = [];
   let changed = false;
+  let generationsChanged = false;
 
   for (const plugin of plugins) {
     let detected = false;
@@ -96,17 +154,41 @@ export function autoConnectNewlyDetected(
     // Detected tools are always eligible; an UNdetected tool is pre-seeded only when
     // we're pre-wiring AND the plugin is confirmed safe to write before it's installed.
     const eligible = detected || (connectAll && plugin.connect.prewireSafe === true);
+    // A disconnect can race a sweep that started in another process. Re-read the
+    // durable consent state after detection and again around every write-producing
+    // install so stale sweeps cannot knowingly restore an opted-out integration.
+    if (integrationDisabled(plugin.cliName)) continue;
 
     if (handled.has(plugin.cliName)) {
       // Already wired. On a version bump, refresh an eligible tool's hooks to the
       // current format (idempotent merge) — this is how a fix in a newer Showtail
       // reaches already-installed hooks, carried by whatever runs this sweep.
-      if (refresh && eligible) {
+      if (!generationIsCurrent(plugin.cliName) && eligible) {
         try {
-          plugin.connect.autoConnect?.(cwd);
+          if (integrationDisabled(plugin.cliName)) continue;
+          const result = plugin.connect.autoConnect?.(cwd);
+          if (integrationDisabled(plugin.cliName)) continue;
+          if (!result) {
+            pending.push({
+              tool: plugin.cliName,
+              label: plugin.label,
+              operation: 'refresh',
+              state: 'pending',
+            });
+            continue;
+          }
           refreshed.push(plugin.cliName);
-        } catch {
-          /* refresh is best-effort */
+          generations[plugin.cliName] = CURRENT_INTEGRATION_GENERATION;
+          generationsChanged = true;
+        } catch (error) {
+          failed.push({
+            tool: plugin.cliName,
+            label: plugin.label,
+            operation: 'refresh',
+            state: 'failed',
+            reason: failureReason(error),
+          });
+          // Leave this tool stale so a later sweep retries the failed refresh.
         }
       }
       continue;
@@ -120,41 +202,95 @@ export function autoConnectNewlyDetected(
     // exactly as-is — never rewrite a tool that's already wired up.
     let already = false;
     try {
+      if (integrationDisabled(plugin.cliName)) continue;
       already = plugin.connect.status(cwd).connected;
     } catch {
       already = false;
     }
+    if (integrationDisabled(plugin.cliName)) continue;
 
     handled.add(plugin.cliName);
     changed = true;
-    if (already) continue;
+    if (already) {
+      // Preserve a manually connected tool exactly as-is and treat that observed
+      // integration as the current baseline, matching the legacy sweep behavior.
+      generations[plugin.cliName] = CURRENT_INTEGRATION_GENERATION;
+      generationsChanged = true;
+      continue;
+    }
 
     try {
+      if (integrationDisabled(plugin.cliName)) continue;
       const result = plugin.connect.autoConnect?.(cwd);
-      if (result) {
-        connected.push({
+      if (integrationDisabled(plugin.cliName)) continue;
+      // `null` means the integration could not be completed (for example an
+      // extension install failed). Leave it stale so a later sweep can retry.
+      if (!result) {
+        pending.push({
           tool: plugin.cliName,
           label: plugin.label,
-          hooks: result.hooks,
+          operation: 'connect',
+          state: 'pending',
         });
+        continue;
       }
-    } catch {
-      // A connect failure must never break the session; it stays handled so we
-      // don't retry-loop every session-start.
+      generations[plugin.cliName] = CURRENT_INTEGRATION_GENERATION;
+      generationsChanged = true;
+      connected.push({
+        tool: plugin.cliName,
+        label: plugin.label,
+        hooks: result.hooks,
+      });
+    } catch (error) {
+      failed.push({
+        tool: plugin.cliName,
+        label: plugin.label,
+        operation: 'connect',
+        state: 'failed',
+        reason: failureReason(error),
+      });
+      // A connect failure must never break the session. It stays handled but stale,
+      // so the normal refresh path can retry it on a later sweep.
     }
   }
 
-  if (changed || refreshed.length > 0 || refresh) {
+  // If this is the first write of a per-tool map from a current legacy config,
+  // carry forward only tools handled before this sweep. A newly handled connect
+  // that failed must remain stale so the next sweep retries it.
+  if (!hadGenerationMap && legacyGenerationCurrent && (changed || generationsChanged)) {
+    for (const plugin of plugins) {
+      if (
+        legacyHandled.has(plugin.cliName) &&
+        generations[plugin.cliName] === undefined
+      ) {
+        generations[plugin.cliName] = CURRENT_INTEGRATION_GENERATION;
+        generationsChanged = true;
+      }
+    }
+  }
+
+  const allHandledIntegrationsCurrent = plugins
+    .filter((plugin) => handled.has(plugin.cliName))
+    .every((plugin) => generationIsCurrent(plugin.cliName));
+  const stampLegacyGeneration = allHandledIntegrationsCurrent && !legacyGenerationCurrent;
+
+  if (changed || generationsChanged || stampLegacyGeneration) {
     try {
       writeGlobalConfig({
         ...readGlobalConfig(),
         autoConnectedTools: [...handled],
-        wiringVersion: SHOWTAIL_VERSION,
+        toolIntegrationGenerations: generations,
+        ...(stampLegacyGeneration
+          ? {
+              wiringVersion: SHOWTAIL_VERSION,
+              managedInstructionRevision: MANAGED_INSTRUCTION_REVISION,
+            }
+          : {}),
       });
     } catch {
       // Persisting the handled set is best-effort; worst case we retry next time.
     }
   }
 
-  return { connected, refreshed };
+  return { connected, refreshed, pending, failed };
 }

@@ -1,13 +1,12 @@
 /**
  * Unit tests for the inbox surface predicate — which never-placed ledger sessions
  * `showtail inbox` shows by default vs keeps aside (recoverable via `--all`). Covers
- * eligibility (real project vs folderless/temp), the signal floor, the scratch list,
+ * project candidacy, the signal floor, the ignored-path list,
  * dismissal, and the membership-vs-resolved-root distinction.
  *
  * Ledger writes go to the shared `SHOWTAIL_HOME` and are cleared between tests by the
  * preload (tests/setup.ts). `SHOWTAIL_ROOT_CEILING` is pinned to the OS temp dir there,
- * so a `.git` fixture under a temp dir resolves as a real project (the temp-dir
- * exclusion is a production-only guard; it's unit-tested directly via `isTempPath`).
+ * so fixtures cannot escape into a developer's real project trail.
  */
 import { describe, expect, test } from 'bun:test';
 import { mkdirSync } from 'node:fs';
@@ -58,18 +57,25 @@ function makeRepo(): string {
 }
 
 describe('inbox surface predicate', () => {
-  test('folderless work (no eligible root) is hidden as not-in-project', () => {
-    const scratch = makeTempDir(); // no .git / .showtail
+  test('work in an existing plain folder surfaces as a project candidate', () => {
+    const scratch = makeTempDir(); // no .git / marker / existing trail
     try {
       const s = makeSession('s-folderless', {
         prompts: 3,
         editFiles: [join(scratch, 'a.ts')],
       });
-      expect(isSurfaced(s)).toBe(false);
-      expect(hiddenReason(s)).toBe('not-in-project');
+      expect(isSurfaced(s)).toBe(true);
+      expect(hiddenReason(s)).toBeNull();
+      expect(sessionWorkRoots(s)).toContain(scratch);
     } finally {
       cleanup(scratch);
     }
+  });
+
+  test('work with no cwd or file path stays out of the project inbox', () => {
+    const s = makeSession('s-no-location', { prompts: 3 });
+    expect(isSurfaced(s)).toBe(false);
+    expect(hiddenReason(s)).toBe('not-in-project');
   });
 
   test('work inside a real repo surfaces', () => {

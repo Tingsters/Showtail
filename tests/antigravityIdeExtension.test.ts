@@ -1,12 +1,16 @@
-import { readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, test } from 'bun:test';
 import {
+  antigravityIdeExtensionInstalled,
+  antigravityExtensionListContainsShowtail,
   bundledVsixPath,
   findAntigravityIdeCli,
   installAntigravityIdeExtension,
+  uninstallAntigravityIdeExtension,
 } from '../src/core/antigravityIdeExtension.ts';
-import { cleanup, makeTempDir, stubCli } from './helpers.ts';
+import { antigravityIdePlugin } from '../src/plugins/antigravity-ide.ts';
+import { cleanup, makeTempDir, stubCli, stubInstalledExtensionCli } from './helpers.ts';
 
 describe('antigravity-ide extension install (env-overridable, no real IDE)', () => {
   const saved = {
@@ -32,6 +36,41 @@ describe('antigravity-ide extension install (env-overridable, no real IDE)', () 
       process.env.SHOWTAIL_VSIX = vsix;
       expect(findAntigravityIdeCli()).toBe(cli);
       expect(bundledVsixPath()).toBe(vsix);
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('recognizes Showtail in native extension-list output', () => {
+    expect(
+      antigravityExtensionListContainsShowtail(
+        'publisher.other\r\ntingsters.showtail\r\n',
+      ),
+    ).toBe(true);
+    expect(antigravityExtensionListContainsShowtail('publisher.other\n')).toBe(false);
+  });
+
+  test('extension-backed capture is reported as connected and active', () => {
+    const dir = makeTempDir();
+    try {
+      const cli = join(
+        dir,
+        process.platform === 'win32' ? 'antigravity-ide.cmd' : 'antigravity-ide.sh',
+      );
+      const body =
+        process.platform === 'win32'
+          ? '@echo off\r\nif "%~1"=="--list-extensions" echo Tingsters.Showtail\r\nexit /b 0\r\n'
+          : '#!/bin/sh\n[ "$1" = "--list-extensions" ] && printf "Tingsters.Showtail\\n"\n';
+      writeFileSync(cli, body);
+      if (process.platform !== 'win32') chmodSync(cli, 0o755);
+      process.env.SHOWTAIL_ANTIGRAVITY_CLI = cli;
+
+      expect(antigravityIdeExtensionInstalled()).toBe(true);
+      expect(antigravityIdePlugin.connect!.status(dir)).toMatchObject({
+        connected: true,
+        hooksActive: false,
+        captureActive: true,
+      });
     } finally {
       cleanup(dir);
     }
@@ -84,6 +123,28 @@ describe('antigravity-ide extension install (env-overridable, no real IDE)', () 
       const args = readFileSync(record, 'utf8');
       expect(args).toContain('--install-extension');
       expect(args).toContain(vsix);
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('uninstalls the native capture extension through the IDE CLI', () => {
+    const dir = makeTempDir();
+    try {
+      const record = join(dir, 'args.txt');
+      process.env.SHOWTAIL_ANTIGRAVITY_CLI = stubInstalledExtensionCli(
+        dir,
+        record,
+        'tingsters.showtail',
+        'antigravity-ide',
+      );
+
+      const result = uninstallAntigravityIdeExtension();
+
+      expect(result).toMatchObject({ uninstalled: true, wasInstalled: true });
+      const args = readFileSync(record, 'utf8');
+      expect(args).toContain('--uninstall-extension');
+      expect(args).toContain('tingsters.showtail');
     } finally {
       cleanup(dir);
     }

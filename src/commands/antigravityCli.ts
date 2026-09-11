@@ -1,11 +1,13 @@
 import { existsSync } from 'node:fs';
 import {
+  antigravityCliAutoCaptureActive,
   installAntigravityCliHooks,
   removeAntigravityCliInstructions,
   resolveAntigravityCliTarget,
   uninstallAntigravityCliHooks,
   writeAntigravityCliInstructions,
 } from '../core/antigravityCli.ts';
+import type { ConnectUninstallResult } from '../plugins/types.ts';
 import {
   printHooksEnabled,
   printInstallHeader,
@@ -44,14 +46,20 @@ export async function runAntigravityCliInstall(
       scope,
     });
   } else {
-    console.log('Auto-capture hooks were SKIPPED (--no-hooks).');
+    const removed = uninstallAntigravityCliHooks(target);
     console.log(
-      '  The instructions still teach Antigravity CLI to log prompts and snapshot',
+      `Auto-capture hooks are OFF at ${scope} scope${removed ? ' (existing Showtail hooks removed)' : ''}.`,
     );
     console.log(
-      '  edits itself as you pair. That capture is model-driven, so it may be less',
+      '  The current managed instructions remain installed, but routine prompts',
     );
-    console.log('  complete than the hooks. Re-run without --no-hooks to enable them.');
+    console.log(
+      '  and edits will not be captured automatically. Re-run without --no-hooks',
+    );
+    console.log('  to restore hands-free capture.');
+    if (antigravityCliAutoCaptureActive(options.cwd)) {
+      console.log('  Automatic capture remains active through the other scope.');
+    }
   }
 
   console.log('');
@@ -62,25 +70,33 @@ export async function runAntigravityCliInstall(
 
 export interface AntigravityCliUninstallOptions {
   user?: boolean;
+  all?: boolean;
   cwd?: string;
 }
 
 /** Remove the Showtail Antigravity CLI instructions and any hooks we installed. */
 export async function runAntigravityCliUninstall(
   options: AntigravityCliUninstallOptions,
-): Promise<void> {
-  const scope = scopeOf(options);
-  const target = resolveAntigravityCliTarget(scope, options.cwd);
+): Promise<ConnectUninstallResult> {
+  const scopes = options.all
+    ? (['project', 'user'] as const)
+    : ([scopeOf(options)] as const);
+  const removedLines: Array<string | null> = [];
 
-  const removedInstructions = removeAntigravityCliInstructions(target);
-  const removedHooks = uninstallAntigravityCliHooks(target);
+  for (const scope of scopes) {
+    const target = resolveAntigravityCliTarget(scope, options.cwd);
+    const removedInstructions = removeAntigravityCliInstructions(target);
+    const removedHooks = uninstallAntigravityCliHooks(target);
+    removedLines.push(
+      removedInstructions ? `Removed instructions from: ${target.contextFile}` : null,
+      removedHooks ? `Removed Showtail hooks from: ${target.hooksFile}` : null,
+    );
+  }
 
   printUninstallResult({
     nothingMessage:
-      'Nothing to remove — no Showtail Antigravity CLI integration found for this scope.',
-    removedLines: [
-      removedInstructions ? `Removed instructions from: ${target.contextFile}` : null,
-      removedHooks ? `Removed Showtail hooks from: ${target.hooksFile}` : null,
-    ],
+      'Nothing to remove — no Showtail Antigravity CLI integration found in the selected scope(s).',
+    removedLines,
   });
+  return { captureStopped: !antigravityCliAutoCaptureActive(options.cwd) };
 }

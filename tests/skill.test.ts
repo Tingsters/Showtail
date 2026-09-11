@@ -216,12 +216,39 @@ describe('skill assets + install', () => {
 
   test('install --no-hooks leaves settings.json untouched', async () => {
     const dir = makeTempDir();
+    const lines: string[] = [];
+    const realLog = console.log;
     try {
+      console.log = (...args: unknown[]) => void lines.push(args.join(' '));
       await runSkillInstall({ project: true, hooks: false, cwd: dir });
       const target = resolveTarget('project', dir);
       expect(existsSync(target.skillFile)).toBe(true);
       expect(existsSync(target.settingsFile)).toBe(false);
       expect(hooksInstalledAt(target.settingsFile)).toBe(false);
+
+      const output = lines.join('\n');
+      expect(output).toContain('routine prompts');
+      expect(output).toContain('will not be captured automatically');
+      expect(output).toContain('restore hands-free capture');
+      expect(output).not.toContain('skill will instead log prompts');
+    } finally {
+      console.log = realLog;
+      cleanup(dir);
+    }
+  });
+
+  test('install --no-hooks removes hooks from an earlier connect', async () => {
+    const dir = makeTempDir();
+    try {
+      const target = resolveTarget('project', dir);
+      await runSkillInstall({ project: true, cwd: dir });
+      expect(hooksInstalledAt(target.settingsFile)).toBe(true);
+
+      await runSkillInstall({ project: true, hooks: false, cwd: dir });
+
+      expect(existsSync(target.skillFile)).toBe(true);
+      expect(hooksInstalledAt(target.settingsFile)).toBe(false);
+      expect(autoCaptureActive(dir)).toBe(false);
     } finally {
       cleanup(dir);
     }

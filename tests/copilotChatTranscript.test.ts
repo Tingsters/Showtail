@@ -1,19 +1,31 @@
 import { describe, expect, test } from 'bun:test';
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, mkdirSync, renameSync, writeFileSync } from 'node:fs';
+import { isAbsolute, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { runInit } from '../src/commands/init.ts';
 import { runImportCopilot } from '../src/commands/importCopilot.ts';
 import { runImportUndo } from '../src/commands/import.ts';
+import { placeLedgerSession } from '../src/commands/reattach.ts';
 import {
+  extractCopilotEdits,
+  parseShowtailProjectControlMarker,
+  parseCopilotSession,
   parseCopilotChatTranscript,
+  reconstructSession,
   summarizeChatSessions,
 } from '../src/core/copilotChatTranscript.ts';
 import { readAllArtifacts } from '../src/core/artifacts.ts';
 import { readAllEvents } from '../src/core/events.ts';
-import { readLedgerRecords, unplacedSessions } from '../src/core/ledger.ts';
+import { enableToolCapture, writeGlobalConfig } from '../src/core/globalConfig.ts';
+import {
+  allLedgerSessions,
+  readLedgerRecords,
+  readLedgerSession,
+  sessionProjectContext,
+  unplacedSessions,
+} from '../src/core/ledger.ts';
 import { buildReportData, renderHtml } from '../src/core/report.ts';
-import { pathsForRoot } from '../src/core/storage.ts';
+import { pathsForRoot, readConfig } from '../src/core/storage.ts';
 import { authorFor, cleanup, makeTempDir } from './helpers.ts';
 
 const ms = (iso: string): number => Date.parse(iso);
@@ -194,6 +206,92 @@ function makeJournal(dir: string): string {
   return lines.map((l) => JSON.stringify(l)).join('\n') + '\n';
 }
 
+/** A compact native session for routing tests, with arbitrary edited paths. */
+function makeRoutingSession(
+  editPaths: string[],
+  options: { prompt?: string; sessionId?: string } = {},
+): string {
+  const prompt = options.prompt ?? 'Build both files.';
+  const response = [
+    ...(prompt ? [{ value: 'Done.' }] : []),
+    ...editPaths.map((fsPath, index) => ({
+      kind: 'textEditGroup',
+      uri: { fsPath },
+      edits: [[{ text: `export const value${index} = ${index};`, range: {} }]],
+    })),
+  ];
+  return JSON.stringify({
+    version: 3,
+    sessionId: options.sessionId ?? 'routing-session',
+    requests: [
+      {
+        requestId: 'routing-request',
+        timestamp: ms('2026-06-22T10:00:00.000Z'),
+        message: { text: prompt },
+        agent: { extensionId: { value: 'GitHub.copilot-chat' } },
+        response,
+      },
+    ],
+  });
+}
+
+/** One native chat whose second turn happens after the project folder moved. */
+function makeMovedContinuationSession(oldFile: string, newFile?: string): string {
+  const request = (
+    requestId: string,
+    prompt: string,
+    fsPath: string,
+    text: string,
+    timestamp: string,
+  ) => ({
+    requestId,
+    timestamp: ms(timestamp),
+    message: { text: prompt },
+    agent: { extensionId: { value: 'GitHub.copilot-chat' } },
+    response: [
+      { value: 'Done.' },
+      {
+        kind: 'textEditGroup',
+        uri: { fsPath },
+        edits: [[{ text, range: {} }]],
+      },
+    ],
+  });
+  return JSON.stringify({
+    version: 3,
+    sessionId: 'moved-continuation',
+    requests: [
+      request(
+        'before-move',
+        'Build the first screen.',
+        oldFile,
+        'export const first = 1;',
+        '2026-06-22T10:00:00.000Z',
+      ),
+      ...(newFile
+        ? [
+            request(
+              'after-move',
+              'Add the second screen.',
+              newFile,
+              'export const second = 2;',
+              '2026-06-22T10:02:00.000Z',
+            ),
+          ]
+        : []),
+    ],
+  });
+}
+
+/** Keep the fixed transcript dates inside the watcher capture window. */
+function setAutomaticImportTracking(enabled: boolean): void {
+  writeGlobalConfig({
+    version: 1,
+    autoInit: enabled,
+    captureSince: '2026-06-01T00:00:00.000Z',
+  });
+}
+
 describe('parseCopilotChatTranscript', () => {
   test('keeps prompts, replies and repo edits; drops thinking, internal edits, @showtail', () => {
     const dir = makeTempDir();
@@ -228,6 +326,286 @@ describe('parseCopilotChatTranscript', () => {
       expect(parsed.messages[0]!.sourceId).toBe('copilot:user:sess-copilot-1:request_1');
       // epoch-ms timestamp → ISO, preserved for back-dating.
       expect(parsed.messages[0]!.timestamp).toBe('2026-06-22T10:00:00.000Z');
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('keeps only explicit request attachments and a marker from the exact control tool result', () => {
+    const attachedProject = makeTempDir();
+    const selectedProject = makeTempDir();
+    try {
+      const attachedFile = join(attachedProject, 'game.ts');
+      const attachedFolder = join(attachedProject, 'levels');
+      const marker = {
+        showtailProjectControl: 'showtail-project-control/v1',
+        claimId: '123e4567-e89b-42d3-a456-426614174010',
+        action: 'report',
+        trailId: 'trl_selected',
+        root: selectedProject,
+        displayName: 'Selected game',
+        mode: 'corroborated',
+        evidence: ['complete-name', 'edit-focus'],
+        crossWorkspace: true,
+        reportPath: join(selectedProject, '.showtail', 'reports', 'report.html'),
+      };
+      const session = {
+        sessionId: 'routing-metadata',
+        requests: [
+          {
+            requestId: 'request-routing',
+            timestamp: ms('2026-09-10T10:00:00.000Z'),
+            message: { text: 'report my game' },
+            agent: { extensionId: { value: 'GitHub.copilot-chat' } },
+            variableData: {
+              variables: [
+                { kind: 'file', id: 'file:///game.ts', value: { fsPath: attachedFile } },
+                {
+                  kind: 'folder',
+                  id: 'file:///levels',
+                  value: { uri: { fsPath: attachedFolder } },
+                },
+                {
+                  kind: 'file',
+                  id: 'vscode.implicit.selection',
+                  value: { uri: { fsPath: join(selectedProject, 'active.ts') } },
+                },
+                {
+                  kind: 'file',
+                  id: 'automatic-file',
+                  automaticallyAdded: true,
+                  value: { fsPath: join(selectedProject, 'auto.ts') },
+                },
+                {
+                  kind: 'promptFile',
+                  id: 'instructions',
+                  value: { fsPath: join(selectedProject, 'AGENTS.md') },
+                },
+              ],
+            },
+            response: [{ value: 'Report generated.' }],
+            result: {
+              metadata: {
+                toolCallRounds: [
+                  {
+                    toolCalls: [
+                      {
+                        id: 'call-project',
+                        name: 'showtail_project_control',
+                        arguments: JSON.stringify({
+                          action: 'report',
+                          selector: 'my game',
+                        }),
+                      },
+                    ],
+                  },
+                ],
+                toolCallResults: {
+                  'call-project': { content: [{ value: JSON.stringify(marker) }] },
+                },
+              },
+            },
+          },
+        ],
+      };
+
+      const parsed = parseCopilotSession(session, attachedProject);
+      const prompt = parsed.messages.find((message) => message.role === 'user')!;
+      expect(prompt.requestId).toBe('request-routing');
+      expect(prompt.attachments).toEqual([
+        { kind: 'file', path: attachedFile },
+        { kind: 'folder', path: attachedFolder },
+      ]);
+      expect(prompt.projectControl).toEqual(
+        expect.objectContaining({
+          claimId: marker.claimId,
+          action: 'report',
+          trailId: 'trl_selected',
+          root: selectedProject,
+          reportPath: marker.reportPath,
+        }),
+      );
+      expect(
+        parsed.events.some(
+          (event) =>
+            event.type === 'tool_use' && event.toolName === 'showtail_project_control',
+        ),
+      ).toBe(false);
+      expect(
+        parsed.events.some(
+          (event) =>
+            event.type === 'tool_result' &&
+            JSON.stringify(event.content).includes(marker.claimId),
+        ),
+      ).toBe(false);
+    } finally {
+      cleanup(attachedProject);
+      cleanup(selectedProject);
+    }
+  });
+
+  test('rejects marker lookalikes, malformed fields, and action mismatches', () => {
+    const root = makeTempDir();
+    try {
+      const valid = {
+        showtailProjectControl: 'showtail-project-control/v1',
+        claimId: '123e4567-e89b-42d3-a456-426614174011',
+        action: 'verify',
+        trailId: 'trl_selected',
+        root,
+        mode: 'authoritative',
+        evidence: ['explicit-picker'],
+      };
+      expect(parseShowtailProjectControlMarker(JSON.stringify(valid))).toEqual(
+        expect.objectContaining({ action: 'verify', trailId: 'trl_selected', root }),
+      );
+      expect(
+        parseShowtailProjectControlMarker(
+          JSON.stringify({ ...valid, claimId: 'not-a-uuid' }),
+        ),
+      ).toBeNull();
+      expect(
+        parseShowtailProjectControlMarker(JSON.stringify({ ...valid, root: 'relative' })),
+      ).toBeNull();
+      expect(
+        parseShowtailProjectControlMarker(
+          JSON.stringify({
+            ...valid,
+            showtailProjectControl: 'showtail-project-control/v2',
+          }),
+        ),
+      ).toBeNull();
+
+      const request = (
+        name: string,
+        argumentsAction: string,
+        response: unknown[] = [{ value: JSON.stringify(valid) }],
+      ) => ({
+        requestId: 'request-lookalike',
+        timestamp: ms('2026-09-10T10:00:00.000Z'),
+        message: { text: 'verify it' },
+        agent: { extensionId: { value: 'GitHub.copilot-chat' } },
+        response,
+        result: {
+          metadata: {
+            toolCallRounds: [
+              {
+                toolCalls: [
+                  {
+                    id: 'call-project',
+                    name,
+                    arguments: JSON.stringify({ action: argumentsAction }),
+                  },
+                ],
+              },
+            ],
+            toolCallResults: {
+              'call-project': { content: [{ value: JSON.stringify(valid) }] },
+            },
+          },
+        },
+      });
+      expect(
+        parseCopilotSession(
+          { sessionId: 'wrong-tool', requests: [request('run_in_terminal', 'verify')] },
+          root,
+        ).messages.find((message) => message.role === 'user')?.projectControl,
+      ).toBeUndefined();
+      expect(
+        parseCopilotSession(
+          {
+            sessionId: 'wrong-action',
+            requests: [request('showtail_project_control', 'report')],
+          },
+          root,
+        ).messages.find((message) => message.role === 'user')?.projectControl,
+      ).toBeUndefined();
+      expect(
+        parseCopilotSession(
+          {
+            sessionId: 'assistant-lookalike',
+            requests: [
+              {
+                requestId: 'request-text',
+                timestamp: ms('2026-09-10T10:00:00.000Z'),
+                message: { text: 'verify it' },
+                agent: { extensionId: { value: 'GitHub.copilot-chat' } },
+                response: [{ value: JSON.stringify(valid) }],
+              },
+            ],
+          },
+          root,
+        ).messages.find((message) => message.role === 'user')?.projectControl,
+      ).toBeUndefined();
+    } finally {
+      cleanup(root);
+    }
+  });
+
+  test('automatic recovery filters each request by its base timestamp', () => {
+    const dir = makeTempDir();
+    try {
+      const session = reconstructSession(makeSession(dir));
+      // This lands inside request_1's synthetic child offsets. The whole request
+      // must stay excluded; only the later request_3 is eligible.
+      const automaticCaptureSince = '2026-06-22T10:00:00.002Z';
+      const parsed = parseCopilotSession(session, dir, { automaticCaptureSince });
+
+      expect(parsed.messages.map((message) => message.sourceId)).toEqual([
+        'copilot:user:sess-copilot-1:request_3',
+        'copilot:asst:sess-copilot-1:request_3',
+      ]);
+      expect(parsed.events.map((event) => event.sourceId)).toEqual([
+        'copilot:user:sess-copilot-1:request_3',
+        'copilot:asst:sess-copilot-1:request_3',
+      ]);
+      expect(
+        extractCopilotEdits(session, 'sess-copilot-1', { automaticCaptureSince }),
+      ).toHaveLength(0);
+
+      // The boundary is inclusive at the request level.
+      expect(
+        parseCopilotSession(session, dir, {
+          automaticCaptureSince: '2026-06-22T10:01:00.000Z',
+        }).messages.map((message) => message.sourceId),
+      ).toEqual([
+        'copilot:user:sess-copilot-1:request_3',
+        'copilot:asst:sess-copilot-1:request_3',
+      ]);
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('automatic recovery fails closed for missing or invalid request timestamps', () => {
+    const dir = makeTempDir();
+    try {
+      const request = (requestId: string, timestamp?: unknown) => ({
+        requestId,
+        ...(timestamp === undefined ? {} : { timestamp }),
+        message: { text: requestId },
+        agent: { extensionId: { value: 'GitHub.copilot-chat' } },
+        response: [
+          { value: 'reply' },
+          {
+            kind: 'textEditGroup',
+            uri: { fsPath: join(dir, `${requestId}.ts`) },
+            edits: [[{ text: 'export {};', range: {} }]],
+          },
+        ],
+      });
+      const session = {
+        sessionId: 'invalid-timestamps',
+        requests: [
+          request('missing'),
+          request('string', 'not-a-date'),
+          request('nan', NaN),
+        ],
+      };
+      const options = { automaticCaptureSince: '2026-06-22T10:00:00.000Z' };
+
+      expect(parseCopilotSession(session, dir, options).messages).toHaveLength(0);
+      expect(extractCopilotEdits(session, 'invalid-timestamps', options)).toHaveLength(0);
     } finally {
       cleanup(dir);
     }
@@ -324,6 +702,121 @@ describe('parseCopilotChatTranscript', () => {
       expect(parsed.messages.find((m) => m.role === 'decision')?.text).toContain(
         '**Copilot asked:**',
       );
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('rejects unsupported legacy session versions and schemas', () => {
+    const dir = makeTempDir();
+    try {
+      const request = {
+        requestId: 'request_unsupported',
+        timestamp: ms('2026-06-22T10:00:00.000Z'),
+        message: { text: 'This must not become evidence.' },
+        agent: { extensionId: { value: 'GitHub.copilot-chat' } },
+        response: [{ value: 'Nor should this reply.' }],
+      };
+      const documents = [
+        { version: 999, sessionId: 'unknown-version', requests: [request] },
+        { schemaVersion: 1, sessionId: 'unknown-schema', requests: [request] },
+      ];
+
+      for (const document of documents) {
+        const content = JSON.stringify(document);
+        expect(reconstructSession(content)).toEqual({});
+        expect(parseCopilotChatTranscript(content, dir).messages).toHaveLength(0);
+      }
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('rejects unsupported journal snapshots before replaying later requests', () => {
+    const dir = makeTempDir();
+    try {
+      const request = {
+        requestId: 'request_unsupported',
+        timestamp: ms('2026-06-22T10:00:00.000Z'),
+        message: { text: 'This must not become evidence.' },
+        agent: { extensionId: { value: 'GitHub.copilot-chat' } },
+        response: [{ value: 'Nor should this reply.' }],
+      };
+      const journals = [
+        [
+          { kind: 0, v: { version: 999, sessionId: 'unknown-version', requests: [] } },
+          { kind: 2, k: ['requests'], v: [request] },
+        ],
+        [
+          { kind: 0, v: { schemaVersion: 1, sessionId: 'unknown-schema', requests: [] } },
+          { kind: 2, k: ['requests'], v: [request] },
+        ],
+      ];
+
+      for (const journal of journals) {
+        const content = journal.map((line) => JSON.stringify(line)).join('\n');
+        expect(reconstructSession(content)).toEqual({});
+        expect(parseCopilotChatTranscript(content, dir).messages).toHaveLength(0);
+      }
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('rejects unknown and malformed journal deltas instead of partially replaying them', () => {
+    const dir = makeTempDir();
+    try {
+      const request = {
+        requestId: 'request_invalid_delta',
+        timestamp: ms('2026-06-22T10:00:00.000Z'),
+        message: { text: 'This must not become evidence.' },
+        agent: { extensionId: { value: 'GitHub.copilot-chat' } },
+        response: [{ value: 'Nor should this reply.' }],
+      };
+      const snapshot = {
+        kind: 0,
+        v: { version: 3, sessionId: 'invalid-journal', requests: [] },
+      };
+      const invalidDeltas = [
+        { kind: 9, k: ['requests'], v: [request] },
+        { kind: 2, k: 'requests', v: [request] },
+        { kind: 2, k: ['requests'], v: request },
+        { kind: 1, k: ['missing', 'request'], v: request },
+        { kind: 1, k: ['__proto__', 'showtailPolluted'], v: true },
+      ];
+
+      for (const delta of invalidDeltas) {
+        const content = [snapshot, delta].map((line) => JSON.stringify(line)).join('\n');
+        expect(reconstructSession(content)).toEqual({});
+        expect(parseCopilotChatTranscript(content, dir).messages).toHaveLength(0);
+      }
+      expect(Object.prototype).not.toHaveProperty('showtailPolluted');
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('rejects invalid JSON after a valid journal snapshot', () => {
+    const dir = makeTempDir();
+    try {
+      const request = {
+        requestId: 'request_after_invalid_json',
+        timestamp: ms('2026-06-22T10:00:00.000Z'),
+        message: { text: 'This must not become evidence.' },
+        agent: { extensionId: { value: 'GitHub.copilot-chat' } },
+        response: [{ value: 'Nor should this reply.' }],
+      };
+      const content = [
+        JSON.stringify({
+          kind: 0,
+          v: { version: 3, sessionId: 'invalid-json', requests: [] },
+        }),
+        '{"kind":',
+        JSON.stringify({ kind: 2, k: ['requests'], v: [request] }),
+      ].join('\n');
+
+      expect(reconstructSession(content)).toEqual({});
+      expect(parseCopilotChatTranscript(content, dir).messages).toHaveLength(0);
     } finally {
       cleanup(dir);
     }
@@ -526,6 +1019,406 @@ describe('copilot import (end to end via --file)', () => {
     }
   });
 
+  test('--auto keeps the same native session in its relocated project', async () => {
+    const oldProject = makeTempDir();
+    const newProject = makeTempDir();
+    const launcher = makeTempDir();
+    try {
+      setAutomaticImportTracking(true);
+      await runInit({ cwd: oldProject });
+      const oldFile = join(oldProject, 'src', 'first.ts');
+      mkdirSync(join(oldProject, 'src'), { recursive: true });
+      writeFileSync(oldFile, 'export const first = 1;\n', 'utf8');
+      const transcript = join(launcher, 'moved-continuation.json');
+      writeFileSync(transcript, makeMovedContinuationSession(oldFile), 'utf8');
+
+      await runImportCopilot(undefined, {
+        file: transcript,
+        auto: true,
+        withResponses: true,
+        cwd: oldProject,
+      });
+      const session = allLedgerSessions().find(
+        (item) => item.nativeSessionId === 'moved-continuation',
+      )!;
+      expect(session.targets).toEqual([expect.objectContaining({ path: oldProject })]);
+
+      const movedFirst = join(newProject, 'src', 'first.ts');
+      mkdirSync(join(newProject, 'src'), { recursive: true });
+      renameSync(oldFile, movedFirst);
+      await placeLedgerSession(session, newProject);
+
+      const secondFile = join(newProject, 'src', 'second.ts');
+      writeFileSync(secondFile, 'export const second = 2;\n', 'utf8');
+      writeFileSync(
+        transcript,
+        makeMovedContinuationSession(oldFile, secondFile),
+        'utf8',
+      );
+      await runImportCopilot(undefined, {
+        file: transcript,
+        auto: true,
+        withResponses: true,
+        cwd: newProject,
+      });
+
+      const current = readLedgerSession(session.id)!;
+      expect(sessionProjectContext(current)).toEqual(
+        expect.objectContaining({ state: 'tracked', root: newProject }),
+      );
+      expect(current.targets).toEqual([expect.objectContaining({ path: newProject })]);
+      const oldPaths = pathsForRoot(oldProject);
+      const newPaths = pathsForRoot(newProject);
+      expect(
+        readAllEvents(oldPaths).filter((event) => event.tool === 'github-copilot'),
+      ).toEqual([]);
+      expect(
+        readAllEvents(newPaths).filter(
+          (event) => event.tool === 'github-copilot' && event.type === 'prompt',
+        ),
+      ).toHaveLength(2);
+      expect(
+        readAllArtifacts(newPaths)
+          .filter((artifact) => artifact.tool === 'github-copilot')
+          .map((artifact) => artifact.path)
+          .sort(),
+      ).toEqual(['src/first.ts', 'src/second.ts']);
+
+      const before = readLedgerRecords(session.id).length;
+      await runImportCopilot(undefined, {
+        file: transcript,
+        auto: true,
+        withResponses: true,
+        cwd: newProject,
+      });
+      expect(readLedgerRecords(session.id)).toHaveLength(before);
+      expect(
+        readAllEvents(newPaths).filter(
+          (event) => event.tool === 'github-copilot' && event.type === 'prompt',
+        ),
+      ).toHaveLength(2);
+    } finally {
+      cleanup(oldProject);
+      cleanup(newProject);
+      cleanup(launcher);
+    }
+  });
+
+  test('--auto honors reconnect cutoff without routing a workspace-only turn', async () => {
+    const dir = makeTempDir();
+    try {
+      await runInit({ cwd: dir });
+      const paths = pathsForRoot(dir);
+      const fixture = join(dir, 'resumed-session.json');
+      writeFileSync(fixture, makeSession(dir), 'utf8');
+      // This cutoff is inside request_1's synthetic offsets, so its reply, plan,
+      // decision, and edit must not independently cross the consent boundary.
+      enableToolCapture('copilot', '2026-06-22T10:00:00.002Z');
+
+      await runImportCopilot(undefined, {
+        file: fixture,
+        auto: true,
+        withResponses: true,
+        cwd: dir,
+      });
+
+      let events = readAllEvents(paths).filter(
+        (event) => event.tool === 'github-copilot',
+      );
+      expect(events).toHaveLength(0);
+      expect(events.filter((event) => event.type === 'plan')).toHaveLength(0);
+      expect(events.filter((event) => event.type === 'decision')).toHaveLength(0);
+      expect(
+        readAllArtifacts(paths).filter((artifact) => artifact.tool === 'github-copilot'),
+      ).toHaveLength(0);
+      const inbox = unplacedSessions({ includeHidden: true }).filter(
+        (session) => session.nativeSessionId === 'resumed-session',
+      );
+      expect(inbox).toHaveLength(1);
+      expect(
+        readLedgerRecords(inbox[0]!.id)
+          .filter((record) => record.kind === 'prompt')
+          .map((record) => record.text),
+      ).toEqual(['Now add a test.']);
+
+      // An explicit import is deliberate and remains able to recover older work.
+      await runImportCopilot(undefined, {
+        file: fixture,
+        withResponses: true,
+        cwd: dir,
+      });
+
+      events = readAllEvents(paths).filter((event) => event.tool === 'github-copilot');
+      expect(events.filter((event) => event.type === 'prompt')).toHaveLength(2);
+      expect(events.filter((event) => event.type === 'ai_output')).toHaveLength(2);
+      expect(events.filter((event) => event.type === 'plan')).toHaveLength(1);
+      expect(events.filter((event) => event.type === 'decision')).toHaveLength(1);
+      expect(
+        readAllArtifacts(paths).filter((artifact) => artifact.tool === 'github-copilot'),
+      ).toHaveLength(1);
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('machine-wide disconnect blocks --auto before reads but preserves explicit import', async () => {
+    const proj = makeTempDir();
+    try {
+      await runInit({ cwd: proj });
+      const paths = pathsForRoot(proj);
+      writeGlobalConfig({
+        version: 1,
+        autoInit: true,
+        captureSince: '2026-06-01T00:00:00.000Z',
+        captureDisabledTools: ['copilot'],
+      });
+
+      await expect(
+        runImportCopilot(undefined, {
+          file: join(proj, 'missing-session.jsonl'),
+          auto: true,
+          cwd: proj,
+        }),
+      ).resolves.toBeUndefined();
+      expect(readAllEvents(paths)).toHaveLength(0);
+      expect(
+        unplacedSessions({ includeHidden: true }).filter(
+          (session) => session.tool === 'github-copilot',
+        ),
+      ).toHaveLength(0);
+
+      const fixture = join(proj, 'manual-session.json');
+      writeFileSync(fixture, makeSession(proj), 'utf8');
+      await runImportCopilot(undefined, {
+        file: fixture,
+        withResponses: true,
+        cwd: proj,
+      });
+      expect(
+        readAllEvents(paths).some(
+          (event) => event.tool === 'github-copilot' && event.type === 'prompt',
+        ),
+      ).toBe(true);
+    } finally {
+      cleanup(proj);
+    }
+  });
+
+  test('--auto creates one deterministic temp project when automatic tracking is on', async () => {
+    const project = makeTempDir();
+    const launcher = makeTempDir();
+    try {
+      setAutomaticImportTracking(true);
+      const first = join(project, 'src', 'app.ts');
+      const second = join(project, 'tests', 'app.test.ts');
+      mkdirSync(join(project, 'src'), { recursive: true });
+      mkdirSync(join(project, 'tests'), { recursive: true });
+      const file = join(launcher, 'candidate.json');
+      writeFileSync(
+        file,
+        makeRoutingSession([first, second], { sessionId: 'candidate' }),
+        'utf8',
+      );
+
+      await runImportCopilot(undefined, {
+        file,
+        auto: true,
+        withResponses: true,
+        cwd: launcher,
+      });
+
+      const paths = pathsForRoot(project);
+      expect(existsSync(paths.config)).toBe(true);
+      expect(existsSync(join(project, 'src', '.showtail'))).toBe(false);
+      expect(existsSync(join(project, 'tests', '.showtail'))).toBe(false);
+      expect(existsSync(join(launcher, '.showtail'))).toBe(false);
+      expect(readConfig(paths).initialization).toEqual(
+        expect.objectContaining({
+          mode: 'automatic',
+          evidence: 'edit',
+          ledgerSessionId: expect.stringMatching(/^led_/),
+        }),
+      );
+      const events = readAllEvents(paths).filter((e) => e.tool === 'github-copilot');
+      expect(events.filter((e) => e.type === 'prompt')).toHaveLength(1);
+      expect(events.filter((e) => e.type === 'ai_output')).toHaveLength(1);
+      expect(
+        readAllArtifacts(paths)
+          .filter((a) => a.tool === 'github-copilot')
+          .map((a) => a.path)
+          .sort(),
+      ).toEqual(['src/app.ts', 'tests/app.test.ts']);
+      expect(
+        unplacedSessions({ includeHidden: true }).filter(
+          (session) => session.tool === 'github-copilot',
+        ),
+      ).toHaveLength(0);
+    } finally {
+      cleanup(project);
+      cleanup(launcher);
+    }
+  });
+
+  test('--auto prunes a provisional trail when the same session becomes mixed-root', async () => {
+    const provisional = makeTempDir();
+    const second = makeTempDir();
+    try {
+      setAutomaticImportTracking(true);
+      await runInit({ cwd: second });
+      const firstFile = join(provisional, 'src', 'one.ts');
+      const secondFile = join(second, 'src', 'two.ts');
+      mkdirSync(join(provisional, 'src'), { recursive: true });
+      mkdirSync(join(second, 'src'), { recursive: true });
+      const file = join(provisional, 'growing.json');
+      writeFileSync(
+        file,
+        makeRoutingSession([firstFile], { sessionId: 'growing' }),
+        'utf8',
+      );
+
+      await runImportCopilot(undefined, {
+        file,
+        auto: true,
+        withResponses: true,
+        cwd: provisional,
+      });
+
+      const provisionalPaths = pathsForRoot(provisional);
+      const secondPaths = pathsForRoot(second);
+      expect(existsSync(provisionalPaths.config)).toBe(true);
+      expect(
+        readAllEvents(provisionalPaths).filter((event) => event.type === 'prompt'),
+      ).toHaveLength(1);
+      expect(readAllArtifacts(provisionalPaths).map((artifact) => artifact.path)).toEqual(
+        ['src/one.ts'],
+      );
+      expect(
+        unplacedSessions({ includeHidden: true }).filter(
+          (session) => session.tool === 'github-copilot',
+        ),
+      ).toHaveLength(0);
+      const secondEvents = readAllEvents(secondPaths).length;
+
+      // The watcher rewrites the same native transcript as the conversation grows.
+      writeFileSync(
+        file,
+        makeRoutingSession([firstFile, secondFile], { sessionId: 'growing' }),
+        'utf8',
+      );
+      await runImportCopilot(undefined, {
+        file,
+        auto: true,
+        withResponses: true,
+        cwd: provisional,
+      });
+
+      expect(existsSync(join(provisional, '.showtail'))).toBe(false);
+      expect(readAllEvents(secondPaths)).toHaveLength(secondEvents);
+      expect(readAllArtifacts(secondPaths)).toHaveLength(0);
+      const inbox = unplacedSessions({ includeHidden: true }).filter(
+        (session) => session.tool === 'github-copilot',
+      );
+      expect(inbox).toHaveLength(1);
+      expect(inbox[0]!.nativeSessionId).toBe('growing');
+      expect(inbox[0]!.targets ?? []).toHaveLength(0);
+      const records = readLedgerRecords(inbox[0]!.id);
+      expect(records.filter((record) => record.kind === 'prompt')).toHaveLength(1);
+      const editRecords = records.filter((record) => record.kind === 'edit');
+      expect(editRecords).toHaveLength(2);
+      expect(editRecords.every((record) => isAbsolute(record.file ?? ''))).toBe(true);
+      expect(editRecords.map((record) => record.file)).toEqual(
+        expect.arrayContaining([firstFile, secondFile]),
+      );
+      expect(editRecords.some((record) => record.file?.startsWith('..'))).toBe(false);
+
+      const before = records.length;
+      await runImportCopilot(undefined, {
+        file,
+        auto: true,
+        withResponses: true,
+        cwd: provisional,
+      });
+      const after = unplacedSessions({ includeHidden: true }).filter(
+        (session) => session.tool === 'github-copilot',
+      );
+      expect(after).toHaveLength(1);
+      expect(readLedgerRecords(after[0]!.id)).toHaveLength(before);
+      expect(existsSync(join(provisional, '.showtail'))).toBe(false);
+      expect(readAllEvents(secondPaths)).toHaveLength(secondEvents);
+    } finally {
+      cleanup(provisional);
+      cleanup(second);
+    }
+  });
+
+  test('--auto keeps mixed tracked roots in one idempotent inbox session', async () => {
+    const first = makeTempDir();
+    const second = makeTempDir();
+    const launcher = makeTempDir();
+    try {
+      setAutomaticImportTracking(true);
+      await runInit({ cwd: first });
+      await runInit({ cwd: second });
+      const firstFile = join(first, 'src', 'one.ts');
+      const secondFile = join(second, 'src', 'two.ts');
+      mkdirSync(join(first, 'src'), { recursive: true });
+      mkdirSync(join(second, 'src'), { recursive: true });
+      const file = join(launcher, 'mixed.json');
+      writeFileSync(
+        file,
+        makeRoutingSession([firstFile, secondFile], { sessionId: 'mixed' }),
+        'utf8',
+      );
+      const firstPaths = pathsForRoot(first);
+      const secondPaths = pathsForRoot(second);
+      const firstEvents = readAllEvents(firstPaths).length;
+      const secondEvents = readAllEvents(secondPaths).length;
+
+      await runImportCopilot(undefined, {
+        file,
+        auto: true,
+        withResponses: true,
+        cwd: launcher,
+      });
+
+      expect(readAllEvents(firstPaths)).toHaveLength(firstEvents);
+      expect(readAllEvents(secondPaths)).toHaveLength(secondEvents);
+      expect(readAllArtifacts(firstPaths)).toHaveLength(0);
+      expect(readAllArtifacts(secondPaths)).toHaveLength(0);
+      const inbox = unplacedSessions({ includeHidden: true }).filter(
+        (session) => session.tool === 'github-copilot',
+      );
+      expect(inbox).toHaveLength(1);
+      const records = readLedgerRecords(inbox[0]!.id);
+      expect(records.filter((record) => record.kind === 'prompt')).toHaveLength(1);
+      const editRecords = records.filter((record) => record.kind === 'edit');
+      expect(editRecords).toHaveLength(2);
+      expect(editRecords.every((record) => isAbsolute(record.file ?? ''))).toBe(true);
+      expect(editRecords.map((record) => record.file)).toEqual(
+        expect.arrayContaining([firstFile, secondFile]),
+      );
+
+      const before = records.length;
+      await runImportCopilot(undefined, {
+        file,
+        auto: true,
+        withResponses: true,
+        cwd: launcher,
+      });
+      const after = unplacedSessions({ includeHidden: true }).filter(
+        (session) => session.tool === 'github-copilot',
+      );
+      expect(after).toHaveLength(1);
+      expect(readLedgerRecords(after[0]!.id)).toHaveLength(before);
+      expect(readAllEvents(firstPaths)).toHaveLength(firstEvents);
+      expect(readAllEvents(secondPaths)).toHaveLength(secondEvents);
+    } finally {
+      cleanup(first);
+      cleanup(second);
+      cleanup(launcher);
+    }
+  });
+
   test('--auto does not route a nested repository into a broad parent trail', async () => {
     const parent = makeTempDir();
     try {
@@ -557,12 +1450,21 @@ describe('copilot import (end to end via --file)', () => {
     }
   });
 
-  test('--auto parks a folderless session in the inbox, never the ~/.showtail catch-all', async () => {
-    const scratch = makeTempDir(); // edits live here; no enclosing `.showtail/`
-    const elsewhere = makeTempDir(); // invocation cwd — also untracked
+  test('--auto leaves a valid temp candidate in one inbox session when tracking is off', async () => {
+    const scratch = makeTempDir();
+    const elsewhere = makeTempDir();
     try {
-      const file = join(elsewhere, 'empty-window.jsonl');
-      writeFileSync(file, makeJournal(scratch), 'utf8'); // edits target scratch/src/foo.ts
+      setAutomaticImportTracking(false);
+      const first = join(scratch, 'src', 'foo.ts');
+      const second = join(scratch, 'tests', 'foo.test.ts');
+      mkdirSync(join(scratch, 'src'), { recursive: true });
+      mkdirSync(join(scratch, 'tests'), { recursive: true });
+      const file = join(elsewhere, 'auto-off.json');
+      writeFileSync(
+        file,
+        makeRoutingSession([first, second], { sessionId: 'auto-off' }),
+        'utf8',
+      );
 
       await runImportCopilot(undefined, {
         file,
@@ -571,21 +1473,20 @@ describe('copilot import (end to end via --file)', () => {
         cwd: elsewhere,
       });
 
-      // No trail was invented anywhere…
       expect(existsSync(join(scratch, '.showtail'))).toBe(false);
+      expect(existsSync(join(scratch, 'src', '.showtail'))).toBe(false);
+      expect(existsSync(join(scratch, 'tests', '.showtail'))).toBe(false);
       expect(existsSync(join(elsewhere, '.showtail'))).toBe(false);
-      // …and the conversation was parked in the inbox (the ledger).
       const inbox = unplacedSessions({ includeHidden: true }).filter(
         (s) => s.tool === 'github-copilot',
       );
       expect(inbox).toHaveLength(1);
       const recs = readLedgerRecords(inbox[0]!.id);
       const kinds = recs.map((r) => r.kind);
-      expect(recs.filter((r) => r.kind === 'prompt').length).toBe(2);
+      expect(recs.filter((r) => r.kind === 'prompt')).toHaveLength(1);
       expect(kinds).toContain('ai_output');
-      expect(kinds).toContain('edit');
+      expect(recs.filter((r) => r.kind === 'edit')).toHaveLength(2);
 
-      // Idempotent: re-running --auto adds no new records and no new session.
       const before = recs.length;
       await runImportCopilot(undefined, {
         file,
@@ -601,6 +1502,35 @@ describe('copilot import (end to end via --file)', () => {
     } finally {
       cleanup(scratch);
       cleanup(elsewhere);
+    }
+  });
+
+  test('--auto does not create a candidate trail without a meaningful prompt', async () => {
+    const project = makeTempDir();
+    try {
+      setAutomaticImportTracking(true);
+      const editPath = join(project, 'src', 'generated.ts');
+      mkdirSync(join(project, 'src'), { recursive: true });
+      const file = join(project, 'edit-only.json');
+      writeFileSync(
+        file,
+        makeRoutingSession([editPath], { prompt: '', sessionId: 'edit-only' }),
+        'utf8',
+      );
+
+      await runImportCopilot(undefined, { file, auto: true, cwd: project });
+
+      expect(existsSync(join(project, '.showtail'))).toBe(false);
+      expect(existsSync(join(project, 'src', '.showtail'))).toBe(false);
+      const inbox = unplacedSessions({ includeHidden: true }).filter(
+        (session) => session.tool === 'github-copilot',
+      );
+      expect(inbox).toHaveLength(1);
+      const records = readLedgerRecords(inbox[0]!.id);
+      expect(records.filter((record) => record.kind === 'prompt')).toHaveLength(0);
+      expect(records.filter((record) => record.kind === 'edit')).toHaveLength(1);
+    } finally {
+      cleanup(project);
     }
   });
 });

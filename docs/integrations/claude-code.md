@@ -1,8 +1,11 @@
 # Claude Code integration
 
 If you work with [Claude Code](https://claude.com/claude-code), Showtail can help
-build the trail for you. Install the bundled skill, which includes auto-capture
-hooks by default:
+build the trail for you. A normal Showtail install connects Claude Code
+automatically when it is detected: just work in your project, then run
+`showtail report`. Use `showtail connect` when you want a specific scope, need
+to repair the integration, or installed Claude Code afterward and need capture
+before its next automatic sweep:
 
 ```bash
 # In your project. Creates ./.claude/skills/showtail/ and ./.claude/settings.json.
@@ -11,7 +14,7 @@ showtail connect claude --project
 # Or install for all projects.
 showtail connect claude --user
 
-# Install the skill without changing settings. Capture is then manual.
+# Install the skill without changing settings. Status then reports manual mode.
 showtail connect claude --project --no-hooks
 ```
 
@@ -53,9 +56,10 @@ matter when you closed Claude Code. It only ever adds what was missing, so
 running `showtail report` repeatedly changes nothing. Pass `--no-sync` to skip
 it and report strictly what was already captured.
 
-If you install with `--no-hooks`, the skill can still check `showtail status --json`
-and log prompts and file snapshots itself. That mode is model-driven rather than
-guaranteed, but it still gives you a useful trail.
+If you install with `--no-hooks`, the skill still checks
+`showtail status --json --tool claude`,
+but it does not create a second assistant-written prompt/file log. Reconnect without
+`--no-hooks` when you want hands-free, reliable capture again.
 
 At the end of your work session, run:
 
@@ -64,6 +68,9 @@ showtail report
 ```
 
 The report gives your educator a readable view of what happened.
+When Claude runs a project control for you, the managed skill identifies the intended project,
+passes its absolute path to `status`, `report`, or `verify`, and checks the returned `root` before
+pointing you at `reportPath`. Its pathless startup status call remains only a capture-mode probe.
 
 ## Install through the Claude Code plugin
 
@@ -79,18 +86,20 @@ The plugin includes the same skill and hooks.
 ## Privacy with Claude Code hooks
 
 When hooks are active, every prompt you submit and every file Claude edits is
-logged locally to `.showtail/`. That is the purpose of Showtail, but it is worth
-keeping a few habits in mind:
+captured locally. Work with one clear project is projected to its `.showtail/`
+trail; unresolved or multi-project work waits in the machine-local inbox. That
+is the purpose of Showtail, but it is worth keeping a few habits in mind:
 
 - Nothing is sent anywhere. There are no external calls and no telemetry.
 - The trail may be committed to your repository, so do not put secrets in
   prompts while capture is on.
 - Review your trail anytime with `showtail report`.
-- Turn capture off with `showtail disconnect claude`. Add `--user` if you
-  installed at user scope.
+- Turn Claude capture off everywhere with `showtail disconnect claude`. The bare
+  command also makes stale project hooks no-op. Use `--user` or `--project` only
+  when you intentionally want a narrower removal that leaves other scopes active.
 - To install the skill without hooks, use `showtail connect claude --no-hooks`.
-  The skill can still capture prompts itself, but it will not add hooks to
-  `settings.json`.
+  The skill remains available, but it will not add hooks to `settings.json` or
+  perform routine assistant-driven capture.
 
 ## Importing an existing session
 

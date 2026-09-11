@@ -1,26 +1,28 @@
 /**
  * `showtail inbox` — the unplaced-session tray. By default it lists only sessions
- * worth placing: real-project, signal-bearing work the ledger captured but couldn't
- * route (plus any whose target trail has gone missing). Scratch — folderless / home /
- * temp / trivial / ignored / dismissed work — stays in the ledger but is hidden here;
- * `showtail inbox --all` reveals it, tagged with why.
+ * worth placing: signal-bearing work the ledger could resolve to a candidate project
+ * but could not place (plus any whose target trail has gone missing). Unresolved,
+ * trivial, ignored, or dismissed work stays in the ledger; `showtail inbox --all`
+ * reveals it, tagged with why.
  *
  * On a terminal it doubles as a picker: choose sessions and the repo to place them in
  * (reattach), or dismiss them from the default view (`d1,3` / `dismiss all`). Without a
  * TTY (or with `--json`) it just reports, so scripts/agents can drive `reattach`/`move`.
  */
 import { emitJson } from '../core/output.ts';
-import { oneLine } from '../core/text.ts';
 import {
-  dismissLedgerSession,
+  dismissLedgerRange,
+  effectiveLedgerPath,
   hiddenReason,
-  sessionWorkRoots,
+  listActionableLedgerRanges,
   unplacedSessions,
   type HiddenReason,
+  type LedgerRangeView,
   type LedgerSession,
 } from '../core/ledger.ts';
 import { prepareCandidateIndex } from '../core/relocate.ts';
-import { placeLedgerSession, stubNote } from './reattach.ts';
+import { placeLedgerRangeInProject, stubNote } from './reattach.ts';
+import { pendingRangeSummary } from './ranges.ts';
 import { ask, pickSessionsWithAction, relativeTime, summarize } from './sessionPicker.ts';
 
 type Unplaced = LedgerSession & { targetMissing?: boolean; pathGone?: boolean };
@@ -35,39 +37,10 @@ const HELP_HINT = "'showtail inbox --help' lists all inbox commands.";
 /** Human tag for why a session is hidden (only shown in the `--all` view). */
 const REASON_TAG: Record<HiddenReason, string> = {
   dismissed: '[dismissed]',
-  'not-in-project': '[scratch: not in a project]',
-  'low-signal': '[scratch: low-signal]',
-  'ignored-path': '[scratch: ignored path]',
+  'not-in-project': '[unresolved: no project path]',
+  'low-signal': '[filtered: low signal]',
+  'ignored-path': '[filtered: ignored path]',
 };
-
-/** The group a session is listed under: its resolved project root, else its cwd. */
-function groupKey(session: Unplaced): string {
-  const roots = sessionWorkRoots(session);
-  return roots[0] ?? session.cwd ?? '(no files)';
-}
-
-/** The trailing tag for a session in the `--all` listing (missing target, or hide reason). */
-function tagFor(session: Unplaced, showHidden: boolean): string {
-  if (session.targetMissing) return '  [target missing]';
-  // Shown in the DEFAULT view, not just under --all: the files having moved is the
-  // actionable part, and `showtail track <new folder>` is what fixes it.
-  if (session.pathGone) return '  [files moved or deleted]';
-  if (!showHidden) return '';
-  const reason = hiddenReason(session);
-  return reason ? `  ${REASON_TAG[reason]}` : '';
-}
-
-/** Print one session as the numbered block shown in the listing / picker. */
-function printSession(session: Unplaced, ordinal: number, showHidden: boolean): void {
-  const { prompts, edits, firstPrompt } = summarize(session.id);
-  console.log(
-    `  ${ordinal}. ${relativeTime(session.lastSeenAt)}    ${prompts} prompt(s), ${edits} edit(s) · ${session.tool}${tagFor(session, showHidden)}`,
-  );
-  if (firstPrompt) console.log(`     first: ${oneLine(firstPrompt, 100)}`);
-  if (session.cwd) console.log(`     cwd:   ${session.cwd}`);
-  console.log(`     id: ${session.id}`);
-  console.log('');
-}
 
 /** Machine-readable shape for `--json`. */
 function toJson(session: Unplaced): Record<string, unknown> {
@@ -76,7 +49,10 @@ function toJson(session: Unplaced): Record<string, unknown> {
     id: session.id,
     tool: session.tool,
     nativeSessionId: session.nativeSessionId,
-    cwd: session.cwd ?? null,
+    cwd:
+      typeof session.cwd === 'string'
+        ? effectiveLedgerPath(session, session.cwd)
+        : (session.cwd ?? null),
     startedAt: session.startedAt,
     lastSeenAt: session.lastSeenAt,
     status: session.targetMissing ? 'target-missing' : 'inbox',
@@ -88,26 +64,57 @@ function toJson(session: Unplaced): Record<string, unknown> {
   };
 }
 
-/**
- * Print the sessions grouped by resolved work root and return them flattened in the
- * printed order, so the picker's ordinals line up with what the student sees.
- */
-function printGrouped(sessions: Unplaced[], showHidden: boolean): Unplaced[] {
-  const groups = new Map<string, Unplaced[]>();
-  for (const s of sessions) {
-    const key = groupKey(s);
-    const list = groups.get(key);
-    if (list) list.push(s);
-    else groups.set(key, [s]);
+function rangeTag(range: LedgerRangeView, showHidden: boolean): string {
+  if (range.targetMissing) return '  [target missing]';
+  if (!showHidden || !range.hiddenReason) return '';
+  return `  ${REASON_TAG[range.hiddenReason]}`;
+}
+
+function printRange(range: LedgerRangeView, ordinal: number, showHidden: boolean): void {
+  const summary = pendingRangeSummary(range);
+  console.log(
+    `  ${ordinal}. ${relativeTime(summary.lastSeenAt)}    ${summary.prompts} prompt(s), ${summary.edits} edit(s) · ${range.session.tool}${rangeTag(range, showHidden)}`,
+  );
+  if (summary.firstPrompt) console.log(`     first: ${summary.firstPrompt}`);
+  console.log(`     reason: ${summary.reason}`);
+  if (summary.candidates.length > 0) {
+    console.log(`     projects: ${summary.candidates.join(', ')}`);
   }
-  const ordered: Unplaced[] = [];
-  let n = 0;
-  for (const [root, items] of groups) {
-    console.log(`  ${root}`);
-    for (const s of items) {
-      n += 1;
-      printSession(s, n, showHidden);
-      ordered.push(s);
+  console.log(`     id: ${summary.id}`);
+  console.log('');
+}
+
+function rangeJson(range: LedgerRangeView): Record<string, unknown> {
+  return {
+    ...pendingRangeSummary(range),
+    tool: range.session.tool,
+    nativeSessionId: range.session.nativeSessionId,
+    status: range.targetMissing ? 'target-missing' : range.segment.status,
+    paths: range.targetPaths,
+    hiddenReason: range.hiddenReason,
+    memberSegmentIds: range.memberSegmentIds,
+  };
+}
+
+function printGroupedRanges(
+  ranges: LedgerRangeView[],
+  showHidden: boolean,
+): LedgerRangeView[] {
+  const groups = new Map<string, LedgerRangeView[]>();
+  for (const range of ranges) {
+    const key = `${range.session.tool} chat ${range.session.nativeSessionId}`;
+    const group = groups.get(key);
+    if (group) group.push(range);
+    else groups.set(key, [range]);
+  }
+  const ordered: LedgerRangeView[] = [];
+  let ordinal = 0;
+  for (const [chat, items] of groups) {
+    console.log(`  ${chat}`);
+    for (const range of items) {
+      ordinal += 1;
+      printRange(range, ordinal, showHidden);
+      ordered.push(range);
     }
   }
   return ordered;
@@ -119,16 +126,23 @@ export async function runInbox(
 ): Promise<void> {
   const showHidden = opts.all === true;
   const sessions = unplacedSessions({ includeHidden: showHidden });
+  const ranges = listActionableLedgerRanges({
+    includeHidden: showHidden,
+    pendingOnly: true,
+  });
 
   if (opts.json) {
-    emitJson({ sessions: sessions.map(toJson) });
+    emitJson({
+      sessions: sessions.map(toJson),
+      ranges: ranges.map(rangeJson),
+    });
     return;
   }
 
-  if (sessions.length === 0) {
+  if (ranges.length === 0) {
     console.log(
       showHidden
-        ? 'Inbox empty — no captured sessions are awaiting placement.'
+        ? 'Inbox empty — no captured work ranges are awaiting placement.'
         : "Inbox empty — you're all set.",
     );
     if (!showHidden) console.log(HELP_HINT);
@@ -136,10 +150,10 @@ export async function runInbox(
   }
 
   console.log(
-    `${showHidden ? 'All unplaced sessions' : 'Unplaced sessions'} (${sessions.length}):`,
+    `${showHidden ? 'All unplaced work ranges' : 'Unplaced work ranges'} (${ranges.length}):`,
   );
   console.log('');
-  const ordered = printGrouped(sessions, showHidden);
+  const ordered = printGroupedRanges(ranges, showHidden);
   if (!showHidden) {
     console.log(HELP_HINT);
     console.log('');
@@ -149,8 +163,8 @@ export async function runInbox(
   if (!process.stdin.isTTY) {
     console.log(
       showHidden
-        ? 'Place a hidden one:  showtail move <session-id> --to <path>'
-        : 'Place one with:  showtail reattach <session-id> --to <path>',
+        ? 'Place a hidden one:  showtail move <range-id> --to <path>'
+        : 'Place one with:  showtail move <range-id> --to <path>',
     );
     return;
   }
@@ -165,10 +179,10 @@ export async function runInbox(
   }
 
   if (result.action === 'dismiss') {
-    for (const session of result.items) dismissLedgerSession(session.id);
+    for (const range of result.items) dismissLedgerRange(range.session.id, range);
     console.log('');
     console.log(
-      `Dismissed ${result.items.length} session(s) — still recoverable with 'showtail inbox --all'.`,
+      `Dismissed ${result.items.length} work range(s) — still recoverable with 'showtail inbox --all'.`,
     );
     return;
   }
@@ -176,9 +190,13 @@ export async function runInbox(
   const toPath = await ask('Place into which project path?', opts.cwd ?? process.cwd());
   // One destination for the whole batch, so the folder is walked and hashed once.
   const index = prepareCandidateIndex(toPath);
-  for (const session of result.items) {
-    const { root, projected, stubs } = await placeLedgerSession(session, toPath, index);
-    console.log(`  ${session.id} → ${root} — ${projected} record(s) projected.`);
+  for (const range of result.items) {
+    const { root, projected, stubs } = await placeLedgerRangeInProject(
+      range,
+      toPath,
+      index,
+    );
+    console.log(`  ${range.selector} -> ${root} — ${projected} record(s) projected.`);
     stubNote(stubs);
   }
   console.log('');
