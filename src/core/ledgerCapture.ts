@@ -1,8 +1,8 @@
 /**
  * Capture a normalized {@link HookTranscript} into a ledger session — the shared
  * primitive behind both live Stop reconcile (commands/hook.ts) and the offline
- * `import … --auto` paths. Records are deduped by `sourceId` so re-running over an
- * append-only transcript is idempotent.
+ * `import … --auto` paths. Records are deduped by `sourceId`; a later completed
+ * provider response appends an auditable superseding revision.
  *
  * Extracted from commands/hook.ts so the import commands can route folderless work
  * to the ledger/inbox the same way the live hook does, instead of dumping it into a
@@ -11,7 +11,9 @@
 import { resolve } from 'node:path';
 import {
   appendLedgerRecord,
+  effectiveLedgerRecords,
   effectiveLedgerPath,
+  ensureLedgerSegments,
   readLedgerRecords,
   readLedgerSession,
   setLedgerTurnProjectMetadata,
@@ -81,14 +83,28 @@ export function automaticCaptureTimestampAllowed(
   return Number.isFinite(cutoff) && Number.isFinite(observed) && observed >= cutoff;
 }
 
+function copilotPromptRequestIdentity(
+  sourceId: string,
+): { nativeSessionId: string; nativeRequestId: string } | undefined {
+  const parts = sourceId.split(':');
+  if (parts.length < 4 || parts[0] !== 'copilot' || parts[1] !== 'user') {
+    return undefined;
+  }
+  const nativeRequestId = parts.at(-1);
+  const nativeSessionId = parts.slice(2, -1).join(':');
+  return nativeRequestId && nativeSessionId
+    ? { nativeSessionId, nativeRequestId }
+    : undefined;
+}
+
 /**
  * Mirror a tool transcript's CONVERSATION (AI replies, decisions, plans) into the
  * ledger, attributing each to the prompt record it followed — so a folderless /
  * inbox session carries its whole thread into `reattach`, not just prompts + edits.
- * Idempotent: dedups by the transcript's per-message `sourceId` against records
- * already in the session, so it is safe to run on every Stop (and on every
- * post-edit for hosts that only fire that). This is the ledger half of making the
- * repo a pure projection.
+ * Idempotent: dedups by the transcript's per-message `sourceId`, except when a
+ * completed response must supersede a partial draft or repair wrong-turn linkage.
+ * It is safe to run on every Stop (and on every post-edit for hosts that only fire
+ * that). This is the ledger half of making the repo a pure projection.
  *
  * A prompt has two writers: the live `user-prompt` hook and this reconcile's
  * back-fill. For a turn the live hook always fires first, but in a *separate*
@@ -117,31 +133,77 @@ export function captureTranscriptToLedger(
     : planFiles
         .filter((f) => !f.nativeSessionId || f.nativeSessionId === transcript.sessionId)
         .at(-1);
-  const seen = new Set<string>();
-  const seenConversation = new Set<string>();
+  const effectiveBySourceId = new Map<string, LedgerRecord>();
   const promptBySourceId = new Map<string, string>();
   const promptByText = new Map<string, string[]>();
+  const promptByNativeRequestId = new Map<string, string[]>();
   const promptById = new Map<string, LedgerRecord>();
+  const claimedPromptIds = new Set<string>();
+  const addPromptCandidate = (index: Map<string, string[]>, key: string, id: string) => {
+    const candidates = index.get(key) ?? [];
+    if (!candidates.includes(id)) candidates.push(id);
+    index.set(key, candidates);
+  };
   // Fold records into the dedup indexes, skipping any already folded in (so a
   // mid-reconcile re-read only adds records that newly appeared on disk).
   const indexedIds = new Set<string>();
+  const indexedRecords: LedgerRecord[] = [];
   const ingest = (records: LedgerRecord[]): void => {
     for (const r of records) {
       if (indexedIds.has(r.id)) continue;
       indexedIds.add(r.id);
-      if (r.sourceId) seen.add(r.sourceId);
-      if (r.kind === 'conversation_event' && r.sourceId) seenConversation.add(r.sourceId);
+      indexedRecords.push(r);
       if (r.kind !== 'prompt') continue;
       promptById.set(r.id, r);
       if (r.sourceId) promptBySourceId.set(r.sourceId, r.id);
       if (r.text !== undefined) {
-        const q = promptByText.get(r.text) ?? [];
-        q.push(r.id);
-        promptByText.set(r.text, q);
+        addPromptCandidate(promptByText, r.text, r.id);
       }
+      const request = r.sourceId ? copilotPromptRequestIdentity(r.sourceId) : undefined;
+      if (request?.nativeSessionId === session.nativeSessionId) {
+        addPromptCandidate(promptByNativeRequestId, request.nativeRequestId, r.id);
+      }
+    }
+    effectiveBySourceId.clear();
+    for (const record of effectiveLedgerRecords(indexedRecords)) {
+      if (record.sourceId) effectiveBySourceId.set(record.sourceId, record);
     }
   };
   ingest(readRecords(session.id));
+  const persistedSession = readLedgerSession(session.id) ?? session;
+  for (const segment of ensureLedgerSegments(persistedSession).segments) {
+    if (segment.promptRecordId && segment.nativeRequestId) {
+      addPromptCandidate(
+        promptByNativeRequestId,
+        segment.nativeRequestId,
+        segment.promptRecordId,
+      );
+    }
+  }
+  const uniqueUnclaimed = (candidates: readonly string[] | undefined) => {
+    const available = (candidates ?? []).filter((id) => !claimedPromptIds.has(id));
+    return available.length === 1 ? available[0] : undefined;
+  };
+  const nativeRequestIdFor = (msg: HookTranscript['messages'][number]) => {
+    if (tool !== 'github-copilot') return undefined;
+    const explicit = msg.requestId?.trim();
+    if (explicit) return explicit;
+    const request = copilotPromptRequestIdentity(msg.sourceId);
+    return request?.nativeSessionId === (transcript.sessionId ?? session.nativeSessionId)
+      ? request.nativeRequestId
+      : undefined;
+  };
+  const matchPrompt = (
+    msg: HookTranscript['messages'][number],
+    nativeRequestId: string | undefined,
+  ): string | undefined => {
+    const exact = promptBySourceId.get(msg.sourceId);
+    if (exact && !claimedPromptIds.has(exact)) return exact;
+    if (nativeRequestId) {
+      return uniqueUnclaimed(promptByNativeRequestId.get(nativeRequestId));
+    }
+    return uniqueUnclaimed(promptByText.get(msg.text));
+  };
   const initialPersistedTurnKey = session.currentTurnKey;
 
   // A reconnect starts a new automatic-capture window. Do not implicitly attach
@@ -179,14 +241,14 @@ export function captureTranscriptToLedger(
     );
     if (msg.role === 'user') {
       sawUserBoundary = true;
-      let recId =
-        promptBySourceId.get(msg.sourceId) ?? promptByText.get(msg.text)?.shift();
+      const nativeRequestId = nativeRequestIdFor(msg);
+      let recId = matchPrompt(msg, nativeRequestId);
       if (!recId) {
         // Snapshot says missing — but the live hook for this turn may have appended
         // it after we read (see the function header). Re-read fresh and retry before
         // concluding it's missing, so we match the live record instead of duplicating.
         ingest(readRecords(session.id));
-        recId = promptBySourceId.get(msg.sourceId) ?? promptByText.get(msg.text)?.shift();
+        recId = matchPrompt(msg, nativeRequestId);
       }
       if (!recId) {
         // Genuinely uncaptured (e.g. a plan-mode turn the live hook never logged) —
@@ -214,35 +276,30 @@ export function captureTranscriptToLedger(
           sourceId: msg.sourceId,
         });
         recId = rec.id;
-        indexedIds.add(rec.id);
-        promptById.set(rec.id, rec);
-        promptBySourceId.set(msg.sourceId, rec.id);
-        seen.add(msg.sourceId);
+        ingest([rec]);
       }
+      claimedPromptIds.add(recId);
       lastBoundaryMayReplaceInitial = boundaryMayReplaceInitial(recId, msg.timestamp);
       if (recId === initialPersistedTurnKey) sawInitialTurnBoundary = true;
       currentTurnKey = recId;
       lastPromptKey = recId;
       promptBySourceId.set(msg.sourceId, recId);
-      if (tool === 'github-copilot' && inAutomaticWindow) {
+      if (nativeRequestId) {
+        addPromptCandidate(promptByNativeRequestId, nativeRequestId, recId);
+      }
+      if (tool === 'github-copilot' && nativeRequestId && inAutomaticWindow) {
         const routed = msg as typeof msg & {
-          requestId?: string;
           attachments?: LedgerProjectAttachment[];
           projectControl?: LedgerProjectControlInput;
         };
-        if (
-          routed.requestId &&
-          ((routed.attachments?.length ?? 0) > 0 || routed.projectControl)
-        ) {
-          if (!continueCapture()) return false;
-          setLedgerTurnProjectMetadata(session.id, recId, {
-            nativeRequestId: routed.requestId,
-            attachments: routed.attachments,
-            controlTarget: routed.projectControl,
-            observedAt: msg.timestamp,
-            continueCapture,
-          });
-        }
+        if (!continueCapture()) return false;
+        setLedgerTurnProjectMetadata(session.id, recId, {
+          nativeRequestId,
+          attachments: routed.attachments,
+          controlTarget: routed.projectControl,
+          observedAt: msg.timestamp,
+          continueCapture,
+        });
       }
     } else if (!inAutomaticWindow) {
       continue;
@@ -253,16 +310,27 @@ export function captureTranscriptToLedger(
       msg.role === 'tool_call' ||
       msg.role === 'recap'
     ) {
-      if (!currentTurnKey || seen.has(msg.sourceId)) continue;
+      if (!currentTurnKey) continue;
       const kind = msg.role === 'assistant' ? 'ai_output' : msg.role;
+      const existing = effectiveBySourceId.get(msg.sourceId);
+      if (existing && existing.kind !== kind) continue;
+      const finalUpgrade =
+        msg.role === 'assistant' &&
+        msg.isFinal === true &&
+        (existing?.transcriptFinal !== true || existing.text !== msg.text);
+      const linkageCorrection =
+        existing !== undefined && existing.turnKey !== currentTurnKey;
+      if (existing && !finalUpgrade && !linkageCorrection) continue;
       if (!continueCapture()) return false;
-      appendLedgerRecord(session.id, {
+      const appended = appendLedgerRecord(session.id, {
         kind,
         tool,
         text: msg.text,
         ts: msg.timestamp,
         turnKey: currentTurnKey,
         sourceId: msg.sourceId,
+        supersedesRecordId: existing?.id,
+        transcriptFinal: msg.role === 'assistant' ? msg.isFinal : undefined,
         approved: msg.role === 'plan' ? msg.approved : undefined,
         planFileContent: msg.role === 'plan' ? planFile?.content : undefined,
         planFileSourceId: msg.role === 'plan' ? planFile?.sourceId : undefined,
@@ -275,7 +343,7 @@ export function captureTranscriptToLedger(
         cacheReadTokens: msg.role === 'recap' ? msg.cacheReadTokens : undefined,
         cacheCreationTokens: msg.role === 'recap' ? msg.cacheCreationTokens : undefined,
       });
-      seen.add(msg.sourceId);
+      ingest([appended]);
     } else if (msg.role === 'edit') {
       // A post-cutoff edit must belong to an eligible prompt. Otherwise an
       // unseen disabled-period prompt could smuggle its child edit across the
@@ -293,9 +361,11 @@ export function captureTranscriptToLedger(
       for (const e of edits) {
         if ((!e.diff && !opts.capturePathOnlyEdits) || isInternalPath(e.file)) continue;
         const editSourceId = `${msg.sourceId}#${e.file}`;
-        if (seen.has(editSourceId)) continue;
+        const existing = effectiveBySourceId.get(editSourceId);
+        if (existing && existing.kind !== 'edit') continue;
+        if (existing && existing.turnKey === currentTurnKey) continue;
         if (!continueCapture()) return false;
-        appendLedgerRecord(session.id, {
+        const appended = appendLedgerRecord(session.id, {
           kind: 'edit',
           tool,
           file: resolve(
@@ -307,9 +377,10 @@ export function captureTranscriptToLedger(
           diff: e.diff,
           turnKey: currentTurnKey,
           sourceId: editSourceId,
+          supersedesRecordId: existing?.id,
           ts: msg.timestamp,
         });
-        seen.add(editSourceId);
+        ingest([appended]);
       }
     }
   }
@@ -317,6 +388,13 @@ export function captureTranscriptToLedger(
   // The structured stream is stored independently from the human-readable
   // messages above. This keeps report fidelity without changing educator-facing
   // event counts or rendering.
+  const assistantFinalBySourceId = new Map(
+    transcript.messages.flatMap((message) =>
+      message.role === 'assistant' && message.isFinal !== undefined
+        ? [[message.sourceId, message.isFinal] as const]
+        : [],
+    ),
+  );
   let conversationTurnKey: string | undefined;
   for (const event of transcript.events ?? []) {
     if (event.type === 'user_text') {
@@ -327,17 +405,28 @@ export function captureTranscriptToLedger(
     }
     if (!conversationTurnKey) continue;
     const sourceId = `conversation:${event.sourceId}`;
-    if (seenConversation.has(sourceId)) continue;
+    const existing = effectiveBySourceId.get(sourceId);
+    if (existing && existing.kind !== 'conversation_event') continue;
+    const transcriptFinal = assistantFinalBySourceId.get(event.sourceId);
+    const finalUpgrade =
+      transcriptFinal === true &&
+      (existing?.transcriptFinal !== true ||
+        JSON.stringify(existing.conversationEvent) !== JSON.stringify(event));
+    const linkageCorrection =
+      existing !== undefined && existing.turnKey !== conversationTurnKey;
+    if (existing && !finalUpgrade && !linkageCorrection) continue;
     if (!continueCapture()) return false;
-    appendLedgerRecord(session.id, {
+    const appended = appendLedgerRecord(session.id, {
       kind: 'conversation_event',
       tool,
       ts: event.timestamp,
       turnKey: conversationTurnKey,
       sourceId,
       conversationEvent: event,
+      supersedesRecordId: existing?.id,
+      transcriptFinal,
     });
-    seenConversation.add(sourceId);
+    ingest([appended]);
   }
   if (opts.automaticCaptureSince && sawUserBoundary) {
     const persistedTurnKey = readLedgerSession(session.id)?.currentTurnKey;

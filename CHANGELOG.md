@@ -82,6 +82,22 @@ _Updated September 11, 2026._
 
 ### Fixed
 
+- **Similar project names cannot collapse or cross-route separate turns.** Native
+  request IDs distinguish repeated Copilot prompts, context-free prefixes stay in
+  the inbox, and terminal/report output or read-only tool paths no longer count as
+  project ownership evidence. Only explicit attachments, validated project-control
+  claims, edits, and successful durable file mutations can route a turn.
+- **Streamed Copilot responses reconcile to their final persisted form.** Showtail
+  keeps append-only correction records, replaces obsolete projected revisions,
+  preserves structured inline references, and verifies the final source-ID
+  projection instead of accepting a partial response as complete.
+- **Same-path trail identity conflicts stop automatic cleanup and are machine
+  detectable.** Status and verify surface conflicting IDs, stale source cleanup
+  validates the trail that actually owns the path, and a validated supersession
+  permanently retires a duplicate identity without deleting raw ledger history.
+- **`showtail move --json` no longer refreshes integrations recursively.** Move is
+  a bounded ledger operation, and the VS Code project controls reuse a valid report
+  and coalesce repeated open requests instead of generating duplicate reports.
 - **A stale VS Code workspace cannot silently own a new zero-edit chat.** Static cwd/workspace
   metadata no longer projects an unbound native turn. Exact edits and attachments, trusted
   control claims, and same-session bindings outrank ambient editor context; unresolved turns

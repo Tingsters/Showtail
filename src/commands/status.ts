@@ -37,6 +37,10 @@ import {
 import { cachedUpdateStatus } from '../core/updateCheck.ts';
 import type { Config } from '../types.ts';
 import { EVENT_TYPES } from '../types.ts';
+import {
+  projectIdentityConflicts,
+  type ProjectSemanticConflict,
+} from './projectSemantics.ts';
 import { pendingRangeSummariesForRoot, type PendingRangeSummary } from './ranges.ts';
 
 /** Count of globally-captured sessions awaiting placement (best-effort; never throws). */
@@ -105,6 +109,8 @@ export interface StatusSnapshot {
   pendingAmbiguous: Array<{ id: string; candidates: string[] }>;
   /** Turn-level work related to this project that still needs placement review. */
   pendingRanges: PendingRangeSummary[];
+  /** Identity conflicts that can make automatic routing unsafe. */
+  semanticConflicts: ProjectSemanticConflict[];
   inbox: number;
   nextAction: StatusNextAction;
   update: ReturnType<typeof cachedUpdateStatus>;
@@ -214,6 +220,7 @@ export function buildStatusSnapshot(options: StatusOptions = {}): StatusSnapshot
   let trailError: string | null = null;
   let relocated: StatusSnapshot['relocated'] = null;
   let session: StatusSnapshot['session'] = null;
+  let semanticConflicts: ProjectSemanticConflict[] = [];
 
   if (root) {
     const paths = pathsForRoot(root);
@@ -223,6 +230,7 @@ export function buildStatusSnapshot(options: StatusOptions = {}): StatusSnapshot
       anchorKind = config.anchorKind ?? null;
       trailNewer = trailIsNewerThanBinary(paths);
       relocated = observedRelocation(root, config);
+      semanticConflicts = projectIdentityConflicts(paths);
       const author = activeAuthorPaths(paths);
       const current = author ? currentSession(author) : null;
       if (author && current) {
@@ -297,6 +305,7 @@ export function buildStatusSnapshot(options: StatusOptions = {}): StatusSnapshot
     relocated,
     ...pending,
     pendingRanges,
+    semanticConflicts,
     inbox,
     nextAction,
     update: cachedUpdateStatus(),
@@ -311,8 +320,13 @@ export async function runStatus(options: StatusOptions = {}): Promise<void> {
     if (options.verboseJson) {
       emitJson(snapshot);
     } else {
-      const { matchingPendingSessions, pendingAmbiguous, pendingRanges, ...compact } =
-        snapshot;
+      const {
+        matchingPendingSessions,
+        pendingAmbiguous,
+        pendingRanges,
+        semanticConflicts,
+        ...compact
+      } = snapshot;
       emitJson({
         ...compact,
         pending: {
@@ -320,6 +334,7 @@ export async function runStatus(options: StatusOptions = {}): Promise<void> {
           ambiguousSessions: pendingAmbiguous.length,
           ranges: pendingRanges.length,
         },
+        semantic: { conflicts: semanticConflicts.length },
       });
     }
     return;
@@ -358,6 +373,15 @@ export async function runStatus(options: StatusOptions = {}): Promise<void> {
         `This project appears to have moved here from ${snapshot.relocated.previousPath}.`,
       );
     }
+    console.log('');
+  }
+
+  if (snapshot.semanticConflicts.length > 0) {
+    console.log('Warning: Showtail found conflicting project identity metadata.');
+    for (const conflict of snapshot.semanticConflicts.slice(0, 3)) {
+      console.log(`  ${conflict.code}: ${conflict.message}`);
+    }
+    console.log('  Run `showtail verify` for the complete semantic check.');
     console.log('');
   }
 

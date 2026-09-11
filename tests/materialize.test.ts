@@ -3,8 +3,15 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { runInit } from '../src/commands/init.ts';
 import { readAllArtifacts } from '../src/core/artifacts.ts';
+import { readAllConversationEventsWithSession } from '../src/core/conversationEvents.ts';
 import { readAllEvents } from '../src/core/events.ts';
-import { appendLedgerRecord, ensureLedgerSession } from '../src/core/ledger.ts';
+import { readJournal } from '../src/core/journal.ts';
+import {
+  appendLedgerRecord,
+  ensureLedgerSession,
+  ledgerRecordProjectionSourceId,
+  readLedgerRecords,
+} from '../src/core/ledger.ts';
 import { materializeLedgerSession } from '../src/core/materialize.ts';
 import { PLAN_APPROVED_TAG } from '../src/core/plans.ts';
 import { pathsForRoot, readSessions, readState } from '../src/core/storage.ts';
@@ -316,6 +323,211 @@ describe('materialize: projecting every record kind', () => {
       expect(readAllArtifacts(paths).map((artifact) => artifact.path)).toEqual([
         'guarded.ts',
       ]);
+    } finally {
+      cleanup(dir);
+      cleanup(home);
+    }
+  });
+
+  test('replaces a projected partial response with its audited final revision', async () => {
+    const home = makeTempDir();
+    const dir = makeTempDir();
+    try {
+      process.env.SHOWTAIL_HOME = home;
+      await runInit({ cwd: dir });
+      const paths = pathsForRoot(dir);
+      const author = authorFor(paths);
+      const session = ensureLedgerSession({
+        tool: 'github-copilot',
+        nativeSessionId: 'projected-stream-upgrade',
+        cwd: dir,
+      });
+      const prompt = appendLedgerRecord(session.id, {
+        kind: 'prompt',
+        tool: 'github-copilot',
+        text: 'Explain the result.',
+        sourceId: 'copilot:user:projected-stream-upgrade:request_1',
+      });
+      const partialReply = appendLedgerRecord(session.id, {
+        kind: 'ai_output',
+        tool: 'github-copilot',
+        text: 'Short partial.',
+        turnKey: prompt.id,
+        sourceId: 'copilot:asst:projected-stream-upgrade:request_1',
+        transcriptFinal: false,
+      });
+      const partialStructured = appendLedgerRecord(session.id, {
+        kind: 'conversation_event',
+        tool: 'github-copilot',
+        turnKey: prompt.id,
+        sourceId: 'conversation:copilot:asst:projected-stream-upgrade:request_1',
+        transcriptFinal: false,
+        conversationEvent: {
+          sequence: 1,
+          type: 'assistant_text',
+          sourceId: 'copilot:asst:projected-stream-upgrade:request_1',
+          text: 'Short partial.',
+        },
+      });
+
+      expect((await materializeLedgerSession(session, author)).projected).toBe(3);
+      expect(readAllEvents(paths).find((event) => event.type === 'ai_output')?.text).toBe(
+        'Short partial.',
+      );
+
+      const finalReply = appendLedgerRecord(session.id, {
+        kind: 'ai_output',
+        tool: 'github-copilot',
+        text: 'Complete final response.',
+        turnKey: prompt.id,
+        sourceId: partialReply.sourceId,
+        supersedesRecordId: partialReply.id,
+        transcriptFinal: true,
+      });
+      const finalStructured = appendLedgerRecord(session.id, {
+        kind: 'conversation_event',
+        tool: 'github-copilot',
+        turnKey: prompt.id,
+        sourceId: partialStructured.sourceId,
+        supersedesRecordId: partialStructured.id,
+        transcriptFinal: true,
+        conversationEvent: {
+          sequence: 1,
+          type: 'assistant_text',
+          sourceId: 'copilot:asst:projected-stream-upgrade:request_1',
+          text: 'Complete final response.',
+        },
+      });
+
+      const corrected = await materializeLedgerSession(session, author);
+      expect(corrected.projected).toBe(2);
+      const replies = readAllEvents(paths).filter((event) => event.type === 'ai_output');
+      expect(replies).toHaveLength(1);
+      expect(replies[0]).toMatchObject({
+        text: 'Complete final response.',
+        sourceId: ledgerRecordProjectionSourceId(session.id, finalReply),
+      });
+      const structured = readAllConversationEventsWithSession(paths).filter(
+        ({ event }) => event.type === 'assistant_text',
+      );
+      expect(structured).toHaveLength(1);
+      expect(structured[0]?.event).toMatchObject({
+        text: 'Complete final response.',
+        sourceId: ledgerRecordProjectionSourceId(session.id, finalStructured),
+      });
+      const repairs = readJournal(author).filter(
+        (entry) =>
+          entry.kind === 'redaction' &&
+          entry.redaction?.reason === 'repair' &&
+          entry.redaction.labels.includes('capture-correction'),
+      );
+      expect(repairs).toHaveLength(1);
+      expect(repairs[0]?.redaction?.entries).toBe(2);
+      expect(readLedgerRecords(session.id)).toEqual(
+        expect.arrayContaining([
+          partialReply,
+          partialStructured,
+          finalReply,
+          finalStructured,
+        ]),
+      );
+
+      expect((await materializeLedgerSession(session, author)).projected).toBe(0);
+      expect(
+        readJournal(author).filter(
+          (entry) =>
+            entry.kind === 'redaction' &&
+            entry.redaction?.reason === 'repair' &&
+            entry.redaction.labels.includes('capture-correction'),
+        ),
+      ).toHaveLength(1);
+    } finally {
+      cleanup(dir);
+      cleanup(home);
+    }
+  });
+
+  test('keeps one response revision visible when correction cleanup is interrupted', async () => {
+    const home = makeTempDir();
+    const dir = makeTempDir();
+    try {
+      process.env.SHOWTAIL_HOME = home;
+      await runInit({ cwd: dir });
+      const paths = pathsForRoot(dir);
+      const author = authorFor(paths);
+      const session = ensureLedgerSession({
+        tool: 'github-copilot',
+        nativeSessionId: 'interrupted-stream-upgrade',
+        cwd: dir,
+      });
+      const prompt = appendLedgerRecord(session.id, {
+        kind: 'prompt',
+        tool: 'github-copilot',
+        text: 'Explain the result.',
+        sourceId: 'copilot:user:interrupted-stream-upgrade:request_1',
+      });
+      const partial = appendLedgerRecord(session.id, {
+        kind: 'ai_output',
+        tool: 'github-copilot',
+        text: 'Short partial.',
+        turnKey: prompt.id,
+        sourceId: 'copilot:asst:interrupted-stream-upgrade:request_1',
+        transcriptFinal: false,
+      });
+      expect((await materializeLedgerSession(session, author)).projected).toBe(2);
+
+      const final = appendLedgerRecord(session.id, {
+        kind: 'ai_output',
+        tool: 'github-copilot',
+        text: 'Complete final response.',
+        turnKey: prompt.id,
+        sourceId: partial.sourceId,
+        supersedesRecordId: partial.id,
+        transcriptFinal: true,
+      });
+      const finalSourceId = ledgerRecordProjectionSourceId(session.id, final);
+      const interrupted = await materializeLedgerSession(session, author, {
+        continueCapture: () =>
+          !readAllEvents(paths).some((event) => event.sourceId === finalSourceId),
+      });
+
+      expect(interrupted).toMatchObject({ completed: false, projected: 1, replies: 1 });
+      expect(
+        readAllEvents(paths)
+          .filter((event) => event.type === 'ai_output')
+          .map((event) => event.text),
+      ).toEqual(['Short partial.', 'Complete final response.']);
+      expect(
+        readJournal(author).filter(
+          (entry) =>
+            entry.kind === 'redaction' &&
+            entry.redaction?.labels.includes('capture-correction'),
+        ),
+      ).toHaveLength(0);
+
+      const resumed = await materializeLedgerSession(session, author);
+      expect(resumed).toMatchObject({ completed: true, projected: 0 });
+      expect(
+        readAllEvents(paths)
+          .filter((event) => event.type === 'ai_output')
+          .map((event) => ({ text: event.text, sourceId: event.sourceId })),
+      ).toEqual([{ text: 'Complete final response.', sourceId: finalSourceId }]);
+      expect(
+        readJournal(author).filter(
+          (entry) =>
+            entry.kind === 'redaction' &&
+            entry.redaction?.labels.includes('capture-correction'),
+        ),
+      ).toHaveLength(1);
+
+      expect((await materializeLedgerSession(session, author)).projected).toBe(0);
+      expect(
+        readJournal(author).filter(
+          (entry) =>
+            entry.kind === 'redaction' &&
+            entry.redaction?.labels.includes('capture-correction'),
+        ),
+      ).toHaveLength(1);
     } finally {
       cleanup(dir);
       cleanup(home);

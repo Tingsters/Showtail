@@ -4,14 +4,17 @@ import { join } from 'node:path';
 import { authorSlugs } from './authors.ts';
 import { CaptureInterruptedError, requireCaptureContinuation } from './captureGuard.ts';
 import { removeEventsByBatch, removeJournalEntriesBySourceIds } from './events.ts';
+import { readGlobalConfig } from './globalConfig.ts';
 import { ensureMachineId } from './identity.ts';
 import { readJournal } from './journal.ts';
 import {
   ensureLedgerSegments,
+  effectiveLedgerRecords,
   knownTrailPath,
   ledgerRecordProjectionSourceId,
   markLedgerSegmentPlaced,
   readLedgerSession,
+  readLedgerRecords,
   readLedgerSegmentRecords,
   setLedgerSegmentMigration,
   trailExistsAt,
@@ -20,6 +23,7 @@ import {
   type LedgerSegment,
   type LedgerSegmentMigration,
   type LedgerSession,
+  type LedgerTarget,
 } from './ledger.ts';
 import {
   ledgerBatchId,
@@ -44,6 +48,42 @@ import type { JournalEntry } from '../types.ts';
 export interface ProjectionRoutingOptions {
   /** Automatic callers abort when their original capture-consent epoch changes. */
   continueCapture?: () => boolean;
+  /** Test/diagnostic seam after target discovery and before segment cleanup. */
+  onBeforeProjectionCleanup?: (
+    segmentId: string,
+    target: LedgerTarget,
+  ) => void | Promise<void>;
+  /** Test/diagnostic seam before the pre-segmentation cleanup commit. */
+  onBeforeLegacyProjectionCommit?: (target: LedgerTarget) => void;
+}
+
+/** Automatic reprojection cannot distinguish two trail identities at one path. */
+export class ProjectionIdentityConflictError extends Error {
+  readonly code = 'SAME_PATH_TRAIL_ID_CONFLICT';
+
+  constructor(
+    readonly sourceTrailId: string,
+    readonly destinationTrailId: string,
+    readonly root: string,
+  ) {
+    super(
+      `Cannot reproject ${sourceTrailId} into ${destinationTrailId}: both identities resolve to ${root}.`,
+    );
+    this.name = 'ProjectionIdentityConflictError';
+  }
+}
+
+/** A recorded placement now points at a path stamped with another trail id. */
+export class ProjectionTargetIdentityMismatchError extends Error {
+  readonly code = 'PROJECTION_TARGET_IDENTITY_MISMATCH';
+
+  constructor(
+    readonly expectedTrailId: string,
+    readonly root: string,
+  ) {
+    super(`Cannot remove ${expectedTrailId}: ${root} now contains another trail.`);
+    this.name = 'ProjectionTargetIdentityMismatchError';
+  }
 }
 
 /** Remove only session metadata left empty by deleting one ledger batch. */
@@ -122,8 +162,101 @@ function sourceIdsForSegment(
 
 function projectionTargetRoot(target: { trailId: string; path: string }): string {
   if (trailExistsAt(target.path, target.trailId)) return target.path;
+  const config = readGlobalConfig();
+  const candidates = [
+    knownTrailPath(target.trailId),
+    config.projectCatalog?.byTrailId[target.trailId]?.currentPath,
+    ...(config.knownProjects ?? [])
+      .filter((project) => project.trailId === target.trailId)
+      .sort((left, right) => right.lastSeenAt.localeCompare(left.lastSeenAt))
+      .map((project) => project.path),
+  ];
+  return (
+    candidates.find(
+      (candidate): candidate is string =>
+        candidate !== undefined && trailExistsAt(candidate, target.trailId),
+    ) ?? target.path
+  );
+}
+
+function targetMentionsRoot(
+  target: { trailId: string; path: string },
+  root: string,
+): boolean {
+  if (samePath(target.path, root)) return true;
   const known = knownTrailPath(target.trailId);
-  return known && trailExistsAt(known, target.trailId) ? known : target.path;
+  return known !== undefined && samePath(known, root);
+}
+
+function assertDistinctProjectionIdentities(
+  sourceTargets: Array<{ trailId: string; path: string }>,
+  destinationTrailId: string,
+  destinationRoot: string,
+  allowStaleSamePathSource = false,
+): void {
+  const conflict = sourceTargets.find(
+    (target) =>
+      target.trailId !== destinationTrailId &&
+      targetMentionsRoot(target, destinationRoot),
+  );
+  if (conflict) {
+    if (
+      allowStaleSamePathSource &&
+      trailExistsAt(destinationRoot, destinationTrailId) &&
+      !trailExistsAt(destinationRoot, conflict.trailId)
+    ) {
+      return;
+    }
+    throw new ProjectionIdentityConflictError(
+      conflict.trailId,
+      destinationTrailId,
+      destinationRoot,
+    );
+  }
+}
+
+type ProjectionTargetCleanupIdentity = 'matching' | 'missing' | 'stale-same-path';
+
+interface ProjectionTargetCleanupOptions extends ProjectionRoutingOptions {
+  allowStaleSamePathSource?: boolean;
+  destination?: LedgerTarget;
+  /** Reprojection cleanup may remove only IDs proven handled at the destination. */
+  provenSourceIds?: ReadonlySet<string>;
+}
+
+function projectionTargetCleanupIdentity(
+  target: LedgerTarget,
+  root: string,
+  options: ProjectionTargetCleanupOptions,
+): ProjectionTargetCleanupIdentity {
+  if (trailExistsAt(root, target.trailId)) return 'matching';
+  if (!existsSync(join(root, '.showtail', 'config.json'))) return 'missing';
+  const destination = options.destination;
+  if (
+    options.allowStaleSamePathSource &&
+    destination &&
+    target.trailId !== destination.trailId &&
+    samePath(root, destination.path) &&
+    trailExistsAt(destination.path, destination.trailId)
+  ) {
+    return 'stale-same-path';
+  }
+  throw new ProjectionTargetIdentityMismatchError(target.trailId, root);
+}
+
+function projectionContainsSourceIds(
+  session: LedgerSession,
+  root: string,
+  sourceIds: ReadonlySet<string>,
+): boolean {
+  if (sourceIds.size === 0) return false;
+  const paths = pathsForRoot(root);
+  const machineId = session.machineId ?? ensureMachineId();
+  return authorSlugs(paths).some((slug) =>
+    readJournal(authorPaths(paths, slug, machineId)).some(
+      (entry) => entry.sourceId !== undefined && sourceIds.has(entry.sourceId),
+    ),
+  );
 }
 
 /** Remove one turn's exact source-id set from one recorded target. */
@@ -131,12 +264,18 @@ function removeSegmentAtTarget(
   session: LedgerSession,
   segment: LedgerSegment,
   target: { trailId: string; path: string },
-  options: ProjectionRoutingOptions,
-): { root: string; removed: number } {
+  options: ProjectionTargetCleanupOptions,
+): { root: string; removed: number; remaining: boolean } {
+  requireCaptureContinuation(options.continueCapture);
   const oldRoot = projectionTargetRoot(target);
-  const sourceIds = sourceIdsForSegment(session, segment);
+  const cleanupIdentity = projectionTargetCleanupIdentity(target, oldRoot, options);
+  const sourceIds = options.provenSourceIds
+    ? new Set(options.provenSourceIds)
+    : sourceIdsForSegment(session, segment);
   const prepared: Array<{ author: AuthorPaths; entries: JournalEntry[] }> = [];
-  if (existsSync(join(oldRoot, '.showtail', 'config.json'))) {
+  // A reused path may now contain an unrelated trail. Never rewrite that trail's
+  // journal merely because the stale placement still names the same directory.
+  if (cleanupIdentity === 'matching') {
     const oldPaths = pathsForRoot(oldRoot);
     const machineId = session.machineId ?? ensureMachineId();
     for (const slug of authorSlugs(oldPaths)) {
@@ -153,8 +292,27 @@ function removeSegmentAtTarget(
   // Prepare every affected shard before the first rewrite. Once cleanup begins,
   // finish this target and unlink it as one idempotent consistency unit.
   requireCaptureContinuation(options.continueCapture);
+  const commitRoot = projectionTargetRoot(target);
+  if (!samePath(commitRoot, oldRoot)) {
+    throw new Error(
+      `Projection target ${target.trailId} moved from ${oldRoot} to ${commitRoot} while cleaning; retry.`,
+    );
+  }
+  const commitIdentity = projectionTargetCleanupIdentity(target, commitRoot, options);
+  if (commitIdentity !== cleanupIdentity) {
+    throw new Error(
+      `Projection target ${target.trailId} changed while cleaning ${oldRoot}; retry.`,
+    );
+  }
   let removed = 0;
   for (const { author, entries } of prepared) {
+    const writeRoot = projectionTargetRoot(target);
+    if (!samePath(writeRoot, commitRoot)) {
+      throw new Error(
+        `Projection target ${target.trailId} moved from ${commitRoot} to ${writeRoot} while cleaning; retry.`,
+      );
+    }
+    projectionTargetCleanupIdentity(target, writeRoot, options);
     const count = removeJournalEntriesBySourceIds(
       author,
       sourceIds,
@@ -163,8 +321,100 @@ function removeSegmentAtTarget(
     removed += count;
     if (count > 0) removeVacatedSessions(author, session.nativeSessionId, entries);
   }
-  unlinkLedgerSegmentPlacement(session.id, segment.id, target.trailId);
-  return { root: oldRoot, removed };
+
+  const latestSegment = currentSegment(session.id, segment.id) ?? segment;
+  const remainingRoot = projectionTargetRoot(target);
+  if (!samePath(remainingRoot, commitRoot)) {
+    throw new Error(
+      `Projection target ${target.trailId} moved from ${commitRoot} to ${remainingRoot} while cleaning; retry.`,
+    );
+  }
+  const remainingIdentity = projectionTargetCleanupIdentity(
+    target,
+    remainingRoot,
+    options,
+  );
+  const remainingSourceIds = sourceIdsForSegment(session, latestSegment);
+  const sourceMembershipChanged = !sameSourceIds(
+    [...sourceIds].sort(),
+    [...remainingSourceIds].sort(),
+  );
+  const remaining =
+    sourceMembershipChanged ||
+    (remainingIdentity === 'matching' &&
+      projectionContainsSourceIds(session, remainingRoot, remainingSourceIds));
+  if (
+    !remaining &&
+    (latestSegment.targets ?? []).some(
+      (candidate) => candidate.trailId === target.trailId,
+    )
+  ) {
+    unlinkLedgerSegmentPlacement(session.id, latestSegment.id, target.trailId);
+  }
+  return { root: oldRoot, removed, remaining };
+}
+
+function mergeProjectionTargets(
+  ...groups: ReadonlyArray<readonly LedgerTarget[]>
+): LedgerTarget[] {
+  const byTrailId = new Map<string, LedgerTarget>();
+  for (const group of groups) {
+    for (const target of group) {
+      // A trail id is the durable identity. Later observations replace a stale
+      // locator instead of creating two logical sources for one moved trail.
+      byTrailId.set(target.trailId, { ...target });
+    }
+  }
+  return [...byTrailId.values()].sort((left, right) =>
+    left.trailId.localeCompare(right.trailId),
+  );
+}
+
+async function removeLedgerSegmentProjectionAtTargets(
+  session: LedgerSession,
+  segmentOrId: LedgerSegment | string,
+  keepTrailId: string | undefined,
+  additionalTargets: readonly LedgerTarget[],
+  options: ProjectionTargetCleanupOptions,
+): Promise<string[]> {
+  requireCaptureContinuation(options.continueCapture);
+  const document = ensureLedgerSegments(session, {
+    continueCapture: options.continueCapture,
+  });
+  const segmentId = typeof segmentOrId === 'string' ? segmentOrId : segmentOrId.id;
+  let segment = document.segments.find((item) => item.id === segmentId);
+  if (!segment) return [];
+  const movedFrom: string[] = [];
+  const targets = mergeProjectionTargets(additionalTargets, segment.targets ?? []);
+
+  for (const target of targets) {
+    if (target.trailId === keepTrailId) continue;
+    const maxAttempts = options.provenSourceIds
+      ? 1
+      : MAX_REPROJECTION_STABILIZATION_ATTEMPTS;
+    let settled = false;
+    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+      requireCaptureContinuation(options.continueCapture);
+      segment =
+        currentSegment(session.id, segment.id, options.continueCapture) ?? segment;
+      await options.onBeforeProjectionCleanup?.(segment.id, { ...target });
+      const cleaned = removeSegmentAtTarget(session, segment, target, options);
+      if (cleaned.removed > 0) movedFrom.push(cleaned.root);
+      if (!cleaned.remaining || options.provenSourceIds) {
+        settled = true;
+        break;
+      }
+    }
+    if (!settled) {
+      throw new Error(
+        `Ledger segment ${segment.id} kept changing while removing its projection; retry.`,
+      );
+    }
+    segment =
+      ensureLedgerSegments(session.id).segments.find((item) => item.id === segmentId) ??
+      segment;
+  }
+  return [...new Set(movedFrom)];
 }
 
 /**
@@ -178,51 +428,13 @@ export async function removeLedgerSegmentProjection(
   keepTrailId?: string,
   options: ProjectionRoutingOptions = {},
 ): Promise<string[]> {
-  requireCaptureContinuation(options.continueCapture);
-  const document = ensureLedgerSegments(session, {
-    continueCapture: options.continueCapture,
-  });
-  const segmentId = typeof segmentOrId === 'string' ? segmentOrId : segmentOrId.id;
-  let segment = document.segments.find((item) => item.id === segmentId);
-  if (!segment) return [];
-  const movedFrom: string[] = [];
-
-  for (const target of [...(segment.targets ?? [])]) {
-    requireCaptureContinuation(options.continueCapture);
-    if (target.trailId === keepTrailId) continue;
-    const oldRoot = projectionTargetRoot(target);
-
-    // A provisional trail may be deleted only when this is the session's sole
-    // turn. Otherwise pruning it would erase neighboring segments too.
-    if (document.segments.length === 1) {
-      try {
-        const result = await pruneProvisionalTrail({
-          root: oldRoot,
-          ledgerSessionId: session.id,
-          continueCapture: options.continueCapture,
-        });
-        if (result.pruned && result.trailId) {
-          unlinkLedgerSegmentPlacement(session.id, segment.id, result.trailId);
-          movedFrom.push(oldRoot);
-          segment =
-            ensureLedgerSegments(session.id).segments.find(
-              (item) => item.id === segmentId,
-            ) ?? segment;
-          continue;
-        }
-      } catch (error) {
-        if (error instanceof CaptureInterruptedError) throw error;
-        // Conservative prune refusal falls through to source-id cleanup.
-      }
-    }
-
-    const cleaned = removeSegmentAtTarget(session, segment, target, options);
-    if (cleaned.removed > 0) movedFrom.push(cleaned.root);
-    segment =
-      ensureLedgerSegments(session.id).segments.find((item) => item.id === segmentId) ??
-      segment;
-  }
-  return [...new Set(movedFrom)];
+  return removeLedgerSegmentProjectionAtTargets(
+    session,
+    segmentOrId,
+    keepTrailId,
+    [],
+    options,
+  );
 }
 
 /** Public command vocabulary alias. */
@@ -232,6 +444,10 @@ export interface LedgerSegmentReprojectionOptions
   extends MaterializeOptions, ProjectionRoutingOptions {
   /** Test/diagnostic hook called only after a phase is durably persisted. */
   onPhase?: (phase: LedgerSegmentMigration['phase']) => void | Promise<void>;
+  /** Test/diagnostic seam around each proven source cleanup attempt. */
+  onSourceCleanup?: (stage: 'before' | 'after', attempt: number) => void | Promise<void>;
+  /** Explicit repair only: the source id is stale and canonical config owns this path. */
+  allowStaleSamePathSource?: boolean;
 }
 
 export interface LedgerSegmentReprojectionResult {
@@ -249,6 +465,271 @@ function sameDestination(
     migration?.destination.trailId === trailId &&
     samePath(migration.destination.path, root)
   );
+}
+
+function mergeSourceTargets(
+  destinationTrailId: string,
+  ...groups: ReadonlyArray<readonly LedgerTarget[]>
+): LedgerTarget[] {
+  return mergeProjectionTargets(...groups).filter(
+    (target) => target.trailId !== destinationTrailId,
+  );
+}
+
+function sameProjectionTargets(
+  left: readonly LedgerTarget[],
+  right: readonly LedgerTarget[],
+): boolean {
+  const canonicalLeft = mergeProjectionTargets(left);
+  const canonicalRight = mergeProjectionTargets(right);
+  return (
+    canonicalLeft.length === canonicalRight.length &&
+    canonicalLeft.every((target, index) => {
+      const candidate = canonicalRight[index]!;
+      return (
+        target.trailId === candidate.trailId && samePath(target.path, candidate.path)
+      );
+    })
+  );
+}
+
+function observedSourceTargets(
+  segment: LedgerSegment,
+  destinationTrailId: string,
+): LedgerTarget[] {
+  return (segment.targets ?? []).filter(
+    (target) => target.trailId !== destinationTrailId,
+  );
+}
+
+function migrationSourceTargets(
+  migration: LedgerSegmentMigration | undefined,
+  segment: LedgerSegment,
+  destinationTrailId: string,
+  continuesMigration: boolean,
+): LedgerTarget[] {
+  return mergeSourceTargets(
+    destinationTrailId,
+    migration?.sourceTargets ?? [],
+    !continuesMigration && migration ? [migration.destination] : [],
+    observedSourceTargets(segment, destinationTrailId),
+  );
+}
+
+function hasExactDestinationPlacement(
+  segment: LedgerSegment,
+  trailId: string,
+  root: string,
+): boolean {
+  const targets = segment.targets ?? [];
+  return (
+    segment.status === 'placed' &&
+    segment.dismissedAt === undefined &&
+    targets.length === 1 &&
+    targets[0]?.trailId === trailId &&
+    samePath(targets[0].path, root)
+  );
+}
+
+function hasKnownSourceProjection(
+  session: LedgerSession,
+  segment: LedgerSegment,
+  targets: readonly LedgerTarget[],
+): boolean {
+  const sourceIds = sourceIdsForSegment(session, segment);
+  if (sourceIds.size === 0) return false;
+  return targets.some((target) => {
+    const sourceRoot = projectionTargetRoot(target);
+    if (!trailExistsAt(sourceRoot, target.trailId)) return false;
+    const sourcePaths = pathsForRoot(sourceRoot);
+    return authorSlugs(sourcePaths).some((slug) =>
+      readJournal(authorPaths(sourcePaths, slug)).some(
+        (entry) => entry.sourceId !== undefined && sourceIds.has(entry.sourceId),
+      ),
+    );
+  });
+}
+
+function currentSegment(
+  sessionId: string,
+  segmentId: string,
+  continueCapture?: () => boolean,
+): LedgerSegment | undefined {
+  return ensureLedgerSegments(sessionId, { continueCapture }).segments.find(
+    (candidate) => candidate.id === segmentId,
+  );
+}
+
+function requireContinuingMigration(
+  segment: LedgerSegment,
+  trailId: string,
+  root: string,
+): LedgerSegmentMigration {
+  if (!sameDestination(segment.migration, trailId, root)) {
+    throw new Error(
+      `Ledger segment migration changed while reprojecting ${segment.id}; retry the current destination.`,
+    );
+  }
+  return segment.migration!;
+}
+
+function incompleteMigration(
+  migration: LedgerSegmentMigration,
+  phase: LedgerSegmentMigration['phase'],
+  sourceTargets: LedgerTarget[],
+): LedgerSegmentMigration {
+  return {
+    phase,
+    destination: { ...migration.destination },
+    sourceTargets,
+    startedAt: migration.startedAt,
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+function effectiveSegmentSourceIds(
+  session: LedgerSession,
+  segment: LedgerSegment,
+): string[] {
+  const effectiveIds = new Set(
+    effectiveLedgerRecords(readLedgerRecords(session.id)).map((record) => record.id),
+  );
+  return [
+    ...new Set(
+      readLedgerSegmentRecords(session.id, segment)
+        .filter((record) => effectiveIds.has(record.id))
+        .map((record) => ledgerRecordProjectionSourceId(session.id, record)),
+    ),
+  ].sort();
+}
+
+function sameSourceIds(left: readonly string[], right: readonly string[]): boolean {
+  return (
+    left.length === right.length &&
+    left.every((sourceId, index) => sourceId === right[index])
+  );
+}
+
+function addMaterializeResult(
+  aggregate: MaterializeResult,
+  next: MaterializeResult,
+): void {
+  aggregate.completed &&= next.completed;
+  aggregate.projected += next.projected;
+  aggregate.prompts += next.prompts;
+  aggregate.replies += next.replies;
+  aggregate.decisions += next.decisions;
+  aggregate.plans += next.plans;
+  aggregate.toolCalls += next.toolCalls;
+  aggregate.recaps += next.recaps;
+  aggregate.edits += next.edits;
+  aggregate.conversationEvents += next.conversationEvents;
+  aggregate.stubs += next.stubs;
+  aggregate.sessionId = next.sessionId;
+  if (next.lastPromptId) aggregate.lastPromptId = next.lastPromptId;
+}
+
+const MAX_REPROJECTION_STABILIZATION_ATTEMPTS = 4;
+
+async function materializeLedgerSegmentUntilStable(
+  session: LedgerSession,
+  segmentId: string,
+  author: AuthorPaths,
+  options: MaterializeOptions,
+): Promise<{
+  materialized: MaterializeResult;
+  segment: LedgerSegment;
+  effectiveSourceIds: string[];
+  handledSourceIds: string[];
+}> {
+  let aggregate: MaterializeResult | undefined;
+  for (let attempt = 0; attempt < MAX_REPROJECTION_STABILIZATION_ATTEMPTS; attempt += 1) {
+    const before = currentSegment(session.id, segmentId, options.continueCapture);
+    if (!before) {
+      throw new Error(`Ledger segment disappeared while reprojecting: ${segmentId}`);
+    }
+    const beforeEffectiveSourceIds = effectiveSegmentSourceIds(session, before);
+    const beforeHandledSourceIds = [...sourceIdsForSegment(session, before)].sort();
+    const next = await materializeLedgerSegment(session, segmentId, author, options);
+    if (aggregate) addMaterializeResult(aggregate, next);
+    else aggregate = { ...next };
+    if (!next.completed) {
+      return {
+        materialized: aggregate,
+        segment: before,
+        effectiveSourceIds: beforeEffectiveSourceIds,
+        handledSourceIds: beforeHandledSourceIds,
+      };
+    }
+
+    const after = currentSegment(session.id, segmentId, options.continueCapture);
+    if (!after) {
+      throw new Error(`Ledger segment disappeared while reprojecting: ${segmentId}`);
+    }
+    if (
+      sameSourceIds(
+        beforeEffectiveSourceIds,
+        effectiveSegmentSourceIds(session, after),
+      ) &&
+      sameSourceIds(
+        beforeHandledSourceIds,
+        [...sourceIdsForSegment(session, after)].sort(),
+      )
+    ) {
+      return {
+        materialized: aggregate,
+        segment: after,
+        effectiveSourceIds: beforeEffectiveSourceIds,
+        handledSourceIds: beforeHandledSourceIds,
+      };
+    }
+  }
+  throw new Error(
+    `Ledger segment ${segmentId} kept changing while materializing; retry after capture settles.`,
+  );
+}
+
+function requireStableCompletedProjection(
+  session: LedgerSession,
+  segmentId: string,
+  trailId: string,
+  root: string,
+  expectedEffectiveSourceIds: readonly string[],
+  options: ProjectionRoutingOptions,
+): void {
+  const segment = currentSegment(session.id, segmentId, options.continueCapture);
+  if (!segment) {
+    throw new Error(`Ledger segment disappeared while reprojecting: ${segmentId}`);
+  }
+  const migration = requireContinuingMigration(segment, trailId, root);
+  if (migration.phase !== 'complete' || migration.completedAt === undefined) {
+    throw new Error(
+      `Ledger segment migration changed while completing ${segment.id}; retry the current destination.`,
+    );
+  }
+  const sourceTargets = mergeSourceTargets(
+    trailId,
+    migration.sourceTargets,
+    observedSourceTargets(segment, trailId),
+  );
+  if (
+    !sameSourceIds(
+      expectedEffectiveSourceIds,
+      effectiveSegmentSourceIds(session, segment),
+    ) ||
+    !hasExactDestinationPlacement(segment, trailId, root) ||
+    hasKnownSourceProjection(session, segment, sourceTargets)
+  ) {
+    const reopened = incompleteMigration(
+      migration,
+      'destination-materialized',
+      sourceTargets,
+    );
+    setLedgerSegmentMigration(session.id, segment.id, reopened, options.continueCapture);
+    throw new Error(
+      `Ledger segment placement changed after completing ${segment.id}; retry the destination.`,
+    );
+  }
 }
 
 /**
@@ -277,73 +758,377 @@ export async function reprojectLedgerSegment(
   }
 
   let migration = segment.migration;
-  if (!sameDestination(migration, trailId, root)) {
+  const continuesMigration = sameDestination(migration, trailId, root);
+  let observedSources = observedSourceTargets(segment, trailId);
+  assertDistinctProjectionIdentities(
+    mergeProjectionTargets(
+      !continuesMigration && migration ? [migration.destination] : [],
+      observedSources,
+    ),
+    trailId,
+    root,
+    options.allowStaleSamePathSource,
+  );
+  let sourceTargets = migrationSourceTargets(
+    migration,
+    segment,
+    trailId,
+    continuesMigration,
+  );
+  if (!continuesMigration) {
     const now = new Date().toISOString();
     migration = {
       phase: 'planned',
       destination: { trailId, path: root },
-      sourceTargets: (segment.targets ?? [])
-        .filter((target) => target.trailId !== trailId)
-        .map((target) => ({ ...target })),
+      sourceTargets: sourceTargets.map((target) => ({ ...target })),
       startedAt: now,
       updatedAt: now,
     };
     setLedgerSegmentMigration(session.id, segment.id, migration, options.continueCapture);
     await options.onPhase?.('planned');
+  } else if (migration) {
+    const terminalStateDrifted =
+      (migration.phase === 'complete' ||
+        migration.phase === 'obsolete-projections-removed') &&
+      (!hasExactDestinationPlacement(segment, trailId, root) ||
+        hasKnownSourceProjection(session, segment, sourceTargets) ||
+        (migration.phase === 'complete' && migration.completedAt === undefined));
+    if (terminalStateDrifted) {
+      migration = incompleteMigration(migration, 'planned', sourceTargets);
+      setLedgerSegmentMigration(
+        session.id,
+        segment.id,
+        migration,
+        options.continueCapture,
+      );
+      await options.onPhase?.('planned');
+    } else if (!sameProjectionTargets(sourceTargets, migration.sourceTargets)) {
+      migration = {
+        ...migration,
+        sourceTargets,
+        updatedAt: new Date().toISOString(),
+      };
+      setLedgerSegmentMigration(
+        session.id,
+        segment.id,
+        migration,
+        options.continueCapture,
+      );
+    }
   }
   if (!migration) {
     throw new Error(`Unable to initialize ledger segment migration: ${segment.id}`);
   }
 
-  const materialized = await materializeLedgerSegment(
+  segment = currentSegment(session.id, segment.id, options.continueCapture);
+  if (!segment) {
+    throw new Error(`Ledger segment disappeared while reprojecting: ${segmentId}`);
+  }
+  migration = requireContinuingMigration(segment, trailId, root);
+  const initialMaterialization = await materializeLedgerSegmentUntilStable(
     session,
     segment.id,
     author,
     options,
   );
+  const materialized = initialMaterialization.materialized;
   if (!materialized.completed) {
     return { materialized, movedFrom: [], phase: migration.phase };
   }
-  if (migration.phase === 'complete') {
+
+  segment = initialMaterialization.segment;
+  migration = requireContinuingMigration(segment, trailId, root);
+  observedSources = observedSourceTargets(segment, trailId);
+  sourceTargets = mergeSourceTargets(trailId, migration.sourceTargets, observedSources);
+  assertDistinctProjectionIdentities(
+    observedSources,
+    trailId,
+    root,
+    options.allowStaleSamePathSource,
+  );
+  if (
+    migration.phase === 'complete' &&
+    migration.completedAt !== undefined &&
+    hasExactDestinationPlacement(segment, trailId, root) &&
+    !hasKnownSourceProjection(session, segment, sourceTargets)
+  ) {
+    if (!sameProjectionTargets(sourceTargets, migration.sourceTargets)) {
+      const now = new Date().toISOString();
+      migration = { ...migration, sourceTargets, updatedAt: now, completedAt: now };
+      setLedgerSegmentMigration(
+        session.id,
+        segment.id,
+        migration,
+        options.continueCapture,
+      );
+    }
     return { materialized, movedFrom: [], phase: 'complete' };
   }
-  if (migration.phase === 'planned') {
+  if (
+    migration.phase === 'obsolete-projections-removed' &&
+    hasExactDestinationPlacement(segment, trailId, root) &&
+    !hasKnownSourceProjection(session, segment, sourceTargets)
+  ) {
+    const now = new Date().toISOString();
     migration = {
       ...migration,
-      phase: 'destination-materialized',
-      updatedAt: new Date().toISOString(),
+      sourceTargets,
+      phase: 'complete',
+      updatedAt: now,
+      completedAt: now,
     };
     setLedgerSegmentMigration(session.id, segment.id, migration, options.continueCapture);
-    await options.onPhase?.('destination-materialized');
+    await options.onPhase?.('complete');
+    requireStableCompletedProjection(
+      session,
+      segment.id,
+      trailId,
+      root,
+      initialMaterialization.effectiveSourceIds,
+      options,
+    );
+    return { materialized, movedFrom: [], phase: 'complete' };
+  }
+  const phaseBeforeDestination = migration.phase;
+  if (
+    phaseBeforeDestination !== 'destination-materialized' ||
+    !sameProjectionTargets(sourceTargets, migration.sourceTargets)
+  ) {
+    migration = incompleteMigration(migration, 'destination-materialized', sourceTargets);
+    setLedgerSegmentMigration(session.id, segment.id, migration, options.continueCapture);
+    if (phaseBeforeDestination !== 'destination-materialized') {
+      await options.onPhase?.('destination-materialized');
+    }
+  }
+
+  segment = currentSegment(session.id, segment.id, options.continueCapture);
+  if (!segment) {
+    throw new Error(`Ledger segment disappeared while reprojecting: ${segmentId}`);
+  }
+  migration = requireContinuingMigration(segment, trailId, root);
+  const postPhaseMaterialization = await materializeLedgerSegmentUntilStable(
+    session,
+    segment.id,
+    author,
+    options,
+  );
+  addMaterializeResult(materialized, postPhaseMaterialization.materialized);
+  if (!postPhaseMaterialization.materialized.completed) {
+    return { materialized, movedFrom: [], phase: migration.phase };
+  }
+  segment = postPhaseMaterialization.segment;
+  migration = requireContinuingMigration(segment, trailId, root);
+  observedSources = observedSourceTargets(segment, trailId);
+  sourceTargets = mergeSourceTargets(trailId, migration.sourceTargets, observedSources);
+  assertDistinctProjectionIdentities(
+    observedSources,
+    trailId,
+    root,
+    options.allowStaleSamePathSource,
+  );
+  if (
+    migration.phase !== 'destination-materialized' ||
+    !sameProjectionTargets(sourceTargets, migration.sourceTargets)
+  ) {
+    migration = incompleteMigration(migration, 'destination-materialized', sourceTargets);
+    setLedgerSegmentMigration(session.id, segment.id, migration, options.continueCapture);
   }
 
   markLedgerSegmentPlaced(session.id, segment.id, trailId, root, {
     continueCapture: options.continueCapture,
     pathRebase: options.rebase,
   });
-  const current = readLedgerSession(session.id) ?? session;
-  const movedFrom = await removeLedgerSegmentProjection(
-    current,
-    segment.id,
+  segment = currentSegment(session.id, segment.id, options.continueCapture);
+  if (!segment) {
+    throw new Error(`Ledger segment disappeared while reprojecting: ${segmentId}`);
+  }
+  migration = requireContinuingMigration(segment, trailId, root);
+  observedSources = observedSourceTargets(segment, trailId);
+  sourceTargets = mergeSourceTargets(trailId, migration.sourceTargets, observedSources);
+  assertDistinctProjectionIdentities(
+    observedSources,
     trailId,
-    options,
+    root,
+    options.allowStaleSamePathSource,
   );
+  if (
+    migration.phase !== 'destination-materialized' ||
+    !sameProjectionTargets(sourceTargets, migration.sourceTargets)
+  ) {
+    migration = incompleteMigration(migration, 'destination-materialized', sourceTargets);
+    setLedgerSegmentMigration(session.id, segment.id, migration, options.continueCapture);
+  }
+  const movedFromRoots = new Set<string>();
+  let cleanupProof = postPhaseMaterialization;
+  let cleanupSettled = false;
+  for (let attempt = 0; attempt < MAX_REPROJECTION_STABILIZATION_ATTEMPTS; attempt += 1) {
+    await options.onSourceCleanup?.('before', attempt);
+    segment = currentSegment(session.id, segment.id, options.continueCapture);
+    if (!segment) {
+      throw new Error(`Ledger segment disappeared while reprojecting: ${segmentId}`);
+    }
+    migration = requireContinuingMigration(segment, trailId, root);
+    observedSources = observedSourceTargets(segment, trailId);
+    sourceTargets = mergeSourceTargets(trailId, migration.sourceTargets, observedSources);
+    assertDistinctProjectionIdentities(
+      observedSources,
+      trailId,
+      root,
+      options.allowStaleSamePathSource,
+    );
+    if (
+      migration.phase !== 'destination-materialized' ||
+      !sameProjectionTargets(sourceTargets, migration.sourceTargets)
+    ) {
+      migration = incompleteMigration(
+        migration,
+        'destination-materialized',
+        sourceTargets,
+      );
+      setLedgerSegmentMigration(
+        session.id,
+        segment.id,
+        migration,
+        options.continueCapture,
+      );
+    }
+
+    const current = readLedgerSession(session.id) ?? session;
+    const cleanedRoots = await removeLedgerSegmentProjectionAtTargets(
+      current,
+      segment.id,
+      trailId,
+      migration.sourceTargets,
+      {
+        ...options,
+        destination: { trailId, path: root },
+        provenSourceIds: new Set(cleanupProof.handledSourceIds),
+      },
+    );
+    for (const cleanedRoot of cleanedRoots) movedFromRoots.add(cleanedRoot);
+    await options.onSourceCleanup?.('after', attempt);
+
+    segment = currentSegment(session.id, segment.id, options.continueCapture);
+    if (!segment) {
+      throw new Error(`Ledger segment disappeared while reprojecting: ${segmentId}`);
+    }
+    migration = requireContinuingMigration(segment, trailId, root);
+    const catchUpMaterialization = await materializeLedgerSegmentUntilStable(
+      session,
+      segment.id,
+      author,
+      options,
+    );
+    addMaterializeResult(materialized, catchUpMaterialization.materialized);
+    if (!catchUpMaterialization.materialized.completed) {
+      return {
+        materialized,
+        movedFrom: [...movedFromRoots],
+        phase: migration.phase,
+      };
+    }
+
+    segment = catchUpMaterialization.segment;
+    migration = requireContinuingMigration(segment, trailId, root);
+    observedSources = observedSourceTargets(segment, trailId);
+    sourceTargets = mergeSourceTargets(trailId, migration.sourceTargets, observedSources);
+    assertDistinctProjectionIdentities(
+      observedSources,
+      trailId,
+      root,
+      options.allowStaleSamePathSource,
+    );
+    if (
+      migration.phase !== 'destination-materialized' ||
+      !sameProjectionTargets(sourceTargets, migration.sourceTargets)
+    ) {
+      migration = incompleteMigration(
+        migration,
+        'destination-materialized',
+        sourceTargets,
+      );
+      setLedgerSegmentMigration(
+        session.id,
+        segment.id,
+        migration,
+        options.continueCapture,
+      );
+    }
+
+    const sourceMembershipChanged =
+      !sameSourceIds(
+        cleanupProof.effectiveSourceIds,
+        catchUpMaterialization.effectiveSourceIds,
+      ) ||
+      !sameSourceIds(
+        cleanupProof.handledSourceIds,
+        catchUpMaterialization.handledSourceIds,
+      );
+    if (
+      !sourceMembershipChanged &&
+      hasExactDestinationPlacement(segment, trailId, root) &&
+      !hasKnownSourceProjection(session, segment, sourceTargets)
+    ) {
+      cleanupSettled = true;
+      break;
+    }
+    cleanupProof = catchUpMaterialization;
+  }
+  if (!cleanupSettled) {
+    migration = incompleteMigration(migration, 'destination-materialized', sourceTargets);
+    setLedgerSegmentMigration(session.id, segment.id, migration, options.continueCapture);
+    throw new Error(
+      `Ledger segment ${segment.id} kept changing while cleaning source projections; retry the destination.`,
+    );
+  }
+  const movedFrom = [...movedFromRoots];
   migration = {
     ...migration,
+    sourceTargets,
     phase: 'obsolete-projections-removed',
     updatedAt: new Date().toISOString(),
   };
   setLedgerSegmentMigration(session.id, segment.id, migration, options.continueCapture);
   await options.onPhase?.('obsolete-projections-removed');
 
+  segment = currentSegment(session.id, segment.id, options.continueCapture);
+  if (!segment) {
+    throw new Error(`Ledger segment disappeared while reprojecting: ${segmentId}`);
+  }
+  migration = requireContinuingMigration(segment, trailId, root);
+  sourceTargets = mergeSourceTargets(
+    trailId,
+    migration.sourceTargets,
+    observedSourceTargets(segment, trailId),
+  );
+  if (
+    !hasExactDestinationPlacement(segment, trailId, root) ||
+    hasKnownSourceProjection(session, segment, sourceTargets)
+  ) {
+    migration = incompleteMigration(migration, 'destination-materialized', sourceTargets);
+    setLedgerSegmentMigration(session.id, segment.id, migration, options.continueCapture);
+    throw new Error(
+      `Ledger segment placement changed while finalizing ${segment.id}; retry the destination.`,
+    );
+  }
+
   migration = {
     ...migration,
+    sourceTargets,
     phase: 'complete',
     updatedAt: new Date().toISOString(),
     completedAt: new Date().toISOString(),
   };
   setLedgerSegmentMigration(session.id, segment.id, migration, options.continueCapture);
   await options.onPhase?.('complete');
+  requireStableCompletedProjection(
+    session,
+    segment.id,
+    trailId,
+    root,
+    cleanupProof.effectiveSourceIds,
+    options,
+  );
   return { materialized, movedFrom, phase: 'complete' };
 }
 
@@ -368,10 +1153,29 @@ export function removeOtherLedgerProjections(
     const movedFrom: string[] = [];
     for (const segment of document.segments) {
       for (const target of [...(segment.targets ?? [])]) {
-        requireCaptureContinuation(options.continueCapture);
         if (target.trailId === keepTrailId) continue;
-        const cleaned = removeSegmentAtTarget(session, segment, target, options);
-        if (cleaned.removed > 0) movedFrom.push(cleaned.root);
+        let current = segment;
+        let settled = false;
+        for (
+          let attempt = 0;
+          attempt < MAX_REPROJECTION_STABILIZATION_ATTEMPTS;
+          attempt += 1
+        ) {
+          requireCaptureContinuation(options.continueCapture);
+          current =
+            currentSegment(session.id, segment.id, options.continueCapture) ?? current;
+          const cleaned = removeSegmentAtTarget(session, current, target, options);
+          if (cleaned.removed > 0) movedFrom.push(cleaned.root);
+          if (!cleaned.remaining) {
+            settled = true;
+            break;
+          }
+        }
+        if (!settled) {
+          throw new Error(
+            `Ledger segment ${segment.id} kept changing while removing its projection; retry.`,
+          );
+        }
       }
     }
     return [...new Set(movedFrom)];
@@ -383,9 +1187,10 @@ export function removeOtherLedgerProjections(
     requireCaptureContinuation(options.continueCapture);
     if (target.trailId === keepTrailId) continue;
     const oldRoot = projectionTargetRoot(target);
+    const cleanupIdentity = projectionTargetCleanupIdentity(target, oldRoot, options);
     const prepared: PreparedAuthorCleanup[] = [];
     const batchId = ledgerBatchId(session.id);
-    if (existsSync(join(oldRoot, '.showtail', 'config.json'))) {
+    if (cleanupIdentity === 'matching') {
       const oldPaths = pathsForRoot(oldRoot);
       const machineId = session.machineId ?? ensureMachineId();
       // Identity can be upgraded after the first projection. Search every author
@@ -403,7 +1208,25 @@ export function removeOtherLedgerProjections(
     // starts, finish this target's journal/session/state/placement cleanup as one
     // consistency unit. Re-checking consent between those writes could strand a
     // half-removed projection; a later target remains a separate interrupt point.
+    options.onBeforeLegacyProjectionCommit?.({ ...target });
     requireCaptureContinuation(options.continueCapture);
+    const commitRoot = projectionTargetRoot(target);
+    if (!samePath(commitRoot, oldRoot)) {
+      throw new Error(
+        `Projection target ${target.trailId} moved from ${oldRoot} to ${commitRoot} while cleaning; retry.`,
+      );
+    }
+    const commitIdentity = projectionTargetCleanupIdentity(target, commitRoot, options);
+    if (commitIdentity !== cleanupIdentity) {
+      throw new Error(
+        `Projection target ${target.trailId} changed while cleaning ${oldRoot}; retry.`,
+      );
+    }
+    if (ensureLedgerSegments(session.id).segments.length > 0) {
+      throw new Error(
+        `Ledger session ${session.id} gained segmented records while cleaning; retry.`,
+      );
+    }
     let removed = 0;
     for (const { author, batchEntries } of prepared) {
       const removedFromAuthor = removeEventsByBatch(author, batchId);
@@ -419,9 +1242,9 @@ export function removeOtherLedgerProjections(
 }
 
 /**
- * Clear obsolete placements, deleting a pristine automatic trail only when its
- * initialization provenance proves this ledger session created it. Any refusal
- * falls back to removing just this session's projection from the existing trail.
+ * Clear obsolete placements. Segmented sessions always remove exact turn IDs and
+ * retain the trail because a concurrent turn can appear after any prune check.
+ * Empty/pre-segmentation sessions keep the guarded provisional-prune fallback.
  */
 export async function clearOtherLedgerProjections(
   session: LedgerSession,

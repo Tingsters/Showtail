@@ -635,6 +635,7 @@ function registerChatParticipant(
             : {}),
         },
         token,
+        { requestIdentity: request.toolInvocationToken },
       );
       stream.markdown(renderProjectControlExecution(execution));
       return controlChatResult(execution);

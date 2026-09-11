@@ -11,6 +11,7 @@ import {
 } from './globalConfig.ts';
 import {
   allLedgerSessions,
+  effectiveLedgerRecords,
   effectiveLedgerPath,
   effectiveLedgerSegmentPath,
   readLedgerIndex,
@@ -354,6 +355,7 @@ function collectHints(cwd: string | undefined): CollectedProjectEvidence {
   const entrypointBasenamesByTrail = new Map<string, Set<string>>();
   const warnings: string[] = [];
   const global = readGlobalConfig();
+  const supersededTrailIds = new Set(Object.keys(global.trailSupersessions ?? {}));
   for (const project of Array.isArray(global.knownProjects) ? global.knownProjects : []) {
     if (
       !project ||
@@ -367,6 +369,7 @@ function collectHints(cwd: string | undefined): CollectedProjectEvidence {
       typeof project.trailId === 'string' && project.trailId.trim()
         ? project.trailId
         : undefined;
+    if (trailId && supersededTrailIds.has(trailId)) continue;
     hints.push({
       path: project.path,
       ...(trailId ? { trailId } : {}),
@@ -386,6 +389,7 @@ function collectHints(cwd: string | undefined): CollectedProjectEvidence {
 
   if (global.projectCatalog?.version === PROJECT_IDENTITY_CATALOG_VERSION) {
     for (const [trailId, identity] of Object.entries(global.projectCatalog.byTrailId)) {
+      if (supersededTrailIds.has(trailId)) continue;
       let invalidReason: string | undefined;
       if (
         !identity ||
@@ -443,6 +447,7 @@ function collectHints(cwd: string | undefined): CollectedProjectEvidence {
 
   try {
     for (const [trailId, trail] of Object.entries(readLedgerIndex().trails)) {
+      if (supersededTrailIds.has(trailId)) continue;
       if (!trail || typeof trail.path !== 'string' || !isAbsolute(trail.path)) continue;
       hints.push({
         path: trail.path,
@@ -472,7 +477,7 @@ function collectHints(cwd: string | undefined): CollectedProjectEvidence {
         });
       }
       try {
-        const records = readLedgerRecords(session.id);
+        const records = effectiveLedgerRecords(readLedgerRecords(session.id));
         const document = readPersistedLedgerSegments(session.id);
         const segmentByRecord = new Map(
           (document?.segments ?? []).flatMap((segment) =>

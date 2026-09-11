@@ -1,12 +1,18 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
+import { writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { captureTranscriptToLedger } from '../src/core/ledgerCapture.ts';
 import {
   appendLedgerRecord,
+  effectiveLedgerRecords,
+  ensureLedgerSegments,
   ensureLedgerSession,
   readLedgerRecords,
   readLedgerSession,
   setLedgerTurn,
+  setLedgerTurnProjectMetadata,
   type LedgerRecord,
+  unresolvedLedgerSupersessionIssues,
 } from '../src/core/ledger.ts';
 import type { HookTranscript } from '../src/plugins/types.ts';
 import { cleanup, makeTempDir } from './helpers.ts';
@@ -591,6 +597,430 @@ describe('captureTranscriptToLedger: prompt back-fill is race-safe', () => {
         'mid-decision',
       ]);
       expect(readLedgerSession(session.id)?.currentTurnKey).toBe(records[0]!.id);
+    } finally {
+      cleanup(home);
+    }
+  });
+
+  test('distinct Copilot request ids keep identical prompts in separate turns', () => {
+    const home = makeTempDir();
+    try {
+      process.env.SHOWTAIL_HOME = home;
+      const session = ensureLedgerSession({
+        tool: 'github-copilot',
+        nativeSessionId: 'repeated-open',
+      });
+      const firstPrompt = appendLedgerRecord(session.id, {
+        kind: 'prompt',
+        tool: 'github-copilot',
+        text: 'open the report',
+        sourceId: 'copilot:user:repeated-open:request_1',
+      });
+      const wrongReply = appendLedgerRecord(session.id, {
+        kind: 'ai_output',
+        tool: 'github-copilot',
+        text: 'Opening',
+        turnKey: firstPrompt.id,
+        sourceId: 'copilot:asst:repeated-open:request_2',
+        transcriptFinal: false,
+      });
+      const wrongDecision = appendLedgerRecord(session.id, {
+        kind: 'decision',
+        tool: 'github-copilot',
+        text: 'Used the existing report.',
+        turnKey: firstPrompt.id,
+        sourceId: 'copilot:decision:repeated-open:call_2',
+      });
+      const wrongStructured = appendLedgerRecord(session.id, {
+        kind: 'conversation_event',
+        tool: 'github-copilot',
+        turnKey: firstPrompt.id,
+        sourceId: 'conversation:copilot:asst:repeated-open:request_2',
+        transcriptFinal: false,
+        conversationEvent: {
+          sequence: 2,
+          type: 'assistant_text',
+          sourceId: 'copilot:asst:repeated-open:request_2',
+          text: 'Opening',
+        },
+      });
+      const staleSegments = ensureLedgerSegments(session);
+      staleSegments.segments[0]!.nativeRequestId = 'request_2';
+      staleSegments.segments[0]!.attachments = [{ kind: 'folder', path: home }];
+      staleSegments.segments[0]!.controlTarget = {
+        schemaVersion: 1,
+        source: 'showtail-project-control',
+        nativeSessionId: 'repeated-open',
+        nativeRequestId: 'request_2',
+        claimId: 'stale-claim',
+        action: 'open_report',
+        trailId: 'trl_stale',
+        root: home,
+        mode: 'authoritative',
+        evidence: ['stale-test'],
+        boundAt: new Date().toISOString(),
+      };
+      writeFileSync(
+        join(home, 'ledger', 'sessions', session.id, 'segments.json'),
+        JSON.stringify(staleSegments, null, 2),
+        'utf8',
+      );
+
+      const transcript: HookTranscript = {
+        sessionId: 'repeated-open',
+        messages: [
+          {
+            role: 'user',
+            text: 'open the report',
+            sourceId: 'copilot:user:repeated-open:request_1',
+          },
+          {
+            role: 'user',
+            text: 'open the report',
+            sourceId: 'copilot:user:repeated-open:request_2',
+          },
+          {
+            role: 'decision',
+            text: 'Used the existing report.',
+            sourceId: 'copilot:decision:repeated-open:call_2',
+            requestId: 'request_2',
+          },
+          {
+            role: 'assistant',
+            text: 'Opened the existing report.',
+            sourceId: 'copilot:asst:repeated-open:request_2',
+            requestId: 'request_2',
+            isFinal: true,
+          },
+        ],
+        events: [
+          {
+            sequence: 0,
+            type: 'user_text',
+            sourceId: 'copilot:user:repeated-open:request_1',
+            text: 'open the report',
+          },
+          {
+            sequence: 1,
+            type: 'user_text',
+            sourceId: 'copilot:user:repeated-open:request_2',
+            text: 'open the report',
+          },
+          {
+            sequence: 2,
+            type: 'assistant_text',
+            sourceId: 'copilot:asst:repeated-open:request_2',
+            text: 'Opened the existing report.',
+          },
+        ],
+      };
+
+      captureTranscriptToLedger(session, transcript, 'github-copilot', [], {
+        backfill: true,
+      });
+
+      const records = readLedgerRecords(session.id);
+      const prompts = records.filter((record) => record.kind === 'prompt');
+      expect(prompts).toHaveLength(2);
+      expect(prompts.map((record) => record.sourceId)).toEqual([
+        'copilot:user:repeated-open:request_1',
+        'copilot:user:repeated-open:request_2',
+      ]);
+      const secondPrompt = prompts[1]!;
+      const segments = ensureLedgerSegments(readLedgerSession(session.id)!);
+      expect(segments.segments.map((segment) => segment.nativeRequestId)).toEqual([
+        'request_1',
+        'request_2',
+      ]);
+      expect(segments.segments[0]?.attachments).toBeUndefined();
+      expect(segments.segments[0]?.controlTarget).toBeUndefined();
+      expect(
+        setLedgerTurnProjectMetadata(session.id, firstPrompt.id, {
+          nativeRequestId: 'request_2',
+        }),
+      ).toBe(false);
+
+      const effective = effectiveLedgerRecords(readLedgerRecords(session.id));
+      const repairedReply = effective.find(
+        (record) => record.sourceId === wrongReply.sourceId,
+      );
+      const repairedDecision = effective.find(
+        (record) => record.sourceId === wrongDecision.sourceId,
+      );
+      const repairedStructured = effective.find(
+        (record) => record.sourceId === wrongStructured.sourceId,
+      );
+      expect(repairedReply).toMatchObject({
+        text: 'Opened the existing report.',
+        turnKey: secondPrompt.id,
+        supersedesRecordId: wrongReply.id,
+        transcriptFinal: true,
+      });
+      expect(repairedDecision).toMatchObject({
+        turnKey: secondPrompt.id,
+        supersedesRecordId: wrongDecision.id,
+      });
+      expect(repairedStructured).toMatchObject({
+        turnKey: secondPrompt.id,
+        supersedesRecordId: wrongStructured.id,
+        transcriptFinal: true,
+      });
+    } finally {
+      cleanup(home);
+    }
+  });
+
+  test('a final Copilot response supersedes persisted partial text once', () => {
+    const home = makeTempDir();
+    try {
+      process.env.SHOWTAIL_HOME = home;
+      const session = ensureLedgerSession({
+        tool: 'github-copilot',
+        nativeSessionId: 'stream-upgrade',
+      });
+      const transcript = (text: string, isFinal: boolean): HookTranscript => ({
+        sessionId: 'stream-upgrade',
+        messages: [
+          {
+            role: 'user',
+            text: 'Explain the result.',
+            sourceId: 'copilot:user:stream-upgrade:request_1',
+            requestId: 'request_1',
+          },
+          {
+            role: 'assistant',
+            text,
+            sourceId: 'copilot:asst:stream-upgrade:request_1',
+            requestId: 'request_1',
+            isFinal,
+          },
+        ],
+        events: [
+          {
+            sequence: 0,
+            type: 'user_text',
+            sourceId: 'copilot:user:stream-upgrade:request_1',
+            text: 'Explain the result.',
+          },
+          {
+            sequence: 1,
+            type: 'assistant_text',
+            sourceId: 'copilot:asst:stream-upgrade:request_1',
+            text,
+          },
+        ],
+      });
+
+      captureTranscriptToLedger(
+        session,
+        transcript('The short partial response.', false),
+        'github-copilot',
+        [],
+        { backfill: true },
+      );
+      const partialRecords = readLedgerRecords(session.id);
+      const partialReply = partialRecords.find((record) => record.kind === 'ai_output')!;
+      const partialStructured = partialRecords.find(
+        (record) =>
+          record.kind === 'conversation_event' &&
+          record.conversationEvent?.type === 'assistant_text',
+      )!;
+
+      const finalTranscript = transcript(
+        'The complete final response with all details.',
+        true,
+      );
+      captureTranscriptToLedger(session, finalTranscript, 'github-copilot', [], {
+        backfill: true,
+      });
+      const afterFinal = readLedgerRecords(session.id);
+      expect(afterFinal.filter((record) => record.kind === 'ai_output')).toHaveLength(2);
+      expect(
+        afterFinal.filter(
+          (record) =>
+            record.kind === 'conversation_event' &&
+            record.conversationEvent?.type === 'assistant_text',
+        ),
+      ).toHaveLength(2);
+      const effective = effectiveLedgerRecords(afterFinal);
+      expect(effective.find((record) => record.kind === 'ai_output')).toMatchObject({
+        text: 'The complete final response with all details.',
+        supersedesRecordId: partialReply.id,
+        transcriptFinal: true,
+      });
+      expect(
+        effective.find(
+          (record) =>
+            record.kind === 'conversation_event' &&
+            record.conversationEvent?.type === 'assistant_text',
+        ),
+      ).toMatchObject({
+        supersedesRecordId: partialStructured.id,
+        transcriptFinal: true,
+      });
+
+      captureTranscriptToLedger(session, finalTranscript, 'github-copilot', [], {
+        backfill: true,
+      });
+      expect(readLedgerRecords(session.id)).toHaveLength(afterFinal.length);
+    } finally {
+      cleanup(home);
+    }
+  });
+
+  test('reconcile advances the effective branch past a stale correction fork', () => {
+    const home = makeTempDir();
+    try {
+      process.env.SHOWTAIL_HOME = home;
+      const session = ensureLedgerSession({
+        tool: 'github-copilot',
+        nativeSessionId: 'forked-upgrade',
+      });
+      const promptSourceId = 'copilot:user:forked-upgrade:request_1';
+      const replySourceId = 'copilot:asst:forked-upgrade:request_1';
+      const prompt = appendLedgerRecord(session.id, {
+        kind: 'prompt',
+        tool: 'github-copilot',
+        text: 'Give me the final result.',
+        sourceId: promptSourceId,
+      });
+      const partialReply = appendLedgerRecord(session.id, {
+        kind: 'ai_output',
+        tool: 'github-copilot',
+        text: 'Partial result.',
+        turnKey: prompt.id,
+        sourceId: replySourceId,
+        transcriptFinal: false,
+      });
+      const staleFinalReply = appendLedgerRecord(session.id, {
+        kind: 'ai_output',
+        tool: 'github-copilot',
+        text: 'Outdated final result.',
+        turnKey: prompt.id,
+        sourceId: replySourceId,
+        supersedesRecordId: partialReply.id,
+        transcriptFinal: true,
+      });
+      appendLedgerRecord(session.id, {
+        kind: 'ai_output',
+        tool: 'github-copilot',
+        text: 'Invalid fork tip.',
+        turnKey: prompt.id,
+        sourceId: replySourceId,
+        supersedesRecordId: partialReply.id,
+        transcriptFinal: true,
+      });
+
+      const partialStructured = appendLedgerRecord(session.id, {
+        kind: 'conversation_event',
+        tool: 'github-copilot',
+        turnKey: prompt.id,
+        sourceId: `conversation:${replySourceId}`,
+        transcriptFinal: false,
+        conversationEvent: {
+          sequence: 1,
+          type: 'assistant_text',
+          sourceId: replySourceId,
+          text: 'Partial result.',
+        },
+      });
+      const staleFinalStructured = appendLedgerRecord(session.id, {
+        kind: 'conversation_event',
+        tool: 'github-copilot',
+        turnKey: prompt.id,
+        sourceId: `conversation:${replySourceId}`,
+        supersedesRecordId: partialStructured.id,
+        transcriptFinal: true,
+        conversationEvent: {
+          sequence: 1,
+          type: 'assistant_text',
+          sourceId: replySourceId,
+          text: 'Outdated final result.',
+        },
+      });
+      appendLedgerRecord(session.id, {
+        kind: 'conversation_event',
+        tool: 'github-copilot',
+        turnKey: prompt.id,
+        sourceId: `conversation:${replySourceId}`,
+        supersedesRecordId: partialStructured.id,
+        transcriptFinal: true,
+        conversationEvent: {
+          sequence: 1,
+          type: 'assistant_text',
+          sourceId: replySourceId,
+          text: 'Invalid fork tip.',
+        },
+      });
+
+      expect(
+        unresolvedLedgerSupersessionIssues(readLedgerRecords(session.id)),
+      ).toHaveLength(2);
+
+      const transcript: HookTranscript = {
+        sessionId: 'forked-upgrade',
+        messages: [
+          {
+            role: 'user',
+            text: 'Give me the final result.',
+            sourceId: promptSourceId,
+            requestId: 'request_1',
+          },
+          {
+            role: 'assistant',
+            text: 'Correct final result.',
+            sourceId: replySourceId,
+            requestId: 'request_1',
+            isFinal: true,
+          },
+        ],
+        events: [
+          {
+            sequence: 0,
+            type: 'user_text',
+            sourceId: promptSourceId,
+            text: 'Give me the final result.',
+          },
+          {
+            sequence: 1,
+            type: 'assistant_text',
+            sourceId: replySourceId,
+            text: 'Correct final result.',
+          },
+        ],
+      };
+
+      captureTranscriptToLedger(session, transcript, 'github-copilot', [], {
+        backfill: true,
+      });
+      const afterRepair = readLedgerRecords(session.id);
+      const effective = effectiveLedgerRecords(afterRepair);
+      expect(
+        effective.find(
+          (record) => record.kind === 'ai_output' && record.sourceId === replySourceId,
+        ),
+      ).toMatchObject({
+        text: 'Correct final result.',
+        supersedesRecordId: staleFinalReply.id,
+        transcriptFinal: true,
+      });
+      expect(
+        effective.find(
+          (record) =>
+            record.kind === 'conversation_event' &&
+            record.sourceId === `conversation:${replySourceId}`,
+        ),
+      ).toMatchObject({
+        supersedesRecordId: staleFinalStructured.id,
+        transcriptFinal: true,
+        conversationEvent: expect.objectContaining({ text: 'Correct final result.' }),
+      });
+      expect(unresolvedLedgerSupersessionIssues(afterRepair)).toEqual([]);
+
+      captureTranscriptToLedger(session, transcript, 'github-copilot', [], {
+        backfill: true,
+      });
+      expect(readLedgerRecords(session.id)).toHaveLength(afterRepair.length);
     } finally {
       cleanup(home);
     }

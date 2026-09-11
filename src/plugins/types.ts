@@ -175,6 +175,10 @@ export interface HookTranscriptMessage {
   text: string;
   timestamp?: string;
   sourceId: string;
+  /** Native provider request id shared by every message in one prompt turn. */
+  requestId?: string;
+  /** True when the provider has persisted the completed response for this turn. */
+  isFinal?: boolean;
   /** For a 'plan' message: whether the student approved it. */
   approved?: boolean;
   /** For an 'assistant' message: the model that produced it, if exposed (raw id). */

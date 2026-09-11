@@ -28,6 +28,8 @@ import {
 const CLAIMS_KEY = 'showtail.projectControl.claims.v1';
 const FOCUS_KEY = 'showtail.projectControl.focus.v1';
 const MAX_CLAIMS = 20;
+const MAX_COMPLETED_PRIOR_CLAIMS = 50;
+const COMPLETED_PRIOR_CLAIM_FALLBACK_MS = 1_000;
 const MAX_TOOL_OUTPUT_BYTES = 7_900;
 const TRUNCATION_NOTICE =
   '\n... output truncated; run the command directly for verbose diagnostics.';
@@ -40,6 +42,8 @@ export interface ProjectControlInput {
 
 export interface ProjectControlExecutionOptions {
   selectorSource?: 'user' | 'semantic';
+  /** Opaque VS Code token tying duplicate delivery to one native chat request. */
+  requestIdentity?: unknown;
 }
 
 export type ProjectControlExecution =
@@ -75,7 +79,14 @@ interface ProjectQuickPickItem extends vscode.QuickPickItem {
 
 interface InFlightPriorClaim {
   action: ProjectControlAction;
+  requestIdentity?: unknown;
   execution: Promise<ProjectControlExecution>;
+}
+
+interface CompletedPriorClaim {
+  execution: Extract<ProjectControlExecution, { ok: true }>;
+  completedAt: number;
+  requestIdentity?: unknown;
 }
 
 function cleanInput(value: unknown): string | undefined {
@@ -192,6 +203,11 @@ function resolutionMessage(resolution: ProjectResolution): string {
 export class ProjectControlController {
   private readonly activationId = randomUUID();
   private readonly inFlightPriorClaims = new Map<string, InFlightPriorClaim>();
+  private readonly inFlightOpenReports = new Map<
+    string,
+    Promise<ProjectControlExecution>
+  >();
+  private readonly completedPriorClaims = new Map<string, CompletedPriorClaim>();
 
   constructor(
     private readonly context: vscode.ExtensionContext,
@@ -443,6 +459,24 @@ export class ProjectControlController {
     return this.claims().find((claim) => claim.claimId === claimId);
   }
 
+  private reusableReport(
+    selection: ProjectSelection,
+  ): { claim: StoredProjectControlClaim; path: string } | undefined {
+    const candidates = this.claims()
+      .filter(
+        (claim) =>
+          (claim.action === 'report' || claim.action === 'open_report') &&
+          claim.trailId === selection.trailId &&
+          sameLocalPath(claim.root, selection.root),
+      )
+      .sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt));
+    for (const claim of candidates) {
+      const path = reportPathFromClaim(claim, selection);
+      if (path && existsSync(path)) return { claim, path };
+    }
+    return undefined;
+  }
+
   private async openReport(path: string): Promise<boolean> {
     try {
       const document = await vscode.workspace.openTextDocument(path);
@@ -615,6 +649,63 @@ export class ProjectControlController {
       return { ok: false, action, message: 'The Showtail command was cancelled.' };
     }
     const selection = resolved.selection;
+    if (action === 'open_report' && !selector) {
+      const reusable = this.reusableReport(selection);
+      if (reusable) {
+        const opened = await this.openReport(reusable.path);
+        return this.finish(
+          action,
+          selection,
+          opened
+            ? `Opened the existing Showtail report at ${reusable.path}.`
+            : `The existing Showtail report is at ${reusable.path}, but VS Code could not open it.`,
+          reusable.path,
+          opened,
+          reusable.claim.claimId,
+        );
+      }
+    }
+    return this.executeSelection(action, selection);
+  }
+
+  private completedClaimBelongsToRequest(
+    completed: CompletedPriorClaim,
+    requestIdentity: unknown,
+  ): boolean {
+    if (completed.requestIdentity !== undefined || requestIdentity !== undefined) {
+      return Object.is(completed.requestIdentity, requestIdentity);
+    }
+    const age = Date.now() - completed.completedAt;
+    return age >= 0 && age <= COMPLETED_PRIOR_CLAIM_FALLBACK_MS;
+  }
+
+  private async replayCompletedPriorClaim(
+    action: ProjectControlAction,
+    completed: CompletedPriorClaim,
+    token?: vscode.CancellationToken,
+  ): Promise<ProjectControlExecution> {
+    const selection = await this.validateExactSelection(completed.execution.selection);
+    if (token?.isCancellationRequested) {
+      return { ok: false, action, message: 'The Showtail command was cancelled.' };
+    }
+    if (!selection) {
+      return {
+        ok: false,
+        action,
+        message: 'That project changed before Showtail could reuse the prior result.',
+      };
+    }
+
+    const sameProject =
+      selection.trailId === completed.execution.selection.trailId &&
+      sameLocalPath(selection.root, completed.execution.selection.root);
+    const reportStillExists =
+      action !== 'report' && action !== 'open_report'
+        ? true
+        : completed.execution.reportPath !== undefined &&
+          existsSync(completed.execution.reportPath);
+    if (sameProject && reportStillExists) return completed.execution;
+
     return this.executeSelection(action, selection);
   }
 
@@ -628,12 +719,31 @@ export class ProjectControlController {
     const suppliedPriorClaimId = cleanInput(rawInput.priorClaimId);
     const priorClaimId = selector ? undefined : suppliedPriorClaimId;
     if (!priorClaimId) {
-      return this.executeOnce(action, selector, undefined, token, options);
+      if (action !== 'open_report') {
+        return this.executeOnce(action, selector, undefined, token, options);
+      }
+      const openKey = `${selector ?? ''}\0${options.selectorSource ?? 'user'}`;
+      const existingOpen = this.inFlightOpenReports.get(openKey);
+      if (existingOpen) return existingOpen;
+      const execution = this.executeOnce(action, selector, undefined, token, options);
+      this.inFlightOpenReports.set(openKey, execution);
+      try {
+        return await execution;
+      } finally {
+        if (this.inFlightOpenReports.get(openKey) === execution) {
+          this.inFlightOpenReports.delete(openKey);
+        }
+      }
     }
 
     const existing = this.inFlightPriorClaims.get(priorClaimId);
     if (existing) {
-      if (existing.action === action) return existing.execution;
+      if (
+        existing.action === action &&
+        Object.is(existing.requestIdentity, options.requestIdentity)
+      ) {
+        return existing.execution;
+      }
       return {
         ok: false,
         action,
@@ -641,10 +751,40 @@ export class ProjectControlController {
       };
     }
 
-    const execution = this.executeOnce(action, selector, priorClaimId, token, options);
-    this.inFlightPriorClaims.set(priorClaimId, { action, execution });
+    const completedKey = `${action}\0${priorClaimId}`;
+    const completed = this.completedPriorClaims.get(completedKey);
+    const replayable =
+      completed !== undefined &&
+      this.completedClaimBelongsToRequest(completed, options.requestIdentity);
+    if (completed && !replayable) this.completedPriorClaims.delete(completedKey);
+
+    const execution = replayable
+      ? this.replayCompletedPriorClaim(action, completed, token)
+      : this.executeOnce(action, selector, priorClaimId, token, options);
+    this.inFlightPriorClaims.set(priorClaimId, {
+      action,
+      execution,
+      ...(options.requestIdentity !== undefined
+        ? { requestIdentity: options.requestIdentity }
+        : {}),
+    });
     try {
-      return await execution;
+      const result = await execution;
+      if (result.ok) {
+        this.completedPriorClaims.set(completedKey, {
+          execution: result,
+          completedAt: Date.now(),
+          ...(options.requestIdentity !== undefined
+            ? { requestIdentity: options.requestIdentity }
+            : {}),
+        });
+        while (this.completedPriorClaims.size > MAX_COMPLETED_PRIOR_CLAIMS) {
+          const oldest = this.completedPriorClaims.keys().next().value;
+          if (oldest === undefined) break;
+          this.completedPriorClaims.delete(oldest);
+        }
+      }
+      return result;
     } finally {
       if (this.inFlightPriorClaims.get(priorClaimId)?.execution === execution) {
         this.inFlightPriorClaims.delete(priorClaimId);
@@ -755,7 +895,10 @@ export function registerProjectControlTool(
     },
     async invoke(options, token) {
       return projectControlToolResult(
-        await controller.execute(options.input, token, { selectorSource: 'semantic' }),
+        await controller.execute(options.input, token, {
+          selectorSource: 'semantic',
+          requestIdentity: options.toolInvocationToken,
+        }),
       );
     },
   };

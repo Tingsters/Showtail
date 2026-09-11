@@ -45,6 +45,7 @@ const PROJECT_EVIDENCE = new Set([
   'marker',
   'workspace',
   'edit',
+  'tool',
   'attachment',
   'control',
   'cwd',

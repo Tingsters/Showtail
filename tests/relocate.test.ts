@@ -100,7 +100,8 @@ function writeDiffFor(content: string): string {
 /**
  * A ledger session that captured one whole-file Write of `content` at `file`,
  * exactly as the post-edit hook would have recorded it (absolute path, live hash,
- * `+`-prefixed diff), plus enough prompts to clear the signal floor.
+ * `+`-prefixed diff). The edit clears the signal floor, so one prompt keeps the
+ * fixture to one independently routable turn unless a test requests more.
  */
 function captureSession(
   nativeId: string,
@@ -113,7 +114,7 @@ function captureSession(
     nativeSessionId: nativeId,
     cwd: dirname(file),
   });
-  for (let i = 0; i < (opts.prompts ?? 3); i += 1) {
+  for (let i = 0; i < (opts.prompts ?? 1); i += 1) {
     appendLedgerRecord(s.id, {
       kind: 'prompt',
       tool: 'claude-code',
@@ -215,6 +216,73 @@ describe('relocation: visibility of moved work', () => {
 });
 
 describe('relocation: content-lineage matching', () => {
+  test('matching ignores content evidence replaced by a valid correction', async () => {
+    const recorded = makeTempDir();
+    const obsoleteCandidate = makeTempDir();
+    const correctedCandidate = makeTempDir();
+    const obsoleteSource = GAME_SOURCE;
+    const correctedSource = [
+      'import csv',
+      '',
+      'def load_words(path):',
+      '    """Read accepted guesses for the sparkle word game."""',
+      '    with open(path, encoding="utf8") as handle:',
+      '        return [row[0].strip() for row in csv.reader(handle) if row]',
+      '',
+      'def score_guess(guess, accepted):',
+      '    return len(guess) if guess in accepted else 0',
+    ].join('\n');
+    try {
+      const session = ensureLedgerSession({
+        tool: 'codex',
+        nativeSessionId: 's-corrected-relocation-evidence',
+        cwd: recorded,
+      });
+      const prompt = appendLedgerRecord(session.id, {
+        kind: 'prompt',
+        tool: 'codex',
+        text: 'update the sparkle word game',
+      });
+      const obsolete = appendLedgerRecord(session.id, {
+        kind: 'edit',
+        tool: 'codex',
+        file: join(recorded, 'fairy', 'main.py'),
+        diff: writeDiffFor(obsoleteSource),
+        sha256: sha256OfString(obsoleteSource),
+        turnKey: prompt.id,
+        sourceId: 'corrected-relocation-edit',
+      });
+      appendLedgerRecord(session.id, {
+        kind: 'edit',
+        tool: 'codex',
+        file: join(recorded, 'word', 'main.py'),
+        diff: writeDiffFor(correctedSource),
+        sha256: sha256OfString(correctedSource),
+        turnKey: prompt.id,
+        sourceId: obsolete.sourceId,
+        supersedesRecordId: obsolete.id,
+      });
+      const segment = ensureLedgerSegments(session).segments[0]!;
+      seedProjectFile(obsoleteCandidate, obsoleteSource);
+      seedProjectFile(correctedCandidate, correctedSource);
+
+      expect(await matchSessionToRoot(session, obsoleteCandidate)).toBe(null);
+      expect(await matchLedgerSegmentToRoot(session, segment, obsoleteCandidate)).toBe(
+        null,
+      );
+      expect(await matchSessionToRoot(session, correctedCandidate)).toEqual(
+        expect.objectContaining({ tier: 'A' }),
+      );
+      expect(
+        await matchLedgerSegmentToRoot(session, segment, correctedCandidate),
+      ).toEqual(expect.objectContaining({ tier: 'A' }));
+    } finally {
+      cleanup(recorded);
+      cleanup(obsoleteCandidate);
+      cleanup(correctedCandidate);
+    }
+  });
+
   test('segment matching cannot borrow an exact hash from a sibling turn', async () => {
     const source = makeTempDir();
     const movedFirst = makeTempDir();

@@ -13,12 +13,15 @@ import { establishIdentity } from '../core/authors.ts';
 import { requireCaptureContinuation } from '../core/captureGuard.ts';
 import { gitToplevel } from '../core/git.ts';
 import {
+  effectiveLedgerRecords,
   effectiveLedgerSegmentPath,
   ensureLedgerSegments,
+  isNativeEditorSession,
   listActionableLedgerRanges,
   listLedgerSegmentViews,
   markPlaced,
   pendingLedgerRangesForRoot,
+  readLedgerRecords,
   readLedgerSegmentRecords,
   sessionTouchesPath,
   unplacedSessions,
@@ -30,7 +33,7 @@ import {
 import { emitJson } from '../core/output.ts';
 import { makeId } from '../core/ids.ts';
 import { ShowtailError } from '../core/errors.ts';
-import { noteKnownProject } from '../core/globalConfig.ts';
+import { noteKnownProject, relocatedKnownProjectFrom } from '../core/globalConfig.ts';
 import {
   applyRebase,
   matchLedgerSegmentToRoot,
@@ -136,6 +139,17 @@ export interface EnsureInitOptions {
   continueCapture?: () => boolean;
 }
 
+export interface EnsureInitResult {
+  created: boolean;
+  paths: ShowtailPaths;
+  /** Automatic capture refused to recreate a known trail's vacated prior path. */
+  skipped?: {
+    reason: 'relocated-project-path';
+    trailId: string;
+    currentPath: string;
+  };
+}
+
 /** Build an unpublished sibling trail used to make first creation transactional. */
 function stagedPaths(paths: ShowtailPaths): ShowtailPaths {
   const base = join(
@@ -180,7 +194,7 @@ function removeStagedTrail(paths: ShowtailPaths): void {
 export async function ensureInitialized(
   root: string,
   options: EnsureInitOptions = {},
-): Promise<{ created: boolean; paths: ShowtailPaths }> {
+): Promise<EnsureInitResult> {
   requireCaptureContinuation(options.continueCapture);
   const paths = pathsForRoot(root);
   if (existsSync(paths.config)) {
@@ -215,6 +229,21 @@ export async function ensureInitialized(
     requireCaptureContinuation(options.continueCapture);
     noteKnownProject(root, config.trailId);
     return { created: false, paths };
+  }
+
+  if (options.initialization?.mode === 'automatic') {
+    const relocated = relocatedKnownProjectFrom(root);
+    if (relocated) {
+      return {
+        created: false,
+        paths,
+        skipped: {
+          reason: 'relocated-project-path',
+          trailId: relocated.trailId,
+          currentPath: relocated.currentPath,
+        },
+      };
+    }
   }
 
   // Git availability controls commit capture. The on-disk `.git` entry identifies
@@ -498,6 +527,16 @@ function ambiguousRangeRelatesToRoot(range: LedgerRangeView, root: string): bool
   return exactMatch || enclosesEveryCandidate;
 }
 
+/** Segment records after valid correction chains replace their obsolete ancestors. */
+function effectiveSegmentRecords(session: LedgerSession, segment: LedgerSegment) {
+  const effectiveIds = new Set(
+    effectiveLedgerRecords(readLedgerRecords(session.id)).map((record) => record.id),
+  );
+  return readLedgerSegmentRecords(session.id, segment).filter((record) =>
+    effectiveIds.has(record.id),
+  );
+}
+
 /** Raw-path compatibility for explicit `track <subfolder>` without session bleed. */
 function segmentTouchesPath(
   session: LedgerSession,
@@ -505,7 +544,7 @@ function segmentTouchesPath(
   folder: string,
   segmentCount: number,
 ): boolean {
-  const records = readLedgerSegmentRecords(session.id, segment);
+  const records = effectiveSegmentRecords(session, segment);
   const editPaths = records.flatMap((record) =>
     record.kind === 'edit' && record.file
       ? [effectiveLedgerSegmentPath(segment, record.file)]
@@ -530,9 +569,14 @@ function segmentTouchesPath(
       return true;
     }
   }
-  // Preserve the legacy session-wide fallback only when it cannot leak a sibling
-  // turn from the same native editor chat into this project.
-  return segmentCount === 1 && sessionTouchesPath(session, folder);
+  // Preserve the legacy session-wide fallback for terminal tools, whose cwd is
+  // direct process evidence. Editor workspace metadata is ambient and may be
+  // refreshed long after a context-free turn, even when the chat has one turn.
+  return (
+    segmentCount === 1 &&
+    !isNativeEditorSession(session) &&
+    sessionTouchesPath(session, folder)
+  );
 }
 
 function rangeTouchesPath(
@@ -562,11 +606,6 @@ function discoverDirectWork(
     ...(options.ledgerSessionId ? { sessionId: options.ledgerSessionId } : {}),
     persist: options.persist,
   }).filter((range) => range.prompts > 0 || range.edits > 0);
-  const sessionRanges = listActionableLedgerRanges({
-    includeHidden: true,
-    ...(options.ledgerSessionId ? { sessionId: options.ledgerSessionId } : {}),
-    persist: options.persist,
-  });
   const resolved = pendingLedgerRangesForRoot(target, {
     includeHidden: true,
     persist: options.persist,
@@ -576,23 +615,6 @@ function discoverDirectWork(
       (range.prompts > 0 || range.edits > 0),
   );
   const resolvedIds = new Set(resolved.map((range) => range.selector));
-  const rootsBySession = new Map<string, string[]>();
-  const ambiguousSessions = new Set<string>();
-  for (const range of sessionRanges) {
-    if (range.route.state === 'ambiguous') {
-      ambiguousSessions.add(range.session.id);
-      continue;
-    }
-    if (range.route.state !== 'tracked' && range.route.state !== 'candidate') {
-      continue;
-    }
-    const routeRoot = range.route.root;
-    const roots = rootsBySession.get(range.session.id) ?? [];
-    if (!roots.some((root) => samePath(root, routeRoot))) {
-      roots.push(routeRoot);
-    }
-    rootsBySession.set(range.session.id, roots);
-  }
   const ranges = all.filter((range) => {
     if (range.route.state === 'ambiguous') return false;
     if (resolvedIds.has(range.selector)) return true;
@@ -611,16 +633,10 @@ function discoverDirectWork(
     if (options.mode === 'explicit' && rangeTouchesPath(range, target, options.persist)) {
       return true;
     }
-    // A prompt-only prefix can safely travel with its sole project witness. If
-    // the native chat later touches A and B, it stays pending for manual review.
-    const roots = rootsBySession.get(range.session.id) ?? [];
-    return (
-      range.route.state === 'none' &&
-      range.edits === 0 &&
-      !ambiguousSessions.has(range.session.id) &&
-      roots.length === 1 &&
-      samePath(roots[0]!, target)
-    );
+    // A context-free prefix is not owned by a later edit merely because that edit
+    // is the chat's sole project witness. Structured per-turn tool evidence is
+    // resolved in ledgerSegmentProjectContexts; anything still `none` stays inbox.
+    return false;
   });
   const ambiguousRanges = all.filter(
     (range) =>
@@ -631,7 +647,7 @@ function discoverDirectWork(
 
 function segmentEditPaths(session: LedgerSession, segment: LedgerSegment): string[] {
   const paths: string[] = [];
-  for (const record of readLedgerSegmentRecords(session.id, segment)) {
+  for (const record of effectiveSegmentRecords(session, segment)) {
     if (record.kind !== 'edit' || !record.file) continue;
     const file = effectiveLedgerSegmentPath(segment, record.file);
     if (!paths.some((existing) => samePath(existing, file))) paths.push(file);

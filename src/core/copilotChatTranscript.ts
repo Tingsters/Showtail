@@ -88,6 +88,8 @@ export interface CopilotMessage {
   sourceId: string;
   /** Native request id shared by the prompt and every child of this turn. */
   requestId?: string;
+  /** True when Copilot persisted `request.result`, its completed-response marker. */
+  isFinal?: boolean;
   /** Explicit student attachments on this exact native request. */
   attachments?: LedgerProjectAttachment[];
   /** Validated result from Showtail's registered local project-control tool. */
@@ -596,16 +598,40 @@ function requestInAutomaticCaptureWindow(
 
 /**
  * Assemble the assistant's text reply from a request's `response[]`. The streamed
- * markdown parts have NO `kind` and carry a `value` string; structural parts
- * (`textEditGroup`, `toolInvocationSerialized`, `inlineReference`, …) and internal
- * `thinking` are skipped. Falls back to joining `result.metadata.toolCallRounds[]`
- * `response` strings when no markdown parts are present.
+ * markdown parts have NO `kind` and carry a `value` string. Visible
+ * `inlineReference` parts become inline-code labels; edit/tool/thinking internals
+ * are skipped. Falls back to joining `result.metadata.toolCallRounds[]` `response`
+ * strings when no visible response parts are present.
  */
+function inlineReferenceText(part: Record<string, unknown>): string | undefined {
+  const reference = prop(part, 'inlineReference');
+  const value =
+    asString(prop(reference, 'name')) ??
+    asString(prop(reference, 'fsPath')) ??
+    asString(prop(reference, 'external')) ??
+    asString(prop(reference, 'path')) ??
+    asString(prop(prop(reference, 'uri'), 'fsPath')) ??
+    asString(reference);
+  if (!value) return undefined;
+
+  // Choose a delimiter longer than every run inside the label so symbol names
+  // containing backticks still render as one inline-code reference.
+  const longestRun = Math.max(0, ...[...value.matchAll(/`+/g)].map((m) => m[0].length));
+  const delimiter = '`'.repeat(longestRun + 1);
+  const padding = value.startsWith('`') || value.endsWith('`') ? ' ' : '';
+  return `${delimiter}${padding}${value}${padding}${delimiter}`;
+}
+
 function assistantText(request: unknown): string {
   const parts = asArray(prop(request, 'response')) ?? [];
   const chunks: string[] = [];
   for (const part of parts) {
     if (!isObject(part)) continue;
+    if (prop(part, 'kind') === 'inlineReference') {
+      const reference = inlineReferenceText(part);
+      if (reference) chunks.push(reference);
+      continue;
+    }
     if (prop(part, 'kind') !== undefined) continue; // structural / thinking / tool
     const value = asString(prop(part, 'value'));
     if (value) chunks.push(value);
@@ -829,6 +855,7 @@ export function parseCopilotSession(
     if (isOwnAgent(extId)) return;
 
     const requestId = asString(prop(request, 'requestId')) ?? String(i);
+    const isFinal = prop(request, 'result') !== undefined;
     const attachments = explicitRequestAttachments(request);
     const projectControl = projectControlFromRequest(request);
     // A request records ONE epoch-ms `timestamp`, but its parts happen in sequence:
@@ -932,6 +959,7 @@ export function parseCopilotSession(
         timestamp: tsAt(1 + decisions.length),
         sourceId,
         requestId,
+        isFinal,
       });
       events.push({
         sequence: eventSequence++,

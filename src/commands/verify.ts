@@ -37,6 +37,10 @@ import {
   type JournalShard,
 } from '../core/journal.ts';
 import type { JournalEntry } from '../types.ts';
+import {
+  projectSemanticConflicts,
+  type ProjectSemanticConflict,
+} from './projectSemantics.ts';
 
 export interface VerifyOptions {
   cwd?: string;
@@ -81,6 +85,8 @@ function isAbsoluteRecordedPath(p: string): boolean {
 export interface VerifyResult {
   ok: boolean;
   checks: CheckResult[];
+  /** Machine-ledger identity/routing problems found beyond structural integrity. */
+  semanticConflicts: ProjectSemanticConflict[];
 }
 
 /** One author's journal, read once and shared by every check that needs it. */
@@ -757,7 +763,33 @@ export async function verifyProject(paths: ShowtailPaths): Promise<VerifyResult>
   }
   checks.push(pathCheck);
 
-  // 8. A report can be generated. This one deliberately re-reads the trail: it
+  // 8. Machine-local placement metadata agrees with the trail projection. Hashes
+  //    prove that recorded content was not changed; stable ledger source IDs prove
+  //    that all content declared placed here is actually present, exactly once.
+  let semanticConflicts: ProjectSemanticConflict[] = [];
+  const semanticCheck: CheckResult = {
+    name: 'ledger routing and projection are semantically consistent',
+    ok: false,
+    details: [],
+  };
+  try {
+    semanticConflicts = projectSemanticConflicts(
+      paths,
+      journals.flatMap((journal) => journal.entries),
+    );
+    semanticCheck.ok = semanticConflicts.length === 0;
+    semanticCheck.details =
+      semanticConflicts.length === 0
+        ? ['No duplicate trail identities or incomplete ledger projections found.']
+        : semanticConflicts.map((conflict) => `${conflict.code}: ${conflict.message}`);
+  } catch (err) {
+    semanticCheck.details.push(
+      `Semantic consistency could not be checked: ${(err as Error).message}`,
+    );
+  }
+  checks.push(semanticCheck);
+
+  // 9. A report can be generated. This one deliberately re-reads the trail: it
   //    exercises the real report path end to end, which is the whole point.
   const reportCheck: CheckResult = {
     name: 'a report can be generated',
@@ -774,7 +806,7 @@ export async function verifyProject(paths: ShowtailPaths): Promise<VerifyResult>
   }
   checks.push(reportCheck);
 
-  return { ok: checks.every((c) => c.ok), checks };
+  return { ok: checks.every((c) => c.ok), checks, semanticConflicts };
 }
 
 /** CLI entry: verify the project and print a clear pass/fail summary. */
@@ -803,7 +835,12 @@ export async function runVerify(options: VerifyOptions = {}): Promise<boolean> {
   assertProjectCommandIdentity(identityPin);
   const result = await verifyProject(paths);
   assertProjectCommandIdentity(identityPin);
-  const trailId = readConfig(paths).trailId ?? null;
+  let trailId: string | null = null;
+  try {
+    trailId = readConfig(paths).trailId ?? null;
+  } catch {
+    // The config check already carries the parse failure in the verify result.
+  }
 
   if (options.json) {
     // Keep the default envelope compact; full diagnostic prose is opt-in.
@@ -811,6 +848,10 @@ export async function runVerify(options: VerifyOptions = {}): Promise<boolean> {
       ok: result.ok,
       root: paths.root,
       trailId,
+      semantic: {
+        conflicts: result.semanticConflicts.length,
+        ...(options.verboseJson ? { details: result.semanticConflicts } : {}),
+      },
       ...(target?.selection
         ? { selection: target.selection satisfies ProjectSelection }
         : {}),

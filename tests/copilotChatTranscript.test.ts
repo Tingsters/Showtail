@@ -331,6 +331,56 @@ describe('parseCopilotChatTranscript', () => {
     }
   });
 
+  test('preserves visible inline references and marks only completed replies final', () => {
+    const dir = makeTempDir();
+    try {
+      const file = join(dir, 'fairy_sparkle.py');
+      const parsed = parseCopilotSession(
+        {
+          sessionId: 'inline-references',
+          requests: [
+            {
+              requestId: 'partial-request',
+              timestamp: ms('2026-09-10T10:00:00.000Z'),
+              message: { text: 'Where is the game?' },
+              response: [
+                { value: 'The game is located at: ' },
+                { kind: 'inlineReference', inlineReference: { fsPath: file } },
+                { kind: 'thinking', value: 'hidden reasoning' },
+              ],
+            },
+            {
+              requestId: 'final-request',
+              timestamp: ms('2026-09-10T10:01:00.000Z'),
+              message: { text: 'Which symbol starts it?' },
+              response: [
+                { value: 'Run ' },
+                {
+                  kind: 'inlineReference',
+                  inlineReference: { name: 'render`Game', fsPath: file },
+                },
+                { kind: 'toolInvocationSerialized', value: 'hidden tool output' },
+              ],
+              result: {},
+            },
+          ],
+        },
+        dir,
+      );
+
+      const replies = parsed.messages.filter((message) => message.role === 'assistant');
+      expect(replies[0]).toMatchObject({
+        text: `The game is located at: \`${file}\``,
+        isFinal: false,
+      });
+      expect(replies[1]?.text).toContain('render`Game');
+      expect(replies[1]?.isFinal).toBe(true);
+      expect(replies.map((reply) => reply.text).join('\n')).not.toContain('hidden');
+    } finally {
+      cleanup(dir);
+    }
+  });
+
   test('keeps only explicit request attachments and a marker from the exact control tool result', () => {
     const attachedProject = makeTempDir();
     const selectedProject = makeTempDir();
@@ -1259,7 +1309,7 @@ describe('copilot import (end to end via --file)', () => {
     }
   });
 
-  test('--auto prunes a provisional trail when the same session becomes mixed-root', async () => {
+  test('--auto vacates a provisional trail when the same session becomes mixed-root', async () => {
     const provisional = makeTempDir();
     const second = makeTempDir();
     try {
@@ -1312,7 +1362,11 @@ describe('copilot import (end to end via --file)', () => {
         cwd: provisional,
       });
 
-      expect(existsSync(join(provisional, '.showtail'))).toBe(false);
+      // Segmented cleanup retains the automatic shell to avoid racing with a
+      // concurrent turn, while removing every projection of this session.
+      expect(existsSync(provisionalPaths.config)).toBe(true);
+      expect(readAllEvents(provisionalPaths)).toHaveLength(0);
+      expect(readAllArtifacts(provisionalPaths)).toHaveLength(0);
       expect(readAllEvents(secondPaths)).toHaveLength(secondEvents);
       expect(readAllArtifacts(secondPaths)).toHaveLength(0);
       const inbox = unplacedSessions({ includeHidden: true }).filter(
@@ -1343,7 +1397,9 @@ describe('copilot import (end to end via --file)', () => {
       );
       expect(after).toHaveLength(1);
       expect(readLedgerRecords(after[0]!.id)).toHaveLength(before);
-      expect(existsSync(join(provisional, '.showtail'))).toBe(false);
+      expect(existsSync(provisionalPaths.config)).toBe(true);
+      expect(readAllEvents(provisionalPaths)).toHaveLength(0);
+      expect(readAllArtifacts(provisionalPaths)).toHaveLength(0);
       expect(readAllEvents(secondPaths)).toHaveLength(secondEvents);
     } finally {
       cleanup(provisional);

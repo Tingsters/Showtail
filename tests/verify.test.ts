@@ -12,6 +12,7 @@ import {
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { runInit } from '../src/commands/init.ts';
+import { captureTranscriptToLedger } from '../src/core/ledgerCapture.ts';
 import { gitIgnoredPaths } from '../src/core/git.ts';
 import { authorSlugs } from '../src/core/authors.ts';
 import { redactTrail } from '../src/commands/redact.ts';
@@ -19,8 +20,19 @@ import { addArtifact } from '../src/core/artifacts.ts';
 import { logEvent, removeEventsByBatch } from '../src/core/events.ts';
 import { startSession } from '../src/core/sessions.ts';
 import {
+  appendLedgerRecord,
+  effectiveLedgerRecords,
+  ensureLedgerSegments,
+  ensureLedgerSession,
+  ledgerRecordProjectionSourceId,
+  markLedgerSegmentPlaced,
+  readLedgerRecords,
+} from '../src/core/ledger.ts';
+import { materializeLedgerSegment } from '../src/core/materialize.ts';
+import {
   authorPaths,
   pathsForRoot,
+  readConfig,
   type AuthorPaths,
   type ShowtailPaths,
 } from '../src/core/storage.ts';
@@ -33,6 +45,7 @@ import {
 } from '../src/core/journal.ts';
 import { verifyProject } from '../src/commands/verify.ts';
 import type { JournalEntry } from '../src/types.ts';
+import type { HookTranscript } from '../src/plugins/types.ts';
 import { authorFor, cleanup, makeTempDir, runCli } from './helpers.ts';
 
 /** Path to an author's first journal segment, ensuring the shard dir exists. */
@@ -185,6 +198,470 @@ describe('verify', () => {
       expect(checkByName(result, 'journal entries are valid').ok).toBe(false);
     } finally {
       cleanup(dir);
+    }
+  });
+
+  test('fails when multiple trail IDs claim the same current project path', async () => {
+    const dir = makeTempDir();
+    const home = makeTempDir();
+    const previousHome = process.env.SHOWTAIL_HOME;
+    try {
+      process.env.SHOWTAIL_HOME = home;
+      await runInit({ cwd: dir });
+      const paths = pathsForRoot(dir);
+      const trailId = readConfig(paths).trailId!;
+      writeFileSync(
+        join(home, 'config.json'),
+        JSON.stringify({
+          version: 1,
+          knownProjects: [
+            {
+              trailId: 'trl_duplicate_same_path',
+              path: dir,
+              lastSeenAt: '2026-09-11T00:00:01.000Z',
+            },
+          ],
+        }) + '\n',
+      );
+
+      const result = await verifyProject(paths);
+      expect(result.ok).toBe(false);
+      expect(result.semanticConflicts).toContainEqual(
+        expect.objectContaining({
+          code: 'SAME_PATH_TRAIL_ID_CONFLICT',
+          trailIds: expect.arrayContaining([trailId, 'trl_duplicate_same_path']),
+        }),
+      );
+      const semantic = checkByName(
+        result,
+        'ledger routing and projection are semantically consistent',
+      );
+      expect(semantic.ok).toBe(false);
+      expect(semantic.details.join('\n')).toContain('SAME_PATH_TRAIL_ID_CONFLICT');
+    } finally {
+      if (previousHome === undefined) delete process.env.SHOWTAIL_HOME;
+      else process.env.SHOWTAIL_HOME = previousHome;
+      cleanup(dir);
+      cleanup(home);
+    }
+  });
+
+  test('returns a failed semantic check instead of throwing for invalid config', async () => {
+    const dir = makeTempDir();
+    const home = makeTempDir();
+    const previousHome = process.env.SHOWTAIL_HOME;
+    try {
+      process.env.SHOWTAIL_HOME = home;
+      await runInit({ cwd: dir });
+      const paths = pathsForRoot(dir);
+      writeFileSync(paths.config, '{ broken', 'utf8');
+
+      const result = await verifyProject(paths);
+      expect(result.ok).toBe(false);
+      expect(result.semanticConflicts).toEqual([]);
+      expect(checkByName(result, 'config.json is present and valid').ok).toBe(false);
+      expect(
+        checkByName(result, 'ledger routing and projection are semantically consistent'),
+      ).toMatchObject({
+        ok: false,
+        details: [expect.stringContaining('Semantic consistency could not be checked')],
+      });
+    } finally {
+      if (previousHome === undefined) delete process.env.SHOWTAIL_HOME;
+      else process.env.SHOWTAIL_HOME = previousHome;
+      cleanup(dir);
+      cleanup(home);
+    }
+  });
+
+  test('CLI JSON returns the verification envelope for invalid config', async () => {
+    const dir = makeTempDir();
+    const home = makeTempDir();
+    const previousHome = process.env.SHOWTAIL_HOME;
+    try {
+      process.env.SHOWTAIL_HOME = home;
+      await runInit({ cwd: dir });
+      const paths = pathsForRoot(dir);
+      writeFileSync(paths.config, '{ broken', 'utf8');
+
+      const result = runCli(dir, ['verify', '--json']);
+      expect(result.code).toBe(3);
+      expect(result.stderr).toBe('');
+      const payload = JSON.parse(result.stdout);
+      expect(payload).toMatchObject({
+        ok: false,
+        root: paths.root,
+        trailId: null,
+        semantic: { conflicts: 0 },
+      });
+      expect(payload).not.toHaveProperty('errorCode');
+      expect(payload.checks).toContainEqual(
+        expect.objectContaining({
+          name: 'config.json is present and valid',
+          ok: false,
+        }),
+      );
+    } finally {
+      if (previousHome === undefined) delete process.env.SHOWTAIL_HOME;
+      else process.env.SHOWTAIL_HOME = previousHome;
+      cleanup(dir);
+      cleanup(home);
+    }
+  });
+
+  test('fails when a placed ledger turn is missing from the trail projection', async () => {
+    const dir = makeTempDir();
+    const home = makeTempDir();
+    const previousHome = process.env.SHOWTAIL_HOME;
+    try {
+      process.env.SHOWTAIL_HOME = home;
+      await runInit({ cwd: dir });
+      const paths = pathsForRoot(dir);
+      const trailId = readConfig(paths).trailId!;
+      const ledger = ensureLedgerSession({
+        tool: 'codex',
+        nativeSessionId: 'verify-missing-projection',
+        cwd: dir,
+      });
+      const prompt = appendLedgerRecord(ledger.id, {
+        kind: 'prompt',
+        tool: 'codex',
+        text: 'this prompt should have been projected',
+        sourceId: 'copilot:user:test-session:request_first',
+      });
+      appendLedgerRecord(ledger.id, {
+        kind: 'ai_output',
+        tool: 'codex',
+        text: 'this reply should have been projected',
+        turnKey: prompt.id,
+        sourceId: 'copilot:asst:test-session:request_second',
+      });
+      const segment = ensureLedgerSegments(ledger).segments[0]!;
+      markLedgerSegmentPlaced(ledger.id, segment.id, trailId, dir);
+
+      const result = await verifyProject(paths);
+      expect(result.ok).toBe(false);
+      expect(result.semanticConflicts).toContainEqual(
+        expect.objectContaining({
+          code: 'MISSING_LEDGER_PROJECTION',
+          sessionId: ledger.id,
+          segmentId: segment.id,
+          count: 2,
+        }),
+      );
+      expect(result.semanticConflicts).toContainEqual(
+        expect.objectContaining({
+          code: 'COLLAPSED_NATIVE_REQUEST_IDS',
+          sessionId: ledger.id,
+          segmentId: segment.id,
+          count: 2,
+        }),
+      );
+    } finally {
+      if (previousHome === undefined) delete process.env.SHOWTAIL_HOME;
+      else process.env.SHOWTAIL_HOME = previousHome;
+      cleanup(dir);
+      cleanup(home);
+    }
+  });
+
+  test('requires only the final projection of a corrected ledger record', async () => {
+    const dir = makeTempDir();
+    const home = makeTempDir();
+    const previousHome = process.env.SHOWTAIL_HOME;
+    try {
+      process.env.SHOWTAIL_HOME = home;
+      await runInit({ cwd: dir });
+      const paths = pathsForRoot(dir);
+      const author = authorFor(paths);
+      const trailId = readConfig(paths).trailId!;
+      const ledger = ensureLedgerSession({
+        tool: 'codex',
+        nativeSessionId: 'verify-corrected-projection',
+        cwd: dir,
+      });
+      const prompt = appendLedgerRecord(ledger.id, {
+        kind: 'prompt',
+        tool: 'codex',
+        text: 'capture the completed response',
+        sourceId: 'verify-revision-prompt',
+      });
+      const draft = appendLedgerRecord(ledger.id, {
+        kind: 'ai_output',
+        tool: 'codex',
+        text: 'partial response',
+        turnKey: prompt.id,
+        sourceId: 'verify-revision-response',
+        transcriptFinal: false,
+      });
+      const final = appendLedgerRecord(ledger.id, {
+        kind: 'ai_output',
+        tool: 'codex',
+        text: 'completed response',
+        turnKey: prompt.id,
+        sourceId: draft.sourceId,
+        supersedesRecordId: draft.id,
+        transcriptFinal: true,
+      });
+      const segment = ensureLedgerSegments(ledger).segments[0]!;
+      markLedgerSegmentPlaced(ledger.id, segment.id, trailId, dir);
+
+      await logEvent(author, {
+        type: 'prompt',
+        text: prompt.text!,
+        tool: 'codex',
+        sourceId: ledgerRecordProjectionSourceId(ledger.id, prompt),
+      });
+      await logEvent(author, {
+        type: 'ai_output',
+        text: final.text!,
+        tool: 'codex',
+        sourceId: ledgerRecordProjectionSourceId(ledger.id, final),
+      });
+
+      const result = await verifyProject(paths);
+      expect(result.ok).toBe(true);
+      expect(result.semanticConflicts).toEqual([]);
+    } finally {
+      if (previousHome === undefined) delete process.env.SHOWTAIL_HOME;
+      else process.env.SHOWTAIL_HOME = previousHome;
+      cleanup(dir);
+      cleanup(home);
+    }
+  });
+
+  test('fails when a superseded ledger projection remains in the journal', async () => {
+    const dir = makeTempDir();
+    const home = makeTempDir();
+    const previousHome = process.env.SHOWTAIL_HOME;
+    try {
+      process.env.SHOWTAIL_HOME = home;
+      await runInit({ cwd: dir });
+      const paths = pathsForRoot(dir);
+      const author = authorFor(paths);
+      const trailId = readConfig(paths).trailId!;
+      const ledger = ensureLedgerSession({
+        tool: 'codex',
+        nativeSessionId: 'verify-obsolete-projection',
+        cwd: dir,
+      });
+      const prompt = appendLedgerRecord(ledger.id, {
+        kind: 'prompt',
+        tool: 'codex',
+        text: 'capture the completed response',
+        sourceId: 'verify-obsolete-prompt',
+      });
+      const draft = appendLedgerRecord(ledger.id, {
+        kind: 'ai_output',
+        tool: 'codex',
+        text: 'partial response',
+        turnKey: prompt.id,
+        sourceId: 'verify-obsolete-response',
+        transcriptFinal: false,
+      });
+      const final = appendLedgerRecord(ledger.id, {
+        kind: 'ai_output',
+        tool: 'codex',
+        text: 'completed response',
+        turnKey: prompt.id,
+        sourceId: draft.sourceId,
+        supersedesRecordId: draft.id,
+        transcriptFinal: true,
+      });
+      const segment = ensureLedgerSegments(ledger).segments[0]!;
+      markLedgerSegmentPlaced(ledger.id, segment.id, trailId, dir);
+
+      for (const record of [prompt, draft, final]) {
+        await logEvent(author, {
+          type: record.kind === 'prompt' ? 'prompt' : 'ai_output',
+          text: record.text!,
+          tool: 'codex',
+          sourceId: ledgerRecordProjectionSourceId(ledger.id, record),
+        });
+      }
+
+      const result = await verifyProject(paths);
+      expect(result.ok).toBe(false);
+      expect(result.semanticConflicts).toContainEqual(
+        expect.objectContaining({
+          code: 'OBSOLETE_LEDGER_PROJECTION',
+          sessionId: ledger.id,
+          segmentId: segment.id,
+          sourceIds: [ledgerRecordProjectionSourceId(ledger.id, draft)],
+          count: 1,
+        }),
+      );
+    } finally {
+      if (previousHome === undefined) delete process.env.SHOWTAIL_HOME;
+      else process.env.SHOWTAIL_HOME = previousHome;
+      cleanup(dir);
+      cleanup(home);
+    }
+  });
+
+  test('fails when an expected ledger projection appears more than once', async () => {
+    const dir = makeTempDir();
+    const home = makeTempDir();
+    const previousHome = process.env.SHOWTAIL_HOME;
+    try {
+      process.env.SHOWTAIL_HOME = home;
+      await runInit({ cwd: dir });
+      const paths = pathsForRoot(dir);
+      const author = authorFor(paths);
+      const trailId = readConfig(paths).trailId!;
+      const ledger = ensureLedgerSession({
+        tool: 'codex',
+        nativeSessionId: 'verify-duplicate-projection',
+        cwd: dir,
+      });
+      const prompt = appendLedgerRecord(ledger.id, {
+        kind: 'prompt',
+        tool: 'codex',
+        text: 'record this once',
+        sourceId: 'verify-duplicate-prompt',
+      });
+      const segment = ensureLedgerSegments(ledger).segments[0]!;
+      markLedgerSegmentPlaced(ledger.id, segment.id, trailId, dir);
+      const sourceId = ledgerRecordProjectionSourceId(ledger.id, prompt);
+
+      for (let i = 0; i < 2; i += 1) {
+        await logEvent(author, {
+          type: 'prompt',
+          text: prompt.text!,
+          tool: 'codex',
+          sourceId,
+        });
+      }
+
+      const result = await verifyProject(paths);
+      expect(result.ok).toBe(false);
+      expect(result.semanticConflicts).toContainEqual(
+        expect.objectContaining({
+          code: 'DUPLICATE_LEDGER_PROJECTION',
+          sessionId: ledger.id,
+          segmentId: segment.id,
+          sourceIds: [sourceId],
+          count: 1,
+        }),
+      );
+    } finally {
+      if (previousHome === undefined) delete process.env.SHOWTAIL_HOME;
+      else process.env.SHOWTAIL_HOME = previousHome;
+      cleanup(dir);
+      cleanup(home);
+    }
+  });
+
+  test('reports an unresolved correction fork and clears it after reconciliation', async () => {
+    const dir = makeTempDir();
+    const home = makeTempDir();
+    const previousHome = process.env.SHOWTAIL_HOME;
+    try {
+      process.env.SHOWTAIL_HOME = home;
+      await runInit({ cwd: dir });
+      const paths = pathsForRoot(dir);
+      const author = authorFor(paths);
+      const trailId = readConfig(paths).trailId!;
+      const ledger = ensureLedgerSession({
+        tool: 'github-copilot',
+        nativeSessionId: 'verify-correction-fork',
+      });
+      const promptSourceId = 'copilot:user:verify-correction-fork:request_1';
+      const replySourceId = 'copilot:asst:verify-correction-fork:request_1';
+      const prompt = appendLedgerRecord(ledger.id, {
+        kind: 'prompt',
+        tool: 'github-copilot',
+        text: 'give me the completed answer',
+        sourceId: promptSourceId,
+      });
+      const partial = appendLedgerRecord(ledger.id, {
+        kind: 'ai_output',
+        tool: 'github-copilot',
+        text: 'partial answer',
+        turnKey: prompt.id,
+        sourceId: replySourceId,
+        transcriptFinal: false,
+      });
+      const staleFinal = appendLedgerRecord(ledger.id, {
+        kind: 'ai_output',
+        tool: 'github-copilot',
+        text: 'stale final answer',
+        turnKey: prompt.id,
+        sourceId: replySourceId,
+        supersedesRecordId: partial.id,
+        transcriptFinal: true,
+      });
+      const wrongTurnPrompt = appendLedgerRecord(ledger.id, {
+        kind: 'prompt',
+        tool: 'github-copilot',
+        text: 'open a different report',
+        sourceId: 'copilot:user:verify-correction-fork:request_2',
+      });
+      appendLedgerRecord(ledger.id, {
+        kind: 'ai_output',
+        tool: 'github-copilot',
+        text: 'invalid fork answer',
+        turnKey: wrongTurnPrompt.id,
+        sourceId: replySourceId,
+        supersedesRecordId: partial.id,
+        transcriptFinal: true,
+      });
+      const segment = ensureLedgerSegments(ledger).segments.find(
+        (candidate) => candidate.promptRecordId === prompt.id,
+      )!;
+      markLedgerSegmentPlaced(ledger.id, segment.id, trailId, dir);
+      await materializeLedgerSegment(ledger, segment, author);
+
+      const unresolved = await verifyProject(paths);
+      expect(unresolved.semanticConflicts).toContainEqual(
+        expect.objectContaining({
+          code: 'INVALID_LEDGER_CORRECTION',
+          sessionId: ledger.id,
+          segmentId: segment.id,
+          sourceIds: [replySourceId],
+          count: 1,
+        }),
+      );
+
+      const transcript: HookTranscript = {
+        sessionId: 'verify-correction-fork',
+        messages: [
+          {
+            role: 'user',
+            text: 'give me the completed answer',
+            sourceId: promptSourceId,
+            requestId: 'request_1',
+          },
+          {
+            role: 'assistant',
+            text: 'correct final answer',
+            sourceId: replySourceId,
+            requestId: 'request_1',
+            isFinal: true,
+          },
+        ],
+      };
+      captureTranscriptToLedger(ledger, transcript, 'github-copilot', [], {
+        backfill: true,
+      });
+      await materializeLedgerSegment(ledger, segment.id, author);
+
+      const repaired = await verifyProject(paths);
+      expect(repaired.semanticConflicts).toEqual([]);
+      expect(repaired.ok).toBe(true);
+      expect(
+        effectiveLedgerRecords(readLedgerRecords(ledger.id)).find(
+          (record) => record.kind === 'ai_output',
+        ),
+      ).toMatchObject({
+        text: 'correct final answer',
+        supersedesRecordId: staleFinal.id,
+      });
+    } finally {
+      if (previousHome === undefined) delete process.env.SHOWTAIL_HOME;
+      else process.env.SHOWTAIL_HOME = previousHome;
+      cleanup(dir);
+      cleanup(home);
     }
   });
 });
@@ -379,6 +856,7 @@ describe('verify --json', () => {
       expect(parsed.checks.map((c: { name: string }) => c.name)).toContain(
         'stored content matches its address',
       );
+      expect(parsed.semantic).toEqual({ conflicts: 0, details: [] });
     } finally {
       cleanup(dir);
     }

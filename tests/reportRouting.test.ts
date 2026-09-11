@@ -6,6 +6,7 @@ import { reconcileReportRouting } from '../src/commands/reportRouting.ts';
 import { readAllEvents } from '../src/core/events.ts';
 import {
   appendLedgerRecord,
+  ensureLedgerSegments,
   ensureLedgerSession,
   listActionableLedgerRanges,
   markPlaced,
@@ -118,6 +119,48 @@ describe('report-time mixed chat routing', () => {
       0,
     );
   }
+
+  test('report does not claim a context-free editor turn from its ambient workspace', async () => {
+    const reportRoot = await project();
+    const session = ensureLedgerSession({
+      tool: 'github-copilot',
+      nativeSessionId: 'ambient-single-turn-report',
+      cwd: null,
+      workspacePaths: [reportRoot],
+    });
+    appendLedgerRecord(session.id, {
+      kind: 'prompt',
+      tool: 'github-copilot',
+      text: 'write an unrelated generic loop',
+    });
+
+    const command = runCli(
+      reportRoot,
+      [
+        'report',
+        reportRoot,
+        '--format',
+        'json',
+        '--json',
+        '--verbose-json',
+        '--no-sync',
+        '--no-open',
+      ],
+      { env: envWithHome(home) },
+    );
+
+    expect(command.code).toBe(0);
+    expect(command.stderr).toBe('');
+    const payload = JSON.parse(command.stdout);
+    expect(payload.claimedSessions).toEqual([]);
+    expect(payload.claimedSegments).toEqual([]);
+    expect(readAllEvents(pathsForRoot(reportRoot))).toEqual([]);
+    const stored = readLedgerSession(session.id)!;
+    expect(stored.status).toBe('inbox');
+    expect(stored.targets ?? []).toEqual([]);
+    expect(ensureLedgerSegments(stored).segments[0]?.status).toBe('inbox');
+    expect(ensureLedgerSegments(stored).segments[0]?.targets ?? []).toEqual([]);
+  });
 
   test('splits later project turns and removes only the inherited unresolved prefix', async () => {
     const first = await project();

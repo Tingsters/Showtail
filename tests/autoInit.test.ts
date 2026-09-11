@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import {
   cleanup,
   enableAutoInit,
@@ -174,6 +174,71 @@ describe('automatic init on first AI use', () => {
       );
     } finally {
       cleanup(dir);
+      cleanup(home);
+    }
+  });
+
+  test('a stale workspace cannot auto-initialize a known vacated project path', () => {
+    const container = makeTempDir();
+    const home = makeTempDir();
+    const previous = join(container, 'word_sparkle');
+    const current = join(container, 'Desktop', 'word_sparkle');
+    try {
+      mkdirSync(previous, { recursive: true });
+      writeFileSync(join(previous, 'package.json'), '{}\n');
+      enableAutoInit(home);
+      const env = envWith(home);
+
+      expect(
+        run(
+          previous,
+          ['hook', 'user-prompt'],
+          userPrompt(previous, 'build it', 'old'),
+          env,
+        ).code,
+      ).toBe(0);
+      const trailId = JSON.parse(
+        readFileSync(join(previous, '.showtail', 'config.json'), 'utf8'),
+      ).trailId;
+      mkdirSync(dirname(current), { recursive: true });
+      renameSync(previous, current);
+      mkdirSync(previous, { recursive: true });
+      writeFileSync(join(previous, 'package.json'), '{}\n');
+
+      const globalPath = join(home, 'config.json');
+      const global = JSON.parse(readFileSync(globalPath, 'utf8'));
+      const lastSeenAt = new Date().toISOString();
+      global.knownProjects = [
+        { trailId, path: current, previousPaths: [previous], lastSeenAt },
+      ];
+      global.projectCatalog = {
+        version: 1,
+        byTrailId: {
+          [trailId]: {
+            trailId,
+            currentPath: current,
+            previousPaths: [previous],
+            currentFolderBasename: 'word_sparkle',
+            lastSeenAt,
+          },
+        },
+      };
+      writeFileSync(globalPath, JSON.stringify(global, null, 2) + '\n');
+
+      const stale = run(
+        previous,
+        ['hook', 'user-prompt'],
+        userPrompt(previous, 'make a report', 'stale-workspace'),
+        env,
+      );
+      expect(stale.code).toBe(0);
+      expect(existsSync(join(previous, '.showtail'))).toBe(false);
+      expect(
+        JSON.parse(readFileSync(join(current, '.showtail', 'config.json'), 'utf8'))
+          .trailId,
+      ).toBe(trailId);
+    } finally {
+      cleanup(container);
       cleanup(home);
     }
   });

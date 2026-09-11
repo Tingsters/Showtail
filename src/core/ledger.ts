@@ -18,15 +18,24 @@
  *
  * Concurrency: each session has its own directory keyed by the (tool, native
  * session, machine) triple, so two concurrent tool sessions never share a file.
- * `records.jsonl` is append-only (atomic per-line writes); `session.json` and
- * `index.json` use the atomic temp+rename + re-read-before-write tolerance the
- * rest of the codebase uses. No lock is needed — materialize is idempotent.
+ * `records.jsonl` is append-only (atomic per-line writes); `session.json` uses
+ * atomic temp+rename tolerance. Identity-bearing session and index writes share
+ * a machine-wide lock with trail retirement so a retired id cannot race back in.
  */
-import { existsSync, readdirSync, realpathSync, rmSync } from 'node:fs';
+import { existsSync, readdirSync, realpathSync, rmSync, statSync } from 'node:fs';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import type { ConversationEvent, Tool } from '../types.ts';
 import { CaptureInterruptedError, requireCaptureContinuation } from './captureGuard.ts';
-import { ledgerDir, readInboxMinSignal, readScratchPaths } from './globalConfig.ts';
+import {
+  assertTrailIdentityActive,
+  ledgerDir,
+  readGlobalConfig,
+  readInboxMinSignal,
+  readScratchPaths,
+  recordTrailIdentitySupersession,
+  trailIdentitySupersession,
+  withTrailIdentityMutationLock,
+} from './globalConfig.ts';
 import { makeId } from './ids.ts';
 import { applyPathRebases, type PathRebase } from './pathRebase.ts';
 import {
@@ -151,6 +160,10 @@ export interface LedgerRecord {
   sha256?: string;
   /** Upstream source id (e.g. a transcript message id), when one exists. */
   sourceId?: string;
+  /** Earlier raw record replaced by this append-only transcript correction. */
+  supersedesRecordId?: string;
+  /** Whether the provider had persisted its completed response for this record. */
+  transcriptFinal?: boolean;
   /**
    * Project context observed for this record. New writers may attach it to a
    * prompt when the host reports a workspace/cwd change. Older records omit it;
@@ -363,17 +376,30 @@ export function readLedgerIndex(): LedgerIndex {
   }
 }
 
+function assertLedgerIndexActive(index: LedgerIndex): void {
+  const config = readGlobalConfig();
+  for (const trailId of Object.keys(index.trails)) {
+    assertTrailIdentityActive(trailId, config);
+  }
+  for (const trailIds of Object.values(index.sessions)) {
+    for (const trailId of trailIds) assertTrailIdentityActive(trailId, config);
+  }
+}
+
 /** Read-modify-write the index atomically (tolerant of a concurrent writer). */
 function updateLedgerIndex(
   mutate: (idx: LedgerIndex) => void,
   continueCapture?: () => boolean,
 ): LedgerIndex {
-  requireCaptureContinuation(continueCapture);
-  const idx = readLedgerIndex();
-  mutate(idx);
-  requireCaptureContinuation(continueCapture);
-  writeJson(indexFile(), idx);
-  return idx;
+  return withTrailIdentityMutationLock(() => {
+    requireCaptureContinuation(continueCapture);
+    const idx = readLedgerIndex();
+    mutate(idx);
+    assertLedgerIndexActive(idx);
+    requireCaptureContinuation(continueCapture);
+    writeJson(indexFile(), idx);
+    return idx;
+  });
 }
 
 // --- sessions -------------------------------------------------------------
@@ -606,7 +632,7 @@ function sessionFacts(sessionOrId: LedgerSession | string): {
   let edits = 0;
   let firstPrompt: string | undefined;
   const editPaths: string[] = [];
-  for (const rec of readLedgerRecords(id)) {
+  for (const rec of effectiveLedgerRecords(readLedgerRecords(id))) {
     if (rec.kind === 'edit') {
       edits += 1;
       if (rec.file)
@@ -974,6 +1000,10 @@ export function appendLedgerRecord(id: string, input: NewLedgerRecord): LedgerRe
   if (input.gitCommit) record.gitCommit = input.gitCommit;
   if (input.sha256) record.sha256 = input.sha256;
   if (input.sourceId) record.sourceId = input.sourceId;
+  if (input.supersedesRecordId) record.supersedesRecordId = input.supersedesRecordId;
+  if (input.transcriptFinal !== undefined) {
+    record.transcriptFinal = input.transcriptFinal;
+  }
   if (input.context) {
     record.context = {
       ...(input.context.cwd !== undefined ? { cwd: input.context.cwd } : {}),
@@ -1071,12 +1101,142 @@ export function ledgerSegmentSelector(sessionId: string, segmentId: string): str
   return `${sessionId}:${segmentId}`;
 }
 
-/** Stable projection source id; unchanged when a record moves between segments. */
+/** Stable projection source id; corrected records get an auditable revision suffix. */
 export function ledgerRecordProjectionSourceId(
   sessionId: string,
   record: LedgerRecord,
 ): string {
-  return record.sourceId ?? `ledger:${sessionId}:${record.id}`;
+  const base = record.sourceId ?? `ledger:${sessionId}:${record.id}`;
+  return record.supersedesRecordId ? `${base}:revision:${record.id}` : base;
+}
+
+interface LedgerSupersessionState {
+  eligible: Set<string>;
+  superseded: Set<string>;
+  unresolvedIssues: LedgerSupersessionIssue[];
+}
+
+export type LedgerSupersessionIssueReason =
+  | 'missing-predecessor'
+  | 'predecessor-not-effective'
+  | 'predecessor-already-superseded'
+  | 'kind-mismatch'
+  | 'source-id-mismatch';
+
+/** A malformed correction that remains at the tip of its logical source chain. */
+export interface LedgerSupersessionIssue {
+  recordId: string;
+  supersedesRecordId: string;
+  reason: LedgerSupersessionIssueReason;
+  kind: LedgerRecord['kind'];
+  sourceId?: string;
+}
+
+interface PendingLedgerSupersessionIssue extends LedgerSupersessionIssue {
+  index: number;
+}
+
+function validCorrectionDescendsFrom(
+  recordId: string,
+  ancestorId: string,
+  validParents: ReadonlyMap<string, string>,
+): boolean {
+  const seen = new Set<string>();
+  let current: string | undefined = recordId;
+  while (current && !seen.has(current)) {
+    if (current === ancestorId) return true;
+    seen.add(current);
+    current = validParents.get(current);
+  }
+  return false;
+}
+
+/** Validate append-only correction chains and identify their effective leaves. */
+function ledgerSupersessionState(
+  records: readonly LedgerRecord[],
+): LedgerSupersessionState {
+  const preceding = new Map<string, LedgerRecord>();
+  const eligible = new Set<string>();
+  const superseded = new Set<string>();
+  const validParents = new Map<string, string>();
+  const validCorrectionsByIdentity = new Map<
+    string,
+    Array<{ recordId: string; index: number }>
+  >();
+  const pendingIssues: PendingLedgerSupersessionIssue[] = [];
+  for (const [index, record] of records.entries()) {
+    if (!record.supersedesRecordId) {
+      eligible.add(record.id);
+      preceding.set(record.id, record);
+      continue;
+    }
+    const target = preceding.get(record.supersedesRecordId);
+    let reason: LedgerSupersessionIssueReason | undefined;
+    if (!target) reason = 'missing-predecessor';
+    else if (record.kind !== target.kind) reason = 'kind-mismatch';
+    else if (record.sourceId === undefined || record.sourceId !== target.sourceId) {
+      reason = 'source-id-mismatch';
+    } else if (!eligible.has(target.id)) reason = 'predecessor-not-effective';
+    else if (superseded.has(target.id)) reason = 'predecessor-already-superseded';
+
+    if (!reason && target) {
+      eligible.add(record.id);
+      superseded.add(target.id);
+      validParents.set(record.id, target.id);
+      const identity = `${record.kind}\0${record.sourceId}`;
+      const validCorrections = validCorrectionsByIdentity.get(identity) ?? [];
+      validCorrections.push({ recordId: record.id, index });
+      validCorrectionsByIdentity.set(identity, validCorrections);
+    } else if (reason) {
+      pendingIssues.push({
+        recordId: record.id,
+        supersedesRecordId: record.supersedesRecordId,
+        reason,
+        kind: record.kind,
+        ...(record.sourceId ? { sourceId: record.sourceId } : {}),
+        index,
+      });
+    }
+    preceding.set(record.id, record);
+  }
+
+  const unresolvedIssues = pendingIssues
+    .filter((issue) => {
+      if (!issue.sourceId) return true;
+      const validCorrections =
+        validCorrectionsByIdentity.get(`${issue.kind}\0${issue.sourceId}`) ?? [];
+      return !validCorrections.some(
+        (record) =>
+          record.index > issue.index &&
+          validCorrectionDescendsFrom(
+            record.recordId,
+            issue.supersedesRecordId,
+            validParents,
+          ),
+      );
+    })
+    .map(({ index: _index, ...issue }) => issue);
+  return { eligible, superseded, unresolvedIssues };
+}
+
+/** Raw record ids hidden by a valid later append-only correction. */
+export function supersededLedgerRecordIds(records: readonly LedgerRecord[]): Set<string> {
+  return ledgerSupersessionState(records).superseded;
+}
+
+/** Records that form the current logical transcript after valid corrections. */
+export function effectiveLedgerRecords(records: readonly LedgerRecord[]): LedgerRecord[] {
+  const { eligible, superseded } = ledgerSupersessionState(records);
+  return records.filter(
+    (record) => eligible.has(record.id) && !superseded.has(record.id),
+  );
+}
+
+/** Invalid correction tips that still require an automatic or manual repair. */
+export function unresolvedLedgerSupersessionIssues(
+  records: readonly LedgerRecord[],
+): LedgerSupersessionIssue[] {
+  return ledgerSupersessionState(records).unresolvedIssues;
 }
 
 /** Copilot embeds its request id in every prompt/reply/edit source id. */
@@ -1207,16 +1367,27 @@ function deriveLedgerSegments(
   for (const record of records) {
     if (record.kind !== 'prompt') continue;
     const id = segmentIdForPrompt(record.id);
+    const priorSegment = priorById.get(id);
     const segment: LedgerSegment = {
       id,
       promptRecordId: record.id,
       recordIds: [],
       startedAt: record.ts,
       endedAt: record.ts,
-      ...segmentMetadata(session, priorById.get(id), legacy),
+      ...segmentMetadata(session, priorSegment, legacy),
     };
     const request = copilotRequestIdentity(record.sourceId);
     if (request?.nativeSessionId === session.nativeSessionId) {
+      if (
+        (priorSegment?.nativeRequestId &&
+          priorSegment.nativeRequestId !== request.nativeRequestId) ||
+        (segment.controlTarget &&
+          (segment.controlTarget.nativeSessionId !== request.nativeSessionId ||
+            segment.controlTarget.nativeRequestId !== request.nativeRequestId))
+      ) {
+        delete segment.attachments;
+        delete segment.controlTarget;
+      }
       segment.nativeRequestId = request.nativeRequestId;
     }
     segments.set(id, segment);
@@ -1429,7 +1600,14 @@ export function setLedgerTurnProjectMetadata(
 
   let changed = false;
   const nativeRequestId = input.nativeRequestId?.trim();
-  if (nativeRequestId && segment.nativeRequestId !== nativeRequestId) {
+  if (
+    nativeRequestId &&
+    segment.nativeRequestId &&
+    segment.nativeRequestId !== nativeRequestId
+  ) {
+    return false;
+  }
+  if (nativeRequestId && !segment.nativeRequestId) {
     segment.nativeRequestId = nativeRequestId;
     changed = true;
   }
@@ -1502,6 +1680,236 @@ function segmentRecordContext(records: LedgerRecord[]): LedgerRecord['context'] 
   return records.find((record) => record.context !== undefined)?.context;
 }
 
+const TERMINAL_TOOL_NAMES = new Set([
+  'bash',
+  'cmd',
+  'exec',
+  'exec_command',
+  'execute_command',
+  'powershell',
+  'run_command',
+  'run_in_terminal',
+  'shell',
+  'shell_command',
+  'terminal',
+]);
+
+const FILE_MUTATION_TOOL_NAMES = new Set([
+  'apply_patch',
+  'create',
+  'create_file',
+  'create_new_file',
+  'edit',
+  'edit_file',
+  'insert_edit_into_file',
+  'multi_replace_string_in_file',
+  'patch_file',
+  'replace',
+  'replace_in_file',
+  'replace_string_in_file',
+  'str_replace',
+  'str_replace_editor',
+  'write',
+  'write_file',
+  'write_to_file',
+]);
+
+const RELOCATION_TOOL_NAMES = new Set([
+  'copy',
+  'copy_file',
+  'move',
+  'move_file',
+  'rename',
+  'rename_file',
+]);
+
+const FILE_MUTATION_PATH_FIELDS = new Set([
+  'absolutepath',
+  'destination',
+  'destinationpath',
+  'file',
+  'filepath',
+  'filepaths',
+  'files',
+  'fspath',
+  'fullpath',
+  'outputpath',
+  'path',
+  'paths',
+  'target',
+  'targetpath',
+  'uri',
+]);
+
+// A relocation's generic `path`/`source` fields normally name the old location.
+// Only destination-shaped fields can prove where the durable result now lives.
+const RELOCATION_TARGET_PATH_FIELDS = new Set([
+  'dest',
+  'destination',
+  'destinationpath',
+  'newfilepath',
+  'newpath',
+  'outputpath',
+  'target',
+  'targetpath',
+  'to',
+  'topath',
+]);
+
+const TOOL_INTERNAL_PATH_RE =
+  /(^|[\\/])\.(?:agents|aider|antigravity-ide|claude|codex|copilot|gemini|showtail|showtail-cli)([\\/]|$)/i;
+
+function normalizedToolName(name: string): string {
+  return name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+}
+
+function toolNameMatches(name: string, candidates: ReadonlySet<string>): boolean {
+  const normalized = normalizedToolName(name);
+  for (const candidate of candidates) {
+    if (normalized === candidate || normalized.endsWith(`_${candidate}`)) return true;
+  }
+  return false;
+}
+
+function isTerminalToolUse(event: ConversationEvent, toolName: string): boolean {
+  if (toolNameMatches(toolName, TERMINAL_TOOL_NAMES)) return true;
+  if (!event.input || typeof event.input !== 'object' || Array.isArray(event.input)) {
+    return false;
+  }
+  const input = event.input as Record<string, unknown>;
+  return typeof input.command === 'string' || typeof input.cmd === 'string';
+}
+
+function mutationPathFields(toolName: string): ReadonlySet<string> | null {
+  if (toolNameMatches(toolName, RELOCATION_TOOL_NAMES)) {
+    return RELOCATION_TARGET_PATH_FIELDS;
+  }
+  return toolNameMatches(toolName, FILE_MUTATION_TOOL_NAMES)
+    ? FILE_MUTATION_PATH_FIELDS
+    : null;
+}
+
+function appendAbsolutePath(paths: string[], candidate: string): void {
+  const value = candidate.trim().replace(/[),.;]+$/, '');
+  if (!isAbsolute(value)) return;
+  const resolved = resolve(value);
+  if (!paths.some((path) => pathKey(path) === pathKey(resolved))) paths.push(resolved);
+}
+
+function collectPathFields(
+  value: unknown,
+  paths: string[],
+  fields: ReadonlySet<string>,
+  pathField = false,
+): void {
+  if (typeof value === 'string') {
+    if (pathField) appendAbsolutePath(paths, value);
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) collectPathFields(item, paths, fields, pathField);
+    return;
+  }
+  if (!value || typeof value !== 'object') return;
+  for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+    const normalized = key.toLowerCase().replace(/[^a-z]/g, '');
+    collectPathFields(item, paths, fields, pathField || fields.has(normalized));
+  }
+}
+
+function structuredToolResultFailed(value: unknown, depth = 0): boolean {
+  if (depth > 2 || value === null || value === undefined) return false;
+  if (Array.isArray(value)) {
+    return value.some((item) => structuredToolResultFailed(item, depth + 1));
+  }
+  if (typeof value !== 'object') return false;
+  const result = value as Record<string, unknown>;
+  if (result.isError === true || result.is_error === true) return true;
+  if (result.success === false || result.ok === false) return true;
+  for (const key of ['exitCode', 'exit_code']) {
+    const code = result[key];
+    if (typeof code === 'number' && code !== 0) return true;
+  }
+  const status = typeof result.status === 'string' ? result.status.toLowerCase() : '';
+  if (
+    ['cancelled', 'canceled', 'error', 'errored', 'failed', 'failure'].includes(status)
+  ) {
+    return true;
+  }
+  const error = result.error;
+  if (error !== undefined && error !== null && error !== false && error !== '')
+    return true;
+  return ['metadata', 'result'].some((key) =>
+    structuredToolResultFailed(result[key], depth + 1),
+  );
+}
+
+function successfulToolResult(event: ConversationEvent): boolean {
+  return (
+    event.type === 'tool_result' &&
+    event.isError !== true &&
+    (event.exitCode === undefined || event.exitCode === 0) &&
+    !structuredToolResultFailed(event.content)
+  );
+}
+
+/**
+ * Per-turn routing evidence from a completed filesystem mutation. Read/search
+ * inputs and terminal command/output paths are intentionally excluded: those are
+ * model-authored or control-plane observations, not proof that student work lives
+ * there. A mutation must have a correlated successful result and a target that
+ * still exists after applying this turn's path rebases.
+ */
+function toolProjectContext(
+  records: LedgerRecord[],
+  segment: LedgerSegment,
+): LedgerSegmentProjectContext | null {
+  const paths: string[] = [];
+  const toolUses = new Map<string, ConversationEvent>();
+  for (const record of records) {
+    const event = record.conversationEvent;
+    if (event?.type === 'tool_use' && event.toolUseId) {
+      toolUses.set(event.toolUseId, event);
+    }
+  }
+  for (const record of records) {
+    const result = record.conversationEvent;
+    if (!result?.toolUseId || !successfulToolResult(result)) continue;
+    const use = toolUses.get(result.toolUseId);
+    if (!use || typeof use.toolName !== 'string') continue;
+    if (isTerminalToolUse(use, use.toolName)) continue;
+    const fields = mutationPathFields(use.toolName);
+    if (!fields) continue;
+    collectPathFields(use.input, paths, fields);
+    collectPathFields(result.content, paths, fields);
+  }
+  if (paths.length === 0) return null;
+  const existing = paths
+    .map((path) => effectiveLedgerSegmentPath(segment, path))
+    .filter((path) => existsSync(path) && !TOOL_INTERNAL_PATH_RE.test(path));
+  if (existing.length === 0) return null;
+  const workspacePaths = existing.filter((path) => {
+    try {
+      return statSync(path).isDirectory();
+    } catch {
+      return false;
+    }
+  });
+  const context = resolveProjectContext({
+    cwd: null,
+    editPaths: existing.filter(
+      (path) => !workspacePaths.some((workspace) => pathKey(workspace) === pathKey(path)),
+    ),
+    workspacePaths,
+  });
+  return context.state === 'tracked' || context.state === 'candidate'
+    ? { ...context, evidence: 'tool' }
+    : context;
+}
+
 function attachmentProjectContext(
   attachments: readonly LedgerProjectAttachment[],
 ): LedgerSegmentProjectContext {
@@ -1537,7 +1945,7 @@ function controlTargetProjectContext(
     : { state: 'none', root: null, evidence: null, candidates: [] };
 }
 
-function isNativeEditorSession(session: LedgerSession): boolean {
+export function isNativeEditorSession(session: LedgerSession): boolean {
   return session.tool === 'github-copilot' || session.tool === 'antigravity-ide';
 }
 
@@ -1547,7 +1955,12 @@ export function ledgerSegmentProjectContexts(
   document: LedgerSegmentsDocument = ensureLedgerSegments(session),
 ): Map<string, LedgerSegmentProjectContext> {
   const allRecords = readLedgerRecords(session.id);
-  const byId = new Map(allRecords.map((record) => [record.id, record]));
+  // Segments retain the append-only raw ids for audit/rebuild purposes. Routing,
+  // however, must see only the current leaves of valid correction chains or a
+  // superseded record can keep influencing the turn it was repaired away from.
+  const byId = new Map(
+    effectiveLedgerRecords(allRecords).map((record) => [record.id, record]),
+  );
   const contexts = new Map<string, LedgerSegmentProjectContext>();
   let preceding: LedgerSegmentProjectContext | undefined;
   let precedingSegmentId: string | undefined;
@@ -1559,6 +1972,7 @@ export function ledgerSegmentProjectContexts(
       return record ? [record] : [];
     });
     const contextHint = segmentRecordContext(records);
+    const toolContext = toolProjectContext(records, segment);
     const editPaths = records.flatMap((record) =>
       record.kind === 'edit' && record.file
         ? [effectiveLedgerSegmentPath(segment, record.file)]
@@ -1584,6 +1998,9 @@ export function ledgerSegmentProjectContexts(
       trusted = context.state === 'tracked' || context.state === 'candidate';
     } else if (segment.controlTarget) {
       context = controlTargetProjectContext(segment.controlTarget);
+      trusted = context.state === 'tracked' || context.state === 'candidate';
+    } else if (toolContext && toolContext.state !== 'none') {
+      context = toolContext;
       trusted = context.state === 'tracked' || context.state === 'candidate';
     } else if (
       contextHint?.scope === 'turn' &&
@@ -1648,7 +2065,12 @@ function segmentFacts(
   let edits = 0;
   let firstPrompt: string | undefined;
   const editPaths: string[] = [];
-  for (const record of readLedgerSegmentRecords(sessionId, segment)) {
+  const wanted = new Set(segment.recordIds);
+  // Resolve corrections across the whole session before selecting this segment:
+  // a corrected record can move from one turn to another while raw membership
+  // remains append-only in both segments for audit and deterministic rebuilds.
+  for (const record of effectiveLedgerRecords(readLedgerRecords(sessionId))) {
+    if (!wanted.has(record.id)) continue;
     if (record.kind === 'prompt') {
       prompts += 1;
       if (!firstPrompt && record.text) firstPrompt = record.text;
@@ -1973,33 +2395,38 @@ export function syncLedgerSessionAggregate(
   document: LedgerSegmentsDocument = ensureLedgerSegments(sessionId),
   continueCapture?: () => boolean,
 ): void {
-  requireCaptureContinuation(continueCapture);
-  const session = readLedgerSession(sessionId);
-  if (!session || document.segments.length === 0) return;
-  const targets = new Map<string, LedgerTarget>();
-  for (const segment of document.segments) {
-    for (const target of segment.targets ?? []) targets.set(target.trailId, target);
-  }
-  session.targets = [...targets.values()].map(cloneTarget);
-  session.status = document.segments.every((segment) => segment.status === 'placed')
-    ? 'placed'
-    : 'inbox';
-  const dismissed = document.segments
-    .filter((segment) => segment.status === 'inbox')
-    .map((segment) => segment.dismissedAt);
-  if (dismissed.length > 0 && dismissed.every((value) => value !== undefined)) {
-    session.dismissedAt = dismissed.sort().at(0);
-  } else {
-    delete session.dismissedAt;
-  }
-  writeLedgerSession(session, continueCapture);
-  const now = new Date().toISOString();
-  updateLedgerIndex((index) => {
-    index.sessions[sessionId] = [...targets.keys()];
-    for (const target of targets.values()) {
-      index.trails[target.trailId] = { path: target.path, lastSeenAt: now };
+  withTrailIdentityMutationLock(() => {
+    requireCaptureContinuation(continueCapture);
+    const session = readLedgerSession(sessionId);
+    if (!session || document.segments.length === 0) return;
+    const targets = new Map<string, LedgerTarget>();
+    for (const segment of document.segments) {
+      for (const target of segment.targets ?? []) targets.set(target.trailId, target);
     }
-  }, continueCapture);
+    const config = readGlobalConfig();
+    for (const trailId of targets.keys()) assertTrailIdentityActive(trailId, config);
+    assertLedgerIndexActive(readLedgerIndex());
+    session.targets = [...targets.values()].map(cloneTarget);
+    session.status = document.segments.every((segment) => segment.status === 'placed')
+      ? 'placed'
+      : 'inbox';
+    const dismissed = document.segments
+      .filter((segment) => segment.status === 'inbox')
+      .map((segment) => segment.dismissedAt);
+    if (dismissed.length > 0 && dismissed.every((value) => value !== undefined)) {
+      session.dismissedAt = dismissed.sort().at(0);
+    } else {
+      delete session.dismissedAt;
+    }
+    writeLedgerSession(session, continueCapture);
+    const now = new Date().toISOString();
+    updateLedgerIndex((index) => {
+      index.sessions[sessionId] = [...targets.keys()];
+      for (const target of targets.values()) {
+        index.trails[target.trailId] = { path: target.path, lastSeenAt: now };
+      }
+    }, continueCapture);
+  });
 }
 
 /** Mark one turn placed; existing targets remain until cleanup commits. */
@@ -2010,35 +2437,39 @@ export function markLedgerSegmentPlaced(
   path: string,
   opts: { continueCapture?: () => boolean; pathRebase?: PathRebase } = {},
 ): void {
-  updateLedgerSegment(
-    sessionId,
-    segmentId,
-    (segment) => {
-      const targets = segment.targets ?? [];
-      const existing = targets.find((target) => target.trailId === trailId);
-      if (existing) existing.path = path;
-      else targets.push({ trailId, path });
-      segment.targets = targets;
-      segment.status = 'placed';
-      delete segment.dismissedAt;
-      if (opts.pathRebase) {
-        const candidate = {
-          fromRoot: resolve(opts.pathRebase.fromRoot),
-          toRoot: resolve(opts.pathRebase.toRoot),
-        };
-        const rebases = segment.pathRebases ?? [];
-        const previous = rebases.at(-1);
-        if (
-          pathKey(candidate.fromRoot) !== pathKey(candidate.toRoot) &&
-          (!previous || !samePathRebase(previous, candidate))
-        ) {
-          rebases.push(candidate);
+  withTrailIdentityMutationLock(() => {
+    assertTrailIdentityActive(trailId);
+    assertLedgerIndexActive(readLedgerIndex());
+    updateLedgerSegment(
+      sessionId,
+      segmentId,
+      (segment) => {
+        const targets = segment.targets ?? [];
+        const existing = targets.find((target) => target.trailId === trailId);
+        if (existing) existing.path = path;
+        else targets.push({ trailId, path });
+        segment.targets = targets;
+        segment.status = 'placed';
+        delete segment.dismissedAt;
+        if (opts.pathRebase) {
+          const candidate = {
+            fromRoot: resolve(opts.pathRebase.fromRoot),
+            toRoot: resolve(opts.pathRebase.toRoot),
+          };
+          const rebases = segment.pathRebases ?? [];
+          const previous = rebases.at(-1);
+          if (
+            pathKey(candidate.fromRoot) !== pathKey(candidate.toRoot) &&
+            (!previous || !samePathRebase(previous, candidate))
+          ) {
+            rebases.push(candidate);
+          }
+          if (rebases.length > 0) segment.pathRebases = rebases;
         }
-        if (rebases.length > 0) segment.pathRebases = rebases;
-      }
-    },
-    opts.continueCapture,
-  );
+      },
+      opts.continueCapture,
+    );
+  });
 }
 
 function ledgerRangeMemberIds(
@@ -2252,25 +2683,31 @@ function repointTarget(
   newTrailId: string,
   path: string,
 ): void {
-  const session = readLedgerSession(sessionId);
-  if (session?.targets) {
-    const t = session.targets.find((x) => x.trailId === oldTrailId);
-    if (t) {
-      t.trailId = newTrailId;
-      t.path = path;
-      writeLedgerSession(session);
+  withTrailIdentityMutationLock(() => {
+    assertTrailIdentityActive(newTrailId);
+    const session = readLedgerSession(sessionId);
+    if (session?.targets) {
+      const t = session.targets.find((x) => x.trailId === oldTrailId);
+      if (t) {
+        t.trailId = newTrailId;
+        t.path = path;
+        writeLedgerSession(session);
+      }
     }
-  }
-  updateLedgerIndex((idx) => {
-    const old = idx.trails[oldTrailId];
-    delete idx.trails[oldTrailId];
-    idx.trails[newTrailId] = {
-      path,
-      lastSeenAt: old?.lastSeenAt ?? new Date().toISOString(),
-    };
-    const list = idx.sessions[sessionId];
-    if (list)
-      idx.sessions[sessionId] = list.map((t) => (t === oldTrailId ? newTrailId : t));
+    updateLedgerIndex((idx) => {
+      const old = idx.trails[oldTrailId];
+      delete idx.trails[oldTrailId];
+      idx.trails[newTrailId] = {
+        path,
+        lastSeenAt: old?.lastSeenAt ?? new Date().toISOString(),
+      };
+      const list = idx.sessions[sessionId];
+      if (list) {
+        idx.sessions[sessionId] = list.map((trailId) =>
+          trailId === oldTrailId ? newTrailId : trailId,
+        );
+      }
+    });
   });
 }
 
@@ -2285,94 +2722,101 @@ export function markPlaced(
   path: string,
   opts: { continueCapture?: () => boolean; pathRebase?: PathRebase } = {},
 ): void {
-  requireCaptureContinuation(opts.continueCapture);
-  const session = readLedgerSession(sessionId);
-  const originalSession = session
-    ? {
-        ...session,
-        ...(session.targets
-          ? { targets: session.targets.map((target) => ({ ...target })) }
-          : {}),
-        ...(session.pathRebases
-          ? { pathRebases: session.pathRebases.map((rebase) => ({ ...rebase })) }
-          : {}),
-      }
-    : null;
-  let wroteSession = false;
-  if (session) {
-    const targets = session.targets ?? [];
-    if (!targets.some((t) => t.trailId === trailId)) targets.push({ trailId, path });
-    else targets.find((t) => t.trailId === trailId)!.path = path;
-    session.targets = targets;
-    session.status = 'placed';
-    if (opts.pathRebase) {
-      const candidate = {
-        fromRoot: resolve(opts.pathRebase.fromRoot),
-        toRoot: resolve(opts.pathRebase.toRoot),
-      };
-      const rebases = session.pathRebases ?? [];
-      const previous = rebases.at(-1);
-      const isNoOp = pathKey(candidate.fromRoot) === pathKey(candidate.toRoot);
-      const repeatsTail =
-        previous !== undefined &&
-        pathKey(resolve(previous.fromRoot)) === pathKey(candidate.fromRoot) &&
-        pathKey(resolve(previous.toRoot)) === pathKey(candidate.toRoot);
-      if (!isNoOp && !repeatsTail) rebases.push(candidate);
-      if (rebases.length > 0) session.pathRebases = rebases;
-    }
-    delete session.dismissedAt; // placement re-surfaces it; a stale dismissal shouldn't linger
-    writeLedgerSession(session, opts.continueCapture);
-    wroteSession = true;
-  }
-  const now = new Date().toISOString();
-  try {
-    updateLedgerIndex((idx) => {
-      idx.trails[trailId] = { path, lastSeenAt: now };
-      const list = idx.sessions[sessionId] ?? [];
-      if (!list.includes(trailId)) list.push(trailId);
-      idx.sessions[sessionId] = list;
-    }, opts.continueCapture);
-  } catch (error) {
-    if (error instanceof CaptureInterruptedError && wroteSession && originalSession) {
-      writeLedgerSession(originalSession, undefined, { preservePathRebases: false });
-    }
-    throw error;
-  }
-
-  // Compatibility wrapper: legacy callers still place a whole native session.
-  // New command surfaces call markLedgerSegmentPlaced for one turn instead.
-  try {
-    const document = ensureLedgerSegments(sessionId);
-    if (document.segments.length > 0) {
-      for (const segment of document.segments) {
-        const targets = segment.targets ?? [];
-        const existing = targets.find((target) => target.trailId === trailId);
-        if (existing) existing.path = path;
-        else targets.push({ trailId, path });
-        segment.targets = targets;
-        segment.status = 'placed';
-        delete segment.dismissedAt;
-        if (opts.pathRebase) {
-          const candidate = {
-            fromRoot: resolve(opts.pathRebase.fromRoot),
-            toRoot: resolve(opts.pathRebase.toRoot),
-          };
-          const rebases = segment.pathRebases ?? [];
-          const previous = rebases.at(-1);
-          if (
-            pathKey(candidate.fromRoot) !== pathKey(candidate.toRoot) &&
-            (!previous || !samePathRebase(previous, candidate))
-          ) {
-            rebases.push(candidate);
-          }
-          if (rebases.length > 0) segment.pathRebases = rebases;
+  withTrailIdentityMutationLock(() => {
+    assertTrailIdentityActive(trailId);
+    assertLedgerIndexActive(readLedgerIndex());
+    requireCaptureContinuation(opts.continueCapture);
+    const session = readLedgerSession(sessionId);
+    const originalSession = session
+      ? {
+          ...session,
+          ...(session.targets
+            ? { targets: session.targets.map((target) => ({ ...target })) }
+            : {}),
+          ...(session.pathRebases
+            ? { pathRebases: session.pathRebases.map((rebase) => ({ ...rebase })) }
+            : {}),
         }
+      : null;
+    let wroteSession = false;
+    if (session) {
+      const targets = session.targets ?? [];
+      if (!targets.some((target) => target.trailId === trailId)) {
+        targets.push({ trailId, path });
+      } else {
+        targets.find((target) => target.trailId === trailId)!.path = path;
       }
-      writeLedgerSegments(sessionId, document);
+      session.targets = targets;
+      session.status = 'placed';
+      if (opts.pathRebase) {
+        const candidate = {
+          fromRoot: resolve(opts.pathRebase.fromRoot),
+          toRoot: resolve(opts.pathRebase.toRoot),
+        };
+        const rebases = session.pathRebases ?? [];
+        const previous = rebases.at(-1);
+        const isNoOp = pathKey(candidate.fromRoot) === pathKey(candidate.toRoot);
+        const repeatsTail =
+          previous !== undefined &&
+          pathKey(resolve(previous.fromRoot)) === pathKey(candidate.fromRoot) &&
+          pathKey(resolve(previous.toRoot)) === pathKey(candidate.toRoot);
+        if (!isNoOp && !repeatsTail) rebases.push(candidate);
+        if (rebases.length > 0) session.pathRebases = rebases;
+      }
+      delete session.dismissedAt; // placement re-surfaces it; a stale dismissal shouldn't linger
+      writeLedgerSession(session, opts.continueCapture);
+      wroteSession = true;
     }
-  } catch {
-    // The session/index remain the compatibility source if sidecar refresh fails.
-  }
+    const now = new Date().toISOString();
+    try {
+      updateLedgerIndex((idx) => {
+        idx.trails[trailId] = { path, lastSeenAt: now };
+        const list = idx.sessions[sessionId] ?? [];
+        if (!list.includes(trailId)) list.push(trailId);
+        idx.sessions[sessionId] = list;
+      }, opts.continueCapture);
+    } catch (error) {
+      if (error instanceof CaptureInterruptedError && wroteSession && originalSession) {
+        writeLedgerSession(originalSession, undefined, { preservePathRebases: false });
+      }
+      throw error;
+    }
+
+    // Compatibility wrapper: legacy callers still place a whole native session.
+    // New command surfaces call markLedgerSegmentPlaced for one turn instead.
+    try {
+      const document = ensureLedgerSegments(sessionId);
+      if (document.segments.length > 0) {
+        for (const segment of document.segments) {
+          const targets = segment.targets ?? [];
+          const existing = targets.find((target) => target.trailId === trailId);
+          if (existing) existing.path = path;
+          else targets.push({ trailId, path });
+          segment.targets = targets;
+          segment.status = 'placed';
+          delete segment.dismissedAt;
+          if (opts.pathRebase) {
+            const candidate = {
+              fromRoot: resolve(opts.pathRebase.fromRoot),
+              toRoot: resolve(opts.pathRebase.toRoot),
+            };
+            const rebases = segment.pathRebases ?? [];
+            const previous = rebases.at(-1);
+            if (
+              pathKey(candidate.fromRoot) !== pathKey(candidate.toRoot) &&
+              (!previous || !samePathRebase(previous, candidate))
+            ) {
+              rebases.push(candidate);
+            }
+            if (rebases.length > 0) segment.pathRebases = rebases;
+          }
+        }
+        writeLedgerSegments(sessionId, document);
+      }
+    } catch {
+      // The session/index remain the compatibility source if sidecar refresh fails.
+    }
+  });
 }
 
 /**
@@ -2425,26 +2869,29 @@ export interface TrailLocationUpdate {
  * really is at `path`, so it can never point the index at an unrelated folder.
  */
 export function noteTrailLocation(trailId: string, path: string): TrailLocationUpdate {
-  const resolved = resolve(path);
-  const known = knownTrailPath(trailId);
-  if (known !== undefined && sameDirectory(known, resolved)) {
-    // Same place, possibly spelled differently — not a move. This matters: on macOS
-    // `process.cwd()` reports a directory's realpath (`/private/var/…`) when the
-    // caller passed `/var/…`, and symlinked or substituted paths do the same.
-    // Treating that as a relocation would rewrite a perfectly correct recorded path
-    // into a different spelling and break every equality check against it.
-    return { moved: false, previousPath: known, duplicated: false };
-  }
-  if (trailIdAt(resolved) !== trailId) {
-    return { moved: false, previousPath: known, duplicated: false };
-  }
-  // A live trail with this id at the OLD path too means the folder was copied rather
-  // than moved — only meaningful now that we know the two paths are different places.
-  const duplicated = known !== undefined && trailIdAt(known) === trailId;
-  updateLedgerIndex((idx) => {
-    idx.trails[trailId] = { path: resolved, lastSeenAt: new Date().toISOString() };
+  return withTrailIdentityMutationLock(() => {
+    assertTrailIdentityActive(trailId);
+    const resolved = resolve(path);
+    const known = knownTrailPath(trailId);
+    if (known !== undefined && sameDirectory(known, resolved)) {
+      // Same place, possibly spelled differently — not a move. This matters: on macOS
+      // `process.cwd()` reports a directory's realpath (`/private/var/…`) when the
+      // caller passed `/var/…`, and symlinked or substituted paths do the same.
+      // Treating that as a relocation would rewrite a perfectly correct recorded path
+      // into a different spelling and break every equality check against it.
+      return { moved: false, previousPath: known, duplicated: false };
+    }
+    if (trailIdAt(resolved) !== trailId) {
+      return { moved: false, previousPath: known, duplicated: false };
+    }
+    // A live trail with this id at the OLD path too means the folder was copied rather
+    // than moved — only meaningful now that we know the two paths are different places.
+    const duplicated = known !== undefined && trailIdAt(known) === trailId;
+    updateLedgerIndex((idx) => {
+      idx.trails[trailId] = { path: resolved, lastSeenAt: new Date().toISOString() };
+    });
+    return { moved: true, previousPath: known, duplicated };
   });
-  return { moved: true, previousPath: known, duplicated };
 }
 
 /**
@@ -2557,4 +3004,74 @@ export function resolveLedgerSessionId(prefix: string): LedgerSession | null {
 /** The last-known path of a trail, from the index (for reattach/move reporting). */
 export function knownTrailPath(trailId: string): string | undefined {
   return readLedgerIndex().trails[trailId]?.path;
+}
+
+/**
+ * Retire a transient same-path trail id after all ranges have left it. The live
+ * canonical config, ledger placements, and old index location are validated
+ * before either discovery catalog is changed.
+ */
+export function supersedeTrailIdentity(
+  supersededTrailId: string,
+  canonicalTrailId: string,
+  canonicalPath: string,
+): void {
+  withTrailIdentityMutationLock(() => {
+    const root = resolve(canonicalPath);
+    if (!supersededTrailId || supersededTrailId === canonicalTrailId) {
+      throw new Error('A trail supersession requires two distinct trail ids.');
+    }
+    assertTrailIdentityActive(canonicalTrailId);
+    if (!trailExistsAt(root, canonicalTrailId)) {
+      throw new Error(`Canonical trail ${canonicalTrailId} is not live at ${root}.`);
+    }
+    const existing = trailIdentitySupersession(supersededTrailId);
+    if (
+      existing &&
+      (existing.canonicalTrailId !== canonicalTrailId ||
+        !sameDirectory(existing.canonicalPath, root))
+    ) {
+      throw new Error(`Trail ${supersededTrailId} is already superseded elsewhere.`);
+    }
+    const index = readLedgerIndex();
+    const oldPath = index.trails[supersededTrailId]?.path;
+    if (!existing && (!oldPath || !sameDirectory(oldPath, root))) {
+      throw new Error(
+        `Trail ${supersededTrailId} is not indexed at canonical path ${root}.`,
+      );
+    }
+    for (const session of allLedgerSessions()) {
+      if (
+        (session.targets ?? []).some((target) => target.trailId === supersededTrailId)
+      ) {
+        throw new Error(
+          `Trail ${supersededTrailId} still owns ledger session ${session.id}.`,
+        );
+      }
+      const document = ensureLedgerSegments(session, { persist: false });
+      if (
+        document.segments.some((segment) =>
+          (segment.targets ?? []).some((target) => target.trailId === supersededTrailId),
+        )
+      ) {
+        throw new Error(
+          `Trail ${supersededTrailId} still owns a range in ${session.id}.`,
+        );
+      }
+    }
+    recordTrailIdentitySupersession(supersededTrailId, canonicalTrailId, root);
+    updateLedgerIndex((current) => {
+      delete current.trails[supersededTrailId];
+      current.trails[canonicalTrailId] = {
+        path: root,
+        lastSeenAt:
+          current.trails[canonicalTrailId]?.lastSeenAt ?? new Date().toISOString(),
+      };
+      for (const [sessionId, trailIds] of Object.entries(current.sessions)) {
+        current.sessions[sessionId] = trailIds.filter(
+          (trailId) => trailId !== supersededTrailId,
+        );
+      }
+    });
+  });
 }

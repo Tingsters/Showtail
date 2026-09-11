@@ -45,6 +45,7 @@ export type ProjectEvidence =
   | 'marker'
   | 'workspace'
   | 'edit'
+  | 'tool'
   | 'attachment'
   | 'control'
   | 'cwd'

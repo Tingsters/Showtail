@@ -1,5 +1,13 @@
 import { beforeEach, describe, expect, mock, test } from 'bun:test';
-import { mkdtempSync, rmdirSync, symlinkSync, unlinkSync } from 'node:fs';
+import {
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  rmdirSync,
+  symlinkSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -52,15 +60,19 @@ function state(initial: Record<string, unknown> = {}) {
   };
 }
 
-function claim(path: string) {
+function claimFor(selected: typeof selection, path: string) {
   return {
     showtailProjectControl: 'showtail-project-control/v1',
     claimId: 'claim_previous',
     action: 'report',
-    ...selection,
+    ...selected,
     reportPath: path,
     createdAt: new Date().toISOString(),
   };
+}
+
+function claim(path: string) {
+  return claimFor(selection, path);
 }
 
 function selectedResult(selected = selection) {
@@ -114,6 +126,93 @@ function controller(
 }
 
 describe('project-control report claims', () => {
+  test('reuses the newest valid report after resolving open_report without a claim id', async () => {
+    const calls: string[][] = [];
+    const { projectControl } = controller(
+      async (args) => {
+        calls.push(args);
+        expect(args[0]).toBe('projects');
+        return selectedResult();
+      },
+      [claim(reportPath)],
+    );
+
+    const result = await projectControl.execute({ action: 'open_report' });
+
+    expect(result).toMatchObject({ ok: true, opened: true, reportPath });
+    expect(calls.map((args) => args[0])).toEqual(['projects']);
+    expect(openTextDocument).toHaveBeenCalledTimes(1);
+    expect(openTextDocument).toHaveBeenCalledWith(reportPath);
+  });
+
+  test('generates once when an automatically matched stored report is missing', async () => {
+    const calls: string[][] = [];
+    const missing = join(root, 'missing-automatic-report.html');
+    const { projectControl } = controller(
+      async (args) => {
+        calls.push(args);
+        if (args[0] === 'projects') return selectedResult();
+        if (args[0] === 'report') {
+          return {
+            stdout: JSON.stringify({
+              ok: true,
+              trailId: selection.trailId,
+              root,
+              reportPath,
+            }),
+            stderr: '',
+            exitCode: 0,
+          };
+        }
+        throw new Error(`Unexpected command: ${args.join(' ')}`);
+      },
+      [claim(missing)],
+    );
+
+    const result = await projectControl.execute({ action: 'open_report' });
+
+    expect(result).toMatchObject({ ok: true, opened: true, reportPath });
+    expect(calls.filter((args) => args[0] === 'projects')).toHaveLength(1);
+    expect(calls.filter((args) => args[0] === 'report')).toHaveLength(1);
+    expect(openTextDocument).toHaveBeenCalledTimes(1);
+  });
+
+  test('coalesces concurrent open_report calls without a prior claim', async () => {
+    const calls: string[][] = [];
+    let releaseReport: (() => void) | undefined;
+    const reportGate = new Promise<void>((resolveGate) => {
+      releaseReport = resolveGate;
+    });
+    const { projectControl } = controller(async (args) => {
+      calls.push(args);
+      if (args[0] === 'projects') return selectedResult();
+      if (args[0] === 'report') {
+        await reportGate;
+        return {
+          stdout: JSON.stringify({
+            ok: true,
+            trailId: selection.trailId,
+            root,
+            reportPath,
+          }),
+          stderr: '',
+          exitCode: 0,
+        };
+      }
+      throw new Error(`Unexpected command: ${args.join(' ')}`);
+    }, []);
+
+    const first = projectControl.execute({ action: 'open_report' });
+    const second = projectControl.execute({ action: 'open_report' });
+    releaseReport?.();
+    const [firstResult, secondResult] = await Promise.all([first, second]);
+
+    expect(secondResult).toEqual(firstResult);
+    expect(calls.filter((args) => args[0] === 'projects')).toHaveLength(1);
+    expect(calls.filter((args) => args[0] === 'report')).toHaveLength(1);
+    expect(openTextDocument).toHaveBeenCalledTimes(1);
+  });
+
   test('opens a valid prior report without invoking report again', async () => {
     const calls: string[][] = [];
     const { globalState, projectControl } = controller(
@@ -136,6 +235,175 @@ describe('project-control report claims', () => {
     const stored = globalState.get<Array<{ claimId: string }>>(CLAIMS_KEY) ?? [];
     expect(stored).toHaveLength(1);
     expect(stored[0]?.claimId).not.toBe('claim_previous');
+  });
+
+  test('replays a completed prior-claim execution without opening twice', async () => {
+    const calls: string[][] = [];
+    const requestIdentity = {};
+    const { projectControl } = controller(
+      async (args) => {
+        calls.push(args);
+        return selectedResult();
+      },
+      [claim(reportPath)],
+    );
+
+    const input = { action: 'open_report' as const, priorClaimId: 'claim_previous' };
+    const first = await projectControl.execute(input, undefined, { requestIdentity });
+    const replay = await projectControl.execute(input, undefined, { requestIdentity });
+
+    expect(replay).toEqual(first);
+    expect(calls.map((args) => args[0])).toEqual(['projects', 'projects']);
+    expect(openTextDocument).toHaveBeenCalledTimes(1);
+  });
+
+  test('does not replay a completed claim into a later native request', async () => {
+    const calls: string[][] = [];
+    const { projectControl } = controller(
+      async (args) => {
+        calls.push(args);
+        return selectedResult();
+      },
+      [claim(reportPath)],
+    );
+    const input = { action: 'open_report' as const, priorClaimId: 'claim_previous' };
+
+    const first = await projectControl.execute(input, undefined, {
+      requestIdentity: {},
+    });
+    const later = await projectControl.execute(input, undefined, {
+      requestIdentity: {},
+    });
+
+    expect(first).toMatchObject({ ok: true, opened: true, reportPath });
+    expect(later).toMatchObject({ ok: true, opened: true, reportPath });
+    expect(later.ok && first.ok ? later.marker.claimId : '').not.toBe(
+      first.ok ? first.marker.claimId : '',
+    );
+    expect(calls.map((args) => args[0])).toEqual(['projects', 'projects']);
+    expect(openTextDocument).toHaveBeenCalledTimes(2);
+  });
+
+  test('regenerates a deleted report instead of replaying stale opened success', async () => {
+    const projectRoot = mkdtempSync(join(tmpdir(), 'showtail-vscode-report-cache-'));
+    const originalReport = join(projectRoot, 'original-report.html');
+    const regeneratedReport = join(projectRoot, 'regenerated-report.html');
+    writeFileSync(originalReport, 'original');
+    writeFileSync(regeneratedReport, 'regenerated');
+    const selected = { ...selection, root: projectRoot };
+    const requestIdentity = {};
+    const calls: string[][] = [];
+    try {
+      const { projectControl } = controller(
+        async (args) => {
+          calls.push(args);
+          if (args[0] === 'projects') return selectedResult(selected);
+          if (args[0] === 'report') {
+            return {
+              stdout: JSON.stringify({
+                ok: true,
+                trailId: selected.trailId,
+                root: projectRoot,
+                reportPath: regeneratedReport,
+              }),
+              stderr: '',
+              exitCode: 0,
+            };
+          }
+          throw new Error(`Unexpected command: ${args.join(' ')}`);
+        },
+        [claimFor(selected, originalReport)],
+      );
+      const input = { action: 'open_report' as const, priorClaimId: 'claim_previous' };
+
+      const first = await projectControl.execute(input, undefined, { requestIdentity });
+      unlinkSync(originalReport);
+      const refreshed = await projectControl.execute(input, undefined, {
+        requestIdentity,
+      });
+
+      expect(first).toMatchObject({ ok: true, reportPath: originalReport, opened: true });
+      expect(refreshed).toMatchObject({
+        ok: true,
+        reportPath: regeneratedReport,
+        opened: true,
+      });
+      expect(refreshed.ok && first.ok ? refreshed.marker.claimId : '').not.toBe(
+        first.ok ? first.marker.claimId : '',
+      );
+      expect(calls.map((args) => args[0])).toEqual(['projects', 'projects', 'report']);
+      expect(openTextDocument.mock.calls.map(([path]) => path)).toEqual([
+        originalReport,
+        regeneratedReport,
+      ]);
+    } finally {
+      rmSync(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  test('refreshes a completed claim when its trail moves to a new root', async () => {
+    const parent = mkdtempSync(join(tmpdir(), 'showtail-vscode-project-cache-'));
+    const originalRoot = join(parent, 'original');
+    const movedRoot = join(parent, 'moved');
+    mkdirSync(originalRoot);
+    mkdirSync(movedRoot);
+    const originalReport = join(originalRoot, 'report.html');
+    const movedReport = join(movedRoot, 'report.html');
+    writeFileSync(originalReport, 'original');
+    writeFileSync(movedReport, 'moved');
+    const originalSelection = { ...selection, root: originalRoot };
+    const movedSelection = { ...selection, root: movedRoot };
+    const requestIdentity = {};
+    const calls: Array<{ args: string[]; cwd: string }> = [];
+    let currentSelection = originalSelection;
+    try {
+      const { projectControl } = controller(
+        async (args, cwd) => {
+          calls.push({ args, cwd });
+          if (args[0] === 'projects') return selectedResult(currentSelection);
+          if (args[0] === 'report') {
+            return {
+              stdout: JSON.stringify({
+                ok: true,
+                trailId: movedSelection.trailId,
+                root: movedRoot,
+                reportPath: movedReport,
+              }),
+              stderr: '',
+              exitCode: 0,
+            };
+          }
+          throw new Error(`Unexpected command: ${args.join(' ')}`);
+        },
+        [claimFor(originalSelection, originalReport)],
+      );
+      const input = { action: 'open_report' as const, priorClaimId: 'claim_previous' };
+
+      const first = await projectControl.execute(input, undefined, { requestIdentity });
+      currentSelection = movedSelection;
+      const refreshed = await projectControl.execute(input, undefined, {
+        requestIdentity,
+      });
+
+      expect(first).toMatchObject({ ok: true, selection: originalSelection });
+      expect(refreshed).toMatchObject({
+        ok: true,
+        selection: movedSelection,
+        reportPath: movedReport,
+      });
+      expect(calls.map(({ args }) => args[0])).toEqual([
+        'projects',
+        'projects',
+        'report',
+      ]);
+      expect(calls.find(({ args }) => args[0] === 'report')?.cwd).toBe(movedRoot);
+      expect(openTextDocument.mock.calls.map(([path]) => path)).toEqual([
+        originalReport,
+        movedReport,
+      ]);
+    } finally {
+      rmSync(parent, { recursive: true, force: true });
+    }
   });
 
   test('regenerates a missing claimed report exactly once', async () => {

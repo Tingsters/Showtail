@@ -34,6 +34,7 @@ import { makeId } from '../core/ids.ts';
 import { readMachineIdentity } from '../core/identity.ts';
 import {
   appendLedgerRecord,
+  effectiveLedgerRecords,
   effectiveLedgerPath,
   ensureLedgerSession,
   markInbox,
@@ -552,7 +553,7 @@ async function runImportAntigravityIdeAuto(
       : undefined;
   const safelyContained =
     resolvedRoot !== undefined &&
-    readLedgerRecords(current.id).every(
+    effectiveLedgerRecords(readLedgerRecords(current.id)).every(
       (record) =>
         record.kind !== 'edit' ||
         (record.file !== undefined &&
@@ -666,7 +667,7 @@ async function runImportAntigravityIdeAuto(
   totals.edits = materialized.edits;
   totals.skipped = Math.max(
     0,
-    readLedgerRecords(current.id).length - materialized.projected,
+    effectiveLedgerRecords(readLedgerRecords(current.id)).length - materialized.projected,
   );
   printAutoResult(totals, [root], options.withResponses !== false);
 }

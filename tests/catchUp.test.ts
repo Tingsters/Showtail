@@ -578,7 +578,12 @@ describe('report catch-up sweep', () => {
       expect.objectContaining({ ok: true, root: resolve(second) }),
     );
 
-    expect(existsSync(join(first, '.showtail'))).toBe(false);
+    // Segmented cleanup keeps the automatic shell so a concurrent turn cannot
+    // race with whole-directory pruning, but the rerouted work must be gone.
+    expect(existsSync(join(first, '.showtail', 'config.json'))).toBe(true);
+    expect(readAllEvents(pathsForRoot(first))).toHaveLength(0);
+    expect(readAllArtifacts(pathsForRoot(first))).toHaveLength(0);
+    expect(readdirSync(join(first, '.showtail', 'reports'))).toEqual([]);
     expect(existsSync(join(second, '.showtail', 'config.json'))).toBe(true);
     expect(readJsonReport(second).turns[0].prompt.text).toBe('make it a top down game');
     expect(
@@ -761,8 +766,12 @@ describe('report catch-up sweep', () => {
       }),
     );
 
-    // The pruned source must stay gone; report must not recreate a reports-only shell.
-    expect(existsSync(join(first, '.showtail'))).toBe(false);
+    // The automatic source shell stays for concurrency safety, but it must not
+    // retain the ambiguous session or gain a report for work it no longer owns.
+    expect(existsSync(join(first, '.showtail', 'config.json'))).toBe(true);
+    expect(readAllEvents(pathsForRoot(first))).toHaveLength(0);
+    expect(readAllArtifacts(pathsForRoot(first))).toHaveLength(0);
+    expect(readdirSync(join(first, '.showtail', 'reports'))).toEqual([]);
     expect(existsSync(join(second, '.showtail'))).toBe(false);
     const session = JSON.parse(
       runCli(workspace, ['move', '--json'], { env }).stdout,

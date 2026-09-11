@@ -6,11 +6,11 @@
  * (and re-redacted) through the normal `logEvent`/`importEditArtifact` path so a
  * projection is byte-for-byte a normal capture.
  *
- * Idempotent: every projected record carries a stable `sourceId`
- * (`ledger:<session>:<record>`) and the batch id `ledger:<session>`, so a second
- * materialize (a retry, a live-then-reattach, or a double-fire) dedups against
- * what the repo already holds and writes nothing new. The batch id also lets
- * `reattach` cleanly remove a wrong placement with `removeEventsByBatch`.
+ * Idempotent: every projected record carries a stable `sourceId`; append-only
+ * corrections get a revision suffix before their obsolete projection is removed
+ * with an explicit repair marker. A retry, live-then-reattach, or double-fire
+ * therefore writes nothing new. Per-turn batches also let routing remove a wrong
+ * placement without touching neighboring work.
  *
  * Called both live (the hook projects into the resolved root as work happens) and
  * on demand (`showtail reattach` projects an inbox/misattributed session into the
@@ -23,7 +23,12 @@ import {
   importedArtifactSourceIds,
 } from './artifacts.ts';
 import { CaptureInterruptedError } from './captureGuard.ts';
-import { importedSourceIds, logEvent, readSessionEvents } from './events.ts';
+import {
+  importedSourceIds,
+  logEvent,
+  readSessionEvents,
+  removeCorrectedJournalEntriesBySourceIds,
+} from './events.ts';
 import {
   conversationEventEnabled,
   importedConversationSourceIds,
@@ -36,10 +41,12 @@ import { isAbsolute, resolve } from 'node:path';
 import { isPathUnder, readConfig, toRepoRelative, type AuthorPaths } from './storage.ts';
 import {
   effectiveLedgerSegmentPath,
+  effectiveLedgerRecords,
   ensureLedgerSegments,
   ledgerRecordProjectionSourceId,
   readLedgerSegmentRecords,
   readLedgerRecords,
+  supersededLedgerRecordIds,
   type LedgerRecord,
   type LedgerSegment,
   type LedgerSession,
@@ -131,6 +138,34 @@ interface ProjectedEditPath {
   path: string;
 }
 
+interface LedgerProjectionState {
+  effectiveRecordIds: Set<string>;
+  obsoleteSourceIds: Set<string>;
+}
+
+function ledgerProjectionState(session: LedgerSession): LedgerProjectionState {
+  const records = readLedgerRecords(session.id);
+  const superseded = supersededLedgerRecordIds(records);
+  return {
+    effectiveRecordIds: new Set(
+      effectiveLedgerRecords(records).map((record) => record.id),
+    ),
+    obsoleteSourceIds: new Set(
+      records
+        .filter((record) => superseded.has(record.id))
+        .map((record) => ledgerRecordProjectionSourceId(session.id, record)),
+    ),
+  };
+}
+
+function effectiveSegmentRecords(
+  session: LedgerSession,
+  records: LedgerRecord[],
+): LedgerRecord[] {
+  const { effectiveRecordIds } = ledgerProjectionState(session);
+  return records.filter((record) => effectiveRecordIds.has(record.id));
+}
+
 /** Resolve and validate every edit before any part of the session is projected. */
 function projectedEditPaths(
   segment: LedgerSegment,
@@ -163,10 +198,13 @@ export function assertLedgerSessionContained(
   root: string,
   rebase?: PathRebase,
 ): void {
+  const state = ledgerProjectionState(session);
   for (const segment of ensureLedgerSegments(session).segments) {
     projectedEditPaths(
       segment,
-      readLedgerSegmentRecords(session.id, segment),
+      readLedgerSegmentRecords(session.id, segment).filter((record) =>
+        state.effectiveRecordIds.has(record.id),
+      ),
       root,
       rebase,
     );
@@ -182,7 +220,7 @@ export function assertLedgerSegmentContained(
 ): void {
   projectedEditPaths(
     segment,
-    readLedgerSegmentRecords(session.id, segment),
+    effectiveSegmentRecords(session, readLedgerSegmentRecords(session.id, segment)),
     root,
     rebase,
   );
@@ -197,12 +235,16 @@ export function assertLedgerSegmentContained(
 async function materializeLedgerRecords(
   session: LedgerSession,
   segment: LedgerSegment,
-  records: LedgerRecord[],
+  segmentRecords: LedgerRecord[],
   author: AuthorPaths,
   batchId: string,
   options: MaterializeOptions = {},
 ): Promise<MaterializeResult> {
   const continueCapture = options.continueCapture ?? (() => true);
+  const projectionState = ledgerProjectionState(session);
+  const records = segmentRecords.filter((record) =>
+    projectionState.effectiveRecordIds.has(record.id),
+  );
   const editPaths = projectedEditPaths(
     segment,
     records,
@@ -516,6 +558,20 @@ async function materializeLedgerRecords(
     }
   }
 
+  // Keep the prior revision visible until every effective replacement is durable.
+  // If capture stops before cleanup, a retry sees the new revision and only needs
+  // to remove the obsolete entries; the trail is never left with neither version.
+  if (projectionState.obsoleteSourceIds.size > 0) {
+    if (!continueCapture()) return out;
+    const removed = await attemptCaptureWrite(() =>
+      removeCorrectedJournalEntriesBySourceIds(
+        author,
+        projectionState.obsoleteSourceIds,
+        `ledger:${session.id}:capture-correction`,
+      ),
+    );
+    if (!removed.completed) return out;
+  }
   if (!continueCapture()) return out;
   out.completed = true;
   return out;

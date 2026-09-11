@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { readAllArtifacts } from '../src/core/artifacts.ts';
 import { readAllEvents } from '../src/core/events.ts';
 import { pathsForRoot } from '../src/core/storage.ts';
 import { cleanup, enableAutoInit, envWithHome, makeTempDir, runCli } from './helpers.ts';
@@ -137,7 +138,11 @@ describe('project-aware routing', () => {
       ).toBe(0);
 
       expect(promptTexts(home)).not.toContain('update my note');
-      expect(existsSync(join(launcher, '.showtail'))).toBe(false);
+      // The automatic shell remains for concurrency safety, but the mixed-root
+      // session is no longer projected into it.
+      expect(existsSync(join(launcher, '.showtail', 'config.json'))).toBe(true);
+      expect(promptTexts(launcher)).toEqual([]);
+      expect(readAllArtifacts(pathsForRoot(launcher))).toEqual([]);
       const inbox = JSON.parse(
         runCli(launcher, ['inbox', '--all', '--json'], { env }).stdout,
       ).sessions;
@@ -246,7 +251,9 @@ describe('project-aware routing', () => {
 
       expect(existsSync(join(repo, '.showtail', 'config.json'))).toBe(true);
       expect(promptTexts(repo)).toContain('make a calculator');
-      expect(existsSync(join(home, '.showtail'))).toBe(false);
+      expect(existsSync(join(home, '.showtail', 'config.json'))).toBe(true);
+      expect(promptTexts(home)).not.toContain('make a calculator');
+      expect(readAllArtifacts(pathsForRoot(home))).toEqual([]);
     } finally {
       cleanup(home);
       cleanup(globalHome);

@@ -1,14 +1,18 @@
 import { describe, expect, test } from 'bun:test';
+import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { LEDGER_SEGMENTS_VERSION } from '../src/core/ledger.ts';
 import {
   cleanup,
+  CLI,
   enableAutoInit,
   envWithHome,
   makeTempDir,
   readJsonReport,
   runCli,
+  spawnEnv,
+  stubCli,
 } from './helpers.ts';
 
 function userPrompt(cwd: string, prompt: string, sid = 's1'): string {
@@ -66,6 +70,52 @@ function promptTexts(dir: string, env: NodeJS.ProcessEnv): string[] {
 }
 
 describe('showtail move', () => {
+  test('JSON listing stays in one bounded process and never refreshes integrations', () => {
+    const scratch = makeTempDir();
+    const home = makeTempDir();
+    try {
+      const invoked = join(scratch, 'extension-invoked.txt');
+      const extensionCli = stubCli(scratch, invoked, 'code-stub');
+      const configPath = join(home, 'config.json');
+      writeFileSync(
+        configPath,
+        JSON.stringify({
+          version: 1,
+          autoInit: true,
+          setupCompletedAt: '2026-09-11T00:00:00.000Z',
+          autoConnectedTools: ['copilot'],
+          wiringVersion: '0.0.0',
+          managedInstructionRevision: 0,
+          toolIntegrationGenerations: { copilot: '0.0.0:0' },
+        }) + '\n',
+      );
+      const before = readFileSync(configPath, 'utf8');
+      const env: NodeJS.ProcessEnv = {
+        ...spawnEnv(),
+        SHOWTAIL_HOME: home,
+        SHOWTAIL_VSCODE_CLI: extensionCli,
+      };
+      delete env.SHOWTAIL_DISABLE_FIRST_RUN;
+
+      const result = spawnSync(process.execPath, ['run', CLI, 'move', '--json'], {
+        cwd: scratch,
+        encoding: 'utf8',
+        env,
+        timeout: 5_000,
+      });
+
+      expect(result.error).toBeUndefined();
+      expect(result.signal).toBeNull();
+      expect(result.status).toBe(0);
+      expect(JSON.parse(result.stdout)).toEqual({ sessions: [], ranges: [] });
+      expect(existsSync(invoked)).toBe(false);
+      expect(readFileSync(configPath, 'utf8')).toBe(before);
+    } finally {
+      cleanup(scratch);
+      cleanup(home);
+    }
+  });
+
   test('lists every session and moves a placed one between folders', () => {
     const scratch = makeTempDir();
     const repoA = makeTempDir();

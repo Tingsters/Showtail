@@ -10,7 +10,7 @@
  * equal, so upgraders kept their old capture wiring) — the bump is easy to forget
  * and nothing caught it.
  */
-export const SHOWTAIL_VERSION = '0.17.0';
+export const SHOWTAIL_VERSION = '0.17.1';
 
 /**
  * Bump whenever bundled managed instructions or capture wiring changes. This is

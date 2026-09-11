@@ -31,6 +31,7 @@ import { commitExists } from './git.ts';
 import { sha256OfFile } from './hash.ts';
 import {
   allLedgerSessions,
+  effectiveLedgerRecords,
   effectiveLedgerSegmentPath,
   effectiveLedgerPath,
   readLedgerSegmentRecords,
@@ -196,7 +197,7 @@ function commitsOf(records: LedgerRecord[]): string[] {
 function ledgerHashIndex(): Map<string, Set<string>> {
   const out = new Map<string, Set<string>>();
   for (const s of allLedgerSessions()) {
-    for (const rec of readLedgerRecords(s.id)) {
+    for (const rec of effectiveLedgerRecords(readLedgerRecords(s.id))) {
       if (rec.kind !== 'edit' || !rec.file || !rec.sha256) continue;
       const key = pathKey(effectiveLedgerPath(s, rec.file));
       const set = out.get(key);
@@ -433,7 +434,7 @@ export async function matchSessionToRoot(
   opts: RelocationOptions = {},
   index?: CandidateIndex,
 ): Promise<RelocationMatch | null> {
-  const records = readLedgerRecords(session.id);
+  const records = effectiveLedgerRecords(readLedgerRecords(session.id));
   return matchRecordsToRoot(
     records,
     editEvidenceOf(records, (path) => effectiveLedgerPath(session, path)),
@@ -459,7 +460,12 @@ export async function matchLedgerSegmentToRoot(
   opts: RelocationOptions = {},
   index?: CandidateIndex,
 ): Promise<RelocationMatch | null> {
-  const records = readLedgerSegmentRecords(session.id, segment);
+  const effectiveRecordIds = new Set(
+    effectiveLedgerRecords(readLedgerRecords(session.id)).map((record) => record.id),
+  );
+  const records = readLedgerSegmentRecords(session.id, segment).filter((record) =>
+    effectiveRecordIds.has(record.id),
+  );
   return matchRecordsToRoot(
     records,
     editEvidenceOf(records, (path) => effectiveLedgerSegmentPath(segment, path)),

@@ -577,7 +577,7 @@ export async function runHook(
       }
       const evidence = context.evidence;
       if (!captureConsentMatches(captureCliName, automaticCaptureSince)) return;
-      await ensureInitialized(anchor, {
+      const initialized = await ensureInitialized(anchor, {
         ...(evidence === 'trail' ? {} : { anchorKind: evidence }),
         initialization: {
           mode: 'automatic',
@@ -586,6 +586,10 @@ export async function runHook(
         },
         continueCapture: continueAutomaticCapture,
       });
+      if (initialized.skipped) {
+        if (ledger) safeMarkInbox(ledger.id, continueAutomaticCapture);
+        return;
+      }
       if (!captureConsentMatches(captureCliName, automaticCaptureSince)) return;
       root = anchor;
     }

@@ -13,13 +13,20 @@ import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { CaptureInterruptedError } from '../src/core/captureGuard.ts';
 import {
+  appendLedgerRecord,
+  ensureLedgerSegments,
   ensureLedgerSession,
+  markLedgerSegmentPlaced,
   markPlaced,
   readLedgerIndex,
   readLedgerSession,
 } from '../src/core/ledger.ts';
 import { ensureMachineId } from '../src/core/identity.ts';
-import { clearOtherLedgerProjections } from '../src/core/projectionRouting.ts';
+import {
+  clearOtherLedgerProjections,
+  ProjectionTargetIdentityMismatchError,
+  removeOtherLedgerProjections,
+} from '../src/core/projectionRouting.ts';
 import { pruneProvisionalTrail } from '../src/core/provisionalTrail.ts';
 import { CONFIG_VERSION, pathsForRoot, writeJson } from '../src/core/storage.ts';
 import { cleanup, makeTempDir } from './helpers.ts';
@@ -334,6 +341,58 @@ describe('pruneProvisionalTrail', () => {
       currentPromptId: null,
       turnByNativeSession: {},
     });
+  });
+
+  test('legacy cleanup revalidates trail identity at its commit boundary', () => {
+    const fixture = seedPristineTrail();
+    const session = readLedgerSession(fixture.ledgerSessionId)!;
+    const configFile = join(fixture.root, '.showtail', 'config.json');
+
+    expect(() =>
+      removeOtherLedgerProjections(session, undefined, {
+        onBeforeLegacyProjectionCommit: () => {
+          const config = JSON.parse(readFileSync(configFile, 'utf8')) as Record<
+            string,
+            unknown
+          >;
+          config.trailId = 'trl_replacement_at_legacy_commit';
+          writeJson(configFile, config);
+        },
+      }),
+    ).toThrow(ProjectionTargetIdentityMismatchError);
+
+    expect(readFileSync(fixture.journalFile, 'utf8')).toContain('evt_prompt_1');
+    expect(readLedgerSession(fixture.ledgerSessionId)?.targets).toContainEqual({
+      trailId: fixture.trailId,
+      path: fixture.root,
+    });
+  });
+
+  test('legacy cleanup aborts when the session becomes segmented before commit', () => {
+    const fixture = seedPristineTrail();
+    const session = readLedgerSession(fixture.ledgerSessionId)!;
+
+    expect(() =>
+      removeOtherLedgerProjections(session, undefined, {
+        onBeforeLegacyProjectionCommit: () => {
+          appendLedgerRecord(session.id, {
+            kind: 'prompt',
+            tool: 'codex',
+            text: 'new segmented work',
+          });
+          const [segment] = ensureLedgerSegments(session).segments;
+          markLedgerSegmentPlaced(session.id, segment!.id, fixture.trailId, fixture.root);
+        },
+      }),
+    ).toThrow('gained segmented records');
+
+    expect(readFileSync(fixture.journalFile, 'utf8')).toContain('evt_prompt_1');
+    expect(ensureLedgerSegments(session).segments[0]).toEqual(
+      expect.objectContaining({
+        status: 'placed',
+        targets: [{ trailId: fixture.trailId, path: fixture.root }],
+      }),
+    );
   });
 
   test('prunes an uncommitted automatic trail containing only its creator session', async () => {

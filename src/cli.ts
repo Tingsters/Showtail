@@ -261,6 +261,7 @@ const NO_BOOTSTRAP = new Set([
   'projects',
   'verify',
   'update',
+  'move',
 ]);
 let pendingUpdateNotice: Promise<string | null> | null = null;
 program.hook('preAction', async (_thisCommand, actionCommand) => {
@@ -287,11 +288,7 @@ program.hook('preAction', async (_thisCommand, actionCommand) => {
     const previousUpdate = consumeUpdateResultNotice();
     if (previousUpdate) process.stderr.write(previousUpdate + '\n\n');
   }
-  const pureMoveListing =
-    actionCommand.name() === 'move' &&
-    json &&
-    actionCommand.processedArgs[0] === undefined;
-  if (NO_BOOTSTRAP.has(actionCommand.name()) || pureMoveListing) return;
+  if (NO_BOOTSTRAP.has(actionCommand.name())) return;
   const boot = ensureFirstRunSetup();
   if (boot.ran) {
     if (!json) {

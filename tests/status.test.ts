@@ -281,6 +281,72 @@ describe('status snapshot', () => {
     }
   });
 
+  test('surfaces same-path trail identity conflicts without repairing metadata', () => {
+    const dir = makeTempDir();
+    const home = makeTempDir();
+    try {
+      const paths = pathsForRoot(dir);
+      mkdirSync(paths.base, { recursive: true });
+      writeJson(paths.config, {
+        version: CONFIG_VERSION,
+        createdAt: '2026-09-11T00:00:00.000Z',
+        anchor: dir,
+        anchorKind: 'explicit',
+        trailId: 'trl_status_canonical',
+        settings: {},
+      });
+      const configPath = join(home, 'config.json');
+      writeFileSync(
+        configPath,
+        JSON.stringify({
+          version: 1,
+          knownProjects: [
+            {
+              trailId: 'trl_status_duplicate',
+              path: dir,
+              lastSeenAt: '2026-09-11T00:00:01.000Z',
+            },
+          ],
+        }) + '\n',
+      );
+      const before = readFileSync(configPath, 'utf8');
+
+      const compact = runCli(dir, ['status', '--json'], { env: envWithHome(home) });
+      expect(compact.code).toBe(0);
+      expect(JSON.parse(compact.stdout).semantic).toEqual({ conflicts: 1 });
+
+      const verbose = runCli(dir, ['status', '--json', '--verbose-json'], {
+        env: envWithHome(home),
+      });
+      expect(verbose.code).toBe(0);
+      expect(JSON.parse(verbose.stdout).semanticConflicts).toContainEqual(
+        expect.objectContaining({ code: 'SAME_PATH_TRAIL_ID_CONFLICT' }),
+      );
+      expect(readFileSync(configPath, 'utf8')).toBe(before);
+
+      writeFileSync(
+        configPath,
+        JSON.stringify({
+          ...JSON.parse(before),
+          trailSupersessions: {
+            trl_status_duplicate: {
+              canonicalTrailId: 'trl_status_canonical',
+              canonicalPath: dir,
+              reason: 'same-path-duplicate',
+              supersededAt: '2026-09-11T00:00:02.000Z',
+            },
+          },
+        }) + '\n',
+      );
+      const retired = runCli(dir, ['status', '--json'], { env: envWithHome(home) });
+      expect(retired.code).toBe(0);
+      expect(JSON.parse(retired.stdout).semantic).toEqual({ conflicts: 0 });
+    } finally {
+      cleanup(dir);
+      cleanup(home);
+    }
+  });
+
   for (const command of ['status', 'capabilities', 'projects']) {
     test(`${command} does not repair a reused path with a different trail id`, () => {
       const dir = makeTempDir();

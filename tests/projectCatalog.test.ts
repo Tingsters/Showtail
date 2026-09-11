@@ -336,6 +336,61 @@ describe('metadata-first project catalog', () => {
     ).toHaveLength(2);
   });
 
+  test('uses only the corrected edit as project identity evidence', () => {
+    const caller = temp();
+    const fairy = temp();
+    const word = temp();
+    const obsoleteFile = join(fairy, 'fairy_spellbook.ts');
+    const correctedFile = join(word, 'word_sparkle.ts');
+    trail(fairy, 'trl_sparkle_fairy', 'Sparkle Fairy');
+    trail(word, 'trl_sparkle_word', 'Sparkle Word');
+    writeFileSync(obsoleteFile, 'export const fairy = true;\n');
+    writeFileSync(correctedFile, 'export const word = true;\n');
+    noteKnownProject(fairy, 'trl_sparkle_fairy');
+    noteKnownProject(word, 'trl_sparkle_word');
+
+    const session = ensureLedgerSession({
+      tool: 'codex',
+      nativeSessionId: 'corrected-catalog-edit',
+      cwd: caller,
+    });
+    const prompt = appendLedgerRecord(session.id, {
+      kind: 'prompt',
+      tool: 'codex',
+      text: 'update the sparkle word game',
+    });
+    const obsolete = appendLedgerRecord(session.id, {
+      kind: 'edit',
+      tool: 'codex',
+      file: obsoleteFile,
+      turnKey: prompt.id,
+      sourceId: 'corrected-catalog-source',
+      sha256: 'a'.repeat(64),
+    });
+    appendLedgerRecord(session.id, {
+      kind: 'edit',
+      tool: 'codex',
+      file: correctedFile,
+      turnKey: prompt.id,
+      sourceId: obsolete.sourceId,
+      supersedesRecordId: obsolete.id,
+      sha256: 'b'.repeat(64),
+    });
+    expect(setLedgerTurnProjectMetadata(session.id, prompt.id, {})).toBe(true);
+
+    const projects = buildProjectCatalog({ cwd: caller }).projects;
+    const fairyEntry = projects.find(
+      (project) => project.trailId === 'trl_sparkle_fairy',
+    );
+    const wordEntry = projects.find((project) => project.trailId === 'trl_sparkle_word');
+    expect(fairyEntry).toMatchObject({ editBacked: false });
+    expect(fairyEntry?.aliases).not.toContain('fairy_spellbook');
+    expect(fairyEntry?.sources).not.toContain('ledger-edit-reference');
+    expect(wordEntry).toMatchObject({ editBacked: true });
+    expect(wordEntry?.aliases).toContain('word_sparkle');
+    expect(wordEntry?.sources).toContain('ledger-edit-reference');
+  });
+
   test('uses only a ledger-revalidated persisted edit reference after a move', () => {
     const caller = temp();
     const previousRoot = temp();

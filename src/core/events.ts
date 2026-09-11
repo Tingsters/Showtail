@@ -407,13 +407,43 @@ export function removeJournalEntriesBySourceIds(
   sourceIds: ReadonlySet<string>,
   markerBatch: string,
 ): number {
+  return removeJournalEntriesBySourceIdsWithMarker(
+    author,
+    sourceIds,
+    markerBatch,
+    'routing-reprojection',
+  );
+}
+
+/** Remove obsolete projections replaced by append-only transcript corrections. */
+export function removeCorrectedJournalEntriesBySourceIds(
+  author: AuthorPaths,
+  sourceIds: ReadonlySet<string>,
+  markerBatch: string,
+): number {
+  return removeJournalEntriesBySourceIdsWithMarker(
+    author,
+    sourceIds,
+    markerBatch,
+    'repair',
+    ['capture-correction'],
+  );
+}
+
+function removeJournalEntriesBySourceIdsWithMarker(
+  author: AuthorPaths,
+  sourceIds: ReadonlySet<string>,
+  markerBatch: string,
+  reason: 'routing-reprojection' | 'repair',
+  labels: string[] = [],
+): number {
   if (sourceIds.size === 0) return 0;
   const removed = rewriteJournal(
     author,
     (entry) => !entry.sourceId || !sourceIds.has(entry.sourceId),
   );
   if (removed > 0) {
-    recordUndoMarker(author, markerBatch, removed, 'routing-reprojection');
+    recordUndoMarker(author, markerBatch, removed, reason, labels);
   }
   return removed;
 }
@@ -428,7 +458,8 @@ function recordUndoMarker(
   author: AuthorPaths,
   batchId: string,
   removed: number,
-  reason: 'import-undo' | 'migration-undo' | 'routing-reprojection',
+  reason: 'import-undo' | 'migration-undo' | 'routing-reprojection' | 'repair',
+  labels: string[] = [],
 ): void {
   if (!author.machineId) return;
   const marker: JournalEntry = {
@@ -442,7 +473,7 @@ function recordUndoMarker(
       reason,
       entries: removed,
       values: 0,
-      labels: [],
+      labels,
       batch: batchId,
     },
   };

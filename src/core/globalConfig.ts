@@ -1,4 +1,14 @@
-import { existsSync } from 'node:fs';
+import {
+  closeSync,
+  existsSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  statSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import { basename, isAbsolute, join, resolve } from 'node:path';
 import { existingPathKey, readJson, writeJson } from './storage.ts';
@@ -58,6 +68,34 @@ export interface ProjectIdentity {
 export interface ProjectIdentityCatalog {
   version: typeof PROJECT_IDENTITY_CATALOG_VERSION;
   byTrailId: Record<string, ProjectIdentity>;
+}
+
+/** Durable retirement of a transient trail identity in favor of its canonical id. */
+export interface TrailIdentitySupersession {
+  canonicalTrailId: string;
+  canonicalPath: string;
+  reason: 'same-path-duplicate';
+  supersededAt: string;
+}
+
+/** A write attempted to reuse an identity that has been durably retired. */
+export class RetiredTrailIdentityError extends Error {
+  constructor(
+    readonly trailId: string,
+    readonly supersession: TrailIdentitySupersession,
+  ) {
+    super(
+      `Trail ${trailId} has been retired in favor of ${supersession.canonicalTrailId} ` +
+        `at ${supersession.canonicalPath}.`,
+    );
+    this.name = 'RetiredTrailIdentityError';
+  }
+}
+
+export interface RelocatedKnownProject {
+  trailId: string;
+  currentPath: string;
+  previousPath: string;
 }
 
 export interface GlobalConfig {
@@ -154,6 +192,8 @@ export interface GlobalConfig {
   knownProjects?: KnownProject[];
   /** Versioned metadata-first project identities, keyed by stable trail id. */
   projectCatalog?: ProjectIdentityCatalog;
+  /** Retired transient ids that must not re-enter project discovery. */
+  trailSupersessions?: Record<string, TrailIdentitySupersession>;
   /** Cached release metadata and the user's passive-check preference. */
   update?: {
     automaticChecks?: boolean;
@@ -177,6 +217,110 @@ export function showtailHome(): string {
 /** Absolute path to the global config file. */
 export function globalConfigPath(): string {
   return join(showtailHome(), 'config.json');
+}
+
+const TRAIL_IDENTITY_LOCK_STALE_MS = 30 * 60_000;
+const TRAIL_IDENTITY_LOCK_TIMEOUT_MS = 15_000;
+const TRAIL_IDENTITY_LOCK_RETRY_MS = 10;
+const trailIdentityLockWaiter = new Int32Array(new SharedArrayBuffer(4));
+let trailIdentityLockState: { path: string; token: string; depth: number } | undefined;
+
+/** Machine-wide serialization point for identity retirement and placement writes. */
+export function trailIdentityMutationLockPath(): string {
+  return join(showtailHome(), 'trail-identity.lock');
+}
+
+function waitForTrailIdentityLock(): void {
+  Atomics.wait(trailIdentityLockWaiter, 0, 0, TRAIL_IDENTITY_LOCK_RETRY_MS);
+}
+
+function errorCode(error: unknown): string | undefined {
+  return error && typeof error === 'object' && 'code' in error
+    ? String((error as { code?: unknown }).code)
+    : undefined;
+}
+
+function recoverStaleTrailIdentityLock(path: string): boolean {
+  try {
+    if (Date.now() - statSync(path).mtimeMs <= TRAIL_IDENTITY_LOCK_STALE_MS) {
+      return false;
+    }
+    unlinkSync(path);
+    return true;
+  } catch (error) {
+    if (errorCode(error) === 'ENOENT') return true;
+    return false;
+  }
+}
+
+function releaseTrailIdentityLock(path: string, token: string): void {
+  try {
+    const current = JSON.parse(readFileSync(path, 'utf8')) as { token?: string };
+    if (current.token === token) unlinkSync(path);
+  } catch {
+    // A missing or replaced lock belongs to another recovery attempt.
+  }
+}
+
+/**
+ * Serialize the retirement decision with every writer that can place or index a
+ * trail id. Calls are reentrant within one process so a retirement can use the
+ * same guarded helpers without deadlocking itself.
+ */
+export function withTrailIdentityMutationLock<T>(fn: () => T): T {
+  if (trailIdentityLockState) {
+    trailIdentityLockState.depth += 1;
+    try {
+      return fn();
+    } finally {
+      trailIdentityLockState.depth -= 1;
+    }
+  }
+
+  const path = trailIdentityMutationLockPath();
+  mkdirSync(showtailHome(), { recursive: true });
+  const token = `${process.pid}:${randomUUID()}`;
+  const startedAt = Date.now();
+  for (;;) {
+    let created = false;
+    try {
+      const descriptor = openSync(path, 'wx');
+      created = true;
+      try {
+        writeFileSync(
+          descriptor,
+          `${JSON.stringify({ token, pid: process.pid, acquiredAt: new Date().toISOString() })}\n`,
+          'utf8',
+        );
+      } finally {
+        closeSync(descriptor);
+      }
+      break;
+    } catch (error) {
+      if (created) {
+        try {
+          unlinkSync(path);
+        } catch {
+          // Preserve the original lock-write failure.
+        }
+      }
+      if (errorCode(error) !== 'EEXIST') throw error;
+      if (recoverStaleTrailIdentityLock(path)) continue;
+      if (Date.now() - startedAt >= TRAIL_IDENTITY_LOCK_TIMEOUT_MS) {
+        throw new Error(`Timed out waiting for trail identity lock ${path}.`);
+      }
+      waitForTrailIdentityLock();
+    }
+  }
+
+  trailIdentityLockState = { path, token, depth: 1 };
+  try {
+    return fn();
+  } finally {
+    const state = trailIdentityLockState;
+    trailIdentityLockState = undefined;
+    if (state) releaseTrailIdentityLock(state.path, state.token);
+  }
 }
 
 /** Authoritative per-tool capture-consent file, isolated from shared config RMWs. */
@@ -222,9 +366,156 @@ export function readGlobalConfig(): GlobalConfig {
   }
 }
 
-/** Persist the global config (atomic write; creates `~/.showtail-cli/` as needed). */
+/**
+ * Persist global config without allowing a stale read-modify-write to erase or
+ * republish a retired identity. Supersessions are append-only machine state.
+ */
 export function writeGlobalConfig(config: GlobalConfig): void {
-  writeJson(globalConfigPath(), config);
+  withTrailIdentityMutationLock(() => {
+    const current = readGlobalConfig();
+    const trailSupersessions = {
+      ...(config.trailSupersessions ?? {}),
+      ...(current.trailSupersessions ?? {}),
+    };
+    const retiredTrailIds = new Set(Object.keys(trailSupersessions));
+    const projectCatalog =
+      config.projectCatalog?.version === PROJECT_IDENTITY_CATALOG_VERSION
+        ? {
+            ...config.projectCatalog,
+            byTrailId: Object.fromEntries(
+              Object.entries(config.projectCatalog.byTrailId).filter(
+                ([trailId]) => !retiredTrailIds.has(trailId),
+              ),
+            ),
+          }
+        : config.projectCatalog;
+    writeJson(globalConfigPath(), {
+      ...config,
+      ...(config.knownProjects
+        ? {
+            knownProjects: config.knownProjects.filter(
+              (project) => !project.trailId || !retiredTrailIds.has(project.trailId),
+            ),
+          }
+        : {}),
+      ...(projectCatalog ? { projectCatalog } : {}),
+      ...(retiredTrailIds.size > 0 ? { trailSupersessions } : {}),
+    });
+  });
+}
+
+function liveTrailIdAt(root: string): string | undefined {
+  const config = join(resolve(root), '.showtail', 'config.json');
+  if (!existsSync(config)) return undefined;
+  try {
+    const trailId = readJson<{ trailId?: string }>(config).trailId;
+    return trailId?.trim() || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** A prior path whose stable trail identity is currently alive somewhere else. */
+export function relocatedKnownProjectFrom(path: string): RelocatedKnownProject | null {
+  const previousPath = resolve(path);
+  const previousKey = existingPathKey(previousPath);
+  const config = readGlobalConfig();
+  const candidates = new Map<string, { currentPath: string; previousPaths: string[] }>();
+  if (config.projectCatalog?.version === PROJECT_IDENTITY_CATALOG_VERSION) {
+    for (const identity of Object.values(config.projectCatalog.byTrailId)) {
+      candidates.set(identity.trailId, {
+        currentPath: identity.currentPath,
+        previousPaths: identity.previousPaths ?? [],
+      });
+    }
+  }
+  for (const project of config.knownProjects ?? []) {
+    if (!project.trailId || candidates.has(project.trailId)) continue;
+    candidates.set(project.trailId, {
+      currentPath: project.path,
+      previousPaths: project.previousPaths ?? [],
+    });
+  }
+  for (const [trailId, candidate] of candidates) {
+    const currentPath = resolve(candidate.currentPath);
+    if (existingPathKey(currentPath) === previousKey) continue;
+    if (!candidate.previousPaths.some((item) => existingPathKey(item) === previousKey)) {
+      continue;
+    }
+    if (liveTrailIdAt(currentPath) !== trailId) continue;
+    return { trailId, currentPath, previousPath };
+  }
+  return null;
+}
+
+export function trailIdentitySupersession(
+  trailId: string,
+): TrailIdentitySupersession | undefined {
+  return readGlobalConfig().trailSupersessions?.[trailId];
+}
+
+/** Reject a retired trail id at the boundary of every identity-bearing write. */
+export function assertTrailIdentityActive(
+  trailId: string,
+  config: GlobalConfig = readGlobalConfig(),
+): void {
+  const supersession = config.trailSupersessions?.[trailId];
+  if (supersession) throw new RetiredTrailIdentityError(trailId, supersession);
+}
+
+/** Persist a validated identity retirement and remove its discovery metadata. */
+export function recordTrailIdentitySupersession(
+  supersededTrailId: string,
+  canonicalTrailId: string,
+  canonicalPath: string,
+): TrailIdentitySupersession {
+  return withTrailIdentityMutationLock(() => {
+    const root = resolve(canonicalPath);
+    if (!supersededTrailId || supersededTrailId === canonicalTrailId) {
+      throw new Error('A trail supersession requires two distinct trail ids.');
+    }
+    const cfg = readGlobalConfig();
+    assertTrailIdentityActive(canonicalTrailId, cfg);
+    if (liveTrailIdAt(root) !== canonicalTrailId) {
+      throw new Error(`Canonical trail ${canonicalTrailId} is not live at ${root}.`);
+    }
+    const existing = cfg.trailSupersessions?.[supersededTrailId];
+    if (
+      existing &&
+      (existing.canonicalTrailId !== canonicalTrailId ||
+        existingPathKey(existing.canonicalPath) !== existingPathKey(root))
+    ) {
+      throw new Error(`Trail ${supersededTrailId} is already superseded elsewhere.`);
+    }
+    const supersession: TrailIdentitySupersession = existing ?? {
+      canonicalTrailId,
+      canonicalPath: root,
+      reason: 'same-path-duplicate',
+      supersededAt: new Date().toISOString(),
+    };
+    const projectCatalog =
+      cfg.projectCatalog?.version === PROJECT_IDENTITY_CATALOG_VERSION
+        ? {
+            ...cfg.projectCatalog,
+            byTrailId: { ...cfg.projectCatalog.byTrailId },
+          }
+        : cfg.projectCatalog;
+    if (projectCatalog?.version === PROJECT_IDENTITY_CATALOG_VERSION) {
+      delete projectCatalog.byTrailId[supersededTrailId];
+    }
+    writeGlobalConfig({
+      ...cfg,
+      knownProjects: (cfg.knownProjects ?? []).filter(
+        (project) => project.trailId !== supersededTrailId,
+      ),
+      ...(projectCatalog ? { projectCatalog } : {}),
+      trailSupersessions: {
+        ...(cfg.trailSupersessions ?? {}),
+        [supersededTrailId]: supersession,
+      },
+    });
+    return supersession;
+  });
 }
 
 function uniqueKnownPaths(paths: string[], current: string): string[] {
@@ -385,170 +676,173 @@ export function noteKnownProject(
   options: KnownProjectObservation = {},
 ): void {
   try {
-    const resolved = resolve(path);
-    const cfg = readGlobalConfig();
-    const now = new Date().toISOString();
-    const projects = [...(cfg.knownProjects ?? [])];
-    const supportedCatalog =
-      cfg.projectCatalog?.version === PROJECT_IDENTITY_CATALOG_VERSION
-        ? cfg.projectCatalog
-        : undefined;
-    const trailIndex = trailId
-      ? projects.findIndex((project) => project.trailId === trailId)
-      : -1;
-    const pathIndex = projects.findIndex(
-      (project) => existingPathKey(project.path) === existingPathKey(resolved),
-    );
-    const index = trailIndex >= 0 ? trailIndex : pathIndex;
-    if (index >= 0) {
-      const current = projects[index]!;
-      const samePath = existingPathKey(current.path) === existingPathKey(resolved);
-      const sameTrail = current.trailId === trailId;
-      const addsEditProvenance = options.editBacked === true && !current.editBacked;
-      const identityChanged = trailId
-        ? identityObservationChanges(
-            supportedCatalog?.byTrailId[trailId],
-            resolved,
-            options,
-          )
-        : false;
-      if (samePath && sameTrail && !addsEditProvenance && !identityChanged) {
-        const lastSeen = Date.parse(current.lastSeenAt);
-        if (Number.isFinite(lastSeen) && Date.now() - lastSeen < 5 * 60_000) return;
-      }
-
-      const previousPaths = options.resetIdentity
-        ? []
-        : uniqueKnownPaths(
-            [
-              ...(current.previousPaths ?? []),
-              ...(sameTrail && !samePath ? [current.path] : []),
-            ],
-            resolved,
-          );
-      const editBacked = options.replaceEditEvidence
-        ? options.editBacked === true
-        : (!options.resetIdentity && sameTrail && current.editBacked) ||
-          options.editBacked === true;
-      projects[index] = {
-        ...(trailId ? { trailId } : {}),
-        path: resolved,
-        ...(previousPaths.length > 0 ? { previousPaths } : {}),
-        ...(editBacked ? { editBacked: true } : {}),
-        lastSeenAt: now,
-      };
-    } else {
-      projects.push({
-        ...(trailId ? { trailId } : {}),
-        path: resolved,
-        ...(options.editBacked ? { editBacked: true } : {}),
-        lastSeenAt: now,
-      });
-    }
-    let projectCatalog = cfg.projectCatalog;
-    if (trailId && (!projectCatalog || supportedCatalog)) {
-      const byTrailId = { ...(supportedCatalog?.byTrailId ?? {}) };
-      for (const [knownTrailId, identity] of Object.entries(byTrailId)) {
-        if (
-          knownTrailId !== trailId &&
-          existingPathKey(identity.currentPath) === existingPathKey(resolved)
-        ) {
-          delete byTrailId[knownTrailId];
+    withTrailIdentityMutationLock(() => {
+      const resolved = resolve(path);
+      const cfg = readGlobalConfig();
+      if (trailId && cfg.trailSupersessions?.[trailId]) return;
+      const now = new Date().toISOString();
+      const projects = [...(cfg.knownProjects ?? [])];
+      const supportedCatalog =
+        cfg.projectCatalog?.version === PROJECT_IDENTITY_CATALOG_VERSION
+          ? cfg.projectCatalog
+          : undefined;
+      const trailIndex = trailId
+        ? projects.findIndex((project) => project.trailId === trailId)
+        : -1;
+      const pathIndex = projects.findIndex(
+        (project) => existingPathKey(project.path) === existingPathKey(resolved),
+      );
+      const index = trailIndex >= 0 ? trailIndex : pathIndex;
+      if (index >= 0) {
+        const current = projects[index]!;
+        const samePath = existingPathKey(current.path) === existingPathKey(resolved);
+        const sameTrail = current.trailId === trailId;
+        const addsEditProvenance = options.editBacked === true && !current.editBacked;
+        const identityChanged = trailId
+          ? identityObservationChanges(
+              supportedCatalog?.byTrailId[trailId],
+              resolved,
+              options,
+            )
+          : false;
+        if (samePath && sameTrail && !addsEditProvenance && !identityChanged) {
+          const lastSeen = Date.parse(current.lastSeenAt);
+          if (Number.isFinite(lastSeen) && Date.now() - lastSeen < 5 * 60_000) return;
         }
+
+        const previousPaths = options.resetIdentity
+          ? []
+          : uniqueKnownPaths(
+              [
+                ...(current.previousPaths ?? []),
+                ...(sameTrail && !samePath ? [current.path] : []),
+              ],
+              resolved,
+            );
+        const editBacked = options.replaceEditEvidence
+          ? options.editBacked === true
+          : (!options.resetIdentity && sameTrail && current.editBacked) ||
+            options.editBacked === true;
+        projects[index] = {
+          ...(trailId ? { trailId } : {}),
+          path: resolved,
+          ...(previousPaths.length > 0 ? { previousPaths } : {}),
+          ...(editBacked ? { editBacked: true } : {}),
+          lastSeenAt: now,
+        };
+      } else {
+        projects.push({
+          ...(trailId ? { trailId } : {}),
+          path: resolved,
+          ...(options.editBacked ? { editBacked: true } : {}),
+          lastSeenAt: now,
+        });
       }
-      const current = options.resetIdentity ? undefined : byTrailId[trailId];
-      const samePath =
-        current && existingPathKey(current.currentPath) === existingPathKey(resolved);
-      const currentFolderBasename = basename(resolved);
-      const observedEntrypoints = uniqueStrings(
-        (options.entrypointBasenames ?? []).map((value) => basename(value)),
-      );
-      const currentEntrypoints = current?.entrypointBasenames ?? [];
-      const entrypointsChanged =
-        observedEntrypoints.length > 0 &&
-        JSON.stringify(observedEntrypoints) !== JSON.stringify(currentEntrypoints);
-      const configuredName = options.configuredName?.trim() || current?.configuredName;
-      const previousConfiguredNames = uniqueStrings(
-        [
-          ...(current?.previousConfiguredNames ?? []),
-          ...(current?.configuredName &&
-          configuredName &&
-          current.configuredName !== configuredName
-            ? [current.configuredName]
-            : []),
-        ],
-        configuredName ? [configuredName] : [],
-      );
-      const previousFolderBasenames = uniqueStrings(
-        [
-          ...(current?.previousFolderBasenames ?? []),
-          ...(current && !samePath ? [current.currentFolderBasename] : []),
-        ],
-        [currentFolderBasename],
-      );
-      const entrypointBasenames = options.replaceEditEvidence
-        ? observedEntrypoints
-        : observedEntrypoints.length > 0
+      let projectCatalog = cfg.projectCatalog;
+      if (trailId && (!projectCatalog || supportedCatalog)) {
+        const byTrailId = { ...(supportedCatalog?.byTrailId ?? {}) };
+        for (const [knownTrailId, identity] of Object.entries(byTrailId)) {
+          if (
+            knownTrailId !== trailId &&
+            existingPathKey(identity.currentPath) === existingPathKey(resolved)
+          ) {
+            delete byTrailId[knownTrailId];
+          }
+        }
+        const current = options.resetIdentity ? undefined : byTrailId[trailId];
+        const samePath =
+          current && existingPathKey(current.currentPath) === existingPathKey(resolved);
+        const currentFolderBasename = basename(resolved);
+        const observedEntrypoints = uniqueStrings(
+          (options.entrypointBasenames ?? []).map((value) => basename(value)),
+        );
+        const currentEntrypoints = current?.entrypointBasenames ?? [];
+        const entrypointsChanged =
+          observedEntrypoints.length > 0 &&
+          JSON.stringify(observedEntrypoints) !== JSON.stringify(currentEntrypoints);
+        const configuredName = options.configuredName?.trim() || current?.configuredName;
+        const previousConfiguredNames = uniqueStrings(
+          [
+            ...(current?.previousConfiguredNames ?? []),
+            ...(current?.configuredName &&
+            configuredName &&
+            current.configuredName !== configuredName
+              ? [current.configuredName]
+              : []),
+          ],
+          configuredName ? [configuredName] : [],
+        );
+        const previousFolderBasenames = uniqueStrings(
+          [
+            ...(current?.previousFolderBasenames ?? []),
+            ...(current && !samePath ? [current.currentFolderBasename] : []),
+          ],
+          [currentFolderBasename],
+        );
+        const entrypointBasenames = options.replaceEditEvidence
           ? observedEntrypoints
-          : currentEntrypoints;
-      const previousEntrypointBasenames = options.replaceEditEvidence
-        ? []
-        : uniqueStrings(
-            [
-              ...(current?.previousEntrypointBasenames ?? []),
-              ...(entrypointsChanged ? currentEntrypointBasenames(current) : []),
-            ],
-            entrypointBasenames,
-          );
-      const editReferences = mergeEditReferences(
-        options.replaceEditEvidence ? [] : (current?.editReferences ?? []),
-        options.editReferences ?? [],
-      );
-      const conflictPaths =
-        options.conflictPaths === undefined
-          ? current?.conflictPaths
-          : uniqueResolvedPaths(options.conflictPaths);
-      const previousPaths = current
-        ? uniqueKnownPaths(
-            [
-              ...(current.previousPaths ?? []),
-              ...(!samePath ? [current.currentPath] : []),
-            ],
-            resolved,
+          : observedEntrypoints.length > 0
+            ? observedEntrypoints
+            : currentEntrypoints;
+        const previousEntrypointBasenames = options.replaceEditEvidence
+          ? []
+          : uniqueStrings(
+              [
+                ...(current?.previousEntrypointBasenames ?? []),
+                ...(entrypointsChanged ? currentEntrypointBasenames(current) : []),
+              ],
+              entrypointBasenames,
+            );
+        const editReferences = mergeEditReferences(
+          options.replaceEditEvidence ? [] : (current?.editReferences ?? []),
+          options.editReferences ?? [],
+        );
+        const conflictPaths =
+          options.conflictPaths === undefined
+            ? current?.conflictPaths
+            : uniqueResolvedPaths(options.conflictPaths);
+        const previousPaths = current
+          ? uniqueKnownPaths(
+              [
+                ...(current.previousPaths ?? []),
+                ...(!samePath ? [current.currentPath] : []),
+              ],
+              resolved,
+            )
+          : [];
+        byTrailId[trailId] = {
+          trailId,
+          currentPath: resolved,
+          ...(previousPaths.length > 0 ? { previousPaths } : {}),
+          ...(configuredName ? { configuredName } : {}),
+          ...(previousConfiguredNames.length > 0 ? { previousConfiguredNames } : {}),
+          currentFolderBasename,
+          ...(previousFolderBasenames.length > 0 ? { previousFolderBasenames } : {}),
+          ...(entrypointBasenames.length > 0 ? { entrypointBasenames } : {}),
+          ...(previousEntrypointBasenames.length > 0
+            ? { previousEntrypointBasenames }
+            : {}),
+          ...(editReferences.length > 0 ? { editReferences } : {}),
+          ...(conflictPaths && conflictPaths.length > 1 ? { conflictPaths } : {}),
+          ...((
+            options.replaceEditEvidence
+              ? options.editBacked === true || editReferences.length > 0
+              : current?.editBacked || options.editBacked || editReferences.length > 0
           )
-        : [];
-      byTrailId[trailId] = {
-        trailId,
-        currentPath: resolved,
-        ...(previousPaths.length > 0 ? { previousPaths } : {}),
-        ...(configuredName ? { configuredName } : {}),
-        ...(previousConfiguredNames.length > 0 ? { previousConfiguredNames } : {}),
-        currentFolderBasename,
-        ...(previousFolderBasenames.length > 0 ? { previousFolderBasenames } : {}),
-        ...(entrypointBasenames.length > 0 ? { entrypointBasenames } : {}),
-        ...(previousEntrypointBasenames.length > 0
-          ? { previousEntrypointBasenames }
-          : {}),
-        ...(editReferences.length > 0 ? { editReferences } : {}),
-        ...(conflictPaths && conflictPaths.length > 1 ? { conflictPaths } : {}),
-        ...((
-          options.replaceEditEvidence
-            ? options.editBacked === true || editReferences.length > 0
-            : current?.editBacked || options.editBacked || editReferences.length > 0
-        )
-          ? { editBacked: true }
-          : {}),
-        lastSeenAt: now,
-      };
-      projectCatalog = {
-        version: PROJECT_IDENTITY_CATALOG_VERSION,
-        byTrailId,
-      };
-    }
-    writeGlobalConfig({
-      ...cfg,
-      knownProjects: projects,
-      ...(projectCatalog ? { projectCatalog } : {}),
+            ? { editBacked: true }
+            : {}),
+          lastSeenAt: now,
+        };
+        projectCatalog = {
+          version: PROJECT_IDENTITY_CATALOG_VERSION,
+          byTrailId,
+        };
+      }
+      writeGlobalConfig({
+        ...cfg,
+        knownProjects: projects,
+        ...(projectCatalog ? { projectCatalog } : {}),
+      });
     });
   } catch {
     // Registry maintenance must never disrupt capture or a project command.
