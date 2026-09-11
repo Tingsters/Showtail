@@ -144,6 +144,6 @@
     "@vscode/test-electron": "2.5.2",
     "@vscode/vsce": "^3.0.0",
     "esbuild": "^0.23.0",
-    "typescript": "^5.5.0"
+    "typescript": "^7.0.2"
   }
 }
