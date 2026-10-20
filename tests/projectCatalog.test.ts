@@ -227,12 +227,11 @@ describe('metadata-first project catalog', () => {
     if (!segment) throw new Error('Expected a HOME descendant segment');
     markLedgerSegmentPlaced(session.id, segment.id, 'trl_home', fakeHome);
 
-    // `os.homedir()` reads USERPROFILE on Windows but $HOME on Linux and macOS, so the
-    // fake home must be set through both or HOME exclusion is only exercised on Windows.
-    const previousUserProfile = process.env.USERPROFILE;
-    const previousHome = process.env.HOME;
-    process.env.USERPROFILE = fakeHome;
-    process.env.HOME = fakeHome;
+    // Name the fake home through the product's own seam. Mutating USERPROFILE/HOME does
+    // not work portably: Bun reads `os.homedir()` once at startup on POSIX, so the
+    // exclusion this test is about would only ever be exercised on Windows.
+    const previousHomedir = process.env.SHOWTAIL_HOMEDIR;
+    process.env.SHOWTAIL_HOMEDIR = fakeHome;
     try {
       expect(buildProjectCatalog({ cwd: caller }).projects).toEqual([]);
       expect(resolveProjectSelector('Home Project', { cwd: caller }).state).toBe(
@@ -264,10 +263,8 @@ describe('metadata-first project catalog', () => {
       );
       expect(config.projectCatalog?.byTrailId.trl_home).not.toHaveProperty('editBacked');
     } finally {
-      if (previousUserProfile === undefined) delete process.env.USERPROFILE;
-      else process.env.USERPROFILE = previousUserProfile;
-      if (previousHome === undefined) delete process.env.HOME;
-      else process.env.HOME = previousHome;
+      if (previousHomedir === undefined) delete process.env.SHOWTAIL_HOMEDIR;
+      else process.env.SHOWTAIL_HOMEDIR = previousHomedir;
     }
   });
 
