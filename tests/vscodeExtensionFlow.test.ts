@@ -8,7 +8,7 @@ import { writeGlobalConfig } from '../src/core/globalConfig.ts';
 import { readLedgerRecords, unplacedSessions } from '../src/core/ledger.ts';
 import { pathsForRoot } from '../src/core/storage.ts';
 import { VSCODE_EXTENSION_HOOK_PROTOCOL } from '../src/core/vscodeExtensionHook.ts';
-import { cleanup, envWithHome, makeTempDir, runCli } from './helpers.ts';
+import { cleanup, envWithHome, fileUri, makeTempDir, runCli } from './helpers.ts';
 
 type ExtensionTool = 'github-copilot' | 'antigravity-ide';
 
@@ -199,7 +199,7 @@ describe('VS Code extension ledger flow', () => {
           type: 'CODE_ACTION',
           step_index: 2,
           created_at: '2026-09-09T12:00:02.000Z',
-          content: `Created file file:///${transcriptEdit.replace(/\\/g, '/')} with requested content.`,
+          content: `Created file ${fileUri(transcriptEdit)} with requested content.`,
         }),
       ].join('\n') + '\n',
       'utf8',

@@ -1,5 +1,5 @@
 import { afterEach } from 'bun:test';
-import { readdirSync, rmSync } from 'node:fs';
+import { readdirSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -150,7 +150,7 @@ afterEach(() => {
 // resolve the developer's real `~/.showtail`, both failing locally and polluting
 // the live trail. Spawned CLIs get the same boundary via spawnEnv() in
 // tests/helpers.ts. Honor an externally-set value (e.g. CI) if present.
-process.env.SHOWTAIL_ROOT_CEILING ??= tmpdir();
+process.env.SHOWTAIL_ROOT_CEILING ??= realpathSync.native(tmpdir());
 
 // Isolate the Gemini/Antigravity config home (`~/.gemini`) for the whole test
 // run. The Antigravity IDE and Gemini CLI plugins resolve hooks/instructions under

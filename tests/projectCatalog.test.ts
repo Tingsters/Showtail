@@ -227,8 +227,12 @@ describe('metadata-first project catalog', () => {
     if (!segment) throw new Error('Expected a HOME descendant segment');
     markLedgerSegmentPlaced(session.id, segment.id, 'trl_home', fakeHome);
 
+    // `os.homedir()` reads USERPROFILE on Windows but $HOME on Linux and macOS, so the
+    // fake home must be set through both or HOME exclusion is only exercised on Windows.
     const previousUserProfile = process.env.USERPROFILE;
+    const previousHome = process.env.HOME;
     process.env.USERPROFILE = fakeHome;
+    process.env.HOME = fakeHome;
     try {
       expect(buildProjectCatalog({ cwd: caller }).projects).toEqual([]);
       expect(resolveProjectSelector('Home Project', { cwd: caller }).state).toBe(
@@ -262,6 +266,8 @@ describe('metadata-first project catalog', () => {
     } finally {
       if (previousUserProfile === undefined) delete process.env.USERPROFILE;
       else process.env.USERPROFILE = previousUserProfile;
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
     }
   });
 
