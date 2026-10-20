@@ -82,6 +82,21 @@ _Updated September 11, 2026._
 
 ### Fixed
 
+- **Codex sessions captured no AI replies and lost edit diffs since Codex 0.148.**
+  Showtail read Codex's on-disk rollout file, an internal format OpenAI documents as
+  "not a stable interface", and Codex changed it in August 2026 (messages and edits
+  moved to `item_completed` items, `apply_patch` became `exec`). Every Codex session
+  since then showed prompts and edits but zero AI replies, and on Codex 0.163 the live
+  edit hook saved nothing. Showtail now reads sessions through Codex's own documented
+  app-server (`thread/items/list`, with `thread/turns/list` for older sessions), takes the
+  patch from the documented `tool_input.command` hook field and the final reply from
+  `Stop.last_assistant_message`, and keeps the rollout reader only as a labelled
+  fallback. Verified on real data: for Codex 0.139–0.142 sessions the app-server returns
+  the same prompts (53/53), replies (114/114) and edited files as the old reader, plus
+  diffs the old reader never had; the 0.163 session returns every message and all 248
+  file changes with matching diffs. When Codex's history can't be read, the Stop hook
+  trace and `import codex` now say so instead of silently capturing less. Sessions
+  already captured without replies can be repaired with `showtail import codex`.
 - **Codex's non-blocking questions no longer show up as bogus prompts.** When Codex
   asks with `request_user_input_async` it keeps working, and the student's answer is
   steered into the running turn as a `<send_user_message_question_reply>` user message

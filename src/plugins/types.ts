@@ -218,6 +218,18 @@ export interface HookTranscriptEvent extends ConversationEvent {
 /** A normalized conversation transcript, in order. */
 export interface HookTranscript {
   sessionId?: string;
+  /**
+   * Set for a transcript assembled from the hook payload alone (no provider history
+   * to read): it has no prompt message to anchor on, so its messages attach to the
+   * session's current turn — the prompt the live hook just recorded.
+   */
+  anchorToCurrentTurn?: boolean;
+  /**
+   * Plain-language notes about a degraded read (e.g. the provider's history API was
+   * unavailable, so only the final reply was captured). Surfaced in the hook trace
+   * so a capture gap is visible instead of silent.
+   */
+  warnings?: string[];
   messages: HookTranscriptMessage[];
   /** Lossless visible conversation events. Absent only for legacy/text-only adapters. */
   events?: HookTranscriptEvent[];
@@ -281,7 +293,10 @@ export interface HookAdapter {
    * if this tool provides none (then stop is a no-op). Only the "how to obtain a
    * transcript" step is tool-specific; the reconcile itself is generic.
    */
-  getTranscript?(raw: unknown, root: string): HookTranscript | null;
+  getTranscript?(
+    raw: unknown,
+    root: string,
+  ): HookTranscript | null | Promise<HookTranscript | null>;
   /**
    * On stop, return the real on-disk plan file(s) this tool wrote for the
    * session, or `[]` if none. The reconcile then saves them as linkable plan

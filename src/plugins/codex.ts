@@ -15,12 +15,17 @@ import {
   resolveCodexTarget,
   writeCodexInstructions,
 } from '../core/codex.ts';
+import { readThreadTranscript } from '../core/codexAppServer.ts';
 import {
+  codexToHookTranscript,
   findRollouts,
   parseCodexRollout,
+  parseCodexTranscript,
   rolloutCwdFromFile,
+  rolloutFormatWarning,
   type CodexRolloutInfo,
 } from '../core/codexTranscript.ts';
+import { asString, prop } from '../core/parse.ts';
 import { commandOnPath, homeDirExists } from '../core/detect.ts';
 import {
   applyPatchEdits,
@@ -31,7 +36,11 @@ import {
   extractSuggestedCode,
   type HookPayload,
 } from '../core/hookInput.ts';
-import type { EnvironmentPlugin, HookTranscript } from './types.ts';
+import type {
+  EnvironmentPlugin,
+  HookTranscript,
+  HookTranscriptMessage,
+} from './types.ts';
 
 type CodexEditTool = 'apply_patch' | 'shell_command';
 
@@ -63,15 +72,139 @@ function locateRollout(payload: HookPayload | null): CodexRolloutInfo | null {
   return rollouts[0]!; // newest first
 }
 
-/** Read the relevant rollout and normalize it for the generic stop reconcile. */
-function codexGetTranscript(raw: unknown, root: string): HookTranscript | null {
-  const info = locateRollout(raw as HookPayload | null);
-  if (!info || !existsSync(info.path)) return null;
+/**
+ * Legacy supplement: the two categories Codex's app-server does not expose as items
+ * — `update_plan` plans and blocking `request_user_input` decisions — still live only
+ * as function calls in the rollout. Best-effort and silent: a missing or reshaped
+ * rollout simply adds nothing, and nothing else depends on it. Replace with the
+ * documented `PostToolUse` hook for these tools once verified interactively.
+ */
+function rolloutSupplement(
+  raw: HookPayload | null,
+  root: string,
+  have: Set<string>,
+): HookTranscriptMessage[] {
   try {
-    return parseCodexRollout(readFileSync(info.path, 'utf8'), root);
+    const hinted = asString(prop(raw, 'transcript_path'));
+    const path = hinted && existsSync(hinted) ? hinted : locateRollout(raw)?.path;
+    if (!path || !existsSync(path)) return [];
+    return parseCodexRollout(readFileSync(path, 'utf8'), root).messages.filter(
+      (m) => (m.role === 'plan' || m.role === 'decision') && !have.has(m.sourceId),
+    );
   } catch {
-    return null; // Unreadable/unsupported rollout — nothing to capture.
+    return [];
   }
+}
+
+/** Second tier: parse the session's rollout file, flagging a format it cannot read. */
+function rolloutFallback(
+  raw: HookPayload | null,
+  root: string,
+): { transcript: HookTranscript | null; warnings: string[] } {
+  try {
+    const hinted = asString(prop(raw, 'transcript_path'));
+    const path = hinted && existsSync(hinted) ? hinted : locateRollout(raw)?.path;
+    if (!path || !existsSync(path)) return { transcript: null, warnings: [] };
+    const content = readFileSync(path, 'utf8');
+    const parsed = parseCodexTranscript(content, root);
+    const warning = rolloutFormatWarning(content, parsed);
+    const transcript = codexToHookTranscript(parsed);
+    return {
+      transcript: transcript.messages.length > 0 ? transcript : null,
+      warnings: warning ? [warning] : [],
+    };
+  } catch {
+    return { transcript: null, warnings: [] };
+  }
+}
+
+/** Insert `extra` into `messages` by timestamp so each lands under its own turn. */
+function mergeByTime(
+  messages: HookTranscriptMessage[],
+  extra: HookTranscriptMessage[],
+): HookTranscriptMessage[] {
+  if (extra.length === 0) return messages;
+  const all = [...messages, ...extra];
+  if (all.some((m) => !m.timestamp)) return all;
+  return all
+    .map((m, i) => ({ m, i }))
+    .sort((a, b) => a.m.timestamp!.localeCompare(b.m.timestamp!) || a.i - b.i)
+    .map((x) => x.m);
+}
+
+/**
+ * Build the transcript for a Stop reconcile. Source of truth is Codex's own
+ * app-server (documented, stable item types, immune to rollout-format changes). If it
+ * is unavailable, fall back to what the hook payload itself carries — the prompt (live
+ * hook) and `Stop.last_assistant_message` (the documented final reply) — and say so in
+ * `warnings` rather than capturing silently less.
+ */
+async function codexGetTranscript(
+  raw: unknown,
+  root: string,
+): Promise<HookTranscript | null> {
+  const payload = raw as HookPayload | null;
+  const threadId = extractSessionId(payload);
+  const model = asString(prop(payload, 'model'));
+  const lastReply = asString(prop(payload, 'last_assistant_message'))?.trim();
+  const turnId = asString(prop(payload, 'turn_id'));
+  const warnings: string[] = [];
+
+  let transcript: HookTranscript | null = null;
+  if (threadId) {
+    try {
+      const read = await readThreadTranscript(threadId, { root, model });
+      transcript = codexToHookTranscript(read.transcript);
+      if (transcript.messages.length === 0) {
+        warnings.push(
+          `Codex's app-server returned no history for thread ${threadId.slice(0, 8)}`,
+        );
+      }
+      const supplement = rolloutSupplement(
+        payload,
+        root,
+        new Set(transcript.messages.map((m) => m.sourceId)),
+      );
+      transcript.messages = mergeByTime(transcript.messages, supplement);
+    } catch (error) {
+      warnings.push(
+        `Codex's app-server was unavailable (${error instanceof Error ? error.message : String(error)})`,
+      );
+      // Second tier: the rollout file reader. Fine for older Codex, blind to the
+      // newer format — which `rolloutFormatWarning` turns into a visible warning.
+      const fallback = rolloutFallback(payload, root);
+      warnings.push(...fallback.warnings);
+      transcript = fallback.transcript;
+    }
+  }
+
+  if (!transcript) {
+    // Hook-only baseline: nothing to read, so anchor on the prompt the live hook
+    // just recorded and keep whatever the payload gives us.
+    if (!lastReply)
+      return warnings.length > 0 ? { sessionId: threadId, messages: [], warnings } : null;
+    transcript = { sessionId: threadId, anchorToCurrentTurn: true, messages: [] };
+  }
+
+  // The final reply is a documented hook field, so make sure it is always present
+  // even when the history read was partial or lagging.
+  if (
+    lastReply &&
+    !transcript.messages.some(
+      (m) => m.role === 'assistant' && m.text.trim() === lastReply,
+    )
+  ) {
+    transcript.messages.push({
+      role: 'assistant',
+      text: lastReply,
+      timestamp: new Date().toISOString(),
+      sourceId: `codex:final:${turnId ?? threadId ?? 'unknown'}`,
+      model,
+      isFinal: true,
+    });
+  }
+  if (warnings.length > 0) transcript.warnings = warnings;
+  return transcript;
 }
 
 export const codexPlugin: EnvironmentPlugin = {

@@ -72,6 +72,12 @@ export interface HookTrace {
    * >0 means the cross-session recovery fired.
    */
   recoveredReplies?: number;
+  /**
+   * stop: plain-language notes about a degraded transcript read (e.g. Codex's
+   * history API was unavailable so only the final reply was captured) — a capture
+   * gap shows up here instead of as a silent zero.
+   */
+  warnings?: string[];
   /** Showtail session ids this hook closed (idle sweep or session-end). */
   closedSessions?: string[];
   /** Wall-clock duration of the hook handler, in milliseconds. */

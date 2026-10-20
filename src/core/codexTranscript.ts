@@ -53,16 +53,18 @@ import {
   readdirSync,
   statSync,
 } from 'node:fs';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { importEditArtifact, importedArtifactSourceIds } from './artifacts.ts';
+import { readThreadTranscript } from './codexAppServer.ts';
 import { hostHome } from './hostHome.ts';
 import {
+  answeredAsyncQuestions,
+  asyncQuestionsFrom,
   asyncReplyCallId,
   asyncReplyDecision,
   parseAsyncQuestionReply,
   parseDecisionQuestions,
   renderDecisionText,
-  type AsyncQuestionReply,
   type DecisionQuestion,
 } from './decisions.ts';
 import { editsFromEnvelope, type EditedFile } from './hookInput.ts';
@@ -103,6 +105,8 @@ export interface CodexMessage {
   edits?: EditedFile[];
   /** For an assistant reply: the model in effect (from `turn_context.model`, e.g. `gpt-5.5`). */
   model?: string;
+  /** For an assistant reply: Codex marked it the turn's `final_answer` (not commentary). */
+  isFinal?: boolean;
 }
 
 /** A normalized rollout: the messages we care about, in order. */
@@ -132,6 +136,12 @@ export interface CodexRolloutSummary {
   first?: string;
   last?: string;
   importState: 'none' | 'partial' | 'full';
+  /**
+   * Message/edit items the file reader could not read because the rollout is in a
+   * newer Codex format. >0 means the prompt/edit counts above are NOT zero for real:
+   * the import reads them through Codex's app-server instead.
+   */
+  unreadableItems?: number;
 }
 
 /** Don't record edits to Showtail/Codex bookkeeping files. Mirrors hook.ts. */
@@ -268,6 +278,45 @@ export function findProjectRollouts(root: string): CodexRolloutInfo[] {
 export function readRolloutFile(path: string, root: string): CodexTranscript {
   if (!existsSync(path)) throw new Error(`Codex rollout not found: ${path}`);
   return parseCodexTranscript(readFileSync(path, 'utf8'), root);
+}
+
+/** A Codex session read for import, with how it was read and anything worth flagging. */
+export interface CodexSessionRead {
+  transcript: CodexTranscript;
+  via: 'app-server' | 'file';
+  /** Plain-language notes about a degraded read (never empty when data may be missing). */
+  warnings: string[];
+}
+
+/**
+ * Read one session for import. Codex's app-server is the source of truth (documented
+ * item types, independent of how Codex lays its rollout out on disk); the rollout file
+ * reader is only the fallback when the app-server can't be reached, and it reports
+ * when the file is in a newer format it can't read instead of returning silent zeros.
+ */
+export async function readCodexSession(
+  path: string,
+  root: string,
+): Promise<CodexSessionRead> {
+  const warnings: string[] = [];
+  const threadId = sessionIdFromName(basename(path));
+  try {
+    const read = await readThreadTranscript(threadId, { root });
+    if (read.transcript.messages.length > 0) {
+      return { transcript: read.transcript, via: 'app-server', warnings };
+    }
+    warnings.push(`Codex's app-server returned no history for ${threadId.slice(0, 8)}`);
+  } catch (error) {
+    warnings.push(
+      `Codex's app-server was unavailable (${error instanceof Error ? error.message : String(error)})`,
+    );
+  }
+  if (!existsSync(path)) throw new Error(`Codex rollout not found: ${path}`);
+  const content = readFileSync(path, 'utf8');
+  const parsed = parseCodexTranscript(content, root);
+  const warning = rolloutFormatWarning(content, parsed);
+  if (warning) warnings.push(warning);
+  return { transcript: parsed, via: 'file', warnings };
 }
 
 /**
@@ -720,44 +769,39 @@ function parseCodexAsyncQuestions(args: string | undefined): DecisionQuestion[] 
   } catch {
     return [];
   }
-  const out: DecisionQuestion[] = [];
-  for (const q of asArray(prop(parsed, 'questions')) ?? []) {
-    const question = asString(prop(q, 'title')) ?? asString(prop(q, 'question'));
-    if (!question) continue;
-    const options = (asArray(prop(q, 'options')) ?? [])
-      .map((o) => asString(o) ?? asString(prop(o, 'label')))
-      .filter((label): label is string => Boolean(label))
-      .map((label) => ({ label, chosen: false }));
-    out.push({ question, options, custom: false });
-  }
-  return out;
+  return asyncQuestionsFrom(asArray(prop(parsed, 'questions')) ?? []);
 }
 
 /**
- * The asked questions with the student's reply applied: the chosen option is marked
- * (or the answer flagged as typed when it matches none). Without the original call
- * (e.g. a rollout resumed mid-way) the reply still renders from its own question text.
+ * Tripwire for the file reader. Codex's rollout format is undocumented and has
+ * changed under us (v0.148 moved messages and edits to `item_completed` items this
+ * parser does not read). This counts what a rollout visibly holds in that newer shape
+ * so a caller can notice "the file has conversation the parser returned nothing for"
+ * and say so, instead of capturing silently less.
  */
-function answeredAsyncQuestions(
-  asked: DecisionQuestion[] | undefined,
-  replies: AsyncQuestionReply[],
-): DecisionQuestion[] {
-  return replies.map((r) => {
-    const base = asked?.find((q) => q.question === r.question);
-    const q: DecisionQuestion = base
-      ? { ...base, options: base.options.map((o) => ({ ...o })) }
-      : { question: r.question, options: [], custom: false };
-    q.answer = r.answer;
-    let matched = false;
-    for (const o of q.options) {
-      if (o.label === r.answer) {
-        o.chosen = true;
-        matched = true;
-      }
-    }
-    q.custom = !matched; // no offered option matched → the student typed their own
-    return q;
-  });
+export function unreadableRolloutItems(content: string): number {
+  let n = 0;
+  for (const line of content.split('\n')) {
+    if (!line.includes('"item_completed"')) continue;
+    if (/"item":\{"type":"(UserMessage|AgentMessage|FileChange)"/.test(line)) n += 1;
+  }
+  return n;
+}
+
+/** The warning to attach when the file reader returned nothing for a populated rollout. */
+export function rolloutFormatWarning(
+  content: string,
+  parsed: CodexTranscript,
+): string | undefined {
+  const readable = parsed.messages.filter(
+    (m) => m.role === 'user' || m.role === 'assistant' || m.role === 'edit',
+  ).length;
+  const unreadable = unreadableRolloutItems(content);
+  if (readable > 0 || unreadable === 0) return undefined;
+  return (
+    `this Codex rollout holds ${unreadable} message/edit item(s) in a newer format ` +
+    "than Showtail's file reader understands (Codex changed its on-disk format)"
+  );
 }
 
 /**
@@ -770,7 +814,14 @@ function answeredAsyncQuestions(
  * tags it with no approval badge — distinct from Claude, which resolves true/false.
  */
 export function parseCodexRollout(content: string, root: string): HookTranscript {
-  const parsed = parseCodexTranscript(content, root);
+  return codexToHookTranscript(parseCodexTranscript(content, root));
+}
+
+/**
+ * Project a normalized Codex transcript (from the rollout file OR the app-server
+ * reader) onto the tool-agnostic {@link HookTranscript} the Stop reconcile consumes.
+ */
+export function codexToHookTranscript(parsed: CodexTranscript): HookTranscript {
   const messages: HookTranscriptMessage[] = [];
   for (const m of parsed.messages) {
     messages.push({
@@ -779,6 +830,7 @@ export function parseCodexRollout(content: string, root: string): HookTranscript
       timestamp: m.timestamp,
       sourceId: m.sourceId,
       model: m.model,
+      ...(m.isFinal === undefined ? {} : { isFinal: m.isFinal }),
       ...(m.role === 'edit' ? { edits: m.edits } : {}),
     });
   }
@@ -821,7 +873,13 @@ export function summarizeRollouts(author: AuthorPaths): CodexRolloutSummary[] {
 
     let parsed: CodexTranscript;
     try {
-      parsed = parseCodexTranscript(readFileSync(info.path, 'utf8'), root);
+      const content = readFileSync(info.path, 'utf8');
+      parsed = parseCodexTranscript(content, root);
+      // Tripwire: a populated rollout the file reader returned nothing for is a
+      // format change, not an empty session — say so instead of listing "0 prompts".
+      if (rolloutFormatWarning(content, parsed)) {
+        summary.unreadableItems = unreadableRolloutItems(content);
+      }
     } catch {
       return summary;
     }

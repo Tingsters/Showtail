@@ -1,0 +1,83 @@
+[
+ {
+  "session_id": "01a157ed-6222-7622-a5fc-910b08113815",
+  "turn_id": "01a157ed-62c9-7a23-850c-3ae397f23a62",
+  "transcript_path": "C:\\Users\\student\\.codex\\sessions\\2026\\10\\19\\rollout-2026-10-19T23-08-57-01a157ed-6222-7622-a5fc-910b08113815.jsonl",
+  "cwd": "__ROOT__",
+  "hook_event_name": "UserPromptSubmit",
+  "model": "gpt-6.1-sol",
+  "permission_mode": "bypassPermissions",
+  "prompt": "This is a tooling test. Do these steps in order, and before each step write one short sentence saying what you are about to do. 1) Use your update_plan tool to record a 3-step plan. 2) Use apply_patch to create notes.txt containing the two lines \"alpha\" and \"beta\". 3) Use apply_patch to change the line \"beta\" to \"gamma\" in notes.txt. 4) Use apply_patch to create tmp.txt containing \"scratch\", then use apply_patch to delete tmp.txt. 5) Run the shell command: echo done. 6) Finish with a one-sentence summary."
+ },
+ {
+  "session_id": "01a157ed-6222-7622-a5fc-910b08113815",
+  "turn_id": "01a157ed-62c9-7a23-850c-3ae397f23a62",
+  "transcript_path": "C:\\Users\\student\\.codex\\sessions\\2026\\10\\19\\rollout-2026-10-19T23-08-57-01a157ed-6222-7622-a5fc-910b08113815.jsonl",
+  "cwd": "__ROOT__",
+  "hook_event_name": "PostToolUse",
+  "model": "gpt-6.1-sol",
+  "permission_mode": "bypassPermissions",
+  "tool_name": "apply_patch",
+  "tool_input": {
+   "command": "*** Begin Patch\n*** Add File: notes.txt\n+alpha\n+beta\n*** End Patch"
+  },
+  "tool_response": "Exit code: 0\nWall time: 0.4 seconds\nOutput:\nSuccess. Updated the following files:\nA notes.txt\n",
+  "tool_use_id": "exec-082e4767-7dca-4c14-b7ab-b1f422cc4498"
+ },
+ {
+  "session_id": "01a157ed-6222-7622-a5fc-910b08113815",
+  "turn_id": "01a157ed-62c9-7a23-850c-3ae397f23a62",
+  "transcript_path": "C:\\Users\\student\\.codex\\sessions\\2026\\10\\19\\rollout-2026-10-19T23-08-57-01a157ed-6222-7622-a5fc-910b08113815.jsonl",
+  "cwd": "__ROOT__",
+  "hook_event_name": "PostToolUse",
+  "model": "gpt-6.1-sol",
+  "permission_mode": "bypassPermissions",
+  "tool_name": "apply_patch",
+  "tool_input": {
+   "command": "*** Begin Patch\n*** Update File: notes.txt\n@@\n-beta\n+gamma\n*** End Patch"
+  },
+  "tool_response": "Exit code: 0\nWall time: 0.4 seconds\nOutput:\nSuccess. Updated the following files:\nM notes.txt\n",
+  "tool_use_id": "exec-e8b22795-7d64-4b49-b41d-8dba66f66f9c"
+ },
+ {
+  "session_id": "01a157ed-6222-7622-a5fc-910b08113815",
+  "turn_id": "01a157ed-62c9-7a23-850c-3ae397f23a62",
+  "transcript_path": "C:\\Users\\student\\.codex\\sessions\\2026\\10\\19\\rollout-2026-10-19T23-08-57-01a157ed-6222-7622-a5fc-910b08113815.jsonl",
+  "cwd": "__ROOT__",
+  "hook_event_name": "PostToolUse",
+  "model": "gpt-6.1-sol",
+  "permission_mode": "bypassPermissions",
+  "tool_name": "apply_patch",
+  "tool_input": {
+   "command": "*** Begin Patch\n*** Add File: tmp.txt\n+scratch\n*** End Patch"
+  },
+  "tool_response": "Exit code: 0\nWall time: 0.4 seconds\nOutput:\nSuccess. Updated the following files:\nA tmp.txt\n",
+  "tool_use_id": "exec-db05c5ff-29c5-4ac2-9d27-eba6cd392fba"
+ },
+ {
+  "session_id": "01a157ed-6222-7622-a5fc-910b08113815",
+  "turn_id": "01a157ed-62c9-7a23-850c-3ae397f23a62",
+  "transcript_path": "C:\\Users\\student\\.codex\\sessions\\2026\\10\\19\\rollout-2026-10-19T23-08-57-01a157ed-6222-7622-a5fc-910b08113815.jsonl",
+  "cwd": "__ROOT__",
+  "hook_event_name": "PostToolUse",
+  "model": "gpt-6.1-sol",
+  "permission_mode": "bypassPermissions",
+  "tool_name": "apply_patch",
+  "tool_input": {
+   "command": "*** Begin Patch\n*** Delete File: tmp.txt\n*** End Patch"
+  },
+  "tool_response": "Exit code: 0\nWall time: 0.4 seconds\nOutput:\nSuccess. Updated the following files:\nD tmp.txt\n",
+  "tool_use_id": "exec-4cf05760-950a-4f37-ad4f-f3310aeaa31c"
+ },
+ {
+  "session_id": "01a157ed-6222-7622-a5fc-910b08113815",
+  "turn_id": "01a157ed-62c9-7a23-850c-3ae397f23a62",
+  "transcript_path": "C:\\Users\\student\\.codex\\sessions\\2026\\10\\19\\rollout-2026-10-19T23-08-57-01a157ed-6222-7622-a5fc-910b08113815.jsonl",
+  "cwd": "__ROOT__",
+  "hook_event_name": "Stop",
+  "model": "gpt-6.1-sol",
+  "permission_mode": "bypassPermissions",
+  "stop_hook_active": false,
+  "last_assistant_message": "notes.txt now contains `alpha` and `gamma`, tmp.txt was created and deleted, and `echo done` printed `done`; `update_plan` was unavailable, and Showtail could not resolve “tooling test” for reporting."
+ }
+]

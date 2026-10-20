@@ -319,6 +319,11 @@ function applyPatchEnvelopes(payload: HookPayload): string[] {
   push(ti); // `tool_input` handed over as a raw string
   if (ti && typeof ti === 'object') {
     const obj = ti as Record<string, unknown>;
+    // `command` is the documented field (Codex hooks docs: apply_patch's
+    // `tool_input.command`, confirmed live on 0.163). `input`/`patch` are the older
+    // shapes we saw before — without `command`, every Codex edit since the hook
+    // contract settled was silently dropped.
+    push(obj.command);
     push(obj.input);
     push(obj.patch);
   }

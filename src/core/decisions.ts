@@ -328,6 +328,53 @@ export function asyncReplyDecision(text: string): AsyncReplyDecision | undefined
   };
 }
 
+/**
+ * The questions of a `request_user_input_async` call, from its `questions` array
+ * (`[{ title, options: string[] }]`; the options may also be `{ label }` objects).
+ * Both the rollout arguments and the app-server's async `agentMessage.questions`
+ * carry this shape.
+ */
+export function asyncQuestionsFrom(questions: unknown[]): DecisionQuestion[] {
+  const out: DecisionQuestion[] = [];
+  for (const q of questions) {
+    const question = asString(prop(q, 'title')) ?? asString(prop(q, 'question'));
+    if (!question) continue;
+    const options = (asArray(prop(q, 'options')) ?? [])
+      .map((o) => asString(o) ?? asString(prop(o, 'label')))
+      .filter((label): label is string => Boolean(label))
+      .map((label) => ({ label, chosen: false }));
+    out.push({ question, options, custom: false });
+  }
+  return out;
+}
+
+/**
+ * The asked questions with the student's reply applied: the chosen option is marked
+ * (or the answer flagged as typed when it matches none). Without the original ask
+ * (e.g. a thread read mid-way) the reply still renders from its own question text.
+ */
+export function answeredAsyncQuestions(
+  asked: DecisionQuestion[] | undefined,
+  replies: AsyncQuestionReply[],
+): DecisionQuestion[] {
+  return replies.map((r) => {
+    const base = asked?.find((q) => q.question === r.question);
+    const q: DecisionQuestion = base
+      ? { ...base, options: base.options.map((o) => ({ ...o })) }
+      : { question: r.question, options: [], custom: false };
+    q.answer = r.answer;
+    let matched = false;
+    for (const o of q.options) {
+      if (o.label === r.answer) {
+        o.chosen = true;
+        matched = true;
+      }
+    }
+    q.custom = !matched; // no offered option matched → the student typed their own
+    return q;
+  });
+}
+
 /** Whether a decision's text is a non-blocking question or its answer. */
 export function isNonBlockingDecisionText(text: string): boolean {
   return /^\s*\*\*[^*\n]+ asked \(non-blocking\):\*\*/.test(text);

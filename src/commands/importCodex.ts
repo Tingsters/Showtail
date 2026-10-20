@@ -13,7 +13,7 @@ import { createInterface } from 'node:readline';
 import {
   findProjectRollouts,
   importCodexTranscript,
-  readRolloutFile,
+  readCodexSession,
   summarizeRollouts,
   type CodexImportResult,
   type CodexRolloutSummary,
@@ -77,7 +77,13 @@ function importMarker(state: CodexRolloutSummary['importState']): string {
 /** Print one summary as the numbered block shown in the picker / `--list`. */
 function printSummary(s: CodexRolloutSummary, ordinal: number): void {
   const span = spanLabel(s.first, s.last);
-  const meta = [`${s.promptCount} prompt(s)`, `${s.editCount} edit(s)`];
+  // A newer-format rollout the file reader can't read is NOT an empty session: say
+  // so, and that the import reads it through Codex's app-server.
+  const meta = s.unreadableItems
+    ? [
+        `${s.unreadableItems} item(s) in Codex's newer format (read via its app-server on import)`,
+      ]
+    : [`${s.promptCount} prompt(s)`, `${s.editCount} edit(s)`];
   if (span) meta.push(span);
   console.log(
     `  ${ordinal}. ${relativeTime(s.info.mtimeMs)}    ${meta.join(', ')}${importMarker(s.importState)}`,
@@ -205,8 +211,11 @@ async function importPaths(
   };
   let imported = 0;
 
+  const warnings = new Set<string>();
   for (const path of filePaths) {
-    const transcript = readRolloutFile(path, author.shared.root);
+    const read = await readCodexSession(path, author.shared.root);
+    for (const w of read.warnings) warnings.add(w);
+    const transcript = read.transcript;
     if (transcript.messages.length === 0) continue;
     const res = await importCodexTranscript(author, transcript, {
       withResponses: options.withResponses,
@@ -225,6 +234,7 @@ async function importPaths(
     if (res.last && (!totals.last || res.last > totals.last)) totals.last = res.last;
   }
 
+  for (const w of warnings) console.warn(`! ${w}`);
   if (imported === 0) {
     console.log(
       'Nothing to import — no prompts or edits were found in those rollout(s).',

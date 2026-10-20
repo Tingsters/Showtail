@@ -487,7 +487,8 @@ export async function runHook(
             (event === 'post-edit' && adapter?.reconcileOnPostEdit)) &&
           adapter?.getTranscript
         ) {
-          const transcript = adapter.getTranscript(payload, root ?? cwd);
+          const transcript = await adapter.getTranscript(payload, root ?? cwd);
+          if (transcript?.warnings?.length) trace.warnings = transcript.warnings;
           if (transcript) {
             let planFiles: DiscoveredPlanFile[] = [];
             try {
@@ -1178,10 +1179,11 @@ async function reconcileFromAdapter(
 ): Promise<void> {
   requireCaptureContinuation(continueCapture);
   const adapter = adapterFor(tool);
-  const transcript = adapter?.getTranscript?.(payload, author.shared.root);
+  const transcript = await adapter?.getTranscript?.(payload, author.shared.root);
   requireCaptureContinuation(continueCapture);
   const fallbackNativeId = parseEvent(adapter, payload).nativeSessionId;
   trace.nativeSessionId = transcript?.sessionId ?? fallbackNativeId;
+  if (transcript?.warnings?.length) trace.warnings = transcript.warnings;
   if (!transcript) return; // No transcript for this tool — nothing to reconcile.
   // The real on-disk plan file(s) this tool wrote, if any. Tools that keep their
   // plan only in the transcript return none and the plan text is materialized.
@@ -1355,6 +1357,16 @@ async function reconcileTranscript(
   const seenArtifacts = importedArtifactSourceIds(author);
   const redactCfg = config.settings.redact;
   let currentTurn: string | undefined; // The prompt id replies attach to.
+  // A transcript built from the hook payload alone has no prompt message to anchor
+  // on: attach it to the prompt the live hook just recorded for this session.
+  if (transcript.anchorToCurrentTurn) {
+    currentTurn =
+      (nativeSessionId
+        ? turnForNativeSession(author.shared, nativeSessionId)
+        : undefined) ??
+      readState(author.shared).currentPromptId ??
+      undefined;
+  }
   // The session that owns `currentTurn` — usually the resolved one, but a
   // closed sibling when the cross-session index matched there (the race fix).
   // Replies are written into this session so they stay grouped with their prompt.

@@ -267,11 +267,11 @@ describe('Copilot CLI session discovery + plugin getTranscript', () => {
     }
   });
 
-  test('plugin getTranscript reads the session by id from the Stop payload', () => {
+  test('plugin getTranscript reads the session by id from the Stop payload', async () => {
     const repo = makeTempDir();
     const home = seedSession('payload-sid', repo);
     try {
-      const transcript = copilotCliPlugin.connect!.hooks!.getTranscript!(
+      const transcript = await copilotCliPlugin.connect!.hooks!.getTranscript!(
         { sessionId: 'payload-sid', timestamp: '2026-09-08T20:00:00.000Z' },
         repo,
       );
@@ -326,7 +326,7 @@ describe('Copilot CLI session discovery + plugin getTranscript', () => {
     }
   });
 
-  test('plugin uses the exact directory id when the transcript omits one', () => {
+  test('plugin uses the exact directory id when the transcript omits one', async () => {
     const repo = makeTempDir();
     const home = makeTempDir();
     process.env.COPILOT_HOME = home;
@@ -339,7 +339,7 @@ describe('Copilot CLI session discovery + plugin getTranscript', () => {
         .filter((line) => JSON.parse(line).type !== 'session.start')
         .join('\n');
       writeFileSync(join(dir, 'events.jsonl'), withoutStart, 'utf8');
-      const transcript = copilotCliPlugin.connect!.hooks!.getTranscript!(
+      const transcript = await copilotCliPlugin.connect!.hooks!.getTranscript!(
         { sessionId: 'directory-id', timestamp: '2026-09-08T20:03:00.000Z' },
         repo,
       );

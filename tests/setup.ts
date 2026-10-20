@@ -176,6 +176,13 @@ process.env.GEMINI_HOME ??= join(RUN_ROOT, 'gemini');
 const CODEX_HOME_DEFAULT = join(RUN_ROOT, 'codex');
 process.env.CODEX_HOME ??= CODEX_HOME_DEFAULT;
 
+// Never spawn the developer's real `codex app-server` from a test. Showtail reads
+// Codex sessions through it (src/core/codexAppServer.ts); pointing it at a binary
+// that does not exist makes every test take the documented fallback path (file
+// reader + hook payload), identically on a machine with Codex and on CI without it.
+// Tests of the reader itself inject a fake transport instead.
+process.env.SHOWTAIL_CODEX_BIN ??= join(RUN_ROOT, 'no-codex-binary');
+
 // Isolate the Copilot CLI config home (`~/.copilot`). User-scope connect writes
 // `~/.copilot/hooks/showtail.json` and an instructions file, and disconnect
 // removes them — so without this pin a connect/uninstall test would clobber the

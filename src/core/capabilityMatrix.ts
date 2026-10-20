@@ -244,13 +244,13 @@ export const CAPABILITIES: Capability[] = [
     id: 'auto-file-capture',
     label: 'Auto file/edit capture',
     description: 'Files the tool edits are snapshotted as artifacts automatically.',
-    note: 'Live-certified for Claude Code + Antigravity CLI. Codex captures edits in real interactive sessions — the edited file is snapshotted and its AI diff (plus deletions) is reconciled from the session rollout at Stop (contract-tested) — but the headless harness can’t certify a live Codex edit. Copilot CLI fires no hooks in headless mode; Copilot (VS Code) snapshots on save with no AI diff.',
+    note: 'Live-certified for Claude Code + Antigravity CLI. Codex captures edits in real interactive sessions — the edited file is snapshotted and its AI diff (plus deletions) is reconciled at Stop from Codex’s app-server, with the documented hook payload as the always-on baseline (contract-tested against recorded Codex 0.141 and 0.163 data) — but the headless harness can’t certify a live Codex edit. Copilot CLI fires no hooks in headless mode; Copilot (VS Code) snapshots on save with no AI diff.',
     requires: hasHooks,
     surfaceRule: needHooks,
     overrides: {
       'claude-code': full(),
       codex: partial(
-        'Works in real interactive sessions (file snapshotted; AI diff + deletions reconciled from the rollout at Stop) and contract-tested; headless `codex exec` doesn’t snapshot a live edit here, so it can’t be live-certified.',
+        'Works in real interactive sessions (file snapshotted; AI diff + deletions reconciled at Stop from Codex’s app-server, not its rollout file) and contract-tested; headless `codex exec` doesn’t snapshot a live edit here, so it can’t be live-certified.',
       ),
       'copilot-cli': partial(
         'Hooks wired + contract-tested, but Copilot CLI fires no hooks in headless `-p` mode (verified with a token), so file capture can’t be certified here.',
