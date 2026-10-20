@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-_Updated September 11, 2026._
+## 0.18.0 — Project-aware capture and reliable Codex sessions
 
 ### Added
 
