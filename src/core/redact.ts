@@ -10,6 +10,7 @@
  * `‹redacted: api-key›`, so the surrounding text still reads naturally.
  */
 import type { RedactConfig } from '../types.ts';
+import { getKnownSecretMatcher } from './knownSecrets.ts';
 
 export interface RedactResult {
   text: string;
@@ -231,6 +232,17 @@ export function redactDetailed(
   let hits = 0;
   const byLabel: Record<string, number> = {};
   let out = text;
+  // First, mask the student's own known secret values (env vars, .env files,
+  // credential files), whatever format they are in. This is the layer that does not
+  // depend on recognising a key's shape; the pattern rules below are the fallback.
+  if (cfg?.secrets !== false) {
+    const known = getKnownSecretMatcher().mask(out, '‹redacted: known-secret›');
+    if (known.hits > 0) {
+      out = known.text;
+      hits += known.hits;
+      byLabel['known-secret'] = known.hits;
+    }
+  }
   for (const rule of rules) {
     out = applyRule(out, rule, allow, () => {
       hits += 1;
