@@ -66,29 +66,77 @@ function luhnValid(value: string): boolean {
   return sum % 10 === 0;
 }
 
+/**
+ * Names that mark a value as sensitive. Matched as a *substring of an
+ * identifier* (`DB_PASSWORD`, `AWS_SECRET_ACCESS_KEY`, `clientSecret`), not as a
+ * whole word: `\b` never matches between `_` and a letter, which is how
+ * `.env`-style names used to slip through.
+ */
+// Start only at the beginning of an identifier run. `\b` would restart the
+// greedy prefix at every `.`/`-` boundary and rescan the run: quadratic on long
+// dotted text.
+const KEYWORD_START = '(?<![A-Za-z0-9_.-])';
+const KEYWORD =
+  '[A-Za-z0-9_.-]*(?:password|passwd|passphrase|pwd|secret|token|api[_-]?key|apikey|access[_-]?key|private[_-]?key|credential|auth(?:orization)?)[A-Za-z0-9_.-]*';
+
 /** Provider keys, private keys, tokens, connection strings, passwords. */
 const SECRET_RULES: Rule[] = [
   {
     label: 'private-key',
     re: /-----BEGIN[ A-Z0-9]*PRIVATE KEY-----[\s\S]*?-----END[ A-Z0-9]*PRIVATE KEY-----/g,
   },
-  { label: 'aws-key', re: /\bAKIA[0-9A-Z]{16}\b/g },
+  // A block whose END marker is missing (truncated diff, `head -5 key.pem`):
+  // everything after BEGIN is key material, so withhold it to the end of the text.
+  { label: 'private-key', re: /-----BEGIN[ A-Z0-9]*PRIVATE KEY-----[\s\S]*$/g },
+  { label: 'aws-key', re: /\b(?:AKIA|ASIA|AGPA|AIDA|AROA|ANPA|ANVA)[0-9A-Z]{16}\b/g },
   { label: 'github-token', re: /\bgh[posru]_[A-Za-z0-9]{36,}\b/g },
+  { label: 'github-token', re: /\bgithub_pat_[A-Za-z0-9_]{22,}\b/g },
+  { label: 'gitlab-token', re: /\bglpat-[A-Za-z0-9_-]{20,}\b/g },
   { label: 'slack-token', re: /\bxox[baprs]-[A-Za-z0-9-]{10,}\b/g },
-  { label: 'stripe-key', re: /\bsk_live_[A-Za-z0-9]{16,}\b/g },
+  {
+    label: 'slack-webhook',
+    re: /https:\/\/hooks\.slack\.com\/services\/[A-Za-z0-9/_-]+/g,
+  },
+  { label: 'stripe-key', re: /\b(?:sk|rk|pk)_(?:live|test)_[A-Za-z0-9]{10,}\b/g },
+  { label: 'stripe-key', re: /\bwhsec_[A-Za-z0-9]{16,}\b/g },
   { label: 'google-api-key', re: /\bAIza[0-9A-Za-z_-]{35}\b/g },
+  { label: 'google-oauth', re: /\bya29\.[0-9A-Za-z_-]{20,}/g },
   { label: 'api-key', re: /\bsk-[A-Za-z0-9_-]{16,}\b/g },
+  { label: 'huggingface-token', re: /\bhf_[A-Za-z0-9]{30,}\b/g },
+  { label: 'npm-token', re: /\bnpm_[A-Za-z0-9]{30,}\b/g },
+  { label: 'sendgrid-key', re: /\bSG\.[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{16,}\b/g },
+  { label: 'twilio-key', re: /\bSK[0-9a-fA-F]{32}\b/g },
+  { label: 'digitalocean-token', re: /\bdo[opr]_v1_[a-f0-9]{40,}\b/g },
   {
     label: 'jwt',
     re: /\beyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g,
   },
-  { label: 'bearer-token', re: /\bBearer\s+([A-Za-z0-9._~+/-]{12,}=*)/g, valueGroup: 1 },
-  // user:pass@host inside a URL (connection strings, basic-auth links).
-  { label: 'credentials', re: /\/\/[^\s:/@]+:([^\s:/@]+)@/g, valueGroup: 1 },
-  // key = "value" / "password": "value" style assignments.
+  { label: 'bearer-token', re: /\bBearer\s+([A-Za-z0-9._~+/-]{8,}=*)/gi, valueGroup: 1 },
+  { label: 'basic-auth', re: /\bBasic\s+([A-Za-z0-9+/]{8,}=*)/g, valueGroup: 1 },
+  // user:pass@host inside a URL. The password may itself contain ':' or '@'
+  // (greedy up to the last '@' before the host), and the user may be empty.
+  { label: 'credentials', re: /\/\/[^\s:/@]*:([^\s/]+)@(?=[^\s@]+)/g, valueGroup: 1 },
+  // Azure storage / shared-access secrets.
+  {
+    label: 'azure-key',
+    re: /\b(?:AccountKey|SharedAccessKey|sig)=([A-Za-z0-9+/%]{20,}=*)/g,
+    valueGroup: 1,
+  },
+  // KEY = "value" / password: 'value' / SECRET_KEY=value. Quoted values may hold
+  // spaces (passphrases); unquoted ones run to the next delimiter.
   {
     label: 'secret',
-    re: /\b(?:password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key)\b["']?\s*[:=]\s*["']?([^\s"',;]{3,})["']?/gi,
+    re: new RegExp(`${KEYWORD_START}${KEYWORD}["']?\\s*[:=]\\s*"([^"\\n]{3,})"`, 'gi'),
+    valueGroup: 1,
+  },
+  {
+    label: 'secret',
+    re: new RegExp(`${KEYWORD_START}${KEYWORD}["']?\\s*[:=]\\s*'([^'\\n]{3,})'`, 'gi'),
+    valueGroup: 1,
+  },
+  {
+    label: 'secret',
+    re: new RegExp(`${KEYWORD_START}${KEYWORD}["']?\\s*[:=]\\s*([^\\s"',;]{3,})`, 'gi'),
     valueGroup: 1,
   },
   // "my password is hunter2", "the pin: 1234"
@@ -101,7 +149,13 @@ const SECRET_RULES: Rule[] = [
 
 /** Common personally-identifying information. */
 const PII_RULES: Rule[] = [
-  { label: 'email', re: /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g },
+  // Anchored at the start of a run of local-part characters: unanchored, the
+  // engine rescans the whole run from every position, which is quadratic on a
+  // long token with no '@' (1MB of it never finished).
+  {
+    label: 'email',
+    re: /(?<![A-Za-z0-9._%+-])[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g,
+  },
   { label: 'ssn', re: /\b\d{3}-\d{2}-\d{4}\b/g },
   {
     label: 'credit-card',
@@ -122,13 +176,20 @@ function applyRule(text: string, rule: Rule, allow: string[], onHit: () => void)
     const groups = args.slice(1, -2);
     const value = rule.valueGroup ? groups[rule.valueGroup - 1] : match;
     if (value == null) return match;
-    if (allow.some((a) => a.length > 0 && (match.includes(a) || value.includes(a)))) {
-      return match;
-    }
+    // Never re-redact a placeholder (the keyword rules would otherwise re-match
+    // `password="‹redacted: secret›"` and mangle it).
+    if (value.includes('‹redacted:')) return match;
+    // Exact match only: a substring test let a short allow entry ("a") switch
+    // redaction off for every match that happened to contain it.
+    if (allow.some((a) => a.length > 0 && (match === a || value === a))) return match;
     if (rule.check && !rule.check(value)) return match;
     onHit();
     const placeholder = `‹redacted: ${rule.label}›`;
-    return rule.valueGroup ? match.replace(value, placeholder) : placeholder;
+    if (!rule.valueGroup) return placeholder;
+    // Replace the value where it sits: `match.replace(value, …)` hit the *first*
+    // occurrence, so `password=pass` became `‹redacted›word=pass`.
+    const at = match.lastIndexOf(value);
+    return match.slice(0, at) + placeholder + match.slice(at + value.length);
   });
 }
 

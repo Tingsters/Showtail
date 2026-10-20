@@ -7,6 +7,7 @@ import { sha256OfFile } from './hash.ts';
 import { makeId } from './ids.ts';
 import { writeObject } from './objects.ts';
 import { redact } from './redact.ts';
+import { isOutsideRoot, isSensitivePath } from './sensitivePaths.ts';
 import {
   authorPaths,
   readConfig,
@@ -32,6 +33,28 @@ function reportRelativePath(root: string, abs: string): string {
   const m = abs.match(WORKTREE_RE);
   if (m) return m[1]!.split(/[\\/]/).join('/');
   return toRepoRelative(root, abs);
+}
+
+/**
+ * Whether an edit to this on-disk path may be captured at all. Credential files
+ * (`.env`, keys, `~/.aws/credentials`…) never are: not as a diff, not as a hash.
+ * A file outside the project root is skipped too, except inside a git worktree
+ * (`.claude/worktrees/<name>/…`), which is real project work that happens to live
+ * elsewhere.
+ */
+function mayCaptureAbs(root: string, abs: string): boolean {
+  if (isSensitivePath(abs)) return false;
+  return !isOutsideRoot(root, abs) || WORKTREE_RE.test(abs);
+}
+
+/** Redact first, then cap: a secret straddling the cap must not escape redaction. */
+function redactThenCap(
+  diff: string,
+  cfg: Parameters<typeof redact>[1],
+): { text: string; hits: number } {
+  const { text, hits } = redact(diff, cfg);
+  if (Buffer.byteLength(text) <= MAX_DIFF_BYTES) return { text, hits };
+  return { text: text.slice(0, MAX_DIFF_BYTES) + '\n… (diff truncated)', hits };
 }
 
 /** Options when recording an artifact. */
@@ -126,6 +149,23 @@ export async function addArtifact(
   // trail root) separately from the display path — a worktree edit lives outside
   // the trail root, so we can't reconstruct it by re-joining root + repoPath.
   const absPath = resolve(paths.root, input.filePath);
+  if (isSensitivePath(absPath)) {
+    // Credential file: record nothing at all (no diff, no hash, no path).
+    return {
+      artifact: {
+        id: 'withheld',
+        path: '',
+        sha256: '',
+        timestamp: new Date().toISOString(),
+      },
+      created: false,
+    };
+  }
+  if (!mayCaptureAbs(paths.root, absPath)) {
+    // Outside the project: don't snapshot (hash) it. Callers that can fall back to
+    // a content-free stub (materialize) treat this like an unreadable file.
+    throw new Error(`Not captured: ${input.filePath} is outside the project.`);
+  }
   if (!existsSync(absPath)) {
     throw new Error(
       `File not found: ${input.filePath}. Pass a path to a file in your project.`,
@@ -173,11 +213,7 @@ export async function addArtifact(
 
   // Capture the AI-suggested code into the (shared) object store (scrubbed, capped).
   if (input.diff && config.settings.captureCode !== false) {
-    let diff = input.diff;
-    if (Buffer.byteLength(diff) > MAX_DIFF_BYTES) {
-      diff = diff.slice(0, MAX_DIFF_BYTES) + '\n… (diff truncated)';
-    }
-    const { text: cleaned, hits } = redact(diff, config.settings.redact);
+    const { text: cleaned, hits } = redactThenCap(input.diff, config.settings.redact);
     requireCaptureContinuation(input.continueCapture);
     entry.diffHash = writeObject(paths, cleaned);
     entry.diffLines = countDiffLines(cleaned);
@@ -252,11 +288,10 @@ export function importEditArtifact(
   const config = readConfig(paths);
   if (config.settings.captureCode === false || !input.diff) return false;
 
-  let diff = input.diff;
-  if (Buffer.byteLength(diff) > MAX_DIFF_BYTES) {
-    diff = diff.slice(0, MAX_DIFF_BYTES) + '\n… (diff truncated)';
-  }
-  const { text: cleaned, hits } = redact(diff, config.settings.redact);
+  // A reattached scratch session legitimately has out-of-root paths, so only
+  // credential files are refused here (everything else is still redacted).
+  if (isSensitivePath(input.path)) return false;
+  const { text: cleaned, hits } = redactThenCap(input.diff, config.settings.redact);
   requireCaptureContinuation(input.continueCapture);
   const diffHash = writeObject(paths, cleaned);
 
@@ -305,6 +340,9 @@ export function importEditStub(
   input: Omit<ImportEditArtifactInput, 'diff'>,
 ): boolean {
   requireCaptureContinuation(input.continueCapture);
+  // A stub holds no content, so an out-of-root path is acceptable here (the
+  // relocation feature depends on it); a credential file's hash is still withheld.
+  if (isSensitivePath(input.path)) return false;
   const entry: JournalEntry = {
     v: JOURNAL_ENTRY_VERSION,
     kind: 'artifact',

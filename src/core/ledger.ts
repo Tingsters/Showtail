@@ -22,7 +22,15 @@
  * atomic temp+rename tolerance. Identity-bearing session and index writes share
  * a machine-wide lock with trail retirement so a retired id cannot race back in.
  */
-import { existsSync, readdirSync, realpathSync, rmSync, statSync } from 'node:fs';
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  realpathSync,
+  rmSync,
+  statSync,
+} from 'node:fs';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import type { ConversationEvent, Tool } from '../types.ts';
 import { CaptureInterruptedError, requireCaptureContinuation } from './captureGuard.ts';
@@ -332,6 +340,22 @@ function indexFile(): string {
 function sessionsDir(): string {
   return join(ledgerDir(), 'sessions');
 }
+/**
+ * Create `dir` owner-only (0700). The ledger holds every session on the machine
+ * as raw text, from every project, so on a shared (lab/Linux/macOS) machine other
+ * users must not be able to list or read it. `mkdir`'s mode only applies on
+ * creation, so an existing directory is tightened too. Best-effort: Windows has no
+ * POSIX modes and relies on the profile ACL.
+ */
+function ensurePrivateDir(dir: string): void {
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  try {
+    chmodSync(dir, 0o700);
+  } catch {
+    // Not supported on this filesystem; the profile ACL still applies.
+  }
+}
+
 function sessionDir(id: string): string {
   return join(sessionsDir(), id);
 }
@@ -526,6 +550,10 @@ export function ensureLedgerSession(input: EnsureLedgerSessionInput): LedgerSess
     lastSeenAt: now,
     status: 'inbox',
   };
+  // Owner-only, created before the session file is staged below.
+  ensurePrivateDir(ledgerDir());
+  ensurePrivateDir(sessionsDir());
+  ensurePrivateDir(sessionDir(session.id));
   // Claim the key under a fresh read: if a concurrent hook just opened a session
   // for the same triple, adopt theirs and leave ours an unindexed orphan dir
   // (harmless — never listed). Otherwise take the slot. If consent changes after
