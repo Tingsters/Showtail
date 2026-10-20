@@ -10,6 +10,8 @@ import {
 import { ShowtailError } from '../core/errors.ts';
 import { gitToplevel } from '../core/git.ts';
 import { findRoot, pathsForRoot, readConfig } from '../core/storage.ts';
+import { SUBMISSION_DIR, verifySubmission } from '../core/submission.ts';
+import { join } from 'node:path';
 
 export interface GuardCheckOptions {
   staged?: boolean;
@@ -56,6 +58,19 @@ export async function runGuardCheck(options: GuardCheckOptions = {}): Promise<vo
         `Refusing to be safe; re-run with --no-verify if you are sure.`,
       GUARD_REFUSED,
     );
+  }
+  // A submission being committed must still verify: unedited since it was signed
+  // and still clean under a fresh scan. (The working trail is refused outright below.)
+  if (paths.some((p) => p.split(/[\\/]/).includes(SUBMISSION_DIR))) {
+    const top = (await gitToplevel(cwd)) ?? cwd;
+    const check = verifySubmission(join(top, SUBMISSION_DIR));
+    if (!check.ok) {
+      throw new ShowtailError(
+        `Showtail: refusing to ${verb} ${SUBMISSION_DIR}/: ${check.problems.join('; ')}. ` +
+          'Run `showtail submit` to regenerate it.',
+        GUARD_REFUSED,
+      );
+    }
   }
   const violations = trailViolations(paths);
   if (violations.length > 0)
