@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { runInit } from '../src/commands/init.ts';
 import {
@@ -7,6 +7,8 @@ import {
   artifactsForPath,
   checkArtifactHashes,
   readAllArtifacts,
+  importEditArtifact,
+  importEditStub,
 } from '../src/core/artifacts.ts';
 import { CaptureInterruptedError } from '../src/core/captureGuard.ts';
 import { addressOf, objectExists } from '../src/core/objects.ts';
@@ -186,6 +188,96 @@ describe('artifacts', () => {
       const { artifact } = await addArtifact(author, { filePath: 'notes.md' });
       expect(artifact.path).toBe('notes.md');
       expect(artifact.linkPath).toBeUndefined();
+    } finally {
+      cleanup(dir);
+    }
+  });
+});
+
+describe('artifacts: secret-safety invariants', () => {
+  /** Every byte under .showtail/, so a canary can be grepped for anywhere. */
+  function allTrailText(root: string): string {
+    const out: string[] = [];
+    const walk = (d: string) => {
+      for (const name of readdirSync(d)) {
+        const p = join(d, name);
+        if (statSync(p).isDirectory()) walk(p);
+        else out.push(readFileSync(p, 'utf8'));
+      }
+    };
+    walk(join(root, '.showtail'));
+    return out.join('\n');
+  }
+  const CANARY = 'canary-Zq8Zq8Zq8Zq8Zq8Zq8-9f3b';
+
+  test('a .env file the agent writes leaves no trace in the trail', async () => {
+    const { dir, author } = await initProject();
+    try {
+      writeFileSync(
+        join(dir, '.env'),
+        `OPENAI_API_KEY=${CANARY}\nDB_PASSWORD=${CANARY}\n`,
+      );
+      const diff = `+OPENAI_API_KEY=${CANARY}\n+DB_PASSWORD=${CANARY}`;
+      const res = await addArtifact(author, { filePath: '.env', diff });
+      expect(res.created).toBe(false);
+      expect(importEditArtifact(author, { path: '.env', diff })).toBe(false);
+      expect(importEditStub(author, { path: '.env' })).toBe(false);
+      expect(allTrailText(dir)).not.toContain(CANARY);
+      expect(artifactsForPath(author, '.env')).toEqual([]);
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('credential files outside the project are never captured', async () => {
+    const { dir, author } = await initProject();
+    try {
+      const outside = makeTempDir();
+      try {
+        mkdirSync(join(outside, '.aws'));
+        writeFileSync(
+          join(outside, '.aws', 'credentials'),
+          `aws_secret_access_key=${CANARY}`,
+        );
+        const res = await addArtifact(author, {
+          filePath: join(outside, '.aws', 'credentials'),
+          diff: `+aws_secret_access_key=${CANARY}`,
+        });
+        expect(res.created).toBe(false);
+        expect(allTrailText(dir)).not.toContain(CANARY);
+        // An ordinary file outside the project is skipped as well.
+        writeFileSync(join(outside, 'notes.txt'), 'hello');
+        await expect(
+          addArtifact(author, { filePath: join(outside, 'notes.txt') }),
+        ).rejects.toThrow(/outside the project/);
+      } finally {
+        cleanup(outside);
+      }
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('a key straddling the 64KB diff cap is redacted before truncation', async () => {
+    const { dir, author } = await initProject();
+    try {
+      writeFileSync(join(dir, 'app.py'), 'x = 1');
+      const pem = `-----BEGIN PRIVATE KEY-----\n${'MIIEvQIBADANBgkqhkiG9w0B'.repeat(10)}\n-----END PRIVATE KEY-----`;
+      const diff = `+${'a'.repeat(64 * 1024 - 40)}\n+${pem}`;
+      await addArtifact(author, { filePath: 'app.py', diff });
+      expect(allTrailText(dir)).not.toContain('MIIEvQIBADANBgkqhkiG9w0B');
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('ordinary project files are still captured', async () => {
+    const { dir, author } = await initProject();
+    try {
+      writeFileSync(join(dir, 'main.py'), 'print(1)');
+      const res = await addArtifact(author, { filePath: 'main.py', diff: '+print(1)' });
+      expect(res.created).toBe(true);
+      expect(res.artifact.path).toBe('main.py');
     } finally {
       cleanup(dir);
     }

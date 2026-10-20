@@ -15,6 +15,7 @@
  */
 import {
   existsSync,
+  lstatSync,
   mkdirSync,
   readFileSync,
   readdirSync,
@@ -41,10 +42,29 @@ function digestOf(ref: string): string {
   return i === -1 ? ref : ref.slice(i + 1);
 }
 
-/** Absolute path to the file backing an object address. */
-function objectPath(paths: ShowtailPaths, ref: string): string {
+/**
+ * A valid digest is exactly 64 lowercase hex characters. Refs come from journal
+ * files, which a submitted trail controls: without this check a ref like
+ * `sha256:../../../../etc/passwd` makes a report read (and embed) any file the
+ * reader can open.
+ */
+const DIGEST_RE = /^[0-9a-f]{64}$/;
+
+/** Absolute path to the file backing an object address, or null if malformed. */
+function objectPath(paths: ShowtailPaths, ref: string): string | null {
   const hex = digestOf(ref);
+  if (!DIGEST_RE.test(hex)) return null;
   return join(paths.objectsDir, hex.slice(0, 2), hex.slice(2));
+}
+
+/** True for a regular file (a symlink planted in a submitted trail is refused). */
+function isRegularFile(file: string): boolean {
+  try {
+    const st = lstatSync(file);
+    return st.isFile() && !st.isSymbolicLink();
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -63,7 +83,7 @@ export function addressOf(content: string): string {
 export function writeObject(paths: ShowtailPaths, content: string): string {
   const hex = sha256OfString(content);
   const ref = `${ALGO}:${hex}`;
-  const file = objectPath(paths, ref);
+  const file = objectPath(paths, ref)!;
   if (!existsSync(file)) {
     mkdirSync(join(paths.objectsDir, hex.slice(0, 2)), { recursive: true });
     writeFileSync(file, content, 'utf8');
@@ -77,7 +97,7 @@ export function readObject(paths: ShowtailPaths, ref: string): string | null {
   const cached = cache.get(ref);
   if (cached !== undefined) return cached;
   const file = objectPath(paths, ref);
-  if (!existsSync(file)) return null;
+  if (!file || !isRegularFile(file)) return null;
   const content = readFileSync(file, 'utf8');
   cache.set(ref, content);
   return content;
@@ -85,7 +105,8 @@ export function readObject(paths: ShowtailPaths, ref: string): string | null {
 
 /** Whether an object exists on disk for this address (ignores the cache). */
 export function objectExists(paths: ShowtailPaths, ref: string): boolean {
-  return existsSync(objectPath(paths, ref));
+  const file = objectPath(paths, ref);
+  return file !== null && existsSync(file);
 }
 
 /**
@@ -101,7 +122,7 @@ export function objectExists(paths: ShowtailPaths, ref: string): boolean {
 export function removeObject(paths: ShowtailPaths, ref: string): boolean {
   cache.delete(ref);
   const file = objectPath(paths, ref);
-  if (!existsSync(file)) return false;
+  if (!file || !existsSync(file)) return false;
   rmSync(file, { force: true });
   return true;
 }
