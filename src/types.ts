@@ -378,6 +378,12 @@ export interface Config {
     idleTimeoutMinutes?: number;
     /** Sensitive-data redaction settings (default on). */
     redact?: RedactConfig;
+    /**
+     * Keep `.showtail/` in git (an educator's course repo). Default off: the
+     * working trail holds raw prompts, replies and diffs, so it is gitignored and
+     * only the sanitised `showtail submit` report leaves the machine.
+     */
+    commitTrail?: boolean;
   };
 }
 

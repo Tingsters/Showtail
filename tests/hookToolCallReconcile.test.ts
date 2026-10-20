@@ -123,7 +123,7 @@ describe('tool call + recap capture at Stop', () => {
     expect(turn.toolCalls[0].toolName).toBe('Bash');
     expect(turn.toolCalls[0].isError).toBe(true);
     expect(turn.toolCalls[0].text).toContain('pip3 install pygame');
-    expect(turn.toolCalls[0].text).toContain('no wheel for pygame');
+    expect(turn.toolCalls[0].text).not.toContain('no wheel for pygame');
     expect(turn.recap.text).toBe('Tried installing pygame; the wheel failed.');
     expect(turn.recap.durationMs).toBe(4200);
     expect(data.summary.stats.totalDurationMs).toBe(4200);

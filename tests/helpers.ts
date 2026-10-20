@@ -303,3 +303,20 @@ export function spawnEnv(): NodeJS.ProcessEnv {
       process.env.SHOWTAIL_IDENTITY_HOME ?? join(tmpdir(), 'showtail-test-identity'),
   };
 }
+
+/**
+ * `showtail init`, then opt the trail into git (`settings.commitTrail`). The
+ * working trail is private by default; the tests of the committed-trail workflow
+ * (merge-through-git, verify's git-history anchor) opt in explicitly.
+ */
+export async function runInitCommitted(dir: string): Promise<void> {
+  const { runInit, ensureTrailIgnore } = await import('../src/commands/init.ts');
+  const { pathsForRoot, readConfig, writeConfig } =
+    await import('../src/core/storage.ts');
+  await runInit({ cwd: dir });
+  const paths = pathsForRoot(dir);
+  const config = readConfig(paths);
+  config.settings.commitTrail = true;
+  writeConfig(paths, config);
+  ensureTrailIgnore(paths);
+}

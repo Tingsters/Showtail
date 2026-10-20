@@ -6,7 +6,7 @@ import { runInit } from '../src/commands/init.ts';
 import { logEvent } from '../src/core/events.ts';
 import { startSession } from '../src/core/sessions.ts';
 import { authorPaths, pathsForRoot, readSessions } from '../src/core/storage.ts';
-import { cleanup, makeTempDir, seedAuthor } from './helpers.ts';
+import { cleanup, makeTempDir, runInitCommitted, seedAuthor } from './helpers.ts';
 
 function git(cwd: string, ...args: string[]): void {
   execFileSync('git', args, { cwd, stdio: 'pipe' });
@@ -16,7 +16,7 @@ describe('sessions are machine-sharded (CC1)', () => {
   test('the same author on two machines writes disjoint session shards', async () => {
     const dir = makeTempDir();
     try {
-      await runInit({ cwd: dir });
+      await runInitCommitted(dir);
       const paths = pathsForRoot(dir);
       seedAuthor(paths, 'dev@x.com'); // creates the author folder
       const slug = 'dev-at-x-com';
@@ -53,7 +53,7 @@ describe('sessions are machine-sharded (CC1)', () => {
       git(dir, 'config', 'user.email', 'ci@example.com');
       git(dir, 'config', 'user.name', 'CI');
 
-      await runInit({ cwd: dir });
+      await runInitCommitted(dir);
       const paths = pathsForRoot(dir);
       seedAuthor(paths, 'dev@x.com');
       const slug = 'dev-at-x-com';

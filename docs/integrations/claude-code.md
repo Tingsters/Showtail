@@ -29,7 +29,7 @@ What this gives you:
 | ---- | ------------------ |
 | You submit a prompt | Logs it as a `prompt` event |
 | Claude edits or writes a file | Snapshots that file as an `artifact` |
-| Claude runs a Bash command, reads a file, searches, etc. | Logs it (and its result) as a `tool_call` event |
+| Claude runs a Bash command, reads a file, searches, etc. | Logs the command (never its output, which is where secrets live) as a `tool_call` event |
 | A backgrounded command or a subagent Claude started finishes | Logs how it finished (completed, failed, or stopped) as a `tool_call` event |
 | Claude pauses to ask you to choose between options | Logs your choice as a `decision` |
 | Claude shows an end-of-turn recap | Logs it, plus the turn's duration and token usage, as a `recap` event |

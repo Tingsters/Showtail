@@ -2,6 +2,7 @@
 import { Command, CommanderError, Option } from 'commander';
 import { runInit } from './commands/init.ts';
 import { runEnsure } from './commands/ensure.ts';
+import { runGuardCheck, runGuardInstall, runGuardUninstall } from './commands/guard.ts';
 import { runSetup } from './commands/setup.ts';
 import { runCapabilities } from './commands/capabilities.ts';
 import { runMatrix } from './commands/matrix.ts';
@@ -251,6 +252,7 @@ program
 //     do — it must stay side-effect-free and honestly report "not set up yet").
 // The notice goes to stderr so it never pollutes a command's `--json` stdout. Once-only
 // and best-effort.
+//   - `guard` (runs from git hooks; it must stay fast and side-effect-free).
 const NO_BOOTSTRAP = new Set([
   'hook',
   'setup',
@@ -262,6 +264,7 @@ const NO_BOOTSTRAP = new Set([
   'verify',
   'update',
   'move',
+  'guard',
 ]);
 let pendingUpdateNotice: Promise<string | null> | null = null;
 program.hook('preAction', async (_thisCommand, actionCommand) => {
@@ -359,6 +362,34 @@ program
   )
   .option('--json', 'output machine-readable JSON')
   .action(action(async (opts: { json?: boolean }) => runEnsure({ json: opts.json })));
+
+const guard = program
+  .command('guard', { hidden: true })
+  .description("Keep Showtail's private working trail out of commits and pushes.");
+
+guard
+  .command('check')
+  .description('Refuse (exit 1) if the commit or push would carry the working trail.')
+  .option('--staged', 'check the files staged for the next commit (pre-commit)')
+  .option(
+    '--push',
+    'check the commits about to be pushed (pre-push; reads ref lines on stdin)',
+  )
+  .action(
+    action(async (opts: { staged?: boolean; push?: boolean }) =>
+      runGuardCheck({ staged: opts.staged, push: opts.push }),
+    ),
+  );
+
+guard
+  .command('install')
+  .description('Install the pre-commit and pre-push guard into this repository.')
+  .action(action(async () => runGuardInstall()));
+
+guard
+  .command('uninstall')
+  .description('Remove the Showtail guard from this repository.')
+  .action(action(async () => runGuardUninstall()));
 
 program
   .command('start', { hidden: true })

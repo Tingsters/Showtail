@@ -7,7 +7,13 @@ import { logEvent } from '../src/core/events.ts';
 import { startSession } from '../src/core/sessions.ts';
 import { authorPaths, pathsForRoot } from '../src/core/storage.ts';
 import { readJournal } from '../src/core/journal.ts';
-import { authorFor, cleanup, makeTempDir, seedAuthor } from './helpers.ts';
+import {
+  authorFor,
+  cleanup,
+  makeTempDir,
+  runInitCommitted,
+  seedAuthor,
+} from './helpers.ts';
 
 /** Recursively list files under a directory (absolute paths). */
 function walk(dir: string): string[] {
@@ -29,7 +35,7 @@ describe('merge-conflict freedom', () => {
   test('two authors write to disjoint paths; identical content shares one object', async () => {
     const dir = makeTempDir();
     try {
-      await runInit({ cwd: dir });
+      await runInitCommitted(dir);
       const paths = pathsForRoot(dir);
 
       const alice = seedAuthor(paths, 'alice@x.com');
@@ -74,7 +80,7 @@ describe('merge-conflict freedom', () => {
       git(dir, 'config', 'user.email', 'ci@example.com');
       git(dir, 'config', 'user.name', 'CI');
 
-      await runInit({ cwd: dir });
+      await runInitCommitted(dir);
       git(dir, 'add', '-A');
       git(dir, 'commit', '-m', 'init showtail');
 
