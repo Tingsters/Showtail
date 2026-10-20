@@ -18,7 +18,7 @@ import {
 } from '../src/core/globalConfig.ts';
 import { readLedgerRecords, unplacedSessions } from '../src/core/ledger.ts';
 import { pathsForRoot, readConfig } from '../src/core/storage.ts';
-import { authorFor, cleanup, makeTempDir } from './helpers.ts';
+import { authorFor, cleanup, fileUri, makeTempDir } from './helpers.ts';
 
 /** A minimal IDE transcript: one prompt, one reply, one CODE_ACTION editing `editPath`. */
 function makeTranscript(editPath: string): string {
@@ -53,7 +53,7 @@ function makeRoutingTranscript(
         type: 'CODE_ACTION',
         step_index: index + 2,
         created_at: '2026-06-24T06:45:06Z',
-        content: `Created file file:///${editPath.replace(/\\/g, '/')} with requested content.`,
+        content: `Created file ${fileUri(editPath)} with requested content.`,
       }),
     );
   }
@@ -85,7 +85,7 @@ function makeResumeWindowTranscript(editPaths: {
     type: 'CODE_ACTION',
     step_index: stepIndex,
     ...(createdAt === undefined ? {} : { created_at: createdAt }),
-    content: `Created file file:///${path.replace(/\\/g, '/')} with requested content.`,
+    content: `Created file ${fileUri(path)} with requested content.`,
   });
   return (
     [
@@ -446,7 +446,7 @@ describe('runImportAntigravityIde --auto routes by edited-file paths', () => {
             type: 'CODE_ACTION',
             step_index: 2,
             created_at: '2026-06-24T06:44:52.000Z',
-            content: `Created file file:///${beforeEdit} with requested content.`,
+            content: `Created file ${fileUri(beforeEdit)} with requested content.`,
           },
           {
             type: 'USER_INPUT',
@@ -461,7 +461,7 @@ describe('runImportAntigravityIde --auto routes by edited-file paths', () => {
           {
             type: 'CODE_ACTION',
             step_index: 5,
-            content: `Created file file:///${missingEdit} with requested content.`,
+            content: `Created file ${fileUri(missingEdit)} with requested content.`,
           },
         ]
           .map((line) => JSON.stringify(line))

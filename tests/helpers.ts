@@ -5,6 +5,7 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
@@ -100,7 +101,23 @@ export function enableAutoInit(home: string, setupCompletedAt?: string): void {
  * name a later run can tell "owner is dead" from "owner is still working".
  */
 export function makeTempDir(): string {
-  return mkdtempSync(join(tmpdir(), `showtail-test-${process.pid}-`));
+  // Canonical (realpath) form: on macOS `tmpdir()` is `/var/folders/...`, a symlink to
+  // `/private/var/...`, and Showtail reports the resolved path. A test that compares
+  // against the spelling it created would then fail on macOS only.
+  return realpathSync.native(
+    mkdtempSync(join(tmpdir(), `showtail-test-${process.pid}-`)),
+  );
+}
+
+/**
+ * A `file://` URI for an absolute path, as the Antigravity IDE writes it: `file:///C:/x`
+ * on Windows (a drive letter follows the three slashes) and `file:///tmp/x` on POSIX,
+ * where the path already starts with a slash. Building it as `file:///` + path gives four
+ * slashes on POSIX, a URI no real host produces.
+ */
+export function fileUri(absPath: string): string {
+  const p = absPath.split('\\').join('/');
+  return `file://${p.startsWith('/') ? '' : '/'}${p}`;
 }
 
 /**
@@ -267,7 +284,9 @@ export function cleanup(dir: string): void {
 export function spawnEnv(): NodeJS.ProcessEnv {
   return {
     ...process.env,
-    SHOWTAIL_ROOT_CEILING: tmpdir(),
+    // Canonical, to match makeTempDir(): findRoot compares walked dirs to the ceiling
+    // as strings, so `/var/...` would never equal a `/private/var/...` temp dir on macOS.
+    SHOWTAIL_ROOT_CEILING: realpathSync.native(tmpdir()),
     // Keep CLI-spawned tests hermetic: the first-run bootstrap pre-wires every tool at
     // user scope (real `~/.claude`, `~/.codex`, …), so leaving it on would let any test
     // that runs a command pollute the shared home. Tests that exercise the bootstrap
