@@ -10,6 +10,7 @@
  *   3  verify failed (integrity check did not pass)
  *   4  nothing to do / not connected
  *   5  refused by the git guard (a commit or push would carry the private trail)
+ *   6  `submit` blocked: the final scan still found something that looks like a secret
  */
 export class ShowtailError extends Error {
   readonly code: number;

@@ -55,6 +55,10 @@ const ALLOW: RegExp[] = [
   /^v?\d+(?:\.\d+){1,3}(?:[-+][\w.-]+)?$/, // a version
   /^\d{4}-\d{2}-\d{2}T[\d:.]+Z?$/, // an ISO timestamp
   /^[\d.:/-]+$/, // numbers, dates, IPs, ratios
+  // A session/file id: words, then a UUID (`rollout-2026-…-<uuid>`, `session_<uuid>`).
+  /^[A-Za-z][A-Za-z0-9_-]*[_-][0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?:\.\w+)?$/i,
+  // Showtail's own ids: `ses_mvh3onq6_0d4f98`, `evt_lqz3k8_a1b2`.
+  /^(?:ses|evt|art|led|trl|bat|turn|plan|pln)_[a-z0-9]{4,12}_[a-z0-9]{3,10}$/,
 ];
 
 function trimEdges(s: string): string {
@@ -145,15 +149,18 @@ export interface Finding {
  * An independent second opinion over text that has already been sanitised. It
  * shares no code with the layers above on purpose: a bug in one must not be a bug
  * in both. Returns what it still finds (labels and counts only). Any finding means
- * the text must not leave the machine.
+ * the text must not leave the machine. `structural` is for ids/hashes/paths.
  */
-export function scanResidual(text: string): Finding[] {
+export function scanResidual(
+  text: string,
+  opts: { structural?: boolean } = {},
+): Finding[] {
   const counts = new Map<string, number>();
   const bump = (kind: string, n = 1) => counts.set(kind, (counts.get(kind) ?? 0) + n);
   const stripped = text
     .split(WITHHELD)
-    .join(' ')
-    .replace(/‹redacted: [a-z-]+›/g, ' ');
+    .join('‹')
+    .replace(/‹redacted: [a-z-]+›/g, '‹');
 
   const known = getKnownSecretMatcher().mask(stripped, ' ');
   if (known.hits > 0) bump('known-secret', known.hits);
@@ -179,11 +186,25 @@ export function scanResidual(text: string): Finding[] {
 
   // Anything long and random-looking that survived. A deliberately lower bar than
   // the filter that already ran, so this catches what slipped past its tuning.
-  for (const m of stripped.matchAll(RUN)) {
+  // Structural fields (ids, hashes, paths) are checked by the patterns above only:
+  // a long hash or id there is expected and is not a leaked key.
+  for (const m of opts.structural ? [] : stripped.matchAll(RUN)) {
     const r = trimEdges(m[0]);
     if (r.length < 24 || !/\d/.test(r) || !/[A-Za-z]/.test(r) || shannon(r) < 3.7)
       continue;
     if (ALLOW.some((re) => re.test(r))) continue;
+    // Words and numbers glued with separators (`showtail-test-36540-abcdef`,
+    // `claude-haiku-4-5`) are names, not keys: every piece is plain letters, plain
+    // digits, or too short to mean anything. Judged here on its own, not by sharing
+    // the filter's helper, so the two layers stay independent.
+    if (
+      /[._-]/.test(r) &&
+      r
+        .split(/[._-]+/)
+        .every((p) => p.length < 6 || !(/\d/.test(p) && /[A-Za-z]/.test(p)))
+    ) {
+      continue;
+    }
     // A file/content hash shown as `sha256:<hex>` is ordinary report content.
     const before = stripped.slice(Math.max(0, (m.index ?? 0) - 8), m.index ?? 0);
     if (/^[0-9a-f]{64}$/i.test(r) && /sha(?:256)?:?$/i.test(before)) continue;

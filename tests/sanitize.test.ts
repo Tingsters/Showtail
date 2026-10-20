@@ -257,3 +257,16 @@ describe('the independent second scanner', () => {
     expect(JSON.stringify(findings)).not.toContain('hunter22xyz');
   });
 });
+
+describe('placeholders never create false findings', () => {
+  test('text after a withheld/redacted marker is not mistaken for its value', () => {
+    // After the marker is removed, "token=" must not swallow the next word.
+    expect(scanResidual(`token=${WITHHELD} and then some ordinary words`)).toEqual([]);
+    expect(scanResidual('password: ‹redacted: secret› remember to rotate it')).toEqual(
+      [],
+    );
+    expect(scanResidual(`api_key = ${WITHHELD}\nnext line of the explanation`)).toEqual(
+      [],
+    );
+  });
+});

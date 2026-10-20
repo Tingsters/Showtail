@@ -12,6 +12,7 @@ import { runLog } from './commands/log.ts';
 import { runArtifactAdd } from './commands/artifact.ts';
 import { runTrace } from './commands/trace.ts';
 import { runReport } from './commands/report.ts';
+import { runSubmit, runVerifySubmission } from './commands/submit.ts';
 import { runVerify } from './commands/verify.ts';
 import { runStatus } from './commands/status.ts';
 import { runProjects } from './commands/projects.ts';
@@ -702,6 +703,85 @@ program
         });
         if (!ok) process.exitCode = 3;
       },
+    ),
+  );
+
+program
+  .command('submit [path]')
+  .description(
+    'Make a sanitised report to hand in (secrets and personal data removed, then re-checked).',
+  )
+  .helpGroup(G_REVIEW)
+  .option('--author <slug>', 'cover only this contributor’s work')
+  .option('--team', 'cover the whole team')
+  .option('--title <text>', 'name shown in the report title (overrides the project name)')
+  .option(
+    '--ai <mode>',
+    'how much AI narration to show: collapsed (default), full, or off',
+  )
+  .option('--no-ai', 'omit AI narration entirely (same as --ai off)')
+  .option('--open', 'open the report when it is ready')
+  .option('--json', 'output machine-readable JSON')
+  .option('--no-sync', 'skip the catch-up read of your AI tool’s transcript')
+  .option('--project <selector>', 'select a project by path, trail id, or name')
+  .option(
+    '--pr [number|url]',
+    'also post a short summary on a pull request (you review the exact text first)',
+  )
+  .option(
+    '--preview',
+    'with --pr: show the exact comment and its approval code; post nothing',
+  )
+  .option(
+    '--approve <code>',
+    'with --pr: post exactly the text a preview showed (its code)',
+  )
+  .action(
+    action(
+      async (
+        path: string | undefined,
+        opts: {
+          author?: string;
+          team?: boolean;
+          title?: string;
+          ai?: string | boolean;
+          open?: boolean;
+          json?: boolean;
+          sync?: boolean;
+          project?: string;
+          pr?: string | boolean;
+          preview?: boolean;
+          approve?: string;
+        },
+      ) => {
+        if (path !== undefined && opts.project !== undefined) {
+          throw new ShowtailError(
+            'Use either submit [path] or --project, not both.',
+            2,
+            {},
+            'PROJECT_ARGUMENT_CONFLICT',
+            'choose-one-project-selector',
+          );
+        }
+        const requested = projectPathOperand(path);
+        await runSubmit({
+          ...opts,
+          cwd: requested,
+          explicitPath: requested !== undefined,
+        });
+      },
+    ),
+  );
+
+program
+  .command('verify-submission')
+  .description('Check that a submission folder is unchanged since it was signed.')
+  .helpGroup(G_REVIEW)
+  .argument('[dir]', 'the submission folder (default: ./showtail-submission)')
+  .option('--json', 'output machine-readable JSON')
+  .action(
+    action(async (dir: string | undefined, opts: { json?: boolean }) =>
+      runVerifySubmission({ dir, json: opts.json }),
     ),
   );
 

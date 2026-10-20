@@ -57,6 +57,14 @@ export interface ReportOptions {
   cwd?: string;
   /** True when cwd came from the optional `report [path]` argument. */
   explicitPath?: boolean;
+  /**
+   * Do everything a report does to bring the trail up to date (resolve the project,
+   * adopt pending ledger work, catch up from transcripts, reroute) and then stop,
+   * without generating any report. `onPrepared` receives the project paths. This is
+   * how `showtail submit` starts from exactly the trail `report` would have read.
+   */
+  prepareOnly?: boolean;
+  onPrepared?: (paths: ShowtailPaths) => void;
   /** Select a project by live path, trail id, or corroborated project name. */
   project?: string;
   /** Open the generated report in the OS default app after writing it. */
@@ -851,6 +859,10 @@ export async function runReport(options: ReportOptions): Promise<void> {
     );
   }
   assertProjectCommandIdentity(identityPin);
+  if (options.prepareOnly) {
+    options.onPrepared?.(paths);
+    return;
+  }
   const slugs = authorSlugs(paths);
   const stamp = fileStamp(new Date().toISOString());
   assertProjectCommandIdentity(identityPin);

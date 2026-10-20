@@ -306,3 +306,38 @@ describe('the hooks never block because of Showtail itself', () => {
     }
   });
 });
+
+describe('committing a submission', () => {
+  test('a verified submission may be committed; an edited one is refused', async () => {
+    const dir = makeGitProject();
+    try {
+      await runInit({ cwd: dir });
+      const { logEvent } = await import('../src/core/events.ts');
+      const { authorFor } = await import('./helpers.ts');
+      const { runSubmit } = await import('../src/commands/submit.ts');
+      await logEvent(authorFor(pathsForRoot(dir)), {
+        type: 'prompt',
+        text: 'build a parser',
+      });
+      const lines: string[] = [];
+      const orig = console.log;
+      console.log = (...a: unknown[]) => void lines.push(a.join(' '));
+      try {
+        await runSubmit({ cwd: dir, sync: false });
+      } finally {
+        console.log = orig;
+      }
+      git(dir, 'add', 'showtail-submission');
+      await runGuardCheck({ staged: true, cwd: dir }); // verified: fine
+
+      const md = join(dir, 'showtail-submission', 'report.md');
+      writeFileSync(md, readFileSync(md, 'utf8') + '\nedited by hand\n');
+      git(dir, 'add', 'showtail-submission');
+      await expect(runGuardCheck({ staged: true, cwd: dir })).rejects.toThrow(
+        /refusing to commit showtail-submission\/.*changed after signing/,
+      );
+    } finally {
+      cleanup(dir);
+    }
+  });
+});
