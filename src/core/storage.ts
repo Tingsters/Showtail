@@ -232,7 +232,19 @@ export function isEligibleAnchor(dir: string): boolean {
  * trail is deliberately ignored while resolving any descendant folder.
  */
 export function isHomedirCatchAll(dir: string): boolean {
-  return existingPathKey(dir) === existingPathKey(homedir());
+  return existingPathKey(dir) === existingPathKey(userHomedir());
+}
+
+/**
+ * The user's HOME for project-boundary decisions. `SHOWTAIL_HOMEDIR` overrides it so
+ * tests can name a fake home: Bun resolves `os.homedir()` once at startup on POSIX, so
+ * changing `$HOME` inside a running process has no effect there (Windows re-reads
+ * `USERPROFILE`, which is why such a test only ever passed on Windows). Unset in normal
+ * use, so real behavior is exactly `os.homedir()`.
+ */
+function userHomedir(): string {
+  const override = process.env.SHOWTAIL_HOMEDIR;
+  return override && override.length > 0 ? override : homedir();
 }
 
 /** Resolve aliases such as macOS `/var` -> `/private/var` for existing paths. */
@@ -326,7 +338,7 @@ function projectBoundary(startDir: string): ProjectBoundary | null {
   const usable = (candidate: string | null): string | null => {
     if (!candidate) return null;
     // HOME is a valid exact project but never a catch-all for child folders.
-    if (isHomedirCatchAll(candidate) && startKey !== existingPathKey(homedir()))
+    if (isHomedirCatchAll(candidate) && startKey !== existingPathKey(userHomedir()))
       return null;
     return candidate;
   };
