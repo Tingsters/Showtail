@@ -17,4 +17,4 @@ a new project, reuse the prior claim with report, open-report, status, or verify
 does name a project, pass that wording as `selector` and do not reuse a prior claim. If the tool
 is unavailable, resolve with `showtail projects "<student-project-wording>" --json` and use only
 the selected trail ID with `showtail report|verify|status --project <trail-id>`. Keep everything
-local and never record secrets.
+local and never record secrets. To hand work in, use `showtail submit` (a sanitised report). Never post anything to a pull request unless the student asks and has approved the exact text from `showtail submit --project <trail-id> --pr --preview`.

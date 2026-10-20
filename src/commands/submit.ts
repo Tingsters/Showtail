@@ -371,7 +371,27 @@ async function handlePr(
  * submission it describes must still verify (an edited report voids the approval).
  */
 async function approveStored(options: SubmitOptions): Promise<SubmitOutcome> {
-  const paths = requirePaths(options.cwd);
+  // Resolve the project exactly as every other command does (never from a shell cwd an
+  // assistant happened to be in). `sync: false`: approving posts stored text; it does not
+  // re-read transcripts or build anything.
+  let resolved: ShowtailPaths | undefined;
+  await runReport({
+    cwd: options.cwd,
+    explicitPath: options.explicitPath,
+    project: options.project,
+    sync: false,
+    prepareOnly: true,
+    onPrepared: (p) => {
+      resolved = p;
+    },
+  });
+  if (!resolved) {
+    throw new ShowtailError(
+      'Showtail: could not find this project to approve its preview.',
+      1,
+    );
+  }
+  const paths: ShowtailPaths = resolved;
   const dir = join(paths.root, SUBMISSION_DIR);
   const file = join(dir, PENDING_FILE);
   const refuse = (why: string): never => {
