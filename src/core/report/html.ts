@@ -2,6 +2,7 @@ import REPORT_CSS from '../../../assets/report/report.css' with { type: 'text' }
 import TIMEZONE_JS from '../../../assets/report/timezone.js' with { type: 'text' };
 import CONTROLS_JS from '../../../assets/report/report-controls.js' with { type: 'text' };
 import type { Event, ReportData, Turn } from '../../types.ts';
+import { isNonBlockingDecisionText } from '../decisions.ts';
 import { escapeHtml, firstLine } from '../html.ts';
 import { highlightCode } from '../highlight.ts';
 import {
@@ -298,10 +299,12 @@ function renderTimelineItem(item: TurnItem): string {
   }
   if (item.kind === 'decision') {
     // The student's mid-exchange choice, labelled so it's never mistaken for a
-    // prompt or an AI reply.
+    // prompt or an AI reply. A question the AI asked without stopping (Codex's
+    // async ask) says so, since the turn kept running while it waited.
+    const nonBlocking = isNonBlockingDecisionText(item.event.text);
     return (
       '<div class="decision">' +
-      '<span class="role-tag decision-tag">🔀 Decision</span>' +
+      `<span class="role-tag decision-tag">🔀 Decision${nonBlocking ? ' (non-blocking)' : ''}</span>` +
       `<div class="ai-text">${renderRichText(item.event.text)}</div>` +
       '</div>'
     );

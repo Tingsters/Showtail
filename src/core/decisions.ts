@@ -180,19 +180,29 @@ export function resolveDecisionAnswers(
  * Render a decision as readable Markdown: the question, every option, the choice.
  * `asker` names the AI that paused to ask (defaults to Claude; Codex passes its
  * own name) so the rendered text reads `**<asker> asked:** …`.
+ *
+ * `nonBlocking` marks a question the AI asked without stopping (Codex's
+ * `request_user_input_async`): the heading reads `**<asker> asked (non-blocking):**`,
+ * which {@link isNonBlockingDecisionText} detects so the report can badge it, and an
+ * unanswered question says the AI kept working instead of "no option selected".
  */
 export function renderDecisionText(
   questions: DecisionQuestion[],
   asker = 'Claude',
+  opts: { nonBlocking?: boolean } = {},
 ): string {
+  const nonBlocking = opts.nonBlocking === true;
   const blocks: string[] = [];
   for (const q of questions) {
-    const lines: string[] = [`**${asker} asked:** ${q.question}`, ''];
+    const heading = nonBlocking ? `${asker} asked (non-blocking)` : `${asker} asked`;
+    const lines: string[] = [`**${heading}:** ${q.question}`, ''];
     for (const o of q.options) {
       lines.push(o.chosen ? `- **${o.label}** ✅ _(your choice)_` : `- ${o.label}`);
     }
     if (q.custom && q.answer) {
       lines.push('', `**You typed:** ${q.answer}`);
+    } else if (nonBlocking && !q.answer) {
+      lines.push('', `_(${asker} kept working while waiting for your answer)_`);
     } else if (!q.options.some((o) => o.chosen)) {
       // No preset chosen and nothing typed — the student was asked but didn't pick
       // (e.g. they clarified instead). Say so rather than leaving it ambiguous.
@@ -203,4 +213,122 @@ export function renderDecisionText(
     blocks.push(lines.join('\n'));
   }
   return blocks.join('\n\n');
+}
+
+// --- Codex non-blocking questions -------------------------------------------
+
+/**
+ * Codex's `request_user_input_async` doesn't pause the turn: the model keeps working
+ * and the student's answer arrives later as a synthetic user message wrapping a JSON
+ * array — `<send_user_message_question_reply>[{answer, question, questionItemId}]
+ * </send_user_message_question_reply>` — which Codex steers into the running turn.
+ * It fires the same `UserPromptSubmit` hook as a typed prompt, so it must be told
+ * apart from one: it is the student's *answer*, not a new prompt.
+ */
+const ASYNC_REPLY_RE =
+  /^\s*<send_user_message_question_reply>([\s\S]*?)<\/send_user_message_question_reply>\s*$/;
+
+/** One answered question carried by a Codex non-blocking reply envelope. */
+export interface AsyncQuestionReply {
+  question: string;
+  answer: string;
+  /** The `request_user_input_async` call this answers, from `questionItemId`. */
+  callId?: string;
+}
+
+/** Pull the call id out of a `questionItemId` (a JSON-encoded `[tool, callId, index]`). */
+function callIdFromItemId(itemId: string | undefined): string | undefined {
+  if (!itemId) return undefined;
+  try {
+    const parts = asArray(JSON.parse(itemId));
+    const id = asString(parts?.[1]);
+    if (id) return id;
+  } catch {
+    // Not JSON — fall through to a pattern match.
+  }
+  return /call_[A-Za-z0-9_-]+/.exec(itemId)?.[0];
+}
+
+/**
+ * Parse a Codex non-blocking reply envelope. Returns undefined for anything else —
+ * including an envelope whose body isn't the expected JSON — so the caller falls
+ * back to treating the text as a normal prompt rather than dropping student input.
+ */
+export function parseAsyncQuestionReply(text: string): AsyncQuestionReply[] | undefined {
+  const m = ASYNC_REPLY_RE.exec(text);
+  if (!m) return undefined;
+  let body: unknown;
+  try {
+    body = JSON.parse(m[1]!);
+  } catch {
+    return undefined;
+  }
+  const items = asArray(body);
+  if (!items) return undefined;
+  const out: AsyncQuestionReply[] = [];
+  for (const item of items) {
+    const question = asString(prop(item, 'question'));
+    const answer = asString(prop(item, 'answer'));
+    if (question === undefined || answer === undefined) return undefined;
+    out.push({
+      question,
+      answer,
+      callId: callIdFromItemId(asString(prop(item, 'questionItemId'))),
+    });
+  }
+  return out.length > 0 ? out : undefined;
+}
+
+/**
+ * The call id shared by a reply's questions, used as the stable source id
+ * (`codex:decision:<callId>`) so the live hook and the transcript reconcile dedupe.
+ */
+export function asyncReplyCallId(replies: AsyncQuestionReply[]): string | undefined {
+  return replies.find((r) => r.callId)?.callId;
+}
+
+/**
+ * Render a student's answer to a non-blocking question from the envelope alone (all
+ * the live hook sees — the option list lives on the earlier tool call). Same heading
+ * as {@link renderDecisionText} with `nonBlocking`, so it badges the same way.
+ */
+export function renderAsyncReplyText(
+  replies: AsyncQuestionReply[],
+  asker = 'Codex',
+): string {
+  return replies
+    .map(
+      (r) =>
+        `**${asker} asked (non-blocking):** ${r.question}\n\n**You answered:** ${r.answer}`,
+    )
+    .join('\n\n');
+}
+
+/** A prompt-hook text turned into the decision it really is. */
+export interface AsyncReplyDecision {
+  text: string;
+  /** `codex:decision:<callId>`, when the envelope named its call — dedupes against the transcript. */
+  sourceId?: string;
+}
+
+/**
+ * If `text` is a Codex non-blocking reply envelope, the decision to record for it —
+ * never undefined for such text, so the student's answer is always kept: a parseable
+ * envelope is rendered, a malformed one is preserved verbatim. Returns undefined only
+ * for text that isn't an envelope (a normal prompt).
+ */
+export function asyncReplyDecision(text: string): AsyncReplyDecision | undefined {
+  if (!/^\s*<send_user_message_question_reply>/.test(text)) return undefined;
+  const replies = parseAsyncQuestionReply(text);
+  if (!replies) return { text: text.trim() };
+  const callId = asyncReplyCallId(replies);
+  return {
+    text: renderAsyncReplyText(replies),
+    sourceId: callId ? `codex:decision:${callId}` : undefined,
+  };
+}
+
+/** Whether a decision's text is a non-blocking question or its answer. */
+export function isNonBlockingDecisionText(text: string): boolean {
+  return /^\s*\*\*[^*\n]+ asked \(non-blocking\):\*\*/.test(text);
 }

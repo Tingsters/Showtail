@@ -1,4 +1,5 @@
 import type { Event, ReportData, Turn } from '../../types.ts';
+import { isNonBlockingDecisionText } from '../decisions.ts';
 import { PLAN_APPROVED_TAG, PLAN_REVISED_TAG } from '../plans.ts';
 import {
   filesChanged,
@@ -317,7 +318,12 @@ function turnMarkdown(lines: string[], turn: Turn, ai: AiMode, author?: string):
     }
     const item = seg.item;
     if (item.kind === 'decision') {
-      lines.push('🔀 **Decision** · _you chose from the options the AI offered_', '');
+      lines.push(
+        isNonBlockingDecisionText(item.event.text)
+          ? '🔀 **Decision (non-blocking)** · _the AI kept working while it waited for your answer_'
+          : '🔀 **Decision** · _you chose from the options the AI offered_',
+        '',
+      );
       lines.push(item.event.text, '');
     } else if (item.kind === 'plan') {
       // Approval status when the tool resolves one (Claude); a tool with no

@@ -7,6 +7,10 @@
  *    (background-subagent results, often many KB), `<system-reminder>` (injected
  *    context), and slash-command wrappers (`<command-name>`, `<local-command-…>`,
  *    hook echoes).
+ *  - Codex's `<send_user_message_question_reply>`: the student's answer to a
+ *    non-blocking question, steered into the running turn. It is not a prompt, but
+ *    it IS student work — callers convert it to a decision (see
+ *    `parseAsyncQuestionReply`) *before* this guard drops it, so nothing is lost.
  *  - Claude Code's **context-compaction summary** — the "This session is being
  *    continued from a previous conversation…" recap the harness injects as a user
  *    turn when it compacts. The transcript flags it `isCompactSummary` (handled
@@ -20,7 +24,7 @@
  * a real prompt is far worse than keeping a stray line.
  */
 const SYNTHETIC_PROMPT_RE =
-  /^<(task-notification|system-reminder|local-command-caveat|command-name|command-message|command-args|command-stdout|command-stderr|user-prompt-submit-hook|session-start-hook)\b/;
+  /^<(task-notification|system-reminder|local-command-caveat|command-name|command-message|command-args|command-stdout|command-stderr|user-prompt-submit-hook|session-start-hook|send_user_message_question_reply)\b/;
 
 const COMPACT_SUMMARY_RE =
   /^This session is being continued from a previous conversation that ran out of context/;

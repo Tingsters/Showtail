@@ -21,6 +21,7 @@ import { readJournal } from '../journal.ts';
 import { authorSlugs, readAllAuthors } from '../authors.ts';
 import { readAllEventsWithSession, type EventWithSession } from '../events.ts';
 import { readObject } from '../objects.ts';
+import { asyncReplyDecision } from '../decisions.ts';
 import { isSyntheticPrompt } from '../syntheticPrompt.ts';
 import {
   readAllConversationEventsWithSession,
@@ -307,6 +308,18 @@ export function buildTurns(
       (event.turnId ? turnByPrompt.get(event.turnId) : undefined) ??
       fallback(event.timestamp, actorSlug, sessionId);
     if (turn) turn.decisions.push(event);
+  }
+
+  // Older trails recorded a Codex non-blocking-question answer as a `prompt`. It is
+  // the student's answer, not a prompt: show it as a decision under the turn it
+  // interrupted (the latest real prompt at-or-before it), so existing trails
+  // recover it without a migration.
+  for (const { event, sessionId, actorSlug } of withSession) {
+    if (event.type !== 'prompt') continue;
+    const reply = asyncReplyDecision(event.text);
+    if (!reply) continue;
+    const turn = fallback(event.timestamp, actorSlug, sessionId);
+    if (turn) turn.decisions.push({ ...event, type: 'decision', text: reply.text });
   }
 
   // Plans (ExitPlanMode) attach to their turn the same way.

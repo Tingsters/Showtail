@@ -82,6 +82,14 @@ _Updated September 11, 2026._
 
 ### Fixed
 
+- **Codex's non-blocking questions no longer show up as bogus prompts.** When Codex
+  asks with `request_user_input_async` it keeps working, and the student's answer is
+  steered into the running turn as a `<send_user_message_question_reply>` user message
+  that fires the prompt hook. Showtail recorded that envelope as a prompt (and opened a
+  new turn). It is now kept as the student's answer, a **🔀 Decision (non-blocking)** under
+  the prompt that was running, with Codex's question shown where it was asked and the
+  answer where it was given. Older trails that stored the envelope as a prompt are
+  recovered the same way at report time, with no migration.
 - **Similar project names cannot collapse or cross-route separate turns.** Native
   request IDs distinguish repeated Copilot prompts, context-free prefixes stay in
   the inbox, and terminal/report output or read-only tool paths no longer count as

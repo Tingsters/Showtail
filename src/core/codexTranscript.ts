@@ -57,8 +57,12 @@ import { join } from 'node:path';
 import { importEditArtifact, importedArtifactSourceIds } from './artifacts.ts';
 import { hostHome } from './hostHome.ts';
 import {
+  asyncReplyCallId,
+  asyncReplyDecision,
+  parseAsyncQuestionReply,
   parseDecisionQuestions,
   renderDecisionText,
+  type AsyncQuestionReply,
   type DecisionQuestion,
 } from './decisions.ts';
 import { editsFromEnvelope, type EditedFile } from './hookInput.ts';
@@ -292,6 +296,10 @@ export function parseCodexTranscript(content: string, root: string): CodexTransc
   // per turn, not per message), so replies are stamped with the model that was
   // active when they were produced — correct even across a mid-session switch.
   let currentModel: string | undefined;
+  // call_id → the questions of a non-blocking `request_user_input_async`, so the
+  // student's later reply can be rendered against the options Codex offered.
+  const askedByCallId = new Map<string, DecisionQuestion[]>();
+  let asyncReplySeq = 0;
 
   // Parse every line once (malformed lines skipped), then scan twice: first to
   // index tool-call *outputs* by call_id (a decision's answer is on a later line
@@ -509,7 +517,54 @@ export function parseCodexTranscript(content: string, root: string): CodexTransc
           timestamp,
           sourceId: `codex:decision:${callId}`,
         });
+      } else if (name === 'request_user_input_async') {
+        // Codex's NON-blocking question: the call returns `{accepted:true}` at once,
+        // the model keeps working, and the student's answer arrives later as a
+        // synthetic user message (handled below). Emit the question here, stamped
+        // with the ask time, so it sits where it appears in the Codex terminal.
+        const questions = parseCodexAsyncQuestions(rawArguments);
+        if (questions.length === 0) continue;
+        askedByCallId.set(callId, questions);
+        messages.push({
+          role: 'decision',
+          text: renderDecisionText(questions, 'Codex', { nonBlocking: true }),
+          timestamp,
+          sourceId: `codex:decision-ask:${callId}`,
+        });
       }
+    } else if (
+      type === 'response_item' &&
+      pType === 'message' &&
+      prop(payload, 'role') === 'user'
+    ) {
+      // The only user-role response_item we keep: the student's answer to a
+      // non-blocking question (`<send_user_message_question_reply>`), stamped with
+      // the reply time so it lands after the work Codex did while waiting. Every
+      // other user-role item here is wrapped/duplicate chrome, still dropped.
+      const text = (asArray(prop(payload, 'content')) ?? [])
+        .map((c) => asString(prop(c, 'text')) ?? '')
+        .join('');
+      const fallback = asyncReplyDecision(text);
+      if (!fallback) continue;
+      const replies = parseAsyncQuestionReply(text);
+      const callId = replies ? asyncReplyCallId(replies) : undefined;
+      messages.push({
+        role: 'decision',
+        text: replies
+          ? renderDecisionText(
+              answeredAsyncQuestions(
+                callId ? askedByCallId.get(callId) : undefined,
+                replies,
+              ),
+              'Codex',
+              { nonBlocking: true },
+            )
+          : fallback.text,
+        timestamp,
+        sourceId: callId
+          ? `codex:decision:${callId}`
+          : `codex:decision:${sessionId ?? '?'}:async${asyncReplySeq++}`,
+      });
     } else if (
       type === 'response_item' &&
       (pType === 'function_call_output' || pType === 'custom_tool_call_output')
@@ -650,6 +705,59 @@ function parseCodexDecision(
     q.custom = !matched; // no offered option matched → the student typed their own
   });
   return questions;
+}
+
+/**
+ * Build the {@link DecisionQuestion}s for a `request_user_input_async` call. Its
+ * arguments differ from the blocking tool's: `{ questions: [{ title, options:
+ * string[] }] }` — the question is the `title`, the options plain strings.
+ */
+function parseCodexAsyncQuestions(args: string | undefined): DecisionQuestion[] {
+  if (!args) return [];
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(args);
+  } catch {
+    return [];
+  }
+  const out: DecisionQuestion[] = [];
+  for (const q of asArray(prop(parsed, 'questions')) ?? []) {
+    const question = asString(prop(q, 'title')) ?? asString(prop(q, 'question'));
+    if (!question) continue;
+    const options = (asArray(prop(q, 'options')) ?? [])
+      .map((o) => asString(o) ?? asString(prop(o, 'label')))
+      .filter((label): label is string => Boolean(label))
+      .map((label) => ({ label, chosen: false }));
+    out.push({ question, options, custom: false });
+  }
+  return out;
+}
+
+/**
+ * The asked questions with the student's reply applied: the chosen option is marked
+ * (or the answer flagged as typed when it matches none). Without the original call
+ * (e.g. a rollout resumed mid-way) the reply still renders from its own question text.
+ */
+function answeredAsyncQuestions(
+  asked: DecisionQuestion[] | undefined,
+  replies: AsyncQuestionReply[],
+): DecisionQuestion[] {
+  return replies.map((r) => {
+    const base = asked?.find((q) => q.question === r.question);
+    const q: DecisionQuestion = base
+      ? { ...base, options: base.options.map((o) => ({ ...o })) }
+      : { question: r.question, options: [], custom: false };
+    q.answer = r.answer;
+    let matched = false;
+    for (const o of q.options) {
+      if (o.label === r.answer) {
+        o.chosen = true;
+        matched = true;
+      }
+    }
+    q.custom = !matched; // no offered option matched → the student typed their own
+    return q;
+  });
 }
 
 /**

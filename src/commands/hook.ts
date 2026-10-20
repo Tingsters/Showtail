@@ -29,6 +29,7 @@ import {
 } from '../core/hookInput.ts';
 import { redact } from '../core/redact.ts';
 import { isSyntheticPrompt } from '../core/syntheticPrompt.ts';
+import { asyncReplyDecision } from '../core/decisions.ts';
 import { asString, prop } from '../core/parse.ts';
 import {
   autoInitEnabled,
@@ -219,6 +220,22 @@ async function captureToLedger(
 ): Promise<void> {
   requireCaptureContinuation(continueCapture);
   if (event === 'user-prompt') {
+    // A Codex non-blocking-question answer is student work steered into the running
+    // turn, not a new prompt: keep it as a decision on the OPEN turn (no new turn).
+    const asyncReply = parsed.prompt ? asyncReplyDecision(parsed.prompt) : undefined;
+    if (asyncReply) {
+      const gitCommit = await maybeCurrentCommit(cwd, true);
+      requireCaptureContinuation(continueCapture);
+      appendLedgerRecord(session.id, {
+        kind: 'decision',
+        tool: session.tool,
+        text: asyncReply.text,
+        turnKey: readLedgerSession(session.id)?.currentTurnKey,
+        sourceId: asyncReply.sourceId,
+        gitCommit,
+      });
+      return;
+    }
     // Skip harness-injected user-role envelopes (`<task-notification>` subagent
     // results, `<system-reminder>` context) — never the student's own prompt.
     if (!parsed.prompt || isSyntheticPrompt(parsed.prompt)) return;
@@ -881,6 +898,33 @@ async function handleUserPrompt(
   // carries it — useful for spotting source-driven capture gaps after the fact.
   const promptSource = asString(prop(payload, 'promptSource'));
   if (promptSource) trace.promptSource = promptSource;
+  // A Codex non-blocking-question answer is the student's work steered into the
+  // running turn — not a new prompt. Record it as a decision on the open turn and
+  // leave that turn open, so the edits/replies that follow stay under the real prompt.
+  const asyncReply = text ? asyncReplyDecision(text) : undefined;
+  if (asyncReply) {
+    const replySession = ev.nativeSessionId
+      ? sessionForNativeSession(author, ev.nativeSessionId, { tool, continueCapture })
+      : undefined;
+    const turnId =
+      (ev.nativeSessionId
+        ? turnForNativeSession(author.shared, ev.nativeSessionId)
+        : undefined) ??
+      readState(author.shared).currentPromptId ??
+      undefined;
+    const { session } = await logEvent(author, {
+      type: 'decision',
+      text: asyncReply.text,
+      tool,
+      turnId,
+      sourceId: asyncReply.sourceId,
+      sessionId: replySession?.id,
+      continueCapture,
+    });
+    trace.sessionId = session.id;
+    trace.turnId = turnId;
+    return;
+  }
   // Harness-injected user-role envelopes (`<task-notification>` subagent results,
   // `<system-reminder>` context, slash-command chrome) aren't the student's input —
   // never record them as prompts. See {@link isSyntheticPrompt}.

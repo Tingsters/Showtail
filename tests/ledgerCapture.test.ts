@@ -362,6 +362,49 @@ describe('reattach: placing and correcting attribution', () => {
     }
   });
 
+  test('a Codex non-blocking-question answer is a decision on the open turn, not a prompt', () => {
+    const scratch = makeTempDir();
+    const home = makeTempDir();
+    try {
+      enableAutoInit(home);
+      const env = envWithHome(home);
+      const hook = (prompt: string) =>
+        runCli(scratch, ['hook', 'user-prompt', '--tool', 'codex'], {
+          input: JSON.stringify({ cwd: scratch, session_id: 'cdx-async', prompt }),
+          env,
+        }).code;
+      const reply =
+        '<send_user_message_question_reply>\n' +
+        JSON.stringify([
+          {
+            answer: 'Robot is on, ready',
+            question: 'Is the robot on?',
+            questionItemId: '["request_user_input_async","call_abc",0]',
+          },
+        ]) +
+        '\n</send_user_message_question_reply>';
+
+      expect(hook('codex: test the robot')).toBe(0);
+      expect(hook(reply)).toBe(0);
+
+      // Still one prompt: the answer did not open a turn of its own.
+      const session = sessionForPrompt(scratch, env, 'codex: test the robot');
+      expect(session.prompts).toBe(1);
+      expect(inbox(scratch, env).sessions).toHaveLength(0);
+      const report = freshReport(scratch, env);
+      expect(report.turns).toHaveLength(1);
+      const decisions = report.turns[0].decisions;
+      expect(decisions).toHaveLength(1);
+      expect(decisions[0].text).toContain(
+        '**Codex asked (non-blocking):** Is the robot on?',
+      );
+      expect(decisions[0].text).toContain('**You answered:** Robot is on, ready');
+    } finally {
+      cleanup(scratch);
+      cleanup(home);
+    }
+  });
+
   test('cross-plugin: a folderless Codex (apply_patch) session reattaches with its diff', () => {
     const scratch = makeTempDir();
     const repo = makeTempDir();
