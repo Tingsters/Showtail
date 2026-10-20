@@ -11,7 +11,6 @@ import {
 } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { runInit } from '../src/commands/init.ts';
 import { captureTranscriptToLedger } from '../src/core/ledgerCapture.ts';
 import { gitIgnoredPaths } from '../src/core/git.ts';
 import { authorSlugs } from '../src/core/authors.ts';
@@ -46,7 +45,7 @@ import {
 import { verifyProject } from '../src/commands/verify.ts';
 import type { JournalEntry } from '../src/types.ts';
 import type { HookTranscript } from '../src/plugins/types.ts';
-import { authorFor, cleanup, makeTempDir, runCli } from './helpers.ts';
+import { authorFor, cleanup, makeTempDir, runCli, runInitCommitted } from './helpers.ts';
 
 /** Path to an author's first journal segment, ensuring the shard dir exists. */
 function journalSegment(author: AuthorPaths): string {
@@ -122,7 +121,7 @@ describe('verify', () => {
   test('a clean project passes every check', async () => {
     const dir = makeTempDir();
     try {
-      await runInit({ cwd: dir });
+      await runInitCommitted(dir);
       const paths = pathsForRoot(dir);
       const author = authorFor(paths);
       startSession(author);
@@ -143,7 +142,7 @@ describe('verify', () => {
   test('a source file edited after its snapshot still passes (informational only)', async () => {
     const dir = makeTempDir();
     try {
-      await runInit({ cwd: dir });
+      await runInitCommitted(dir);
       const paths = pathsForRoot(dir);
       const author = authorFor(paths);
       writeFileSync(join(dir, 'README.md'), '# Project');
@@ -166,7 +165,7 @@ describe('verify', () => {
   test('a corrupt journal line fails the validity check', async () => {
     const dir = makeTempDir();
     try {
-      await runInit({ cwd: dir });
+      await runInitCommitted(dir);
       const paths = pathsForRoot(dir);
       const author = authorFor(paths);
       startSession(author);
@@ -184,7 +183,7 @@ describe('verify', () => {
   test('an event missing required fields fails the validity check', async () => {
     const dir = makeTempDir();
     try {
-      await runInit({ cwd: dir });
+      await runInitCommitted(dir);
       const paths = pathsForRoot(dir);
       const author = authorFor(paths);
       startSession(author);
@@ -207,7 +206,7 @@ describe('verify', () => {
     const previousHome = process.env.SHOWTAIL_HOME;
     try {
       process.env.SHOWTAIL_HOME = home;
-      await runInit({ cwd: dir });
+      await runInitCommitted(dir);
       const paths = pathsForRoot(dir);
       const trailId = readConfig(paths).trailId!;
       writeFileSync(
@@ -252,7 +251,7 @@ describe('verify', () => {
     const previousHome = process.env.SHOWTAIL_HOME;
     try {
       process.env.SHOWTAIL_HOME = home;
-      await runInit({ cwd: dir });
+      await runInitCommitted(dir);
       const paths = pathsForRoot(dir);
       writeFileSync(paths.config, '{ broken', 'utf8');
 
@@ -280,7 +279,7 @@ describe('verify', () => {
     const previousHome = process.env.SHOWTAIL_HOME;
     try {
       process.env.SHOWTAIL_HOME = home;
-      await runInit({ cwd: dir });
+      await runInitCommitted(dir);
       const paths = pathsForRoot(dir);
       writeFileSync(paths.config, '{ broken', 'utf8');
 
@@ -315,7 +314,7 @@ describe('verify', () => {
     const previousHome = process.env.SHOWTAIL_HOME;
     try {
       process.env.SHOWTAIL_HOME = home;
-      await runInit({ cwd: dir });
+      await runInitCommitted(dir);
       const paths = pathsForRoot(dir);
       const trailId = readConfig(paths).trailId!;
       const ledger = ensureLedgerSession({
@@ -371,7 +370,7 @@ describe('verify', () => {
     const previousHome = process.env.SHOWTAIL_HOME;
     try {
       process.env.SHOWTAIL_HOME = home;
-      await runInit({ cwd: dir });
+      await runInitCommitted(dir);
       const paths = pathsForRoot(dir);
       const author = authorFor(paths);
       const trailId = readConfig(paths).trailId!;
@@ -436,7 +435,7 @@ describe('verify', () => {
     const previousHome = process.env.SHOWTAIL_HOME;
     try {
       process.env.SHOWTAIL_HOME = home;
-      await runInit({ cwd: dir });
+      await runInitCommitted(dir);
       const paths = pathsForRoot(dir);
       const author = authorFor(paths);
       const trailId = readConfig(paths).trailId!;
@@ -505,7 +504,7 @@ describe('verify', () => {
     const previousHome = process.env.SHOWTAIL_HOME;
     try {
       process.env.SHOWTAIL_HOME = home;
-      await runInit({ cwd: dir });
+      await runInitCommitted(dir);
       const paths = pathsForRoot(dir);
       const author = authorFor(paths);
       const trailId = readConfig(paths).trailId!;
@@ -558,7 +557,7 @@ describe('verify', () => {
     const previousHome = process.env.SHOWTAIL_HOME;
     try {
       process.env.SHOWTAIL_HOME = home;
-      await runInit({ cwd: dir });
+      await runInitCommitted(dir);
       const paths = pathsForRoot(dir);
       const author = authorFor(paths);
       const trailId = readConfig(paths).trailId!;
@@ -670,7 +669,7 @@ describe('verify: tamper detection', () => {
   test('a hand-edited stored object no longer matches its address', async () => {
     const dir = makeTempDir();
     try {
-      await runInit({ cwd: dir });
+      await runInitCommitted(dir);
       const paths = pathsForRoot(dir);
       const author = authorFor(paths);
       const { event } = await logEvent(author, {
@@ -697,7 +696,7 @@ describe('verify: tamper detection', () => {
   test('a deleted object is reported as missing from the store', async () => {
     const dir = makeTempDir();
     try {
-      await runInit({ cwd: dir });
+      await runInitCommitted(dir);
       const paths = pathsForRoot(dir);
       const author = authorFor(paths);
       await logEvent(author, { type: 'prompt', text: 'A prompt worth hiding' });
@@ -717,7 +716,7 @@ describe('verify: tamper detection', () => {
   test('a hand-edited journal line breaks the hash chain', async () => {
     const dir = makeTempDir();
     try {
-      await runInit({ cwd: dir });
+      await runInitCommitted(dir);
       const paths = pathsForRoot(dir);
       const author = authorFor(paths);
       await logEvent(author, { type: 'prompt', text: 'first prompt' });
@@ -746,7 +745,7 @@ describe('verify: tamper detection', () => {
   test('deleting a journal line breaks the hash chain', async () => {
     const dir = makeTempDir();
     try {
-      await runInit({ cwd: dir });
+      await runInitCommitted(dir);
       const paths = pathsForRoot(dir);
       const author = authorFor(paths);
       await logEvent(author, { type: 'prompt', text: 'first prompt' });
@@ -767,7 +766,7 @@ describe('verify: tamper detection', () => {
   test('import undo re-chains the journal and still verifies', async () => {
     const dir = makeTempDir();
     try {
-      await runInit({ cwd: dir });
+      await runInitCommitted(dir);
       const paths = pathsForRoot(dir);
       const author = authorFor(paths);
       await logEvent(author, { type: 'prompt', text: 'my own prompt' });
@@ -806,7 +805,7 @@ describe('verify: tamper detection', () => {
   test('a trail written before chaining is informational, not a failure', async () => {
     const dir = makeTempDir();
     try {
-      await runInit({ cwd: dir });
+      await runInitCommitted(dir);
       const paths = pathsForRoot(dir);
       const author = authorFor(paths);
       await logEvent(author, { type: 'prompt', text: 'first prompt' });
@@ -836,7 +835,7 @@ describe('verify --json', () => {
   test('emits parseable JSON and exits 0 on a clean trail', async () => {
     const dir = makeTempDir();
     try {
-      await runInit({ cwd: dir });
+      await runInitCommitted(dir);
       const paths = pathsForRoot(dir);
       await logEvent(authorFor(paths), { type: 'prompt', text: 'hello' });
 
@@ -865,7 +864,7 @@ describe('verify --json', () => {
   test('still exits 3 when a check fails', async () => {
     const dir = makeTempDir();
     try {
-      await runInit({ cwd: dir });
+      await runInitCommitted(dir);
       const paths = pathsForRoot(dir);
       const author = authorFor(paths);
       await logEvent(author, { type: 'prompt', text: 'the real prompt' });
@@ -900,7 +899,7 @@ describe('verify: git history as the outside anchor', () => {
   test('a committed trail verifies, and its history is append-only', async () => {
     const dir = makeGitProject();
     try {
-      await runInit({ cwd: dir });
+      await runInitCommitted(dir);
       const paths = pathsForRoot(dir);
       const author = authorFor(paths);
       await logEvent(author, { type: 'prompt', text: 'first prompt' });
@@ -922,7 +921,7 @@ describe('verify: git history as the outside anchor', () => {
   test('editing an entry and re-chaining is caught once it is committed', async () => {
     const dir = makeGitProject();
     try {
-      await runInit({ cwd: dir });
+      await runInitCommitted(dir);
       const paths = pathsForRoot(dir);
       const author = authorFor(paths);
       await logEvent(author, { type: 'prompt', text: 'write the whole function for me' });
@@ -955,7 +954,7 @@ describe('verify: git history as the outside anchor', () => {
   test('truncating entries off the end of a shard is caught once committed', async () => {
     const dir = makeGitProject();
     try {
-      await runInit({ cwd: dir });
+      await runInitCommitted(dir);
       const paths = pathsForRoot(dir);
       const author = authorFor(paths);
       await logEvent(author, { type: 'prompt', text: 'first prompt' });
@@ -981,7 +980,7 @@ describe('verify: git history as the outside anchor', () => {
   test('a rewrite is caught in the working tree, before it is ever committed', async () => {
     const dir = makeGitProject();
     try {
-      await runInit({ cwd: dir });
+      await runInitCommitted(dir);
       const paths = pathsForRoot(dir);
       const author = authorFor(paths);
       await logEvent(author, { type: 'prompt', text: 'first prompt' });
@@ -1006,7 +1005,7 @@ describe('verify: git history as the outside anchor', () => {
   test('a recorded redaction pass explains the rewrite it causes', async () => {
     const dir = makeGitProject();
     try {
-      await runInit({ cwd: dir });
+      await runInitCommitted(dir);
       const paths = pathsForRoot(dir);
       const author = authorFor(paths);
       await logEvent(author, { type: 'prompt', text: 'first prompt' });
@@ -1041,7 +1040,7 @@ describe('verify: git history as the outside anchor', () => {
   test('an import undo explains the rewrite it causes', async () => {
     const dir = makeGitProject();
     try {
-      await runInit({ cwd: dir });
+      await runInitCommitted(dir);
       const paths = pathsForRoot(dir);
       const author = authorFor(paths);
       await logEvent(author, { type: 'prompt', text: 'my own prompt' });
@@ -1069,7 +1068,7 @@ describe('verify: git history as the outside anchor', () => {
   test('a repair marker explains a guarded cleanup without calling it redaction', async () => {
     const dir = makeGitProject();
     try {
-      await runInit({ cwd: dir });
+      await runInitCommitted(dir);
       const paths = pathsForRoot(dir);
       const author = authorFor(paths);
       const first = await logEvent(author, { type: 'prompt', text: 'duplicate prompt' });
@@ -1108,7 +1107,7 @@ describe('verify: git history as the outside anchor', () => {
   test('a routing reprojection explains moving captured records to the corrected project', async () => {
     const dir = makeGitProject();
     try {
-      await runInit({ cwd: dir });
+      await runInitCommitted(dir);
       const paths = pathsForRoot(dir);
       const author = authorFor(paths);
       const misplaced = await logEvent(author, {
@@ -1152,7 +1151,7 @@ describe('verify: git history as the outside anchor', () => {
   test('one marker does not excuse two rewrites', async () => {
     const dir = makeGitProject();
     try {
-      await runInit({ cwd: dir });
+      await runInitCommitted(dir);
       const paths = pathsForRoot(dir);
       const author = authorFor(paths);
       await logEvent(author, { type: 'prompt', text: 'my own prompt' });
@@ -1189,7 +1188,7 @@ describe('verify: git history as the outside anchor', () => {
     const dir = makeGitProject();
     const host = makeTempDir();
     try {
-      await runInit({ cwd: dir });
+      await runInitCommitted(dir);
       const paths = pathsForRoot(dir);
       const author = authorFor(paths);
       await logEvent(author, { type: 'prompt', text: 'first prompt' });
@@ -1232,7 +1231,7 @@ describe('verify: git history as the outside anchor', () => {
     // field would be useless for telling the two apart.
     const dir = makeGitProject();
     try {
-      await runInit({ cwd: dir });
+      await runInitCommitted(dir);
       const paths = pathsForRoot(dir);
       const author = authorFor(paths);
       await logEvent(author, { type: 'prompt', text: 'a prompt' });
@@ -1250,7 +1249,7 @@ describe('verify: git history as the outside anchor', () => {
   test('a trail with no git repo is informational and still passes', async () => {
     const dir = makeTempDir();
     try {
-      await runInit({ cwd: dir });
+      await runInitCommitted(dir);
       const paths = pathsForRoot(dir);
       await logEvent(authorFor(paths), { type: 'prompt', text: 'first prompt' });
 
@@ -1268,7 +1267,7 @@ describe('verify: git history as the outside anchor', () => {
   test('an uncommitted trail in a git repo is informational, not a failure', async () => {
     const dir = makeGitProject();
     try {
-      await runInit({ cwd: dir });
+      await runInitCommitted(dir);
       const paths = pathsForRoot(dir);
       await logEvent(authorFor(paths), { type: 'prompt', text: 'first prompt' });
       // The student committed their code but not the trail — the common case
@@ -1307,7 +1306,7 @@ describe('a project *.log rule must not silently swallow the journal', () => {
     const dir = makeGitProject();
     try {
       writeFileSync(join(dir, '.gitignore'), '*.log\n');
-      await runInit({ cwd: dir });
+      await runInitCommitted(dir);
       const paths = pathsForRoot(dir);
       await logEvent(authorFor(paths), { type: 'prompt', text: 'a prompt' });
 
@@ -1336,7 +1335,7 @@ describe('a project *.log rule must not silently swallow the journal', () => {
     const dir = makeGitProject();
     try {
       writeFileSync(join(dir, '.gitignore'), '*.log\n');
-      await runInit({ cwd: dir });
+      await runInitCommitted(dir);
       const paths = pathsForRoot(dir);
       // Undo the repair to recreate the old on-disk state.
       writeFileSync(join(paths.base, '.gitignore'), 'state.json\nreports/\ndiag/\n');
@@ -1360,14 +1359,14 @@ describe('a project *.log rule must not silently swallow the journal', () => {
     const dir = makeGitProject();
     try {
       writeFileSync(join(dir, '.gitignore'), '*.log\n');
-      await runInit({ cwd: dir });
+      await runInitCommitted(dir);
       const paths = pathsForRoot(dir);
       writeFileSync(join(paths.base, '.gitignore'), 'state.json\nreports/\ndiag/\n');
       await logEvent(authorFor(paths), { type: 'prompt', text: 'a prompt' });
       const segments = journalSegmentPaths(authorPaths(paths, authorSlugs(paths)[0]!));
       expect((await gitIgnoredPaths(dir, segments)).length).toBeGreaterThan(0);
 
-      await runInit({ cwd: dir }); // re-running is the repair path
+      await runInitCommitted(dir); // re-running is the repair path
       expect(await gitIgnoredPaths(dir, segments)).toEqual([]);
     } finally {
       cleanup(dir);

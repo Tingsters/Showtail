@@ -9,6 +9,7 @@
  *   2  no single usable project could be selected (missing trail/path or ambiguity)
  *   3  verify failed (integrity check did not pass)
  *   4  nothing to do / not connected
+ *   5  refused by the git guard (a commit or push would carry the private trail)
  */
 export class ShowtailError extends Error {
   readonly code: number;

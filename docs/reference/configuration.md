@@ -53,9 +53,10 @@ the preference for one process or managed environment.
 | `settings.git` | Try to capture the git commit hash on each event. |
 | `settings.captureAiOutput` | Capture AI text responses (Stop hook / imports). Default on. |
 | `settings.captureCode` | Capture AI-suggested code/diffs alongside edits. Default on. |
-| `settings.captureToolCalls` | Capture non-edit tool calls (Bash, Read, Grep, ...) and their results. Default on. |
+| `settings.captureToolCalls` | Capture non-edit tool calls (Bash, Read, Grep, ...): the command only, never its output. Default on. |
 | `settings.idleTimeoutMinutes` | Minutes of inactivity after which an open session auto-closes (stamped at its last event). Defaults to 60. |
 | `settings.redact` | Sensitive-data redaction settings — see below. |
+| `settings.commitTrail` | Keep `.showtail/` in git. Default **off**: the working trail holds raw prompts, replies and diffs, so it ignores itself and a pre-commit/pre-push guard refuses it. Share with `showtail submit` instead. Educators who want the trail itself in a course repo set this to `true`. |
 
 ## Redaction
 

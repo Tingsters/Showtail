@@ -94,15 +94,27 @@ function tag(content: string, name: string): string | undefined {
   return value ? value : undefined;
 }
 
+/** What a failed tool call records in place of its output. */
+export const OUTPUT_NOT_CAPTURED = '*(output not captured)*';
+
 /**
  * The full rendered `Event.text` for a tool call: its already-rendered input
- * `header` (from {@link renderToolCallInput}), followed by its (truncated)
- * result when one was captured.
+ * `header` (from {@link renderToolCallInput}).
+ *
+ * The call's *output* is deliberately NOT recorded unless `includeOutput` is set.
+ * Output is where secrets live: `cat .env`, `printenv`, `aws configure list`, a
+ * failing request that echoes its Authorization header. No pattern list can
+ * promise to catch all of that, so the safe default is to never store it. The
+ * trail still shows what was run, and whether it failed.
  */
 export function renderToolCallText(
   header: string,
   result: ToolResult | undefined,
+  includeOutput = false,
 ): string {
+  if (!includeOutput) {
+    return result?.isError ? `${header}\n\n**Error** ${OUTPUT_NOT_CAPTURED}` : header;
+  }
   const body = result?.content ? truncateBlock(result.content) : undefined;
   if (!body) return header;
   const prefix = result?.isError ? '**Error:**\n' : '';

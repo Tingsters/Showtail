@@ -12,6 +12,7 @@ import type { Config } from '../types.ts';
 import { establishIdentity } from '../core/authors.ts';
 import { requireCaptureContinuation } from '../core/captureGuard.ts';
 import { gitToplevel } from '../core/git.ts';
+import { installGuardHooks } from '../core/guard.ts';
 import {
   effectiveLedgerRecords,
   effectiveLedgerSegmentPath,
@@ -83,9 +84,25 @@ const GITATTRIBUTES = `# Showtail stores content-addressed objects; keep bytes b
 const JOURNAL_UNIGNORE = '!authors/**/journal/**/*.log';
 
 /**
+ * The working trail is PRIVATE by default: it holds the student's raw prompts,
+ * the AI's replies and code diffs, so nothing in `.showtail/` can be committed by
+ * an accidental `git add .`. What leaves the machine is the sanitised report that
+ * `showtail submit` writes. A trail that is genuinely meant to live in git (an
+ * educator's course repo) opts in with `settings.commitTrail: true`.
+ */
+const PRIVATE_MARKER = '# showtail:private';
+const PRIVATE_GITIGNORE = `${PRIVATE_MARKER}
+# Showtail's working trail is private: it holds your raw prompts, the AI's replies
+# and code diffs, so it is never committed. To share your work run \`showtail submit\`
+# (a sanitised report). To keep the trail itself in git, set settings.commitTrail.
+*
+!.gitignore
+`;
+
+/**
  * Ephemeral/regenerable and machine-local bits don't belong in version control.
- * Everything else under .showtail/ — including every author's folder and the
- * shared object store — IS committed, so teammates' trails merge through git.
+ * Used only when `settings.commitTrail` is on: then everything else under
+ * .showtail/ IS committed, so teammates' trails merge through git.
  */
 const GITIGNORE = `state.json
 reports/
@@ -98,20 +115,30 @@ ${JOURNAL_UNIGNORE}
 const STAGED_TRAIL_PREFIX = `${SHOWTAIL_DIR}.init-`;
 
 /**
- * Make sure the trail's `.gitignore` carries {@link JOURNAL_UNIGNORE}.
+ * Bring the trail's `.gitignore` in line with `settings.commitTrail`.
  *
- * Written on create, but also repaired on every `ensure`: trails created before
- * this existed are the ones actually at risk, and their journals are silently
- * uncommitted right now. Appends rather than rewrites, so a line someone added
- * themselves survives.
+ * Private (default): ignore everything but the ignore file itself. Repaired on
+ * every `ensure` as well as on create, because trails made before this default
+ * existed are exactly the ones that would otherwise stay committable.
+ *
+ * Committed (opt-in): the legacy rules, with {@link JOURNAL_UNIGNORE} so a
+ * project-wide `*.log` rule cannot silently swallow the journal. Appends rather
+ * than rewrites, so a line someone added themselves survives.
  */
-export function ensureJournalUnignored(paths: ShowtailPaths): void {
+export function ensureTrailIgnore(paths: ShowtailPaths): void {
   const file = join(paths.base, '.gitignore');
-  if (!existsSync(file)) {
+  const commit = readConfig(paths).settings.commitTrail === true;
+  const current = existsSync(file) ? readFileSync(file, 'utf8') : undefined;
+
+  if (!commit) {
+    if (current?.includes(PRIVATE_MARKER)) return;
+    writeFileSync(file, PRIVATE_GITIGNORE, 'utf8');
+    return;
+  }
+  if (current === undefined || current.includes(PRIVATE_MARKER)) {
     writeFileSync(file, GITIGNORE, 'utf8');
     return;
   }
-  const current = readFileSync(file, 'utf8');
   if (current.includes(JOURNAL_UNIGNORE)) return;
   const sep = current.endsWith('\n') ? '' : '\n';
   writeFileSync(
@@ -119,6 +146,24 @@ export function ensureJournalUnignored(paths: ShowtailPaths): void {
     `${current}${sep}\n# Keep journal segments committable even when the project ignores *.log.\n${JOURNAL_UNIGNORE}\n`,
     'utf8',
   );
+}
+
+/** @deprecated Kept for callers of the old name; see {@link ensureTrailIgnore}. */
+export const ensureJournalUnignored = ensureTrailIgnore;
+
+/**
+ * Install the pre-commit/pre-push guard unless the trail has opted into git. The
+ * self-ignoring `.gitignore` is the primary protection; the hooks cover `git add -f`
+ * and a trail that was tracked before it became private. Best-effort: never let a
+ * hooks problem break capture.
+ */
+async function installGuardIfPrivate(paths: ShowtailPaths): Promise<void> {
+  try {
+    if (readConfig(paths).settings.commitTrail === true) return;
+    await installGuardHooks(paths.root);
+  } catch {
+    // A read-only hooks directory or missing git must not stop the trail working.
+  }
 }
 
 export interface InitOptions {
@@ -206,7 +251,8 @@ export async function ensureInitialized(
     // keeping out of git. Trails created before that negation existed are the
     // ones actually affected, and they only get fixed on a path like this one.
     requireCaptureContinuation(options.continueCapture);
-    ensureJournalUnignored(paths);
+    ensureTrailIgnore(paths);
+    await installGuardIfPrivate(paths);
     const config = readConfig(paths);
     // An explicit `track` makes an automatically-created fallback intentional.
     // Keep unknown/older metadata conservative: only a trail positively marked
@@ -301,7 +347,7 @@ export async function ensureInitialized(
     requireCaptureContinuation(options.continueCapture);
     writeFileSync(join(staged.base, '.gitattributes'), GITATTRIBUTES, 'utf8');
     requireCaptureContinuation(options.continueCapture);
-    writeFileSync(join(staged.base, '.gitignore'), GITIGNORE, 'utf8');
+    writeFileSync(join(staged.base, '.gitignore'), PRIVATE_GITIGNORE, 'utf8');
     requireCaptureContinuation(options.continueCapture);
     renameSync(staged.base, paths.base);
   } catch (error) {
@@ -326,6 +372,7 @@ export async function ensureInitialized(
   if (!options.continueCapture || options.continueCapture()) {
     noteKnownProject(root, config.trailId);
   }
+  await installGuardIfPrivate(paths);
 
   return { created: true, paths };
 }

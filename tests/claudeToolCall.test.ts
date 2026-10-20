@@ -129,7 +129,7 @@ function makeToolCallTranscript(): string {
 }
 
 describe('parseClaudeTranscript — tool calls', () => {
-  test('captures a successful Bash call, header + truncated output', () => {
+  test('captures a successful Bash call: the command, never its output', () => {
     const dir = makeTempDir();
     try {
       const { messages } = parseClaudeTranscript(makeToolCallTranscript(), dir);
@@ -139,21 +139,23 @@ describe('parseClaudeTranscript — tool calls', () => {
       expect(call!.toolName).toBe('Bash');
       expect(call!.isError).toBe(false);
       expect(call!.text).toContain('$ pip3 install pygame-ce');
-      expect(call!.text).toContain('Successfully installed pygame-ce-2.5.8');
+      // Output is where secrets live (cat .env, printenv): it is never stored.
+      expect(call!.text).not.toContain('Successfully installed pygame-ce-2.5.8');
     } finally {
       cleanup(dir);
     }
   });
 
-  test('marks a failed Bash call as an error and includes its output', () => {
+  test('marks a failed Bash call as an error without storing its output', () => {
     const dir = makeTempDir();
     try {
       const { messages, events } = parseClaudeTranscript(makeToolCallTranscript(), dir);
       const call = messages.find((m) => m.sourceId === 'tb1');
       expect(call).toBeDefined();
       expect(call!.isError).toBe(true);
-      expect(call!.text).toContain('**Error:**');
-      expect(call!.text).toContain("ModuleNotFoundError: No module named 'pygame'");
+      expect(call!.text).toContain('**Error**');
+      expect(call!.text).toContain('output not captured');
+      expect(call!.text).not.toContain("ModuleNotFoundError: No module named 'pygame'");
 
       const result = events.find(
         (event) => event.type === 'tool_result' && event.toolUseId === 'tb1',
