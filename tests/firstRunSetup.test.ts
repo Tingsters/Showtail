@@ -439,3 +439,42 @@ describe('first-run bootstrap ("just works" on install)', () => {
     }
   });
 });
+
+describe('review commands never enrol the reader', () => {
+  // An educator opening a student's repository runs `report` / `verify`. Those must not
+  // silently wire the educator's own AI tools (user-scope hooks) just for reading.
+  test("report, verify and verify-submission leave the reader's tools and config alone", () => {
+    const dir = makeTempDir();
+    const home = makeTempDir();
+    const ghome = join(makeTempDir(), '.showtail-cli');
+    try {
+      const env = bootstrapEnv(home, ghome);
+      // A student's trail already in the repo (made elsewhere, with bootstrap off).
+      const base = { ...spawnEnv() };
+      expect(runCli(dir, ['ensure'], { env: base }).code).toBe(0);
+
+      // Enrolment = tracking switched on and the reader's own tools wired. (Other state,
+      // like the daily update-check timestamp, may legitimately live in the same file.)
+      const enrolled = () =>
+        existsSync(join(home, '.claude', 'settings.json')) ||
+        (existsSync(join(ghome, 'config.json')) &&
+          Boolean(globalConfig(ghome).autoInit || globalConfig(ghome).setupCompletedAt));
+
+      for (const args of [
+        ['report', '--no-open', '--no-sync'],
+        ['verify'],
+        ['verify-submission'],
+      ]) {
+        runCli(dir, args, { env });
+        expect(enrolled()).toBe(false);
+      }
+
+      // A command that does start tracking still bootstraps, so the test is meaningful.
+      runCli(dir, ['log', '--type', 'note', '--text', 'hi'], { env });
+      expect(enrolled()).toBe(true);
+    } finally {
+      cleanup(dir);
+      cleanup(home);
+    }
+  });
+});

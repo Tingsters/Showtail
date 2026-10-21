@@ -50,11 +50,20 @@ want frozen for a term, pin the exact release instead — `Tingsters/Showtail@v0
 — or a commit SHA. Showtail is pre-1.0, so `v0` is the moving tag; there is
 deliberately no `v1` until the API settles.
 
-!!! note "Students must commit `.showtail/`"
+!!! note "This needs `commitTrail`"
 
-    The trail is only checkable if it is in the repo. Step 4 of the
-    [classroom workflow](classroom-workflow.md) covers this — reports are
-    regenerable and git-ignored, but `.showtail/` itself must be committed.
+    By default a student's working trail is private (`.showtail/` ignores itself and a
+    git guard refuses to commit it), because it holds raw prompts that can contain
+    secrets. The Action can only verify a trail that is in the repo, so the assignment
+    template must opt in with `"commitTrail": true` under `settings` in
+    `.showtail/config.json`. See
+    [Stronger checks](classroom-workflow.md#stronger-checks-for-a-course-repo) for the
+    trade-off, and tell students their prompts become part of the repository.
+
+    Without it, the Action fails with "verify could not run … check the submission has a
+    committed `.showtail/` folder". For the default (private-trail) workflow use
+    [`mode: submission`](#verifying-the-submission-instead), which checks the signed,
+    sanitised `showtail-submission/` folder students commit.
 
     Committing it **as they work**, rather than once at the end, is what makes
     the history check worth anything: each push pins the journal as it stood,
@@ -62,12 +71,29 @@ deliberately no `v1` until the API settles.
     committed in a single lump at submission time still verifies internally, but
     there is nothing outside it to compare against.
 
+## Verifying the submission instead
+
+By default students keep their raw trail private and hand in a sanitised report. To check
+that in CI, point the Action at the submission:
+
+```yaml
+      - uses: Tingsters/Showtail@v0
+        with:
+          mode: submission
+```
+
+It confirms the report files are unchanged since `showtail submit` signed them, and that
+their text still scans clean. It does **not** need `fetch-depth: 0` (there is no git
+history check in this mode), and it proves the files were not edited, not who made them.
+
 ## Inputs
 
 | Input | Default | What it does |
 | ----- | ------- | ------------ |
 | `path` | `.` | Directory holding the submission — the folder containing `.showtail/`. Use it when the project lives in a subfolder. |
 | `version` | `latest` | Which Showtail to install: `latest`, or a tag from the [releases page](https://github.com/Tingsters/Showtail/releases). Pin a tag if you want every submission graded by exactly the same version — but only tags that ship `verify --json` work here, so keep `latest` unless you have a reason to pin. |
+| `mode` | `trail` | `trail` verifies a committed `.showtail/` trail (needs `settings.commitTrail`). `submission` verifies the signed, sanitised `showtail-submission/` folder instead — see [below](#verifying-the-submission-instead). |
+| `submission-dir` | `showtail-submission` | With `mode: submission`: the folder to check, relative to `path`. |
 | `fail-on-invalid` | `true` | Set to `false` to report the result without failing the job — useful early in a term, when you want the signal but not a red X. |
 
 ```yaml

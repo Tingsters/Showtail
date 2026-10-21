@@ -29,6 +29,7 @@ import {
   logConversationEvent,
 } from './conversationEvents.ts';
 import { hostHome } from './hostHome.ts';
+import { redact } from './redact.ts';
 import { isSyntheticPrompt } from './syntheticPrompt.ts';
 import {
   asArray,
@@ -68,6 +69,17 @@ import type { HookTranscriptEvent } from '../plugins/types.ts';
 // The decision types are part of this module's public surface (they appear on
 // ClaudeMessage); re-export them so any importer keeps its existing path.
 export type { DecisionOption, DecisionQuestion } from './decisions.ts';
+
+/**
+ * The leading text of a message, for a fallback `sourceId` when the host gave it no
+ * native id. Redacted *before* slicing: this string is written to the journal in the
+ * clear, so a key at the start of a prompt must not end up there. (Text without a
+ * secret in its first 24 characters yields the same id as before, so re-importing an
+ * old transcript still dedupes against what it recorded.)
+ */
+function idSnippet(text: string): string {
+  return redact(text).text.slice(0, 24);
+}
 
 /** A normalized message recovered from a transcript. */
 export interface ClaudeMessage {
@@ -696,7 +708,7 @@ export function parseClaudeTranscript(
           sourceId:
             asString(prop(obj, 'uuid')) ??
             pendingDuration?.sourceId ??
-            `cc:recap:${asString(prop(obj, 'timestamp')) ?? recapText.slice(0, 24)}`,
+            `cc:recap:${asString(prop(obj, 'timestamp')) ?? idSnippet(recapText)}`,
           ...tokenTotals(turnTokens),
         });
         pendingDuration = undefined;
@@ -820,7 +832,7 @@ function handleTaskNotification(obj: unknown): ClaudeMessage | null {
     timestamp,
     sourceId:
       asString(prop(obj, 'uuid')) ??
-      `cc:task:${note.toolUseId ?? timestamp ?? note.summary.slice(0, 24)}`,
+      `cc:task:${note.toolUseId ?? timestamp ?? idSnippet(note.summary)}`,
   };
 }
 
@@ -840,7 +852,7 @@ function handleUser(obj: unknown): ClaudeMessage | null {
     role: 'user',
     text,
     timestamp: asString(prop(obj, 'timestamp')),
-    sourceId: asString(prop(obj, 'uuid')) ?? `cc:user:${text.slice(0, 24)}`,
+    sourceId: asString(prop(obj, 'uuid')) ?? `cc:user:${idSnippet(text)}`,
   };
 }
 
@@ -935,7 +947,7 @@ function handleAssistant(
       role: 'assistant',
       text: texts.join('\n'),
       timestamp,
-      sourceId: uuid || `cc:asst:${texts[0]!.slice(0, 24)}`,
+      sourceId: uuid || `cc:asst:${idSnippet(texts[0]!)}`,
       model,
     });
   }

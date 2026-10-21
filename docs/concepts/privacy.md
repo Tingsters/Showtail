@@ -2,9 +2,13 @@
 
 Showtail is privacy-first by design:
 
-- **Everything is local.** Resolved work lives in the project's `.showtail/`
-  trail. Work that does not yet have one safe project destination waits in the
-  machine-local ledger/inbox under `~/.showtail-cli/` (or `SHOWTAIL_HOME`).
+- **Everything is local, and the trail is private by default.** Resolved work lives
+  in the project's `.showtail/` trail. Work that does not yet have one safe project
+  destination waits in the machine-local ledger/inbox under `~/.showtail-cli/` (or
+  `SHOWTAIL_HOME`). `.showtail/` ignores itself in git, so a plain `git add .` can
+  never publish your raw prompts, the AI's replies or your code diffs. What you hand
+  in is a separate, sanitised report from `showtail submit` (see
+  [Sharing your work safely](sharing.md)).
 - **No telemetry, analytics, or automatic upload of your trail.** Captured
   prompts, edits, reports, and project data are not sent to Showtail's
   maintainers or to a Showtail service.
@@ -21,16 +25,51 @@ Showtail is privacy-first by design:
 - **You control what is recorded.** Installation enables supported capture
   integrations by default. Use `showtail setup --off` to stop automatic project
   creation, or `showtail disconnect <tool>` to stop a tool's capture integration.
-- **Secrets are scrubbed before storage.** Showtail makes a best-effort pass to
-  redact provider keys, tokens, passwords, and personal data (email, phone,
-  card, SSN) from captured text *before* it is written, and the report notes how
-  many it removed. It is a safety net, not a guarantee — still avoid putting
-  secrets in prompts. Tune it under `settings.redact` in `config.json` (see
-  [Configuration](../reference/configuration.md#redaction)). When it does miss
-  something, `showtail redact` cleans it out after the fact — see
+- **Secrets are kept out in layers, and described honestly.** See
+  [How secrets are kept out](#how-secrets-are-kept-out). No scrubber is perfect, so
+  the design does not rest on one: what cannot be made safe is never captured, and
+  what you share is checked twice. Tune the capture-time pass under `settings.redact`
+  in `config.json` (see [Configuration](../reference/configuration.md#redaction)).
+  When something is missed anyway, `showtail redact` cleans it out after the fact — see
   [If something leaked anyway](#if-something-leaked-anyway).
 - **The files are plain and inspectable.** They are JSON and JSONL files that
   you can open in any editor.
+
+## How secrets are kept out
+
+A provider changing its key format must not become a leak, so the layers do not all
+depend on recognising what a key looks like.
+
+1. **Never captured.** The *output* of tool calls (what `cat .env` or `printenv`
+   printed) is not recorded, only the command, and structured tool results keep their
+   exit status but not their `stdout`, `stderr` or content. Credential files (`.env*`,
+   `*.pem`, `id_rsa`, `~/.aws/credentials`, `.npmrc`, Terraform state, service-account
+   JSON, …) are never captured: no diff, no hash, no content. Edits outside your
+   project are not snapshotted.
+2. **Your own secrets, in any format.** Showtail reads the secret values on your
+   machine (secret-named environment variables, your project's `.env` files, and the
+   standard credential files) and masks every exact occurrence, raw or URL-encoded,
+   base64, or JSON-escaped. This works for a key format that did not exist yesterday.
+3. **Known formats and labels.** Provider key formats (OpenAI, Anthropic, AWS, GitHub,
+   Stripe, Hugging Face, …), private keys (even a truncated block), `NAME=value` lines
+   such as `DB_PASSWORD=…`, bearer/basic auth and passwords in URLs.
+4. **Anything that looks random, when you share.** `showtail submit` withholds any long
+   opaque token that is not recognisably ordinary (a word, an identifier, a path, a
+   commit id, a UUID, a version). Secrets are random strings, so this holds for formats
+   nobody has seen. It over-redacts on purpose.
+5. **A second, independent check.** Before anything is written for sharing, a separate
+   scanner looks over the result. If it finds anything, `submit` stops and writes
+   nothing.
+
+What no tool can promise: a low-entropy password you typed in plain prose, with no
+label, that is not on your machine ("it's purple elephant"). Keep those out of prompts.
+
+!!! danger "If you pasted a real key into a prompt, rotate it now"
+    Whatever Showtail hides afterwards, **the AI provider already received it**. Hiding
+    it from your record does not make it safe. Revoke the key and make a new one. On a
+    public repository a leaked key can be found and abused within minutes, and deleting
+    a commit does not help, because forks and cached views keep it. Rotating is the only
+    fix. It also helps to set a spending limit on every API key you use.
 
 ## Local project-selection metadata
 
@@ -110,23 +149,24 @@ rewrite no marker accounts for. See
 
 ## Committing `.showtail/`
 
-Showtail is designed to be committed into your repository so your educator can
-review it. The project-root `.gitignore` does not ignore `.showtail/`.
+By default, don't. The working trail holds your raw prompts, the AI's replies and your
+code diffs, so `.showtail/` ignores itself, and a `pre-commit` / `pre-push` guard that
+Showtail installs refuses to commit it even with `git add -f`. To share your work, use
+`showtail submit`: it writes a sanitised report you can hand in or attach to a pull
+request. See [Sharing your work safely](sharing.md).
 
-Showtail writes its own `.showtail/.gitignore` that excludes only the
-regenerable, machine-local bits — `state.json` and `reports/`. Everything else,
-including every student's `authors/<slug>/` folder and the shared `objects/`
-store, is committed, which is what lets teammates' trails merge through git.
-(Reports are regenerated with `showtail report`, so they do not need to be
-committed.)
+If `.showtail/` was already committed before you updated, stop tracking it with
+`git rm -r --cached .showtail`. That does not remove it from earlier commits: if it held
+a secret, rotate the secret.
 
-Before you commit, remember that your captured prompts become part of your git
-history. Redaction helps, but do not rely on it — keep passwords, private
-personal information, and anything you would not want shared out of your prompts
-while capture is on.
+### Educators who want the trail itself in git
 
-If a project is sensitive, you can add `.showtail/` to your project-root
-`.gitignore` and share reports another way.
+A course repository can opt in with `"commitTrail": true` under `settings` in
+`.showtail/config.json`. Then everything under `.showtail/` is committed (teammates'
+trails merge through git, and the [GitHub Action](../educators/verify-in-ci.md) and
+`showtail verify` can use git history as an outside anchor). The trade-off is the whole
+point of the default: the trail is only as safe as capture-time redaction, which is
+best-effort. Tell students plainly that their prompts become part of the repository.
 
 ## External services
 
@@ -135,7 +175,8 @@ with services operated by third parties, subject to their privacy policies:
 
 - [GitHub](https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement)
   for installation, public release checks, updates, and optional identity lookup
-  through GitHub CLI.
+  through GitHub CLI, and, only after you approve the exact text, posting a
+  pull-request summary with `showtail submit --pr` (through your own `gh` login).
 - [OpenAI](https://openai.com/policies/privacy-policy/) when you import a
   user-supplied ChatGPT shared conversation.
 - [Google](https://policies.google.com/privacy) when you import a user-supplied

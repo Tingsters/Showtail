@@ -1,7 +1,8 @@
 # Example classroom workflow
 
-1. **Teacher:** Ask students to install Showtail, use it for a project, and commit
-   `.showtail/` with their work. **Tip: have students install their AI tool *before*
+1. **Teacher:** Ask students to install Showtail, use it for a project, and hand in the
+   report `showtail submit` makes. (Their working trail stays private on their machine; see
+   [Sharing your work safely](../concepts/sharing.md).) **Tip: have students install their AI tool *before*
    Showtail** (or just install Showtail last). Installing Showtail turns automatic project
    tracking on and connects the tools it finds. A later sweep can connect a tool installed
    afterward, but first-session capture is not guaranteed; run
@@ -11,24 +12,36 @@
    `showtail setup --off`; to stop capture from a tool, use
    `showtail disconnect <tool>`.
 3. **Student:** Work on the project as usual — prompts and edits are captured for
-   you. On a group project, each teammate's trail lands in their own
-   `authors/<slug>/` folder and merges through git without conflicts.
-4. **Student:** Before submitting, run `showtail verify`, then commit everything,
-   including `.showtail/`. (Reports are regenerable and git-ignored by default —
-   no need to commit them.)
-5. **Teacher:** Run `showtail report` to generate or refresh the report from the trail, then open
-   `.showtail/reports/report-team-*.html` for the whole group, or a
-   `report-<student>-*.html` for one student. The Markdown source sits beside
-   each.
-6. **Teacher:** Run `showtail verify` or `showtail trace <file>` when a deeper
-   review is needed.
+   you. Nothing sensitive is ever committed by accident: `.showtail/` ignores itself.
+4. **Student:** When finished, run `showtail submit`. It removes secrets and personal data,
+   checks the result a second time, and writes `showtail-submission/`. They hand in
+   `report.html` the way they would any assignment (upload it to your LMS), or, on a
+   group project, commit the `showtail-submission/` folder.
+5. **Teacher:** Open `report.html`. It is an ordinary web page, so there is nothing to
+   install. To check the file is unchanged since it was signed, run
+   `showtail verify-submission <folder>` (this needs Showtail, and shows the file was not
+   edited, not who made it).
+6. **Teacher:** For a deeper review, see
+   [Stronger checks](#stronger-checks-for-a-course-repo) below.
 
 The goal is not to catch anyone. The goal is to make the process visible and
 give students a structured way to demonstrate genuine understanding.
 
-**Grading a whole class?** Put the [Showtail GitHub Action](verify-in-ci.md) in
-your assignment template repo and step 6 happens by itself: every submission's
-trail is verified on push, with a pass/fail summary in the Checks tab.
+## Stronger checks for a course repo
+
+The default keeps each student's raw trail on their own machine, which is what keeps
+secrets out of git. If you want Showtail to verify the **trail itself** (its hash chain
+and its history in git), set `"commitTrail": true` under `settings` in the assignment
+template's `.showtail/config.json`. Then `.showtail/` is committed with the student's
+work, `showtail verify` can use git history as an outside anchor, and the
+[Showtail GitHub Action](verify-in-ci.md) works on every push.
+
+Know the trade-off before you choose it: a committed trail is only as safe as capture-time
+redaction, which is best-effort, so tell students plainly that their prompts become part of
+the repository, and that a real key pasted into a prompt must be rotated. Without
+`commitTrail`, the git-history check has nothing to read; use the Action's
+[`mode: submission`](verify-in-ci.md#verifying-the-submission-instead) to verify the signed
+submission instead.
 
 ## Which tools are covered
 

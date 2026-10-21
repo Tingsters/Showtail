@@ -2,6 +2,77 @@
 
 ## Unreleased
 
+## 0.19.0 — Secrets stay out: a private trail and a sanitised report
+
+A security release. A single leaked API key on a public repository can cost thousands of
+dollars within hours, and the old design (a regex pass, then commit the whole trail) could
+not promise that would not happen. This release changes what Showtail shares, not just how
+well it scrubs.
+
+### Behaviour changes (read these)
+
+- **The working trail is private by default.** `.showtail/` now ignores itself in git, so
+  `git add .` can never publish your raw prompts, the AI's replies or your diffs. Existing
+  trails are repaired on the next run. A `pre-commit` / `pre-push` guard (installed
+  automatically) also refuses `git add -f` and an already-tracked trail; it blocks only on
+  its own refusal (exit `5`), so a missing or older `showtail` never stops a commit. If you
+  *want* the trail in git (a course repo), set `settings.commitTrail: true`. Educators who
+  rely on the GitHub Action or `verify`'s git-history check need that setting; see
+  [Stronger checks](docs/educators/classroom-workflow.md#stronger-checks-for-a-course-repo).
+- **Tool output is no longer captured.** What `cat .env` or `printenv` printed used to be
+  stored in the trail, both as text and in the structured `tool_result` events (`stdout`,
+  `stderr`, `content`). The command and the exit status are kept; the output is not.
+  Credential files (`.env*`, keys, `.ssh`/`.aws`, Terraform state, …) are never captured
+  (no diff, no hash, no content), including through a tool's own input.
+
+### New
+
+- **`showtail submit`** makes the report to hand in. It masks your own secret values (read
+  from your environment, `.env` files and credential files) in any encoding, removes known
+  formats, withholds any long random-looking token it does not recognise as ordinary text,
+  localises machine paths, then runs a **second, independent scan** and writes nothing if
+  it finds anything (exit `6`). Output: `showtail-submission/` with a signed manifest. It
+  prepares the trail exactly as `report` does and accepts `[path]` / `--project`.
+- **`showtail submit --pr`** posts a short summary (never the report) as a pull-request
+  comment. `--preview` shows the exact text and an approval code; `--approve <code>` posts
+  exactly that text, only while the submission still verifies. It says when the repo is
+  public, posts once, and never edits.
+- **`showtail verify-submission`** checks a submission is unchanged since it was signed
+  (integrity, not identity). The GitHub Action gains `mode: submission` to do this in CI.
+- **AI assistants ask first.** The skill and instructions for Claude Code, Codex, Copilot,
+  Copilot CLI and Antigravity now ask the student whether to add the PR summary (default
+  no), show the full text, and wait for an explicit yes. They resolve the project to a
+  stable trail ID first, like every other project control.
+
+### Fixed
+
+- **Redaction missed most real secrets.** `DB_PASSWORD=…`, `AWS_SECRET_ACCESS_KEY=…`,
+  `STRIPE_SECRET_KEY=…` and many provider formats (GitHub fine-grained, GitLab, Stripe
+  test/restricted, Hugging Face, npm, SendGrid, Twilio, DigitalOcean, Google OAuth, Azure,
+  Slack webhooks, basic auth) were not caught, an unterminated private-key block survived,
+  and passwords containing `:` or `@` leaked. `password=pass` was mangled instead of
+  redacted, and an allow-list entry matched by substring. A secret straddling the 64KB diff
+  cap escaped because redaction ran after truncation. Two rules were quadratic (a 1MB prompt
+  never finished). Your own secret values are now masked wherever they appear, whatever
+  their format.
+- **A forged object reference could read any file** (`sha256:../../etc/passwd`) when an
+  educator rendered a submitted trail. Only 64-hex digests resolve now, and symlinks are
+  refused.
+- **A prompt's first 24 characters were written, unredacted, into its fallback `sourceId`.**
+- Hardening: `git` calls ignore a repo's own `core.fsmonitor` (reading a student's repo can
+  no longer run the student's code) and no longer fail silently on a long history; the VS
+  Code extension's `binaryPath` is machine-scoped, ignores workspace settings, never runs a
+  program from inside the workspace and does nothing in an untrusted workspace; report
+  Markdown is no longer breakable by a diff containing a code fence; `report` and
+  `verify-submission` no longer wire the reader's own AI tools; the machine-wide ledger is
+  created owner-only.
+
+### What this does not do
+
+No scrubber is perfect. A low-entropy password typed in plain prose, with no label, that is
+not on your machine cannot be reliably found. If you pasted a real key into a prompt,
+**rotate it**: the provider already has it.
+
 ## 0.18.0 — Project-aware capture and reliable Codex sessions
 
 ### Added

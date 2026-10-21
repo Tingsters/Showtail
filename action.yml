@@ -21,6 +21,18 @@ inputs:
       Pin a tag for a stable grading gate.
     required: false
     default: "latest"
+  mode:
+    description: >-
+      What to verify. "trail" (default) checks a committed `.showtail/` trail (the course
+      repo must set `settings.commitTrail`). "submission" checks the signed, sanitised
+      `showtail-submission/` folder students commit by default.
+    required: false
+    default: "trail"
+  submission-dir:
+    description: >-
+      With `mode: submission`: the submission folder, relative to `path`.
+    required: false
+    default: "showtail-submission"
   fail-on-invalid:
     description: >-
       Fail the step when the trail does not verify. Set to "false" to report the
@@ -82,6 +94,8 @@ runs:
       env:
         INPUT_PATH: ${{ inputs.path }}
         INPUT_FAIL_ON_INVALID: ${{ inputs.fail-on-invalid }}
+        INPUT_MODE: ${{ inputs.mode }}
+        INPUT_SUBMISSION_DIR: ${{ inputs.submission-dir }}
       run: |
         # The runner already runs this with `bash --noprofile --norc -eo pipefail`,
         # so every command below must either succeed or handle its own failure —
@@ -108,6 +122,75 @@ runs:
           echo "::error::Showtail: path not found: $INPUT_PATH"
           exit 1
         }
+
+        # mode: submission — verify the signed, sanitised `showtail-submission/` folder
+        # instead of a committed trail. This is the check for the default (private-trail)
+        # workflow, where students commit the submission, not `.showtail/`.
+        if [ "$INPUT_MODE" = "submission" ]; then
+          sub_dir="${INPUT_SUBMISSION_DIR:-showtail-submission}"
+          sub_status=0
+          showtail verify-submission "$sub_dir" --json >"$json" 2>"$errlog" || sub_status=$?
+          if [ "$sub_status" -ne 0 ] && [ "$sub_status" -ne 3 ]; then
+            {
+              echo "## Showtail submission verification"
+              echo
+              echo "**\`showtail verify-submission\` could not run in \`$INPUT_PATH/$sub_dir\` (exit $sub_status).**"
+              echo
+              echo "Check that the submission folder is committed and the pinned \`version\` has"
+              echo "\`verify-submission\` (use \`latest\`)."
+              echo
+              echo '```'
+              cat "$errlog"
+              echo '```'
+            } >> "$summary"
+            cat "$errlog" >&2
+            echo "::error::Showtail: verify-submission could not run in '$INPUT_PATH/$sub_dir' (exit $sub_status)."
+            exit 1
+          fi
+          sub_ok=false
+          if command -v jq >/dev/null 2>&1; then
+            sub_ok=$(jq -r 'if .ok then "true" else "false" end' "$json" 2>/dev/null || true)
+          elif [ "$sub_status" -eq 0 ]; then
+            sub_ok=true
+          fi
+          [ "$sub_ok" = "true" ] || sub_ok=false
+          {
+            echo "ok=$sub_ok"
+            echo "checks-json<<SHOWTAIL_JSON_EOF"
+            cat "$json"
+            echo "SHOWTAIL_JSON_EOF"
+          } >> "$out"
+          {
+            echo "## Showtail submission verification"
+            echo
+            if [ "$sub_ok" = "true" ]; then
+              echo "**PASS — the submission is unchanged since it was signed.**"
+              echo
+              echo "> This shows the report files were not edited after \`showtail submit\`. It does"
+              echo "> not show who made them."
+            else
+              echo "**FAIL — the submission did not verify:**"
+              echo
+              if command -v jq >/dev/null 2>&1; then
+                jq -r '.problems[] | "- " + .' "$json"
+              else
+                echo '```json'
+                cat "$json"
+                echo '```'
+              fi
+            fi
+          } >> "$summary"
+          if [ "$sub_ok" = "true" ]; then
+            echo "Showtail: the submission verified."
+            exit 0
+          fi
+          if [ "$fail_on_invalid" = "false" ]; then
+            echo "::warning::Showtail: the submission did not verify (reported only; fail-on-invalid is false)."
+            exit 0
+          fi
+          echo "::error::Showtail: the submission did not verify — see the job summary."
+          exit 1
+        fi
 
         # `actions/checkout` defaults to fetch-depth: 1 — a shallow clone with
         # essentially no history. One of `verify`'s checks holds the journal

@@ -8,8 +8,8 @@ is easier to evaluate when students can show their process.
 - A **show your work tool** for coursework and projects.
 - A **hands-free** way to document your process: your prompts and edits are
   captured automatically as you work with AI.
-- A **local, file-based trail** that is easy to commit to git and easy for a
-  human to review.
+- A **local, file-based, private trail**, plus a sanitised report you can share
+  (see [Sharing your work safely](sharing.md)).
 - **Evidence of your process**, showing how you worked with AI to build the
   project.
 - **Team-aware.** On a group project, each student gets their own folder under
@@ -116,8 +116,12 @@ before it is even committed.
 
 **What is caught, and what is not.** The chain is unkeyed and local, so on its
 own it detects an *unwitting* edit, not a determined one. Git is what changes
-that — but only for a trail that is actually committed. Concretely, measured
-against a real trail:
+that, but only for a trail that is actually committed, which is **opt-in**: the
+working trail is private by default (`settings.commitTrail`), so the git check
+below applies to course repos that turn it on. What `showtail submit` hands in
+instead is protected by a signed manifest ([Sharing your work
+safely](sharing.md#checking-a-submission)), which shows a file was not edited
+after signing, not who made it. Concretely, measured against a real trail:
 
 | | Detected? |
 |---|---|
@@ -140,7 +144,8 @@ strong:
   prompt from one that was invented and appended with a correctly computed
   `prev`. Committing as you work narrows the window — a prompt appended today
   cannot claim to be from last week's commit — but it does not close it.
-- **No commits, no anchor.** A student who never commits `.showtail/`, or who
+- **No commits, no anchor.** Because the trail is private by default, this is the normal
+  case unless the repo opts in with `commitTrail`. A student who never commits `.showtail/`, or who
   commits it once at submission time, gets nothing from this check. `verify`
   says so rather than passing quietly, and so does the
   [GitHub Action](../educators/verify-in-ci.md) on a shallow checkout.

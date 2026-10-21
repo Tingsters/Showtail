@@ -253,7 +253,12 @@ program
 //     do — it must stay side-effect-free and honestly report "not set up yet").
 // The notice goes to stderr so it never pollutes a command's `--json` stdout. Once-only
 // and best-effort.
-//   - `guard` (runs from git hooks; it must stay fast and side-effect-free).
+//   - `guard` (runs from git hooks; it must stay fast and side-effect-free), and
+//   - `report` / `verify` / `verify-submission`: the review commands. An educator
+//     opening a student's repository runs these, and must not have their own AI tools
+//     silently wired up (user-scope hooks written into ~/.claude, ~/.codex, …) just
+//     for reading someone else's work. A trail only exists where capture was already
+//     running, so a student loses nothing by these skipping the bootstrap.
 const NO_BOOTSTRAP = new Set([
   'hook',
   'setup',
@@ -266,6 +271,8 @@ const NO_BOOTSTRAP = new Set([
   'update',
   'move',
   'guard',
+  'report',
+  'verify-submission',
 ]);
 let pendingUpdateNotice: Promise<string | null> | null = null;
 program.hook('preAction', async (_thisCommand, actionCommand) => {

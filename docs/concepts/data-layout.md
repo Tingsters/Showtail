@@ -29,7 +29,8 @@ what lets two students merge their trails through git without a conflict.
     report-*-<timestamp>.md            # Markdown source each HTML is rendered from
     report-*-<timestamp>.json          # machine-readable JSON
   .gitattributes                 # marks the trail binary so EOL rewrites can't break content hashes
-  .gitignore                     # ignores state.json and reports/
+  .gitignore                     # ignores EVERYTHING here (the working trail is private); only with settings.commitTrail
+                                 # does it ignore just state.json/reports/diag
 ```
 
 Every work path recorded inside the trail is **relative to the project root**, and the
