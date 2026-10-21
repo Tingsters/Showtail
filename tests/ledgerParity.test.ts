@@ -196,7 +196,10 @@ describe('tool_call/recap projection parity', () => {
         'tool_use',
         'tool_result',
       ]);
-      expect(events[2]).toMatchObject({ stdout: 'ok\n', stderr: '', exitCode: 0 });
+      // The exit status is kept; the command's output is not (it is where secrets live).
+      expect(events[2]).toMatchObject({ exitCode: 0 });
+      expect(events[2]).not.toHaveProperty('stdout');
+      expect(events[2]).not.toHaveProperty('stderr');
     } finally {
       cleanup(dir);
       cleanup(home);

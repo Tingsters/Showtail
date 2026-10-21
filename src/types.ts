@@ -372,6 +372,12 @@ export interface Config {
     /** Capture non-edit tool calls (Bash, Read, Grep, ...) and their results. Default on. */
     captureToolCalls?: boolean;
     /**
+     * Keep a tool call's *output* (`stdout`, `stderr`, result content) in the trail. Default
+     * off: output is where secrets live (`cat .env`, `printenv`), so only the command and
+     * the exit status are recorded. Turning it on still redacts, but redaction is best-effort.
+     */
+    captureToolOutput?: boolean;
+    /**
      * Minutes of inactivity after which an open session is automatically closed
      * (stamped at its last event). Defaults to 60 when absent.
      */
