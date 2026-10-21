@@ -6,6 +6,7 @@ import {
   extractAntigravityEditedFiles,
   extractAgyWorkspacePaths,
   extractApplyPatchFiles,
+  extractCopilotCliApplyPatchEdits,
   extractCopilotCliEditedFiles,
   extractCopilotCliPrompt,
   extractCopilotCliSessionId,
@@ -481,5 +482,36 @@ describe('Copilot CLI extractors', () => {
     expect(extractCopilotCliEditedFiles({ toolArgs: 'not json' })).toEqual([]);
     expect(extractCopilotCliEditedFiles({})).toEqual([]);
     expect(extractCopilotCliSuggestedCode({})).toBeUndefined();
+  });
+
+  test('apply_patch: toolArgs is a raw envelope string → per-file edits with diffs', () => {
+    // Real shape (verified against Copilot CLI 1.0.83 session logs): apply_patch's
+    // toolArgs is the envelope STRING itself, not a JSON object.
+    const env = '*** Begin Patch\n*** Add File: src/a.py\n+print("hi")\n*** End Patch\n';
+    const edits = extractCopilotCliApplyPatchEdits({ cwd: '/repo', toolArgs: env });
+    expect(edits).toHaveLength(1);
+    expect(edits[0]!.file).toBe('src/a.py');
+    expect(edits[0]!.diff).toContain('+ print("hi")');
+    // Absolute envelope paths are made repo-relative against cwd.
+    const abs = '*** Begin Patch\n*** Add File: /repo/src/b.py\n+x = 1\n*** End Patch\n';
+    expect(
+      extractCopilotCliApplyPatchEdits({ cwd: '/repo', toolArgs: abs })[0]!.file,
+    ).toBe('src/b.py');
+  });
+
+  test('apply_patch extractor handles several files and a deletion', () => {
+    const env =
+      '*** Begin Patch\n*** Update File: a.py\n@@\n-old\n+new\n*** Delete File: b.py\n*** End Patch\n';
+    const edits = extractCopilotCliApplyPatchEdits({ cwd: '/repo', toolArgs: env });
+    expect(edits.map((e) => e.file).sort()).toEqual(['a.py', 'b.py']);
+  });
+
+  test('apply_patch extractor ignores non-envelope toolArgs', () => {
+    expect(
+      extractCopilotCliApplyPatchEdits({
+        toolArgs: JSON.stringify({ path: 'a.py', old_str: 'x', new_str: 'y' }),
+      }),
+    ).toEqual([]);
+    expect(extractCopilotCliApplyPatchEdits({})).toEqual([]);
   });
 });

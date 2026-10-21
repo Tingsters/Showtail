@@ -25,13 +25,15 @@ describe('copilot-cli assets stay in sync with the single source of truth', () =
     const json = copilotCliHooksJson();
     // Copilot CLI expects a top-level version field on hook files.
     expect(json).toContain('"version": 1');
-    // PostToolUse is matched to the edit tools.
+    // postToolUse is matched to the edit tools, including apply_patch.
     expect(json).toContain('"matcher"');
+    expect(json).toContain('apply_patch');
 
     const commands = Object.values(COPILOT_CLI_HOOK_EVENTS).flatMap((groups) =>
       groups.flatMap((g) => g.hooks.map((h) => h.command)),
     );
-    expect(commands.length).toBe(4);
+    // sessionStart, userPromptSubmitted, postToolUse, agentStop, sessionEnd.
+    expect(commands.length).toBe(5);
     for (const c of commands) {
       expect(c).toContain('showtail hook');
       expect(c).toContain('--tool copilot-cli');

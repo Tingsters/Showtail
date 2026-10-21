@@ -30,6 +30,7 @@ import {
   readCopilotCliSessionFile,
 } from '../core/copilotCliTranscript.ts';
 import {
+  extractCopilotCliApplyPatchEdits,
   extractCopilotCliEditedFiles,
   extractCopilotCliPrompt,
   extractCopilotCliSessionId,
@@ -153,6 +154,17 @@ export const copilotCliPlugin: EnvironmentPlugin = {
       // match). Best-effort: a hook must never crash the host session.
       parse(raw) {
         const p = raw as CopilotCliHookPayload;
+        // `apply_patch` carries a Codex-style envelope with per-file diffs; prefer the
+        // rich `edits` path (clean diffs + deletions) when present.
+        const applyPatch = extractCopilotCliApplyPatchEdits(p);
+        if (applyPatch.length > 0) {
+          return {
+            nativeSessionId: extractCopilotCliSessionId(p),
+            prompt: extractCopilotCliPrompt(p),
+            editedFiles: applyPatch.map((e) => e.file),
+            edits: applyPatch,
+          };
+        }
         return {
           nativeSessionId: extractCopilotCliSessionId(p),
           prompt: extractCopilotCliPrompt(p),
