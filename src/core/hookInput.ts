@@ -760,3 +760,19 @@ export function extractCopilotCliSuggestedCode(
   }
   return undefined;
 }
+
+/**
+ * Per-file edits from a Copilot CLI `apply_patch` postToolUse payload. Copilot's
+ * `apply_patch` delivers its `toolArgs` as a RAW envelope string (not a JSON object) —
+ * the same `*** Begin Patch … *** Add/Update/Move/Delete File: … *** End Patch` format
+ * Codex uses — so we reuse {@link editsFromEnvelope} for clean per-file +/- diffs (and
+ * deletions). Returns [] when `toolArgs` isn't an apply_patch envelope.
+ */
+export function extractCopilotCliApplyPatchEdits(p: CopilotCliHookPayload): EditedFile[] {
+  const a = p.toolArgs;
+  if (typeof a !== 'string') return [];
+  if (!/\*\*\* (Begin Patch|Add File:|Update File:|Move File:|Delete File:)/.test(a)) {
+    return [];
+  }
+  return editsFromEnvelope(a, (path) => normalizeHookPath(path, p.cwd));
+}

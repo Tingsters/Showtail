@@ -106,18 +106,22 @@ export function findCopilotCliExecutable(): string | null {
  * (camelCase — see the file header) map onto Showtail's subcommands like Codex/Gemini:
  *  - sessionStart        → session-start
  *  - userPromptSubmitted → user-prompt (fires when the student submits a prompt)
- *  - postToolUse         → post-edit   (matched to the file-editing tool)
- *  - sessionEnd          → stop        (Copilot has no per-turn Stop; sessionEnd is
- *                                       the end-of-session event, so the AI-reply
- *                                       reconcile runs from events.jsonl there)
+ *  - postToolUse         → post-edit   (matched to the file-editing tools)
+ *  - agentStop           → stop        (fires when the main agent finishes a TURN, so
+ *                                       AI replies reconcile per turn from the
+ *                                       transcript — not only at session close)
+ *  - sessionEnd          → stop        (end-of-session backstop; the generic reconcile
+ *                                       dedups by sourceId, so the overlap is harmless)
  * Every command is tagged `--tool copilot-cli` so events are attributed correctly.
  *
- * `postToolUse` matches Copilot's edit tool. Verified against real session logs:
- * the file-editing tool is `edit` (args `{path, old_str, new_str}`); `view` is a
- * read (args `{path}` only) and must NOT match. The matcher is a regex against the
- * tool name; `create`/`write` are kept defensively for new-file variants. The
- * post-edit handler is also defensive (it only records a file when the tool's args
- * carry an edit signal), so a missed/ignored matcher never snapshots a mere read.
+ * `postToolUse` matches Copilot's file-editing tools. Per GitHub's hooks reference and
+ * real session logs the edit tools are `edit` (`{path, old_str, new_str}`), `create`,
+ * `str_replace_editor`, and `apply_patch` (a Codex-style envelope STRING), with `write` kept
+ * defensively for variants; `view` is a
+ * read and must NOT match. The matcher is a regex (`^(?:PATTERN)$`) against the tool
+ * name. The post-edit handler is also defensive (it records a file only when the args
+ * carry an edit signal / patch envelope), so a missed/ignored matcher never snapshots a
+ * mere read.
  */
 export const COPILOT_CLI_HOOK_EVENTS: HookEvents = {
   sessionStart: [
@@ -136,9 +140,12 @@ export const COPILOT_CLI_HOOK_EVENTS: HookEvents = {
   ],
   postToolUse: [
     {
-      matcher: 'edit|create|write|str_replace_editor',
+      matcher: 'edit|create|write|str_replace_editor|apply_patch',
       hooks: [{ type: 'command', command: 'showtail hook post-edit --tool copilot-cli' }],
     },
+  ],
+  agentStop: [
+    { hooks: [{ type: 'command', command: 'showtail hook stop --tool copilot-cli' }] },
   ],
   sessionEnd: [
     { hooks: [{ type: 'command', command: 'showtail hook stop --tool copilot-cli' }] },

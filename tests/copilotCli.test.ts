@@ -38,14 +38,16 @@ describe('copilot-cli install / uninstall', () => {
       expect(body).toContain("applyTo: '**'");
       expect(copilotCliHooksInstalledAt(target.hooksFile)).toBe(true);
 
-      // The four Copilot lifecycle events are present (Copilot's real camelCase
-      // event names — not Claude's PascalCase), with the version envelope.
+      // The Copilot lifecycle events are present (Copilot's real camelCase event
+      // names — not Claude's PascalCase), with the version envelope. agentStop is the
+      // per-turn reply signal; sessionEnd is the end-of-session backstop.
       const hooks = JSON.parse(readFileSync(target.hooksFile, 'utf8'));
       expect(hooks.version).toBe(1);
       for (const event of [
         'sessionStart',
         'userPromptSubmitted',
         'postToolUse',
+        'agentStop',
         'sessionEnd',
       ]) {
         expect(Array.isArray(hooks.hooks[event])).toBe(true);
