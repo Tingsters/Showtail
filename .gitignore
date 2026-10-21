@@ -19,7 +19,8 @@ bun.lockb
 Thumbs.db
 *.log
 
-# NOTE: .showtail/ is intentionally NOT ignored.
-# Showtail's whole purpose is a reviewable, committable "show your work" trail.
-# See the Privacy section of the README before committing it for sensitive work.
+# Showtail's own working trail. It holds raw prompts, AI replies and diffs, so it is private
+# (Showtail ignores it itself by default; this repo no longer opts in via commitTrail).
+# Share work with `showtail submit` instead. See docs/concepts/sharing.md.
+.showtail/
 .aider*
