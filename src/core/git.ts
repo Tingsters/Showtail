@@ -9,9 +9,29 @@ const execFileAsync = promisify(execFile);
  * instead of an error. Showtail must work fine without git.
  */
 
+/**
+ * Settings applied to every git call. Showtail runs git inside a repository that
+ * may have come from someone else (an educator opening a submission), and a repo's
+ * own config can name a program for git to run: `core.fsmonitor` is executed by
+ * `git status` and friends. Turn that off, and refuse the external-command remote
+ * helper, so reading a student's repo can never run the student's code.
+ */
+const SAFE_GIT_CONFIG = ['-c', 'core.fsmonitor=false', '-c', 'protocol.ext.allow=never'];
+
+/**
+ * Output cap for a git call. Node's default is 1MB, and a long `git log --numstat`
+ * exceeds it: the call throws, every caller here treats a throw as "git said
+ * nothing", and a long history then reads as "not committed yet". 256MB is far above
+ * any real history while still bounded.
+ */
+const GIT_MAX_BUFFER = 256 * 1024 * 1024;
+
 async function runGit(args: string[], cwd: string): Promise<string | undefined> {
   try {
-    const { stdout } = await execFileAsync('git', args, { cwd });
+    const { stdout } = await execFileAsync('git', [...SAFE_GIT_CONFIG, ...args], {
+      cwd,
+      maxBuffer: GIT_MAX_BUFFER,
+    });
     return stdout.trim();
   } catch {
     return undefined;
@@ -25,7 +45,7 @@ async function runCmd(
   cwd: string,
 ): Promise<string | undefined> {
   try {
-    const { stdout } = await execFileAsync(cmd, args, { cwd });
+    const { stdout } = await execFileAsync(cmd, args, { cwd, maxBuffer: GIT_MAX_BUFFER });
     return stdout.trim();
   } catch {
     return undefined;

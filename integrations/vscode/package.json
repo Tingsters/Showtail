@@ -21,6 +21,13 @@
     "onStartupFinished",
     "onLanguageModelTool:showtail_project_control"
   ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": "limited",
+      "description": "Showtail runs the showtail program on file saves, so it does nothing in a workspace you have not trusted.",
+      "restrictedConfigurations": ["showtail.binaryPath"]
+    }
+  },
   "contributes": {
     "chatParticipants": [
       {
@@ -120,6 +127,8 @@
         "showtail.binaryPath": {
           "type": "string",
           "default": "showtail",
+          "scope": "machine",
+          "markdownDescription": "Path to the showtail CLI (on PATH by default). Machine/user setting only: a project's own `.vscode/settings.json` cannot change it, because the extension runs this program on every save.",
           "description": "Path to the showtail CLI (on PATH by default)."
         },
         "showtail.captureOnSave": {

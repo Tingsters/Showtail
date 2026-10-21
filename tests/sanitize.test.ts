@@ -270,3 +270,39 @@ describe('placeholders never create false findings', () => {
     );
   });
 });
+
+describe('fallback source ids never carry the start of a prompt in the clear', () => {
+  test('a prompt that opens with a key leaves no key in its sourceId', async () => {
+    const { parseClaudeTranscript } = await import('../src/core/claudeCode.ts');
+    const dir = makeTempDir();
+    try {
+      const key = 'sk-abcdefghijklmnopqrstuvwxyz1234';
+      // No `uuid` on the line, so the id falls back to the leading text.
+      const line = JSON.stringify({
+        type: 'user',
+        timestamp: '2026-10-20T12:00:00.000Z',
+        message: { role: 'user', content: `${key} please help me with this` },
+      });
+      const { messages } = parseClaudeTranscript(line + '\n', dir);
+      const m = messages.find((x) => x.role === 'user');
+      expect(m).toBeDefined();
+      expect(m!.sourceId).not.toContain('sk-abcdef');
+      expect(m!.sourceId).toContain('redacted');
+
+      // Ordinary text keeps the id it always had (re-imports still dedupe).
+      const plain = JSON.stringify({
+        type: 'user',
+        timestamp: '2026-10-20T12:00:01.000Z',
+        message: { role: 'user', content: 'how do I write a parser' },
+      });
+      const p = parseClaudeTranscript(plain + '\n', dir).messages.find(
+        (x) => x.role === 'user',
+      );
+      expect(p!.sourceId).toBe(
+        'cc:user:how do I write a parser'.slice(0, 'cc:user:'.length + 24),
+      );
+    } finally {
+      cleanup(dir);
+    }
+  });
+});

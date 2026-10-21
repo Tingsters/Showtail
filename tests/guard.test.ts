@@ -1,6 +1,13 @@
 import { describe, expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { delimiter, join } from 'node:path';
 import { runGuardCheck } from '../src/commands/guard.ts';
 import { ensureInitialized, ensureTrailIgnore, runInit } from '../src/commands/init.ts';
@@ -336,6 +343,37 @@ describe('committing a submission', () => {
       await expect(runGuardCheck({ staged: true, cwd: dir })).rejects.toThrow(
         /refusing to commit showtail-submission\/.*changed after signing/,
       );
+    } finally {
+      cleanup(dir);
+    }
+  });
+});
+
+describe('reading an untrusted repository', () => {
+  test('a repo whose config names a core.fsmonitor program does not run it', async () => {
+    const dir = makeGitProject();
+    try {
+      const marker = join(dir, 'PWNED');
+      // The classic attack: git status runs whatever core.fsmonitor points at.
+      const hook = join(dir, 'evil.sh');
+      writeFileSync(
+        hook,
+        `#!/bin/sh\necho ran > "${marker.split(String.fromCharCode(92)).join('/')}"\nexit 0\n`,
+      );
+      chmodSync(hook, 0o755);
+      git(dir, 'config', 'core.fsmonitor', hook.split(String.fromCharCode(92)).join('/'));
+      // Sanity: plain `git status` really does run it here. (If this git ignores the
+      // setting, there is nothing to defend against and the test has nothing to prove.)
+      spawnSync('git', ['status'], { cwd: dir });
+      if (!existsSync(marker)) return;
+      rmSync(marker);
+      const { changedFiles, isGitRepo } = await import('../src/core/git.ts');
+      expect(await isGitRepo(dir)).toBe(true);
+      await changedFiles(dir);
+      expect(existsSync(marker)).toBe(false);
+      // The guard's own git calls are hardened the same way.
+      await stagedPaths(dir);
+      expect(existsSync(marker)).toBe(false);
     } finally {
       cleanup(dir);
     }

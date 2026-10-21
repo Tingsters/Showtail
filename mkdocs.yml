@@ -68,6 +68,7 @@ nav:
       - Concepts & events: concepts/how-it-works.md
       - Data layout: concepts/data-layout.md
       - Privacy & redaction: concepts/privacy.md
+      - Sharing your work safely: concepts/sharing.md
       - Example report: concepts/example-report.md
   - Integrations:
       - Overview & matrix: integrations/index.md

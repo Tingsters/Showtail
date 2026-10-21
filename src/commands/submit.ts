@@ -194,6 +194,20 @@ export async function runSubmit(options: SubmitOptions = {}): Promise<SubmitOutc
   return outcome;
 }
 
+/** Labels for personal data, which is withheld but is not a credential to rotate. */
+const PII_LABELS = new Set(['email', 'phone', 'ssn', 'credit-card']);
+
+/**
+ * True when anything that could have been a credential was withheld. Withholding keeps
+ * it out of the report, but not out of the AI provider's hands: if it was a real key the
+ * student pasted into a prompt, it has to be rotated.
+ */
+export function withheldSecrets(withheld: SubmissionManifest['withheld']): boolean {
+  return Object.entries(withheld.byLabel).some(
+    ([label, n]) => n > 0 && !PII_LABELS.has(label),
+  );
+}
+
 function report(outcome: SubmitOutcome, options: SubmitOptions, root: string): void {
   const { dir, manifest } = outcome;
   if (options.json) {
@@ -207,6 +221,7 @@ function report(outcome: SubmitOutcome, options: SubmitOptions, root: string): v
       comment: outcome.comment ?? null,
       approvalCode: outcome.comment ? approvalCode(outcome.comment) : null,
       posted: outcome.posted ?? null,
+      rotateAdvice: withheldSecrets(manifest.withheld),
     });
     return;
   }
@@ -217,6 +232,16 @@ function report(outcome: SubmitOutcome, options: SubmitOptions, root: string): v
     `  Sanitised: ${manifest.withheld.total} value(s) withheld, then re-checked by an independent scan (clean).`,
   );
   console.log(`  Fingerprint: sha256:${manifest.files['report.html']}`);
+  if (withheldSecrets(manifest.withheld)) {
+    console.log('');
+    console.log(
+      'Something that looked like a key or password was removed from your report.',
+    );
+    console.log(
+      'If it was a REAL one you pasted into a prompt, rotate it now: the AI provider',
+    );
+    console.log('already received it, whatever Showtail hides afterwards.');
+  }
   console.log('');
   console.log('Hand in report.html as you would any assignment.');
   console.log(

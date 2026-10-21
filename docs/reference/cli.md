@@ -96,6 +96,8 @@ showtail verify --project "<trail-id>" --json
 | `capabilities` | The same read-only snapshot as `status`, plus agent-oriented commands and next-action guidance. Flags: `--json`, `--tool <tool>`. |
 | `report [path]` | Generate a shareable report for the current or named project. `--project <selector>` resolves and locks the target before any write. Default command JSON is compact and returns the selected `trailId`, root, report paths, summary, and diagnostic counts; `--verbose-json` includes full routing and relocation arrays. Ambiguous/conflicting selection exits without creating a report. Other report, recovery, author/team, narration, sync, and open flags are unchanged. |
 | `verify [path]` | Run integrity checks on the current or named trail. `--project <selector>` never falls back to cwd, and success JSON includes the selected `trailId` and root. Default JSON reports compact check counts; `--verbose-json` includes every check detail. Exits `3` if an integrity check fails. Flags: `--project <selector>`, `--json`, `--verbose-json`. |
+| `submit [path]` | Make the **sanitised report to hand in**: your own secrets, known key formats, passwords, personal data and any long random-looking token are removed, machine paths become `~`/`<project>`, then an independent second scan checks the result. If that scan finds anything, nothing is written (exit `6`). Writes `showtail-submission/` (`report.html`, `report.md`, `manifest.json`, `manifest.sig`; the manifest is signed so edits are detectable). It prepares the trail exactly as `report` does and takes the same project selectors (`[path]`, `--project`). `--pr [number\|url]` also posts a short **summary** (never the report) as a pull-request comment via `gh`: `--preview` prints the exact text and an approval code and posts nothing; `--approve <code>` posts exactly that stored text, only while the submission still verifies; in a terminal it simply asks y/N. A comment is posted once and never edited. Flags: `--author <slug>`, `--team`, `--title <text>`, `--ai <collapsed\|full\|off>`, `--no-ai`, `--open`, `--json`, `--no-sync`, `--project <selector>`, `--pr`, `--preview`, `--approve <code>`. See [Sharing your work safely](../concepts/sharing.md). |
+| `verify-submission [dir]` | Check that a submission folder (default `./showtail-submission`) is unchanged since it was signed, and scan its text again. Integrity only: it cannot say who made it. Exits `3` if it does not verify. Flags: `--json`. |
 | `trace <file>` | Show every snapshot and related event for a file. Flags: `--format <text\|json>` (default `text`). |
 
 !!! note "Maintainer command"
@@ -246,7 +248,12 @@ checkout (`fetch-depth: 0`); see
 | `0` | Success. |
 | `1` | General error. |
 | `2` | No single project could be selected, the requested folder does not exist, captured work is ambiguous, or a relocation requires review. Nothing is created or guessed. |
-| `3` | `verify` found a problem with the trail. |
+| `3` | `verify` or `verify-submission` found a problem. |
 | `4` | `report [path]` targeted a folder with no trail and no path or content-lineage match in captured work. Nothing is created. |
+| `5` | The git guard refused a commit or push that would carry the private working trail (or an edited submission). |
+| `6` | `submit` was blocked: the final scan still found something that looks like a secret. Nothing was written. |
+
+!!! note "Hidden: `guard`"
+    `showtail guard check|install|uninstall` is the git guard behind the `pre-commit` and `pre-push` hooks Showtail installs. It refuses to commit or push the private `.showtail/` working trail. It is installed automatically and blocks only on its own refusal (exit `5`); a missing or older `showtail` never blocks a commit.
 
 (A `ShowtailError` may set its own specific code; agents can branch on these.)

@@ -136,8 +136,10 @@ untracked target before its trail exists), and `reportPath` identifies the repor
 give you. The pathless `showtail status --json --tool <tool>` command used at agent startup remains
 a capture-mode probe, not a project report request.
 
-Sessions open and close on their own — there's nothing to end by hand. Commit
-`.showtail/` with your work so your educator can review it.
+Sessions open and close on their own — there's nothing to end by hand. Your trail
+stays private on your machine (it is never committed). When you finish, run
+`showtail submit` and hand in the sanitised report it writes. See
+[Sharing your work safely](../concepts/sharing.md).
 
 !!! tip "Not using a tool with hooks?"
     ChatGPT and Gemini can't run commands on your machine, so they are

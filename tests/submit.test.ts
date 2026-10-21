@@ -450,3 +450,52 @@ describe('the real CLI', () => {
     }
   });
 });
+
+describe('report Markdown cannot be broken out of', () => {
+  test('a diff containing a code fence gets a longer fence, and the report still renders', async () => {
+    const { fenceFor } = await import('../src/core/report/markdown.ts');
+    expect(fenceFor('plain')).toBe('```');
+    expect(fenceFor('has ``` inside')).toBe('````');
+    expect(fenceFor('a ```` b ``` c')).toBe('`````');
+
+    const { renderMarkdown, renderHtml } = await import('../src/core/report.ts');
+    const { dir, paths } = await leakyProject();
+    try {
+      const data = buildReportData(paths);
+      data.turns[0]!.codeChanges.push({
+        path: 'notes.md',
+        timestamp: data.turns[0]!.prompt.timestamp,
+        diff: '+```\n+![x](https://evil.example/track?q=1)\n+```\n+still inside the diff',
+        diffLines: 4,
+      });
+      const md = renderMarkdown(data);
+      expect(md).toContain('````diff');
+      // The injected image sits between our fences, so it is code, not an <img>.
+      const html = renderHtml(data);
+      expect(html).not.toContain('<img src="https://evil.example');
+    } finally {
+      cleanup(dir);
+    }
+  });
+});
+
+describe('rotate advice', () => {
+  test('is shown when something key-like was withheld, and not for personal data alone', async () => {
+    const { withheldSecrets } = await import('../src/commands/submit.ts');
+    expect(withheldSecrets({ total: 1, byLabel: { 'opaque-token': 1 } })).toBe(true);
+    expect(withheldSecrets({ total: 1, byLabel: { 'api-key': 1 } })).toBe(true);
+    expect(withheldSecrets({ total: 2, byLabel: { email: 1, phone: 1 } })).toBe(false);
+    expect(withheldSecrets({ total: 0, byLabel: {} })).toBe(false);
+
+    const { dir } = await leakyProject();
+    try {
+      const { out } = await quiet(() => runSubmit({ cwd: dir, sync: false }));
+      expect(out).toContain('rotate it now');
+      expect(out).toContain('AI provider');
+      const json = await quiet(() => runSubmit({ cwd: dir, sync: false, json: true }));
+      expect(json.out).toContain('"rotateAdvice": true');
+    } finally {
+      cleanup(dir);
+    }
+  });
+});

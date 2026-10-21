@@ -56,7 +56,8 @@ export function violationMessage(violations: string[], verb: 'commit' | 'push'):
 }
 
 async function git(args: string[], cwd: string): Promise<string> {
-  const { stdout } = await execFileAsync('git', args, {
+  // Same hardening as core/git.ts: a repo's own config must not be able to run a program.
+  const { stdout } = await execFileAsync('git', ['-c', 'core.fsmonitor=false', ...args], {
     cwd,
     maxBuffer: 256 * 1024 * 1024,
   });

@@ -67,6 +67,17 @@ function planTitle(text: string): string {
 }
 
 /**
+ * A code fence longer than any run of backticks inside `text`. A diff or prompt that
+ * itself contains a fence (a Markdown sample, or text crafted to) would otherwise
+ * close ours early and spill the rest of the report into the page.
+ */
+export function fenceFor(text: string): string {
+  let longest = 0;
+  for (const run of text.match(/`+/g) ?? []) longest = Math.max(longest, run.length);
+  return '`'.repeat(Math.max(3, longest + 1));
+}
+
+/**
  * Render a report as student- and educator-friendly Markdown. When
  * `turnsPlaceholder` is set, the exchanges are emitted as a single placeholder
  * line (swapped for interactive HTML cards by {@link renderHtml}); otherwise the
@@ -344,7 +355,8 @@ function turnMarkdown(lines: string[], turn: Turn, ai: AiMode, author?: string):
       const link = `[\`${code.path}\`](${fileHref(code.linkPath ?? code.path)})`;
       if (code.diff) {
         lines.push(`_Suggested code — ${link}${stat}:_`, '');
-        lines.push('```diff', code.diff, '```', '');
+        const fence = fenceFor(code.diff);
+        lines.push(`${fence}diff`, code.diff, fence, '');
       } else {
         // No diff captured — name the changed file without promising code below it.
         lines.push(`_Changed file — ${link}${stat}._`, '');

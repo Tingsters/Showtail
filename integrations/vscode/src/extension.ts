@@ -3,7 +3,7 @@ import { execFile, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { delimiter, dirname, isAbsolute, join, resolve as resolvePath, sep } from 'node:path';
 import { promisify } from 'node:util';
 import {
   ProjectControlController,
@@ -38,11 +38,44 @@ let output: vscode.OutputChannel;
 let extensionSessionId = `vscode-extension-${randomUUID()}`;
 let antigravitySaveContext: ExtensionHookContext | undefined;
 
-/** The configured `showtail` binary (on PATH by default). */
-function showtailBin(): string {
-  return (
-    vscode.workspace.getConfiguration('showtail').get<string>('binaryPath') || 'showtail'
+/**
+ * Find `name` on PATH, skipping any directory inside an open workspace. Windows
+ * resolves a bare command name against the current directory first, and this
+ * extension runs `showtail` with the workspace as its cwd, so a repository that
+ * ships its own `showtail.exe` would otherwise be run on every save. Only real
+ * executables are considered on Windows (`.cmd`/`.bat` need a shell); if nothing
+ * is found the bare name is used, as before.
+ */
+function resolveOnPath(name: string): string | undefined {
+  const folders = (vscode.workspace.workspaceFolders ?? []).map((f) =>
+    resolvePath(f.uri.fsPath).toLowerCase(),
   );
+  const exts = process.platform === 'win32' ? ['.exe', '.com'] : [''];
+  for (const dir of (process.env.PATH ?? process.env.Path ?? '').split(delimiter)) {
+    if (!dir || dir === '.') continue;
+    const abs = resolvePath(dir);
+    const lower = abs.toLowerCase();
+    if (folders.some((w) => lower === w || lower.startsWith(w + sep))) continue;
+    for (const ext of exts) {
+      const candidate = join(abs, name + ext);
+      if (existsSync(candidate)) return candidate;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * The `showtail` program to run. `showtail.binaryPath` is a machine-scoped setting (a
+ * project's own settings cannot change it). A bare name is resolved from PATH,
+ * never from inside the workspace.
+ */
+function showtailBin(): string {
+  const configured =
+    vscode.workspace.getConfiguration('showtail').get<string>('binaryPath') || 'showtail';
+  if (isAbsolute(configured) || configured.includes('/') || configured.includes('\\')) {
+    return configured;
+  }
+  return resolveOnPath(configured) ?? configured;
 }
 
 function processOutput(value: unknown): string {
@@ -52,6 +85,11 @@ function processOutput(value: unknown): string {
 
 /** Run the showtail CLI; never throw — capture must never disrupt the editor. */
 async function runShowtailResult(args: string[], cwd: string): Promise<CliResult> {
+  // This runs a program with the workspace as its cwd: never in a workspace the user
+  // has not trusted.
+  if (!vscode.workspace.isTrusted) {
+    return { stdout: '', stderr: 'Showtail does nothing in an untrusted workspace.', exitCode: 1 };
+  }
   try {
     const { stdout, stderr } = await execFileAsync(showtailBin(), args, { cwd });
     return {
@@ -100,6 +138,10 @@ function runShowtailStdin(
   input: string,
 ): Promise<string | undefined> {
   return new Promise((resolve) => {
+    if (!vscode.workspace.isTrusted) {
+      resolve(undefined);
+      return;
+    }
     try {
       const cp = spawn(showtailBin(), args, { cwd });
       let out = '';

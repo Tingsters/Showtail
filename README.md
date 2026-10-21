@@ -6,11 +6,11 @@
 
 **Show your work.** Showtail keeps a clear record of how you built a project with AI: the prompts you sent and the files you changed along the way. It captures this **automatically** as you work, so the trail builds itself.
 
-Showtail writes resolved work to a plain `.showtail/` folder inside your project; work that does not yet have one clear project waits in a machine-local inbox. There are no accounts, no cloud service, and no telemetry. It is just local files that you and your educator can open, review, and commit with the rest of your work. Interactive commands may make a quiet, daily request for public GitHub release metadata so Showtail can mention an available update; no trail or project data is sent, and the check can be disabled.
+Showtail writes resolved work to a plain `.showtail/` folder inside your project; work that does not yet have one clear project waits in a machine-local inbox. There are no accounts, no cloud service, and no telemetry. It is just local files, and they stay **private**: `.showtail/` ignores itself in git so a plain `git add .` can never publish your prompts, and what you hand in is a separate, sanitised report from `showtail submit`. Interactive commands may make a quiet, daily request for public GitHub release metadata so Showtail can mention an available update; no trail or project data is sent, and the check can be disabled.
 
 ```bash
 # Install (below), then just work — your prompts and edits are captured automatically.
-showtail report    # when you're done: generate the report for your educator
+showtail submit    # when you're done: a sanitised report to hand in (secrets removed, then re-checked)
 ```
 
 **There is no setup step.** Installing turns tracking on and connects the AI tools it can
@@ -35,13 +35,14 @@ and `showtail setup --off`.
 - [How it works](https://tingsters.github.io/Showtail/concepts/how-it-works/) — the event model and data layout
 - [CLI reference](https://tingsters.github.io/Showtail/reference/cli/) — every command and flag
 - [Privacy & redaction](https://tingsters.github.io/Showtail/concepts/privacy/) — what's captured, what's scrubbed
+- [Sharing your work safely](https://tingsters.github.io/Showtail/concepts/sharing/) — `submit`, pull-request summaries, and what is checked
 - [For educators](https://tingsters.github.io/Showtail/educators/classroom-workflow/) — running this in a class
 
 ## What Showtail is
 
 - A **show your work tool** for coursework and projects — your prompts and edits, captured automatically as you work with AI.
-- A **local, file-based trail** that is easy to commit to git and easy for a human to review.
-- **Team-aware**: each student gets their own folder under one shared `.showtail/`, so trails merge through git without conflicts.
+- A **local, private, file-based trail** and a sanitised report that is safe to share.
+- **Team-aware**: each student gets their own folder under `.showtail/`; a course repo can opt in to committing it (`settings.commitTrail`) so trails merge through git without conflicts.
 
 It is **not** an AI detector, **not** surveillance, **not** a cloud service, and **not** a grading tool — it produces a report so people can review the work, not judge it. [Read more →](https://tingsters.github.io/Showtail/concepts/how-it-works/)
 
