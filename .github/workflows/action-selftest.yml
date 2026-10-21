@@ -48,6 +48,12 @@ jobs:
           cd fixture
           printf 'def solve(items, cap):\n    return 0\n' > solver.py
           bun run ../src/cli.ts track .
+          # The working trail is private by default (it ignores itself in git). This
+          # fixture stands in for a course repo that opts in to committing it, which is
+          # what makes the trail verifiable, so opt in and let `track` repair the ignore file.
+          jq '.settings.commitTrail = true' .showtail/config.json > .showtail/config.json.tmp
+          mv .showtail/config.json.tmp .showtail/config.json
+          bun run ../src/cli.ts track .
           bun run ../src/cli.ts log -t prompt -x 'help me start a knapsack solver'
           bun run ../src/cli.ts artifact solver.py
           bun run ../src/cli.ts log -t prompt -x 'now add memoization'
