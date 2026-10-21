@@ -1,6 +1,7 @@
 /** Durable storage for the provider-neutral structured conversation stream. */
 import type { Config, ConversationEvent, JsonValue, Tool } from '../types.ts';
 import { authorSlugs } from './authors.ts';
+import { ALWAYS_CAPTURE_TOOLS, withholdSensitiveParts } from './conversationPrivacy.ts';
 import { requireCaptureContinuation } from './captureGuard.ts';
 import { resolveOrStartSession } from './events.ts';
 import { makeId } from './ids.ts';
@@ -39,14 +40,6 @@ const MUTATION_TOOLS = new Set([
   'apply_patch',
   'write_to_file',
   'replace_file_content',
-]);
-const ALWAYS_CAPTURE_TOOLS = new Set([
-  'askuserquestion',
-  'request_user_input',
-  'vscode_askquestions',
-  'enterplanmode',
-  'exitplanmode',
-  'update_plan',
 ]);
 const CONVERSATION_EVENT_TYPES = new Set([
   'assistant_text',
@@ -116,8 +109,14 @@ function sanitizeEvent(
   paths: ShowtailPaths,
   event: ConversationEvent & { sourceId: string },
 ): { event: ConversationEvent; hits: number } {
-  const cfg = readConfig(paths).settings.redact;
-  const payload = sanitizeJson(event, cfg);
+  const settings = readConfig(paths).settings;
+  const cfg = settings.redact;
+  // First drop what must never be stored (tool output, credential-file content); the
+  // pattern and known-value redaction below then runs over whatever is left.
+  const payload = sanitizeJson(
+    withholdSensitiveParts(event, { captureToolOutput: settings.captureToolOutput }),
+    cfg,
+  );
   if (
     !payload.value ||
     Array.isArray(payload.value) ||

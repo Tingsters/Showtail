@@ -39,6 +39,7 @@ const PASS = new Set([
 const STRUCTURAL = new Set([
   'id',
   'turnId',
+  'toolUseId',
   'sessionId',
   'batchId',
   'sha256',

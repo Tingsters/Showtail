@@ -233,11 +233,13 @@ describe('structured conversation events', () => {
         events.find(
           (event) => event.toolUseId === 'bash-1' && event.type === 'tool_result',
         ),
-      ).toMatchObject({
-        stdout: 'ok\n',
-        stderr: '',
-        exitCode: 0,
-      });
+      ).toMatchObject({ exitCode: 0 });
+      // The exit status survives; the command's output does not (it is where secrets live).
+      const bashResult = events.find(
+        (event) => event.toolUseId === 'bash-1' && event.type === 'tool_result',
+      );
+      expect(bashResult).not.toHaveProperty('stdout');
+      expect(bashResult).not.toHaveProperty('stderr');
       expect(events.at(-1)?.text).toBe('The demo is complete.');
     } finally {
       cleanup(dir);
