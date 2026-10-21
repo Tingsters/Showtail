@@ -39,12 +39,15 @@ let extensionSessionId = `vscode-extension-${randomUUID()}`;
 let antigravitySaveContext: ExtensionHookContext | undefined;
 
 /**
- * Find `name` on PATH, skipping any directory inside an open workspace. Windows
- * resolves a bare command name against the current directory first, and this
- * extension runs `showtail` with the workspace as its cwd, so a repository that
- * ships its own `showtail.exe` would otherwise be run on every save. Only real
- * executables are considered on Windows (`.cmd`/`.bat` need a shell); if nothing
- * is found the bare name is used, as before.
+ * Find `name` on PATH, skipping any directory inside an open workspace. A plain
+ * Windows process launch resolves a bare command name against the working
+ * directory first, and this extension runs `showtail` with the workspace as its
+ * cwd, so a repository that ships its own `showtail.exe` could be run on every
+ * save. The VS Code and Antigravity extension hosts currently opt out of that
+ * search themselves (`NoDefaultCurrentDirectoryInExePath=1`; verified by
+ * test/runSecurityHost.mjs), so this is defence in depth: it keeps the extension
+ * safe if a host stops doing so. Only real executables are considered on Windows
+ * (`.cmd`/`.bat` need a shell); if nothing is found the bare name is used, as before.
  */
 function resolveOnPath(name: string): string | undefined {
   const folders = (vscode.workspace.workspaceFolders ?? []).map((f) =>
