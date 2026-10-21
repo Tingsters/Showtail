@@ -144,6 +144,7 @@
     "watch": "node esbuild.js --watch",
     "test": "bun test",
     "test:extension-host": "bun run build && node test/runExtensionHost.mjs",
+    "test:security-host": "bun run build && bun test/runSecurityHost.mjs",
     "typecheck": "tsc --noEmit",
     "package": "node esbuild.js --production && vsce package --no-dependencies"
   },
