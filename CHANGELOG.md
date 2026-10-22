@@ -2,21 +2,10 @@
 
 ## Unreleased
 
-### Fixed
+## 0.20.0 — Secrets stay out: a private trail and a sanitised report
 
-- **GitHub Copilot CLI edits made with `apply_patch` were not captured.** The CLI writes
-  files with `apply_patch` as well as `edit` (14 of 16 real local sessions used it), and the
-  `postToolUse` matcher only listed `edit`, so those edits never reached the trail. The matcher
-  now includes `apply_patch`, and its payload (a patch envelope delivered as a raw string) is
-  parsed into per-file diffs, including deletions, the same way Codex's is.
-- **Copilot CLI replies now reconcile every turn, not only when the session ends.** Showtail
-  now also registers the CLI's `agentStop` hook (it fires when the agent finishes a turn), with
-  `sessionEnd` kept as the backstop; the reconcile dedups by source id, so the overlap is
-  harmless. Replies are recorded as each turn finishes instead of only at session close.
-  Existing installs pick up the new hook the next time the wiring refreshes
-  (`showtail connect copilot-cli`).
-
-## 0.19.0 — Secrets stay out: a private trail and a sanitised report
+*0.19.0 was prepared but never published; its notes are included here. It is a minor
+release rather than a patch because the working trail is now private by default.*
 
 A security release. A single leaked API key on a public repository can cost thousands of
 dollars within hours, and the old design (a regex pass, then commit the whole trail) could
@@ -59,6 +48,18 @@ well it scrubs.
   stable trail ID first, like every other project control.
 
 ### Fixed
+
+- **GitHub Copilot CLI edits made with `apply_patch` were not captured.** The CLI writes
+  files with `apply_patch` as well as `edit` (14 of 16 real local sessions used it), and the
+  `postToolUse` matcher only listed `edit`, so those edits never reached the trail. The matcher
+  now includes `apply_patch`, and its payload (a patch envelope delivered as a raw string) is
+  parsed into per-file diffs, including deletions, the same way Codex's is.
+- **Copilot CLI replies now reconcile every turn, not only when the session ends.** Showtail
+  now also registers the CLI's `agentStop` hook (it fires when the agent finishes a turn), with
+  `sessionEnd` kept as the backstop; the reconcile dedups by source id, so the overlap is
+  harmless. Replies are recorded as each turn finishes instead of only at session close.
+  Existing installs pick up the new hook the next time the wiring refreshes
+  (`showtail connect copilot-cli`).
 
 - **Redaction missed most real secrets.** `DB_PASSWORD=…`, `AWS_SECRET_ACCESS_KEY=…`,
   `STRIPE_SECRET_KEY=…` and many provider formats (GitHub fine-grained, GitLab, Stripe
