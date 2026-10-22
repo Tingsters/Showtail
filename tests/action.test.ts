@@ -6,7 +6,7 @@ import { runSubmit } from '../src/commands/submit.ts';
 import { logEvent } from '../src/core/events.ts';
 import { SUBMISSION_DIR } from '../src/core/submission.ts';
 import { pathsForRoot } from '../src/core/storage.ts';
-import { authorFor, CLI, cleanup, makeTempDir, spawnEnv } from './helpers.ts';
+import { authorFor, CLI, cleanup, makeTempDir, runCli, spawnEnv } from './helpers.ts';
 
 /**
  * Runs the *real* "Verify trail" step script from action.yml under bash, the way the
@@ -155,5 +155,36 @@ describe('action.yml', () => {
     const text = readFileSync(join(ROOT, 'action.yml'), 'utf8');
     expect(text).toContain('SHOWTAIL_DISABLE_FIRST_RUN=1');
     expect(existsSync(join(ROOT, 'install.sh'))).toBe(true);
+  });
+});
+
+describe('verify-submission --json emits exactly one document', () => {
+  // The Action reads it with `jq`. A failing run used to print its result AND the CLI's error
+  // envelope, two JSON documents, and jq exited 5 on the second. That only showed on runners
+  // that have jq, so it is pinned here at the source.
+  test('a failing verify prints one parseable JSON document and exits 3', async () => {
+    const dir = await makeSubmission();
+    try {
+      const md = join(dir, SUBMISSION_DIR, 'report.md');
+      writeFileSync(md, readFileSync(md, 'utf8') + '\nedited after signing\n');
+      const r = runCli(dir, ['verify-submission', '--json'], { env: spawnEnv() });
+      expect(r.code).toBe(3);
+      const doc = JSON.parse(r.stdout); // throws if there is more than one document
+      expect(doc.ok).toBe(false);
+      expect(doc.problems.join(' ')).toContain('changed after signing');
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('a passing verify prints one document and exits 0', async () => {
+    const dir = await makeSubmission();
+    try {
+      const r = runCli(dir, ['verify-submission', '--json'], { env: spawnEnv() });
+      expect(r.code).toBe(0);
+      expect(JSON.parse(r.stdout).ok).toBe(true);
+    } finally {
+      cleanup(dir);
+    }
   });
 });

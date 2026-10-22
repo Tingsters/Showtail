@@ -787,9 +787,9 @@ program
   .argument('[dir]', 'the submission folder (default: ./showtail-submission)')
   .option('--json', 'output machine-readable JSON')
   .action(
-    action(async (dir: string | undefined, opts: { json?: boolean }) =>
-      runVerifySubmission({ dir, json: opts.json }),
-    ),
+    action(async (dir: string | undefined, opts: { json?: boolean }) => {
+      if (!runVerifySubmission({ dir, json: opts.json })) process.exitCode = 3;
+    }),
   );
 
 program

@@ -149,7 +149,9 @@ runs:
           fi
           sub_ok=false
           if command -v jq >/dev/null 2>&1; then
-            sub_ok=$(jq -r 'if .ok then "true" else "false" end' "$json" 2>/dev/null || true)
+            # -s: read the first JSON document only, so an error envelope printed after the
+            # result can never turn this into a jq runtime error.
+            sub_ok=$(jq -rs 'if (.[0].ok // false) then "true" else "false" end' "$json" 2>/dev/null || true)
           elif [ "$sub_status" -eq 0 ]; then
             sub_ok=true
           fi
@@ -172,7 +174,7 @@ runs:
               echo "**FAIL — the submission did not verify:**"
               echo
               if command -v jq >/dev/null 2>&1; then
-                jq -r '.problems[] | "- " + .' "$json"
+                jq -rs '.[0].problems[]? | "- " + .' "$json"
               else
                 echo '```json'
                 cat "$json"
