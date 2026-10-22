@@ -13,7 +13,25 @@ import { authorFor, CLI, cleanup, makeTempDir, runCli, spawnEnv } from './helper
  * runner would, so the `mode: submission` branch is exercised for what it does.
  */
 const ROOT = join(import.meta.dir, '..');
-const hasBash = Bun.spawnSync(['bash', '-c', 'exit 0']).exitCode === 0;
+/**
+ * Git Bash on Windows. A bare `bash` there can resolve to WSL's System32\bash.exe, which
+ * cannot run these scripts or see Windows paths, so name Git's explicitly.
+ */
+function findBash(): string {
+  if (process.platform !== 'win32') return 'bash';
+  const roots = [
+    process.env.ProgramFiles,
+    process.env['ProgramFiles(x86)'],
+    process.env.LOCALAPPDATA && join(process.env.LOCALAPPDATA, 'Programs'),
+  ].filter(Boolean) as string[];
+  for (const root of roots) {
+    const candidate = join(root, 'Git', 'bin', 'bash.exe');
+    if (existsSync(candidate)) return candidate;
+  }
+  return 'bash';
+}
+const BASH = findBash();
+const hasBash = Bun.spawnSync([BASH, '-c', 'exit 0']).exitCode === 0;
 
 function stepScript(): string {
   const action = Bun.YAML.parse(readFileSync(join(ROOT, 'action.yml'), 'utf8')) as {
@@ -55,7 +73,7 @@ async function runStep(
   const output = join(work, 'output.txt');
   writeFileSync(summary, '');
   writeFileSync(output, '');
-  const proc = Bun.spawn(['bash', '--noprofile', '--norc', '-eo', 'pipefail', script], {
+  const proc = Bun.spawn([BASH, '--noprofile', '--norc', '-eo', 'pipefail', script], {
     cwd: project,
     env: {
       ...spawnEnv(),
@@ -93,10 +111,10 @@ describe.skipIf(!hasBash)('the Action in submission mode', () => {
     const dir = await makeSubmission();
     try {
       const r = await runStep(dir, {});
-      expect(r.code).toBe(0);
-      expect(r.output).toContain('ok=true');
-      expect(r.summary).toContain('PASS');
-      expect(r.summary).toContain('not show who made them');
+      expect(r.code, r.out).toBe(0);
+      expect(r.output, r.out).toContain('ok=true');
+      expect(r.summary, r.out).toContain('PASS');
+      expect(r.summary, r.out).toContain('not show who made them');
     } finally {
       cleanup(dir);
     }
@@ -108,10 +126,10 @@ describe.skipIf(!hasBash)('the Action in submission mode', () => {
       const md = join(dir, SUBMISSION_DIR, 'report.md');
       writeFileSync(md, readFileSync(md, 'utf8') + '\nedited after signing\n');
       const r = await runStep(dir, {});
-      expect(r.code).toBe(1);
-      expect(r.output).toContain('ok=false');
-      expect(r.summary).toContain('FAIL');
-      expect(r.summary).toContain('changed after signing');
+      expect(r.code, r.out).toBe(1);
+      expect(r.output, r.out).toContain('ok=false');
+      expect(r.summary, r.out).toContain('FAIL');
+      expect(r.summary, r.out).toContain('changed after signing');
     } finally {
       cleanup(dir);
     }
@@ -123,8 +141,8 @@ describe.skipIf(!hasBash)('the Action in submission mode', () => {
       const md = join(dir, SUBMISSION_DIR, 'report.md');
       writeFileSync(md, readFileSync(md, 'utf8') + '\nedited\n');
       const r = await runStep(dir, { INPUT_FAIL_ON_INVALID: 'false' });
-      expect(r.code).toBe(0);
-      expect(r.output).toContain('ok=false');
+      expect(r.code, r.out).toBe(0);
+      expect(r.output, r.out).toContain('ok=false');
     } finally {
       cleanup(dir);
     }
@@ -134,8 +152,8 @@ describe.skipIf(!hasBash)('the Action in submission mode', () => {
     const dir = await makeSubmission();
     try {
       const r = await runStep(dir, { INPUT_SUBMISSION_DIR: 'nope' });
-      expect(r.code).toBe(1);
-      expect(r.output).not.toContain('ok=true');
+      expect(r.code, r.out).toBe(1);
+      expect(r.output, r.out).not.toContain('ok=true');
     } finally {
       cleanup(dir);
     }
@@ -168,7 +186,7 @@ describe('verify-submission --json emits exactly one document', () => {
       const md = join(dir, SUBMISSION_DIR, 'report.md');
       writeFileSync(md, readFileSync(md, 'utf8') + '\nedited after signing\n');
       const r = runCli(dir, ['verify-submission', '--json'], { env: spawnEnv() });
-      expect(r.code).toBe(3);
+      expect(r.code, r.stdout + r.stderr).toBe(3);
       const doc = JSON.parse(r.stdout); // throws if there is more than one document
       expect(doc.ok).toBe(false);
       expect(doc.problems.join(' ')).toContain('changed after signing');
@@ -181,7 +199,7 @@ describe('verify-submission --json emits exactly one document', () => {
     const dir = await makeSubmission();
     try {
       const r = runCli(dir, ['verify-submission', '--json'], { env: spawnEnv() });
-      expect(r.code).toBe(0);
+      expect(r.code, r.stdout + r.stderr).toBe(0);
       expect(JSON.parse(r.stdout).ok).toBe(true);
     } finally {
       cleanup(dir);
