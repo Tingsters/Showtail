@@ -60,7 +60,9 @@ jobs:
           cd ..
           git config user.email student@example.com
           git config user.name 'Test Student'
-          git add -A fixture
+          # -f: this repo's own .gitignore ignores `.showtail/` (so does Showtail's default), and
+          # the fixture is deliberately committing its trail.
+          git add -A -f fixture
           git commit -q -m 'fixture: coursework with its trail'
 
       - name: A valid trail passes
