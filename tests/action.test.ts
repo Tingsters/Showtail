@@ -84,7 +84,10 @@ async function runStep(
       INPUT_FAIL_ON_INVALID: 'true',
       INPUT_MODE: 'submission',
       INPUT_SUBMISSION_DIR: SUBMISSION_DIR,
+      // Windows runners name it `Path`; spreading the environment keeps that key, so adding only
+      // `PATH` would leave two spellings and the child could take the one without the shim.
       PATH: `${shims}${delimiter}${process.env.PATH ?? ''}`,
+      Path: `${shims}${delimiter}${process.env.PATH ?? ''}`,
       ...input,
     },
     stdout: 'pipe',
