@@ -482,8 +482,14 @@ export interface VerifySubmissionOptions {
   json?: boolean;
 }
 
-/** `showtail verify-submission [dir]`: check a submission's signature, hashes and text. */
-export function runVerifySubmission(options: VerifySubmissionOptions = {}): void {
+/**
+ * `showtail verify-submission [dir]`: check a submission's signature, hashes and text.
+ * Returns whether it verified; the caller sets exit status 3 when it did not. It must not
+ * throw on failure: with `--json` the CLI's error handler would then print a second JSON
+ * document after this result, and a consumer (the GitHub Action reads it with `jq`) would
+ * be handed two documents on stdout instead of one. `verify` follows the same pattern.
+ */
+export function runVerifySubmission(options: VerifySubmissionOptions = {}): boolean {
   const dir = options.dir ?? `${options.cwd ?? process.cwd()}/${SUBMISSION_DIR}`;
   const check = verifySubmission(dir);
   if (options.json) {
@@ -504,7 +510,7 @@ export function runVerifySubmission(options: VerifySubmissionOptions = {}): void
     console.log(`NOT VERIFIED: ${dir}`);
     for (const p of check.problems) console.log(`  - ${p}`);
   }
-  if (!check.ok) throw new ShowtailError('Submission did not verify.', 3);
+  return check.ok;
 }
 
 // `buildManifest` is re-exported for tests that need to sign synthetic input.
