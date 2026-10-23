@@ -184,6 +184,20 @@ function isAntigravityHostTool(tool: Tool): boolean {
 }
 
 /**
+ * What an Antigravity hook prints back. agy (the CLI) validates the reply per
+ * event (https://antigravity.google/docs/hooks): only `PreToolUse` and `Stop`
+ * take a `decision`; `SessionStart`, `PreInvocation` and `PostToolUse` replies
+ * have optional fields only, and agy 1.4.x rejects an unknown `decision` there
+ * ("unknown field \"decision\""). An empty object is valid for all of them, and
+ * `{"decision":"allow"}` lets a Stop proceed. The IDE keeps its long-standing
+ * `{"decision":"allow"}`, which its own hook engine was verified against.
+ */
+export function antigravityReply(tool: Tool, event: HookEvent): string {
+  if (tool !== 'antigravity-cli') return '{"decision":"allow"}';
+  return event === 'stop' ? '{"decision":"allow"}' : '{}';
+}
+
+/**
  * Normalize a raw hook payload into a tool-agnostic event. With an adapter the
  * plugin owns the parsing; without one (manual `cli`, or an unknown tool) we
  * read only the common `prompt`/`session_id` fields and capture no edits.
@@ -802,7 +816,7 @@ export async function runHook(
     // capture problem can never block the user's IDE/agent. Gated to Antigravity
     // hosts (see isAntigravityHostTool); other hosts ignore hook stdout.
     if (isAntigravityHostTool(trace.tool)) {
-      process.stdout.write('{"decision":"allow"}\n');
+      process.stdout.write(`${antigravityReply(trace.tool, event)}\n`);
     }
   }
 }

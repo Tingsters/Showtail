@@ -1,7 +1,10 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { autoConnectNewlyDetected } from '../src/core/autoConnectSweep.ts';
+import {
+  CURRENT_INTEGRATION_GENERATION,
+  autoConnectNewlyDetected,
+} from '../src/core/autoConnectSweep.ts';
 import { disableToolCapture } from '../src/core/globalConfig.ts';
 import { MANAGED_INSTRUCTION_REVISION, SHOWTAIL_VERSION } from '../src/core/version.ts';
 import type { ConnectPlugin } from '../src/plugins/registry.ts';
@@ -465,7 +468,7 @@ describe('autoConnectNewlyDetected sweep', () => {
       MANAGED_INSTRUCTION_REVISION - 1,
     );
     expect(partiallyRefreshed.toolIntegrationGenerations.codex).toBe(
-      `${SHOWTAIL_VERSION}:${MANAGED_INSTRUCTION_REVISION}`,
+      CURRENT_INTEGRATION_GENERATION,
     );
     expect(partiallyRefreshed.toolIntegrationGenerations['antigravity-cli']).toBe(
       staleGeneration,
@@ -511,9 +514,7 @@ describe('autoConnectNewlyDetected sweep', () => {
     expect(typeof cfg.wiringVersion).toBe('string');
     expect(cfg.wiringVersion.length).toBeGreaterThan(0);
     expect(cfg.managedInstructionRevision).toBe(MANAGED_INSTRUCTION_REVISION);
-    expect(cfg.toolIntegrationGenerations.claude).toBe(
-      `${SHOWTAIL_VERSION}:${MANAGED_INSTRUCTION_REVISION}`,
-    );
+    expect(cfg.toolIntegrationGenerations.claude).toBe(CURRENT_INTEGRATION_GENERATION);
   });
 
   test('skips plugins without an autoConnect (manual-only, e.g. an IDE extension)', () => {

@@ -277,8 +277,11 @@ describe('hook command (end-to-end via stdin)', () => {
           JSON.stringify(payload),
         );
         expect(r.code).toBe(0);
-        if (plugin.id === 'antigravity-ide' || plugin.id === 'antigravity-cli') {
+        if (plugin.id === 'antigravity-ide') {
           expect(r.stdout.trim()).toBe('{"decision":"allow"}');
+        } else if (plugin.id === 'antigravity-cli') {
+          // agy's PreInvocation reply has no `decision` field; {} is the valid no-op.
+          expect(r.stdout.trim()).toBe('{}');
         } else {
           expect(r.stdout).toBe('');
         }
@@ -1758,4 +1761,18 @@ describe('hook resume consent boundary', () => {
       }
     });
   }
+});
+
+describe("Antigravity CLI hook replies follow agy's per-event schema", () => {
+  test('only Stop carries a decision; other CLI events reply with {}', async () => {
+    const { antigravityReply } = await import('../src/commands/hook.ts');
+    expect(antigravityReply('antigravity-cli', 'stop')).toBe('{"decision":"allow"}');
+    for (const event of ['session-start', 'user-prompt', 'post-edit'] as const) {
+      expect(antigravityReply('antigravity-cli', event)).toBe('{}');
+    }
+    // The IDE keeps the reply its engine was verified against.
+    expect(antigravityReply('antigravity-ide', 'user-prompt')).toBe(
+      '{"decision":"allow"}',
+    );
+  });
 });

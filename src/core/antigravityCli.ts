@@ -4,7 +4,7 @@ import { join } from 'node:path';
 // so `showtail connect antigravity-cli` is fully self-contained (no files to ship).
 import AGY_BODY from '../../assets/antigravity-cli/AGY.showtail.md' with { type: 'text' };
 import { geminiHome } from './antigravityCliTranscript.ts';
-import type { HookEvents } from './hookMerge.ts';
+import type { AntigravityHookEvents } from './hookMerge.ts';
 import {
   applyManagedBlock,
   classify,
@@ -24,8 +24,13 @@ export type InstallScope = 'user' | 'project';
 //   * workspace: `<root>/.agents/hooks.json`
 //   * global:    `~/.gemini/config/hooks.json`  (next to `mcp_config.json`)
 // The schema is NOT Claude's `{ hooks: { <Event>: [...] } }`. It is a map of
-// NAMED config blocks, each with an `enabled` flag and event-name keys:
-//   { "showtail-cli": { "enabled": true, "<Event>": [ { matcher?, hooks:[{type,command}] } ] } }
+// NAMED config blocks, each with an `enabled` flag and event-name keys. Tool
+// events take matcher groups; the other events take handlers DIRECTLY
+// (https://antigravity.google/docs/hooks; nesting them under `hooks` made agy
+// 1.4.x reject the whole file, disabling every bundle in it):
+//   { "showtail-cli": { "enabled": true,
+//       "PostToolUse":  [ { "matcher": "...", "hooks": [ {type, command} ] } ],
+//       "SessionStart": [ {type, command} ], "PreInvocation": [ ... ], "Stop": [ ... ] } }
 // The block name is arbitrary (agy runs every enabled bundle), so the CLI and
 // IDE deliberately use DISTINCT keys — `showtail-cli` here, `showtail-ide` in
 // antigravityIde.ts — sharing this same file. That way `disconnect antigravity-ide`
@@ -44,23 +49,12 @@ export type InstallScope = 'user' | 'project';
 /** Top-level config-block name we own in agy's hooks.json (distinct from the IDE's `showtail-ide`). */
 export const ANTIGRAVITY_BLOCK_NAME = 'showtail-cli';
 
-export const ANTIGRAVITY_CLI_HOOK_EVENTS: HookEvents = {
+export const ANTIGRAVITY_CLI_HOOK_EVENTS: AntigravityHookEvents = {
   SessionStart: [
-    {
-      hooks: [
-        {
-          type: 'command',
-          command: 'showtail hook session-start --tool antigravity-cli',
-        },
-      ],
-    },
+    { type: 'command', command: 'showtail hook session-start --tool antigravity-cli' },
   ],
   PreInvocation: [
-    {
-      hooks: [
-        { type: 'command', command: 'showtail hook user-prompt --tool antigravity-cli' },
-      ],
-    },
+    { type: 'command', command: 'showtail hook user-prompt --tool antigravity-cli' },
   ],
   PostToolUse: [
     {
@@ -71,11 +65,7 @@ export const ANTIGRAVITY_CLI_HOOK_EVENTS: HookEvents = {
       ],
     },
   ],
-  Stop: [
-    {
-      hooks: [{ type: 'command', command: 'showtail hook stop --tool antigravity-cli' }],
-    },
-  ],
+  Stop: [{ type: 'command', command: 'showtail hook stop --tool antigravity-cli' }],
 };
 
 /** The `showtail` block exactly as it appears inside agy's hooks.json. */

@@ -15,21 +15,22 @@
  * Every command we install contains {@link HOOK_MARKER}, so our bundle is
  * recognized by its commands even if the name were reused.
  */
-import { HOOK_MARKER, type HookEvents, type HookGroup } from './hookMerge.ts';
+import {
+  HOOK_MARKER,
+  entryCommands,
+  type AntigravityHookEvents,
+  type HookEntry,
+} from './hookMerge.ts';
 
-/** A named hook bundle: an `enabled` flag plus event → matcher-group arrays. */
-export type NamedHookBundle = { enabled?: boolean } & Record<string, HookGroup[]>;
+/** A named hook bundle: an `enabled` flag plus event → entries (groups or handlers). */
+export type NamedHookBundle = { enabled?: boolean } & Record<string, HookEntry[]>;
 
 /** Does this named bundle contain one of our auto-capture commands? */
 function bundleIsOurs(bundle: unknown): boolean {
   if (!bundle || typeof bundle !== 'object') return false;
-  return Object.entries(bundle as Record<string, unknown>).some(([key, groups]) => {
-    if (key === 'enabled' || !Array.isArray(groups)) return false;
-    return (groups as HookGroup[]).some((g) =>
-      g?.hooks?.some(
-        (h) => typeof h?.command === 'string' && h.command.includes(HOOK_MARKER),
-      ),
-    );
+  return Object.entries(bundle as Record<string, unknown>).some(([key, entries]) => {
+    if (key === 'enabled' || !Array.isArray(entries)) return false;
+    return entries.some((e) => entryCommands(e).some((c) => c.includes(HOOK_MARKER)));
   });
 }
 
@@ -42,7 +43,7 @@ function bundleIsOurs(bundle: unknown): boolean {
 export function mergeNamedHooks(
   config: Record<string, unknown>,
   name: string,
-  events: HookEvents,
+  events: AntigravityHookEvents,
 ): Record<string, unknown> {
   const next = { ...config };
   next[name] = { enabled: true, ...events };

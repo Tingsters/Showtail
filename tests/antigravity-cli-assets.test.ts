@@ -7,6 +7,7 @@ import {
   ANTIGRAVITY_CLI_HOOK_EVENTS,
   antigravityCliHooksJson,
 } from '../src/core/antigravityCli.ts';
+import { entryCommands } from '../src/core/hookMerge.ts';
 
 const REPO = join(import.meta.dir, '..');
 
@@ -46,10 +47,24 @@ describe('antigravity-cli assets stay in sync with the single source of truth', 
       'write_to_file',
     );
 
+    // Tool events take matcher groups; every other event takes handlers DIRECTLY.
+    // Nesting a non-tool event's handlers under `hooks` makes agy reject the whole
+    // hooks.json ("command hook must specify 'command'"), disabling every bundle.
+    for (const [event, entries] of Object.entries(ANTIGRAVITY_CLI_HOOK_EVENTS)) {
+      for (const entry of entries) {
+        if (event === 'PostToolUse' || event === 'PreToolUse') {
+          expect('hooks' in entry).toBe(true);
+        } else {
+          expect(entry).toMatchObject({ type: 'command' });
+          expect('hooks' in entry).toBe(false);
+        }
+      }
+    }
+
     // Every Showtail command must be a BARE `showtail …` (no quotes/paths, since
     // agy execs the first token via cmd.exe) and carry the tool tag.
-    const commands = Object.values(ANTIGRAVITY_CLI_HOOK_EVENTS).flatMap((groups) =>
-      groups.flatMap((g) => g.hooks.map((h) => h.command)),
+    const commands = Object.values(ANTIGRAVITY_CLI_HOOK_EVENTS).flatMap((entries) =>
+      entries.flatMap(entryCommands),
     );
     expect(commands.length).toBe(4);
     for (const c of commands) {

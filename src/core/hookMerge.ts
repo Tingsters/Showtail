@@ -24,6 +24,30 @@ export interface HookGroup {
 /** Map of hook event name -> matcher groups. */
 export type HookEvents = Record<string, HookGroup[]>;
 
+/**
+ * Antigravity's event lists mix two shapes: tool events (`PreToolUse`,
+ * `PostToolUse`) take matcher groups, while the other events (`SessionStart`,
+ * `PreInvocation`, `PostInvocation`, `Stop`) take handlers directly. A nested
+ * `{ hooks: [...] }` under those makes agy reject the WHOLE hooks.json
+ * ("command hook must specify 'command'"), disabling every bundle in the file.
+ * See https://antigravity.google/docs/hooks.
+ */
+export type HookEntry = HookGroup | HookCommand;
+export type AntigravityHookEvents = Record<string, HookEntry[]>;
+
+/** The commands in an entry, whichever shape it has. */
+export function entryCommands(entry: unknown): string[] {
+  if (!entry || typeof entry !== 'object') return [];
+  const e = entry as Partial<HookGroup & HookCommand>;
+  if (typeof e.command === 'string') return [e.command];
+  if (Array.isArray(e.hooks)) {
+    return e.hooks
+      .map((h) => h?.command)
+      .filter((c): c is string => typeof c === 'string');
+  }
+  return [];
+}
+
 /** Marker used to recognize (and cleanly remove) the hooks we install. */
 export const HOOK_MARKER = 'showtail hook';
 

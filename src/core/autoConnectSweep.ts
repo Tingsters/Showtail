@@ -77,7 +77,13 @@ export interface SweepResult {
 }
 
 const EMPTY: SweepResult = { connected: [], refreshed: [], pending: [], failed: [] };
-const CURRENT_INTEGRATION_GENERATION = `${SHOWTAIL_VERSION}:${MANAGED_INSTRUCTION_REVISION}`;
+/**
+ * Bumped when an integration's written format changes, so the next sweep rewrites
+ * already-installed hooks even without a version bump. 2: Antigravity CLI hooks
+ * for non-tool events moved to agy's direct-handler format.
+ */
+const HOOK_FORMAT_REVISION = 2;
+export const CURRENT_INTEGRATION_GENERATION = `${SHOWTAIL_VERSION}:${MANAGED_INSTRUCTION_REVISION}:${HOOK_FORMAT_REVISION}`;
 
 function failureReason(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
