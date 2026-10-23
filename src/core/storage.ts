@@ -15,6 +15,8 @@ import { dirname, join, parse, relative, resolve, sep } from 'node:path';
 import type { Config, Session, State } from '../types.ts';
 import { requireCaptureContinuation } from './captureGuard.ts';
 import { makeId } from './ids.ts';
+import { isPathUnder, pathKey, toRepoRelative } from '@showtail/agent-traces/paths/pathUtil';
+export { isPathUnder, pathKey, toRepoRelative };
 
 export const SHOWTAIL_DIR = '.showtail';
 
@@ -261,24 +263,6 @@ export function samePath(a: string, b: string): boolean {
   return existingPathKey(a) === existingPathKey(b);
 }
 
-/**
- * A case-normalized key for a resolved path, so comparisons are correct on
- * Windows — where the ledger records drive-relative, lowercase-drive paths
- * (`c:\Users\…`) while `homedir()`/`cwd` yield `C:\Users\…`. Case-folds only on
- * win32; POSIX paths are already case-sensitive and left as-is.
- */
-export function pathKey(p: string): string {
-  const r = resolve(p);
-  return process.platform === 'win32' ? r.toLowerCase() : r;
-}
-
-/** Whether `child` is `parent` or nested beneath it (case-insensitive on win32). */
-export function isPathUnder(child: string, parent: string): boolean {
-  const c = pathKey(child);
-  const p = pathKey(parent);
-  const prefix = p.endsWith(sep) ? p : p + sep;
-  return c === p || c.startsWith(prefix);
-}
 
 /**
  * Whether `dir` lives under the OS temp directory (or a literal `/tmp` / `\tmp`).
@@ -838,12 +822,3 @@ export function migrateLegacySessions(
   rmSync(author.sessionsIndex, { force: true });
 }
 
-/**
- * Normalize a user-provided file path to a clean, repo-relative, forward-slash
- * path so trails are consistent and portable across machines.
- */
-export function toRepoRelative(root: string, filePath: string): string {
-  const abs = resolve(root, filePath);
-  const rel = relative(root, abs);
-  return rel.split(sep).join('/');
-}
