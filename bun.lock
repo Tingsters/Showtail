@@ -5,6 +5,7 @@
     "": {
       "name": "showtail",
       "dependencies": {
+        "@showtail/agent-traces": "workspace:*",
         "commander": "^14.0.0",
         "turbo-stream": "^2.4.0",
       },
@@ -15,8 +16,14 @@
         "typescript": "^5.5.0",
       },
     },
+    "packages/agent-traces": {
+      "name": "@showtail/agent-traces",
+      "version": "0.1.0",
+    },
   },
   "packages": {
+    "@showtail/agent-traces": ["@showtail/agent-traces@workspace:packages/agent-traces"],
+
     "@types/node": ["@types/node@22.19.21", "", { "dependencies": { "undici-types": "~6.21.0" } }, "sha512-VMeFBSCKQKmm2swI2kW51SFusDqekC6q9trBCvJ/JliDchFSuoYYKN7yVNjPthP1HKZcx3U1gI/wTcEBjEFKTA=="],
 
     "bun-types": ["bun-types@1.3.14", "", { "dependencies": { "@types/node": "*" } }, "sha512-4N0ig0fEomHt5R0KCFWjovxow98rIoRwKolrYdCcknNwMekCXRnWEUvgu5soYV8QXtVsrUD8B95MBOZGPvr6KQ=="],

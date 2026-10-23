@@ -1,0 +1,14 @@
+{
+  "name": "@showtail/agent-traces",
+  "version": "0.1.0",
+  "description": "Find and read the session logs that AI coding agents (Claude Code, Codex, Antigravity, Copilot) already keep on disk, plus redaction helpers for sharing them safely.",
+  "type": "module",
+  "license": "Apache-2.0",
+  "exports": {
+    ".": "./src/index.ts",
+    "./*": "./src/*.ts"
+  },
+  "files": ["src", "README.md", "LICENSE"],
+  "engines": { "bun": ">=1.1.0", "node": ">=22.6.0" },
+  "repository": { "type": "git", "url": "git+https://github.com/Tingsters/Showtail.git", "directory": "packages/agent-traces" }
+}
