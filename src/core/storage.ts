@@ -15,7 +15,11 @@ import { dirname, join, parse, relative, resolve, sep } from 'node:path';
 import type { Config, Session, State } from '../types.ts';
 import { requireCaptureContinuation } from './captureGuard.ts';
 import { makeId } from './ids.ts';
-import { isPathUnder, pathKey, toRepoRelative } from '@showtail/agent-traces/paths/pathUtil';
+import {
+  isPathUnder,
+  pathKey,
+  toRepoRelative,
+} from '@showtail/agent-traces/paths/pathUtil';
 export { isPathUnder, pathKey, toRepoRelative };
 
 export const SHOWTAIL_DIR = '.showtail';
@@ -262,7 +266,6 @@ export function existingPathKey(p: string): string {
 export function samePath(a: string, b: string): boolean {
   return existingPathKey(a) === existingPathKey(b);
 }
-
 
 /**
  * Whether `dir` lives under the OS temp directory (or a literal `/tmp` / `\tmp`).
@@ -821,4 +824,3 @@ export function migrateLegacySessions(
   requireCaptureContinuation(continueCapture);
   rmSync(author.sessionsIndex, { force: true });
 }
-

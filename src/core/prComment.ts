@@ -11,29 +11,20 @@
  * first, and why it is only ever posted once and never edited.
  */
 import type { ReportData } from '../types.ts';
-import { createHash } from 'node:crypto';
-import { scanResidual, type Finding } from './sanitize.ts';
+import {
+  approvalCode,
+  neutralize,
+  scanComment,
+} from '@showtail/agent-traces/share/comment';
 import type { SubmissionManifest } from './submission.ts';
+
+export { approvalCode, neutralize, scanComment };
 
 /** GitHub rejects bodies over ~65k characters; stay well under. */
 const MAX_BODY = 30_000;
 const MAX_PROMPTS = 8;
 const MAX_PROMPT_CHARS = 140;
 const MAX_FILES = 15;
-
-/** Keep a user's text from pinging people, linking issues, or injecting HTML. */
-export function neutralize(text: string): string {
-  return text
-    .replace(/[\r\n]+/g, ' ')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/@/g, '@​')
-    .replace(/#(\d)/g, '#​$1')
-    .replace(/`/g, "'")
-    .replace(/\s+/g, ' ')
-    .trim();
-}
 
 function excerpt(text: string): string {
   const flat = neutralize(text);
@@ -112,20 +103,4 @@ export function buildPrComment(data: ReportData, manifest: SubmissionManifest): 
   return body.length > MAX_BODY
     ? `${body.slice(0, MAX_BODY - 20)}\n\n… (truncated)`
     : body;
-}
-
-/** Findings from scanning a comment body; any finding means it must not be posted. */
-export function scanComment(body: string): Finding[] {
-  // The fingerprint line is a 64-hex hash by design: scan with it removed.
-  const withoutHash = body.replace(/`sha256:[0-9a-f]{64}`/g, '');
-  return scanResidual(withoutHash);
-}
-
-/**
- * A short code that identifies this exact comment text. The student approves a
- * preview, and posting requires the code for *that* text, so an agent (or a script)
- * cannot post something other than what was reviewed.
- */
-export function approvalCode(body: string): string {
-  return createHash('sha256').update(body).digest('hex').slice(0, 8);
 }

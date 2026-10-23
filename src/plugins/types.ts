@@ -169,11 +169,12 @@ export interface NormalizedHookEvent {
 }
 
 export type {
+  DiscoveredPlanFile,
   HookTranscript,
   HookTranscriptEvent,
   HookTranscriptMessage,
 } from '@showtail/agent-traces/model';
-import type { HookTranscript } from '@showtail/agent-traces/model';
+import type { DiscoveredPlanFile, HookTranscript } from '@showtail/agent-traces/model';
 
 // --- Legacy transcript migration -----------------------------------------
 
@@ -193,23 +194,6 @@ export interface MigrationCapability {
   read(candidate: MigrationTranscriptCandidate, root: string): HookTranscript;
   /** Provider-owned plan files tied to this session, when available. */
   planFiles?(candidate: MigrationTranscriptCandidate): DiscoveredPlanFile[];
-}
-
-/**
- * A real on-disk plan file a tool wrote for the session (e.g. Antigravity's
- * `brain/<id>/plan.md`). The hook dispatcher materializes this into the trail
- * and links it from the report; the discovery of *where* a tool keeps its plan
- * files is the only tool-specific part, exactly like {@link HookAdapter.getTranscript}.
- */
-export interface DiscoveredPlanFile {
-  /** Absolute source path on disk (provenance only; never linked directly). */
-  absPath: string;
-  /** The plan markdown read from disk. */
-  content: string;
-  /** Stable id for the saved copy + dedup, e.g. `agy-plan:<conversationId>`. */
-  sourceId: string;
-  /** The tool's own session id this plan belongs to, for matching to a session. */
-  nativeSessionId?: string;
 }
 
 export interface HookAdapter {

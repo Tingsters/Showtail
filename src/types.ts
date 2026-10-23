@@ -44,8 +44,16 @@ export type ActorSlug = string;
  */
 export type Tool = string;
 
-export type { ConversationEvent, JsonValue, RedactConfig } from '@showtail/agent-traces/model';
-import type { ConversationEvent, JsonValue, RedactConfig } from '@showtail/agent-traces/model';
+export type {
+  ConversationEvent,
+  JsonValue,
+  RedactConfig,
+} from '@showtail/agent-traces/model';
+import type {
+  ConversationEvent,
+  JsonValue,
+  RedactConfig,
+} from '@showtail/agent-traces/model';
 
 /** A single recorded event in a work session. One JSONL line = one Event. */
 export interface Event {

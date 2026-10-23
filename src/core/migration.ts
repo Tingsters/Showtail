@@ -41,6 +41,13 @@ import { PLAN_APPROVED_TAG, PLAN_REVISED_TAG } from './plans.ts';
 import { materializePlan } from './plans.ts';
 import { readConfig, readSessions, type AuthorPaths } from './storage.ts';
 import { renderToolCallInput, renderToolCallText } from './toolCalls.ts';
+import {
+  closeInTime as closeInTimeWithin,
+  isContiguousSubsequence,
+  spansOverlap,
+  timestampMs,
+  transcriptSpan,
+} from '@showtail/agent-traces/match/overlap';
 
 const MATCH_DRIFT_MS = 10 * 60_000;
 const EVENT_MATCH_DRIFT_MS = 2 * 60_000;
@@ -230,60 +237,16 @@ function samePath(a: string, b: string): boolean {
   return key(a) === key(b);
 }
 
-function timestampMs(value: string | undefined): number | undefined {
-  if (!value) return undefined;
-  const parsed = Date.parse(value);
-  return Number.isFinite(parsed) ? parsed : undefined;
-}
-
 function closeInTime(a: string | undefined, b: string | undefined): boolean {
-  const left = timestampMs(a);
-  const right = timestampMs(b);
-  return left !== undefined && right !== undefined
-    ? Math.abs(left - right) <= EVENT_MATCH_DRIFT_MS
-    : true;
-}
-
-function transcriptSpan(transcript: HookTranscript): { first?: string; last?: string } {
-  let first: string | undefined;
-  let last: string | undefined;
-  for (const item of [...transcript.messages, ...(transcript.events ?? [])]) {
-    const ts = item.timestamp;
-    if (!ts) continue;
-    if (!first || ts < first) first = ts;
-    if (!last || ts > last) last = ts;
-  }
-  return { first, last };
+  return closeInTimeWithin(a, b, EVENT_MATCH_DRIFT_MS);
 }
 
 function sessionOverlaps(session: Session, candidate: ParsedCandidate): boolean {
-  const sessionStart = timestampMs(session.startedAt);
-  const sessionEnd = timestampMs(session.endedAt) ?? sessionStart;
-  const candidateStart = timestampMs(candidate.first);
-  const candidateEnd = timestampMs(candidate.last) ?? candidateStart;
-  if (
-    sessionStart === undefined ||
-    sessionEnd === undefined ||
-    candidateStart === undefined ||
-    candidateEnd === undefined
-  ) {
-    return false;
-  }
-  return (
-    candidateStart <= sessionEnd + MATCH_DRIFT_MS &&
-    candidateEnd >= sessionStart - MATCH_DRIFT_MS
+  return spansOverlap(
+    { start: session.startedAt, end: session.endedAt },
+    { start: candidate.first, end: candidate.last },
+    MATCH_DRIFT_MS,
   );
-}
-
-function isContiguousSubsequence(needles: string[], haystack: string[]): boolean {
-  if (needles.length === 0 || needles.length > haystack.length) return false;
-  outer: for (let start = 0; start <= haystack.length - needles.length; start += 1) {
-    for (let i = 0; i < needles.length; i += 1) {
-      if (needles[i] !== haystack[start + i]) continue outer;
-    }
-    return true;
-  }
-  return false;
 }
 
 function increment(record: Record<string, number>, key: string): void {
