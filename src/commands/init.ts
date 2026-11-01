@@ -21,13 +21,13 @@ import {
   listActionableLedgerRanges,
   listLedgerSegmentViews,
   markPlaced,
-  pendingLedgerRangesForRoot,
   readLedgerRecords,
-  readLedgerSegmentRecords,
   sessionTouchesPath,
   unplacedSessions,
   type LedgerRangeView,
+  type LedgerRecord,
   type LedgerSegment,
+  type LedgerSegmentsDocument,
   type LedgerSegmentView,
   type LedgerSession,
 } from '../core/ledger.ts';
@@ -48,6 +48,7 @@ import {
   ensureTrailId,
   isHomedirCatchAll,
   isPathUnder,
+  pathKey,
   pathsForRoot,
   readConfig,
   resolveProjectContext,
@@ -57,7 +58,7 @@ import {
   writeState,
   type ShowtailPaths,
 } from '../core/storage.ts';
-import { pendingRangeSummary, type PendingRangeSummary } from './ranges.ts';
+import { pendingRangeSummaries, type PendingRangeSummary } from './ranges.ts';
 
 /**
  * Mark the whole trail as binary so git never normalizes line endings: the
@@ -507,11 +508,11 @@ function rangeRef(range: LedgerRangeView): WorkRangeRef {
   };
 }
 
-function pendingWorkRange(range: LedgerRangeView): PendingWorkRange {
-  return {
-    ...pendingRangeSummary(range),
-    segmentIds: [...range.memberSegmentIds],
-  };
+function pendingWorkRanges(ranges: LedgerRangeView[]): PendingWorkRange[] {
+  return pendingRangeSummaries(ranges).map((summary, index) => ({
+    ...summary,
+    segmentIds: [...ranges[index]!.memberSegmentIds],
+  }));
 }
 
 function pendingAmbiguousRange(range: LedgerRangeView): PendingAmbiguousRange {
@@ -574,15 +575,7 @@ function ambiguousRangeRelatesToRoot(range: LedgerRangeView, root: string): bool
   return exactMatch || enclosesEveryCandidate;
 }
 
-/** Segment records after valid correction chains replace their obsolete ancestors. */
-function effectiveSegmentRecords(session: LedgerSession, segment: LedgerSegment) {
-  const effectiveIds = new Set(
-    effectiveLedgerRecords(readLedgerRecords(session.id)).map((record) => record.id),
-  );
-  return readLedgerSegmentRecords(session.id, segment).filter((record) =>
-    effectiveIds.has(record.id),
-  );
-}
+type PathRecord = Pick<LedgerRecord, 'id' | 'kind' | 'file' | 'context'>;
 
 /** Raw-path compatibility for explicit `track <subfolder>` without session bleed. */
 function segmentTouchesPath(
@@ -590,8 +583,10 @@ function segmentTouchesPath(
   segment: LedgerSegment,
   folder: string,
   segmentCount: number,
+  sessionRecords: readonly PathRecord[],
 ): boolean {
-  const records = effectiveSegmentRecords(session, segment);
+  const wanted = new Set(segment.recordIds);
+  const records = sessionRecords.filter((record) => wanted.has(record.id));
   const editPaths = records.flatMap((record) =>
     record.kind === 'edit' && record.file
       ? [effectiveLedgerSegmentPath(segment, record.file)]
@@ -629,11 +624,11 @@ function segmentTouchesPath(
 function rangeTouchesPath(
   range: LedgerRangeView,
   folder: string,
-  persist: boolean,
+  document: LedgerSegmentsDocument,
+  records: readonly PathRecord[],
 ): boolean {
-  const document = ensureLedgerSegments(range.session, { persist });
   return range.segments.some((segment) =>
-    segmentTouchesPath(range.session, segment, folder, document.segments.length),
+    segmentTouchesPath(range.session, segment, folder, document.segments.length, records),
   );
 }
 
@@ -653,31 +648,41 @@ function discoverDirectWork(
     ...(options.ledgerSessionId ? { sessionId: options.ledgerSessionId } : {}),
     persist: options.persist,
   }).filter((range) => range.prompts > 0 || range.edits > 0);
-  const resolved = pendingLedgerRangesForRoot(target, {
-    includeHidden: true,
-    persist: options.persist,
-  }).filter(
+  const resolved = all.filter(
     (range) =>
-      (!options.ledgerSessionId || range.session.id === options.ledgerSessionId) &&
-      (range.prompts > 0 || range.edits > 0),
+      (range.route.state === 'tracked' || range.route.state === 'candidate') &&
+      pathKey(resolve(range.route.root)) === pathKey(target),
   );
   const resolvedIds = new Set(resolved.map((range) => range.selector));
+  const documents = new Map<string, LedgerSegmentsDocument>();
+  const pathRecords = new Map<string, PathRecord[]>();
   const ranges = all.filter((range) => {
     if (range.route.state === 'ambiguous') return false;
     if (resolvedIds.has(range.selector)) return true;
-    const document = ensureLedgerSegments(range.session, {
-      persist: options.persist,
-    });
+    let document = documents.get(range.session.id);
+    if (!document) {
+      document = ensureLedgerSegments(range.session, { persist: options.persist });
+      documents.set(range.session.id, document);
+    }
+    const touchesTarget = (): boolean => {
+      let records = pathRecords.get(range.session.id);
+      if (!records) {
+        // Retain path evidence only; long transcripts can contain large replies
+        // and diffs that this synchronous compatibility check never uses.
+        records = effectiveLedgerRecords(readLedgerRecords(range.session.id)).map(
+          ({ id, kind, file, context }) => ({ id, kind, file, context }),
+        );
+        pathRecords.set(range.session.id, records);
+      }
+      return rangeTouchesPath(range, target, document, records);
+    };
     // Before segmentation existed, one prompt-only session was claimable from
     // its captured cwd. Preserve that behavior without applying the session cwd
     // to every turn of a mixed editor chat.
-    if (
-      document.segments.length === 1 &&
-      rangeTouchesPath(range, target, options.persist)
-    ) {
+    if (document.segments.length === 1 && touchesTarget()) {
       return true;
     }
-    if (options.mode === 'explicit' && rangeTouchesPath(range, target, options.persist)) {
+    if (options.mode === 'explicit' && touchesTarget()) {
       return true;
     }
     // A context-free prefix is not owned by a later edit merely because that edit
@@ -690,16 +695,6 @@ function discoverDirectWork(
       range.route.state === 'ambiguous' && ambiguousRangeRelatesToRoot(range, target),
   );
   return { ranges, ambiguousRanges };
-}
-
-function segmentEditPaths(session: LedgerSession, segment: LedgerSegment): string[] {
-  const paths: string[] = [];
-  for (const record of effectiveSegmentRecords(session, segment)) {
-    if (record.kind !== 'edit' || !record.file) continue;
-    const file = effectiveLedgerSegmentPath(segment, record.file);
-    if (!paths.some((existing) => samePath(existing, file))) paths.push(file);
-  }
-  return paths;
 }
 
 type SegmentEditPresence = 'none' | 'all-present' | 'all-absent' | 'mixed';
@@ -765,9 +760,7 @@ function legacyCompatibleSegment(
     persist,
   });
   if (views.some((view) => view.route.state === 'ambiguous')) return false;
-  const editBearing = views.filter(
-    (view) => segmentEditPaths(session, view.segment).length > 0,
-  );
+  const editBearing = views.filter((view) => view.editPaths.length > 0);
   if (editBearing.length !== 1 || editBearing[0]!.segment.id !== segment.id) {
     return false;
   }
@@ -787,7 +780,6 @@ function legacyRelocationCohort(
   view: LedgerSegmentView,
   persist: boolean,
 ): LedgerSegment[] | null {
-  if (!legacyCompatibleSegment(view.session, view.segment, persist)) return null;
   const document = ensureLedgerSegments(view.session, { persist });
   const currentTargets = view.segment.targets ?? [];
   if (view.segment.status === 'placed') {
@@ -848,7 +840,7 @@ async function discoverRelocationWork(
     // One turn that edits A+B must remain review-only; content from one side may
     // never be used to auto-attribute the whole atomic turn to that side.
     if (view.route.state === 'ambiguous') continue;
-    const paths = segmentEditPaths(session, segment);
+    const paths = view.editPaths;
     const editPresence = segmentEditPresence(paths);
     if (editPresence === 'none' || editPresence === 'all-present') continue;
 
@@ -877,7 +869,8 @@ async function discoverRelocationWork(
     }
     if (!match) continue;
 
-    const cohort = legacyRelocationCohort(view, persist);
+    const legacyEligible = legacyCompatibleSegment(session, segment, persist);
+    const cohort = legacyEligible ? legacyRelocationCohort(view, persist) : null;
     const range = cohort
       ? {
           ...singleSegmentRange(view),
@@ -892,7 +885,6 @@ async function discoverRelocationWork(
       tier: match.tier,
       detail: match.detail,
     };
-    const legacyEligible = legacyCompatibleSegment(session, segment, persist);
     if (editPresence === 'mixed') {
       candidates.push({ ...summary, reason: 'mixed' });
     } else if (match.tier === 'B') {
@@ -929,7 +921,7 @@ export async function pendingWorkForRoot(
   const relocation = await discoverRelocationWork(root, ledgerSessionId, false);
   return {
     sessions: uniqueSessionsForRanges(direct.ranges),
-    ranges: direct.ranges.map(pendingWorkRange),
+    ranges: pendingWorkRanges(direct.ranges),
     pendingAmbiguous: aggregateAmbiguousRanges(direct.ambiguousRanges),
     pendingAmbiguousRanges: direct.ambiguousRanges.map(pendingAmbiguousRange),
     safeRelocations: relocation.safe.flatMap((item) =>

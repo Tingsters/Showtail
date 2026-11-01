@@ -310,6 +310,8 @@ export interface LedgerSegmentView {
   targetPaths: string[];
   prompts: number;
   edits: number;
+  /** Effective edit paths, already rebased for this turn. */
+  editPaths: string[];
   firstPrompt?: string;
   hiddenReason: HiddenReason | null;
 }
@@ -1982,13 +1984,23 @@ export function ledgerSegmentProjectContexts(
   session: LedgerSession,
   document: LedgerSegmentsDocument = ensureLedgerSegments(session),
 ): Map<string, LedgerSegmentProjectContext> {
-  const allRecords = readLedgerRecords(session.id);
   // Segments retain the append-only raw ids for audit/rebuild purposes. Routing,
   // however, must see only the current leaves of valid correction chains or a
   // superseded record can keep influencing the turn it was repaired away from.
   const byId = new Map(
-    effectiveLedgerRecords(allRecords).map((record) => [record.id, record]),
+    effectiveLedgerRecords(readLedgerRecords(session.id)).map((record) => [
+      record.id,
+      record,
+    ]),
   );
+  return segmentProjectContexts(session, document, byId);
+}
+
+function segmentProjectContexts(
+  session: LedgerSession,
+  document: LedgerSegmentsDocument,
+  byId: ReadonlyMap<string, LedgerRecord>,
+): Map<string, LedgerSegmentProjectContext> {
   const contexts = new Map<string, LedgerSegmentProjectContext>();
   let preceding: LedgerSegmentProjectContext | undefined;
   let precedingSegmentId: string | undefined;
@@ -2086,19 +2098,16 @@ export function ledgerSegmentProjectContext(
 }
 
 function segmentFacts(
-  sessionId: string,
   segment: LedgerSegment,
+  byId: ReadonlyMap<string, LedgerRecord>,
 ): { prompts: number; edits: number; firstPrompt?: string; editPaths: string[] } {
   let prompts = 0;
   let edits = 0;
   let firstPrompt: string | undefined;
   const editPaths: string[] = [];
-  const wanted = new Set(segment.recordIds);
-  // Resolve corrections across the whole session before selecting this segment:
-  // a corrected record can move from one turn to another while raw membership
-  // remains append-only in both segments for audit and deterministic rebuilds.
-  for (const record of effectiveLedgerRecords(readLedgerRecords(sessionId))) {
-    if (!wanted.has(record.id)) continue;
+  for (const id of segment.recordIds) {
+    const record = byId.get(id);
+    if (!record) continue;
     if (record.kind === 'prompt') {
       prompts += 1;
       if (!firstPrompt && record.text) firstPrompt = record.text;
@@ -2115,6 +2124,8 @@ function segmentHiddenReason(
   route: LedgerSegmentProjectContext,
   facts: ReturnType<typeof segmentFacts>,
   hasProjectWitness: boolean,
+  min: ReturnType<typeof readInboxMinSignal>,
+  scratch: string[],
 ): HiddenReason | null {
   if (segment.dismissedAt) return 'dismissed';
   const pathsGone =
@@ -2129,7 +2140,6 @@ function segmentHiddenReason(
   // A context-free turn beside resolved project work needs human placement even
   // when it is individually small. Otherwise the opening or closing turn of a
   // mixed native chat disappears from the default inbox as low-signal scratch.
-  const min = readInboxMinSignal();
   if (
     !unresolvedProjectCompanion &&
     !(facts.edits >= min.edits || facts.prompts >= min.prompts)
@@ -2142,16 +2152,10 @@ function segmentHiddenReason(
       : route.state === 'ambiguous'
         ? route.candidates
         : facts.editPaths;
-  const scratch = readScratchPaths();
   if (scratch.some((root) => routePaths.some((path) => isPathUnder(path, root)))) {
     return 'ignored-path';
   }
   return null;
-}
-
-function segmentTargetAlive(target: LedgerTarget): boolean {
-  const path = knownTrailPath(target.trailId) ?? target.path;
-  return trailIdAt(path) !== undefined;
 }
 
 /** List routeable turn ranges with composite selectors for command surfaces. */
@@ -2165,35 +2169,51 @@ export function listLedgerSegmentViews(
   } = {},
 ): LedgerSegmentView[] {
   const views: LedgerSegmentView[] = [];
+  const minSignal = readInboxMinSignal();
+  const ignoredRoots = readScratchPaths();
+  const trails = readLedgerIndex().trails;
+  const targetPath = (target: LedgerTarget): string =>
+    trails[target.trailId]?.path ?? target.path;
   for (const session of allLedgerSessions()) {
     if (opts.sessionId && session.id !== opts.sessionId) continue;
     const document = ensureLedgerSegments(session, { persist: opts.persist });
-    const contexts = ledgerSegmentProjectContexts(session, document);
-    const ignoredRoots = readScratchPaths();
+    // Keep this snapshot local to one scan: sharing it across turns avoids
+    // reparsing a whole transcript per turn, while later scans see new captures
+    // and append-only corrections immediately.
+    const byId = new Map(
+      effectiveLedgerRecords(readLedgerRecords(session.id)).map((record) => [
+        record.id,
+        record,
+      ]),
+    );
+    const contexts = segmentProjectContexts(session, document, byId);
     const isIgnoredWitness = (path: string): boolean =>
       ignoredRoots.some((root) => isPathUnder(path, root));
     const hasProjectWitness = document.segments.some((segment) => {
       const context = contexts.get(segment.id);
-      const witnessPaths = (segment.targets ?? []).map(
-        (target) => knownTrailPath(target.trailId) ?? target.path,
-      );
+      const witnessPaths = (segment.targets ?? []).map(targetPath);
       if (context?.state === 'tracked' || context?.state === 'candidate') {
         witnessPaths.push(context.root);
       }
       return witnessPaths.some((path) => !isIgnoredWitness(path));
     });
     for (const segment of document.segments) {
-      const facts = segmentFacts(session.id, segment);
+      const facts = segmentFacts(segment, byId);
       const route = contexts.get(segment.id)!;
       const targets = segment.targets ?? [];
-      const targetPaths = targets.map(
-        (target) => knownTrailPath(target.trailId) ?? target.path,
-      );
+      const targetPaths = targets.map(targetPath);
       const targetMissing =
         segment.status === 'placed' &&
         targets.length > 0 &&
-        !targets.some(segmentTargetAlive);
-      const hiddenReason = segmentHiddenReason(segment, route, facts, hasProjectWitness);
+        !targetPaths.some((path) => trailIdAt(path) !== undefined);
+      const hiddenReason = segmentHiddenReason(
+        segment,
+        route,
+        facts,
+        hasProjectWitness,
+        minSignal,
+        ignoredRoots,
+      );
       if (!opts.includeHidden && hiddenReason !== null && !targetMissing) continue;
       if (opts.pendingOnly && segment.status === 'placed' && !targetMissing) continue;
       views.push({
@@ -2205,6 +2225,7 @@ export function listLedgerSegmentViews(
         targetPaths,
         prompts: facts.prompts,
         edits: facts.edits,
+        editPaths: facts.editPaths,
         ...(facts.firstPrompt ? { firstPrompt: facts.firstPrompt } : {}),
         hiddenReason,
       });
@@ -2271,6 +2292,7 @@ function asRange(members: LedgerSegmentView[]): LedgerRangeView {
     targetPaths,
     prompts: members.reduce((count, member) => count + member.prompts, 0),
     edits: members.reduce((count, member) => count + member.edits, 0),
+    editPaths: members.flatMap((member) => member.editPaths),
     firstPrompt: members.find((member) => member.firstPrompt)?.firstPrompt,
   };
 }

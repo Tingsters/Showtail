@@ -249,6 +249,7 @@ describe('the installed hooks, run by real git', () => {
       const env = {
         ...spawnEnv(),
         PATH: `${shimDir}${delimiter}${process.env.PATH ?? ''}`,
+        Path: `${shimDir}${delimiter}${process.env.PATH ?? ''}`,
       };
 
       expect(runCli(dir, ['ensure'], { env }).code).toBe(0);
@@ -300,6 +301,7 @@ describe('the hooks never block because of Showtail itself', () => {
       const env = {
         ...process.env,
         PATH: `${shimDir}${delimiter}${process.env.PATH ?? ''}`,
+        Path: `${shimDir}${delimiter}${process.env.PATH ?? ''}`,
       };
       const r = spawnSync('git', ['commit', '-q', '-m', 'work'], {
         cwd: dir,

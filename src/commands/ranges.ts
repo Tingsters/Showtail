@@ -2,6 +2,7 @@ import {
   listActionableLedgerRanges,
   readLedgerRecords,
   type LedgerRangeView,
+  type LedgerRecord,
 } from '../core/ledger.ts';
 import { samePath } from '../core/storage.ts';
 import { oneLine } from '../core/text.ts';
@@ -48,9 +49,12 @@ function rangeReason(range: LedgerRangeView): string {
 }
 
 /** Convert a range view without deriving or persisting any additional ledger state. */
-export function pendingRangeSummary(range: LedgerRangeView): PendingRangeSummary {
+export function pendingRangeSummary(
+  range: LedgerRangeView,
+  records: readonly LedgerRecord[] = readLedgerRecords(range.session.id),
+): PendingRangeSummary {
   const memberIds = new Set(range.segments.flatMap((segment) => segment.recordIds));
-  const prompts = readLedgerRecords(range.session.id).flatMap((record) =>
+  const prompts = records.flatMap((record) =>
     memberIds.has(record.id) && record.kind === 'prompt' && record.text
       ? [oneLine(record.text, 160)]
       : [],
@@ -68,6 +72,21 @@ export function pendingRangeSummary(range: LedgerRangeView): PendingRangeSummary
     reason: rangeReason(range),
     candidates: routeCandidates(range),
   };
+}
+
+/** Summarize neighbors using one prompt snapshot per session, local to this call. */
+export function pendingRangeSummaries(ranges: LedgerRangeView[]): PendingRangeSummary[] {
+  const promptsBySession = new Map<string, LedgerRecord[]>();
+  return ranges.map((range) => {
+    let prompts = promptsBySession.get(range.session.id);
+    if (!prompts) {
+      prompts = readLedgerRecords(range.session.id).filter(
+        (record) => record.kind === 'prompt',
+      );
+      promptsBySession.set(range.session.id, prompts);
+    }
+    return pendingRangeSummary(range, prompts);
+  });
 }
 
 function rangeRelatesToRoot(range: LedgerRangeView, root: string): boolean {
@@ -100,9 +119,9 @@ export function pendingRangeSummariesForRoot(
       .filter((range) => rangeRelatesToRoot(range, root))
       .map((range) => range.session.id),
   );
-  return ranges
-    .filter(
+  return pendingRangeSummaries(
+    ranges.filter(
       (range) => relatedSessions.has(range.session.id) && ledgerRangeIsPending(range),
-    )
-    .map(pendingRangeSummary);
+    ),
+  );
 }

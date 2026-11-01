@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { chmodSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
-import { delimiter, join } from 'node:path';
+import { delimiter, dirname, join } from 'node:path';
 import { runInit } from '../src/commands/init.ts';
 import { runSubmit } from '../src/commands/submit.ts';
 import { logEvent } from '../src/core/events.ts';
@@ -73,6 +73,13 @@ async function runStep(
   const output = join(work, 'output.txt');
   writeFileSync(summary, '');
   writeFileSync(output, '');
+  // Non-login Git Bash does not add its Unix tools to the inherited Windows PATH.
+  const bashTools = join(dirname(BASH), '..', 'usr', 'bin');
+  const stepPath = [
+    shims,
+    ...(process.platform === 'win32' && existsSync(bashTools) ? [bashTools] : []),
+    process.env.PATH ?? '',
+  ].join(delimiter);
   const proc = Bun.spawn([BASH, '--noprofile', '--norc', '-eo', 'pipefail', script], {
     cwd: project,
     env: {
@@ -86,8 +93,8 @@ async function runStep(
       INPUT_SUBMISSION_DIR: SUBMISSION_DIR,
       // Windows runners name it `Path`; spreading the environment keeps that key, so adding only
       // `PATH` would leave two spellings and the child could take the one without the shim.
-      PATH: `${shims}${delimiter}${process.env.PATH ?? ''}`,
-      Path: `${shims}${delimiter}${process.env.PATH ?? ''}`,
+      PATH: stepPath,
+      Path: stepPath,
       ...input,
     },
     stdout: 'pipe',

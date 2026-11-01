@@ -14,17 +14,18 @@ function readJson(path: string): PackageManifest {
   return JSON.parse(readFileSync(path, 'utf8')) as PackageManifest;
 }
 
+function readLicense(path: string): string {
+  return readFileSync(path, 'utf8').replace(/\r\n/g, '\n');
+}
+
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(`License check failed: ${message}`);
 }
 
 const project = readJson(join(root, 'package.json'));
 const extension = readJson(join(root, 'integrations', 'vscode', 'package.json'));
-const rootLicense = readFileSync(join(root, 'LICENSE'), 'utf8');
-const extensionLicense = readFileSync(
-  join(root, 'integrations', 'vscode', 'LICENSE'),
-  'utf8',
-);
+const rootLicense = readLicense(join(root, 'LICENSE'));
+const extensionLicense = readLicense(join(root, 'integrations', 'vscode', 'LICENSE'));
 const notices = readFileSync(join(root, 'THIRD_PARTY_NOTICES.md'), 'utf8');
 const bunVersion = readFileSync(join(root, '.bun-version'), 'utf8').trim();
 
@@ -40,12 +41,32 @@ const shippedDependencies: Record<string, string> = {
   commander: 'MIT',
   'turbo-stream': 'ISC',
 };
+// First-party workspaces ship under Showtail's license rather than as third-party notices.
+const workspaceDependencies: Record<string, string> = {
+  '@showtail/agent-traces': 'packages/agent-traces',
+};
 const declared = Object.keys(project.dependencies ?? {}).sort();
-const reviewed = Object.keys(shippedDependencies).sort();
+const reviewed = [
+  ...Object.keys(shippedDependencies),
+  ...Object.keys(workspaceDependencies),
+].sort();
 assert(
   JSON.stringify(declared) === JSON.stringify(reviewed),
   'production dependency set changed; review its license and update the inventory',
 );
+
+for (const [name, directory] of Object.entries(workspaceDependencies)) {
+  const manifest = readJson(join(root, directory, 'package.json'));
+  assert(
+    project.dependencies?.[name] === 'workspace:*' && manifest.name === name,
+    `${name} must resolve to its reviewed workspace`,
+  );
+  assert(manifest.license === project.license, `${name} must use Showtail's license`);
+  assert(
+    readLicense(join(root, directory, 'LICENSE')) === rootLicense,
+    `${name} LICENSE must match the root license`,
+  );
+}
 
 for (const [name, expectedLicense] of Object.entries(shippedDependencies)) {
   const manifest = readJson(join(root, 'node_modules', name, 'package.json'));
