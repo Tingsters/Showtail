@@ -116,7 +116,9 @@ jobs:
             exit 1
           fi
           git add -A fixture
-          git commit -q -m 'tweak'
+          # This synthetic commit models an attacker rewriting the trail. Let it
+          # reach the verifier even when the install step added Showtail's guard.
+          git -c core.hooksPath=/dev/null commit -q -m 'tweak'
 
       # `fail-on-invalid: false` so the step reports without failing the job —
       # this also covers that input, which is otherwise untested on a runner.
