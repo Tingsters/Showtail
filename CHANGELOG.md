@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+## 0.20.1 — Report performance and capture fixes
+
+- Reports reuse ledger records across turns and pending-work summaries, reducing
+  repeated transcript parsing in large machine-wide histories.
+- Antigravity CLI hooks use agy's documented format so prompt and edit capture
+  runs correctly.
+- Agent transcript readers share parsing and redaction helpers through the
+  `@showtail/agent-traces` workspace package.
+- Windows shell tests use the intended tool paths. The release license audit
+  covers the internal workspace and accepts equivalent Windows line endings.
+
 ## 0.20.0 — Secrets stay out: a private trail and a sanitised report
 
 *0.19.0 was prepared but never published; its notes are included here. It is a minor
