@@ -142,6 +142,7 @@ export interface ConnectCapability {
  * this shape — it never inspects a raw payload or branches on a tool name.
  */
 export interface NormalizedHookEvent {
+  promptOrigin?: 'human' | 'agent' | 'harness';
   /** The host tool's own session id (Claude/Gemini `session_id`, …), if any. */
   nativeSessionId?: string;
   /**
@@ -191,7 +192,10 @@ export interface MigrationCapability {
   /** Discover every local transcript for this provider, newest first. */
   discover(): MigrationTranscriptCandidate[];
   /** Parse one candidate into the provider-neutral transcript model. */
-  read(candidate: MigrationTranscriptCandidate, root: string): HookTranscript;
+  read(
+    candidate: MigrationTranscriptCandidate,
+    root: string,
+  ): HookTranscript | Promise<HookTranscript>;
   /** Provider-owned plan files tied to this session, when available. */
   planFiles?(candidate: MigrationTranscriptCandidate): DiscoveredPlanFile[];
 }

@@ -4,6 +4,7 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import {
   HistoryStore,
+  canonical,
   containsPath,
   digest,
   type RecordInput,
@@ -195,7 +196,23 @@ function loadProject(
       const unverified = warningCount !== warnings.length;
       if (chain.unchained)
         warnings.push(`${chain.unchained} legacy journal entries predate hash chaining.`);
-      for (const entry of entries) {
+      const overlays = new Map<string, any>();
+      for (const audit of entries)
+        for (const overlay of audit.enrichment?.overlays ?? [])
+          overlays.set(overlay.targetEventId, {
+            ...overlays.get(overlay.targetEventId),
+            ...overlay,
+          });
+      for (const original of entries) {
+        const overlay = overlays.get(original.id);
+        const entry = overlay
+          ? {
+              ...original,
+              sourceId: overlay.sourceId ?? original.sourceId,
+              model: overlay.model ?? original.model,
+              turn: overlay.turnId ?? original.turn,
+            }
+          : original;
         if (!entry.id || !Number.isFinite(Date.parse(entry.ts)))
           throw new Error('LEGACY_RECORD_INVALID');
         const session = sessions.get(entry.conv ?? '');
@@ -267,7 +284,9 @@ function loadProject(
           input,
           source,
           originalId: id,
-          aliases: sourceId ? [sourceId] : [],
+          aliases: [
+            ...new Set([original.sourceId, sourceId].filter((s): s is string => !!s)),
+          ],
           turn,
           project,
           session: {
@@ -275,7 +294,7 @@ function loadProject(
             nativeSessionId:
               session?.nativeSessionId ??
               session?.claudeSessionId ??
-              `legacy:${config.trailId ?? source}:${slug}:${entry.conv ?? id}`,
+              `legacy:${config.trailId ?? source}:${slug}:${entry.conv ?? (kind === 'audit' ? 'audit' : id)}`,
             startedAt: session?.startedAt ?? entry.ts,
             endedAt: session?.endedAt,
             cwd: root,
@@ -388,6 +407,43 @@ export function importLegacy(
       })
       .immediate();
   }
+  const patches = new Map<string, Partial<import('./history.ts').HistoryRecord>>();
+  for (const item of items) {
+    const record = store.importRecord(item.source, item.originalId);
+    if (!record) continue;
+    const patch: Partial<import('./history.ts').HistoryRecord> = {};
+    if (item.input.model && item.input.model !== record.model)
+      patch.model = item.input.model;
+    const turn = item.turn ? store.importRecord(item.source, item.turn) : undefined;
+    if (record.kind !== 'prompt' && turn && (turn.turnId ?? turn.id) !== record.turnId)
+      patch.turnId = turn.turnId ?? turn.id;
+    if (Object.keys(patch).length) {
+      const old = store
+        .query('SELECT patch FROM record_overlays WHERE record_id=?')
+        .get(record.id) as { patch: string } | null;
+      patches.set(record.id, {
+        ...(old ? JSON.parse(old.patch) : {}),
+        ...patches.get(record.id),
+        ...patch,
+      });
+    }
+  }
+  if (patches.size)
+    store
+      .transaction(() => {
+        const operations = {
+          overlays: [...patches].map(([id, patch]) => ({ id, patch })),
+          authors: [],
+          bindings: [],
+        };
+        const receipt = 'repair_' + digest(canonical(operations)).slice(0, 32);
+        store
+          .query('INSERT OR IGNORE INTO repair_receipts VALUES (?,?,?)')
+          .run(receipt, new Date().toISOString(), canonical({ operations }));
+        for (const [recordId, patch] of patches)
+          store.overlayRecord(recordId, patch, receipt);
+      })
+      .immediate();
   if (items.some((item) => item.input.provenance?.legacyIntegrity === 'unverified')) {
     const key = digest(JSON.stringify({ sources: paths, warnings: result.warnings }));
     const session = store.ensureSession({

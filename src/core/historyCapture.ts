@@ -23,7 +23,11 @@ import {
   type SessionInput,
 } from './history.ts';
 import { getPlugin, getPluginById } from '../plugins/registry.ts';
-import type { HookTranscript, HookTranscriptMessage } from '../plugins/types.ts';
+import type {
+  HookTranscript,
+  HookTranscriptMessage,
+  NormalizedHookEvent,
+} from '../plugins/types.ts';
 import { extractPrompt, extractSessionId, type HookPayload } from './hookInput.ts';
 import {
   readGlobalConfig,
@@ -229,15 +233,32 @@ export function captureTranscript(
         const kind = roleKind(message.role);
         if (!kind) continue;
         if (message.role === 'user') {
-          if (isSyntheticPrompt(message.text)) continue;
+          const promptTimestamp = message.submittedAt ?? message.timestamp;
+          if (
+            message.origin === 'agent' ||
+            message.origin === 'harness' ||
+            (message.origin !== 'human' && isSyntheticPrompt(message.text))
+          ) {
+            if (inWindow(promptTimestamp, options.since))
+              append({
+                kind: 'tool_call',
+                origin: message.origin ?? 'harness',
+                toolName: 'Provider message',
+                text: message.text,
+                sourceId: message.sourceId,
+                ts: promptTimestamp,
+                turnId: currentTurn,
+              });
+            continue;
+          }
           const reply = asyncReplyDecision(message.text);
           if (reply) {
-            if (inWindow(message.timestamp, options.since))
+            if (inWindow(promptTimestamp, options.since))
               append({
                 kind: 'decision',
                 text: reply.text,
                 sourceId: reply.sourceId,
-                ts: message.timestamp,
+                ts: promptTimestamp,
                 turnId: currentTurn,
               });
             continue;
@@ -245,13 +266,15 @@ export function captureTranscript(
           let prompt = store.bySource(session.id, message.sourceId);
           if (!prompt && message.requestId)
             prompt = store.bySource(session.id, `prompt:${message.requestId}`);
-          if (!prompt && inWindow(message.timestamp, options.since)) {
+          if (!prompt && inWindow(promptTimestamp, options.since)) {
             const text = redact(message.text, historySettings().redact).text;
             // Only unpaired LIVE prompts participate. Separate equal transcript prompts stay separate.
             prompt = livePrompts.find(
               (r) =>
                 !claimed.has(r.id) &&
                 r.text === text &&
+                !!message.timestamp &&
+                Math.abs(Date.parse(r.ts) - Date.parse(promptTimestamp!)) <= 5000 &&
                 !store
                   .query(
                     "SELECT 1 FROM source_aliases WHERE session_id=? AND record_id=? AND source_id NOT LIKE 'hook:%' AND source_id NOT LIKE 'prompt:%'",
@@ -259,37 +282,48 @@ export function captureTranscript(
                   .get(session.id, r.id),
             );
           }
-          if (!prompt && inWindow(message.timestamp, options.since))
+          if (!prompt && inWindow(promptTimestamp, options.since))
             prompt = append({
               kind: 'prompt',
+              origin: message.origin,
               text: message.text,
               sourceId: message.sourceId,
-              ts: message.timestamp,
+              ts: promptTimestamp,
               requestId: message.requestId,
-              context: { cwd: session.cwd, workspacePaths: session.workspacePaths },
+              context: message.context ?? {
+                cwd: session.cwd,
+                workspacePaths: session.workspacePaths,
+              },
             });
           else if (
             prompt &&
             prompt.text !== redact(message.text, historySettings().redact).text &&
-            inWindow(message.timestamp, options.since)
+            inWindow(promptTimestamp, options.since)
           ) {
             prompt =
               append({
                 kind: 'prompt',
                 text: message.text,
                 sourceId: message.sourceId,
-                ts: message.timestamp,
+                ts: promptTimestamp,
                 requestId: message.requestId,
-                context: { cwd: session.cwd, workspacePaths: session.workspacePaths },
+                context: message.context ?? {
+                  cwd: session.cwd,
+                  workspacePaths: session.workspacePaths,
+                },
               }) ?? prompt;
           }
           currentTurn = prompt?.turnId ?? prompt?.id;
           if (prompt) {
             claimed.add(prompt.id);
             promptAliases.set(message.sourceId, currentTurn!);
-            if (options.continueCapture?.() !== false)
+            if (options.continueCapture?.() !== false && prompt.sessionId === session.id)
               store.alias(session.id, message.sourceId, prompt.id);
-            if (message.requestId && options.continueCapture?.() !== false)
+            if (
+              message.requestId &&
+              prompt.sessionId === session.id &&
+              options.continueCapture?.() !== false
+            )
               store.alias(session.id, `prompt:${message.requestId}`, prompt.id);
           }
           continue;
@@ -376,6 +410,39 @@ export function captureTranscript(
         if (initial && (!latest || initial.ts >= latest.ts))
           store.setCurrentTurn(session.id, initialTurn);
       }
+      if (store.repairSchema && options.continueCapture?.() !== false) {
+        const prompts = transcript.messages.filter(
+          (m) =>
+            m.role === 'user' &&
+            (m.origin === 'human' || !isSyntheticPrompt(m.text)) &&
+            !asyncReplyDecision(m.text),
+        );
+        const matched = prompts.filter(
+          (m) => store.bySource(session.id, m.sourceId)?.kind === 'prompt',
+        ).length;
+        let sourceStat: { sourceSize?: number; sourceMtime?: number } = {};
+        try {
+          if (session.transcriptPath) {
+            const st = statSync(session.transcriptPath);
+            sourceStat = { sourceSize: st.size, sourceMtime: st.mtimeMs };
+          }
+        } catch {
+          /* receipt remains bounded by its read time */
+        }
+        store.noteSourceRead(session.id, {
+          ...sourceStat,
+          status:
+            prompts.length && matched === prompts.length && !transcript.warnings?.length
+              ? 'reconciled'
+              : 'partial',
+          prompts: prompts.length,
+          matched,
+          missing: prompts.length - matched,
+          warningCodes: transcript.warnings?.length ? ['TRANSCRIPT_DEGRADED'] : [],
+          readAt: new Date().toISOString(),
+        });
+      }
+
       return inserted;
     })
     .immediate();
@@ -469,7 +536,7 @@ export async function runHistoryHook(
   if (!automaticCaptureEnabled(tool)) return;
   const payload = (raw && typeof raw === 'object' ? raw : {}) as HookPayload &
     Record<string, any>;
-  const parsed = adapter?.parse(payload) ?? {
+  const parsed: NormalizedHookEvent = adapter?.parse(payload) ?? {
     nativeSessionId: extractSessionId(payload),
     prompt: extractPrompt(payload) ?? undefined,
     editedFiles: [],
@@ -532,21 +599,50 @@ export async function runHistoryHook(
   };
   const gitCommit = cwd ? await maybeCurrentCommit(cwd, true) : undefined;
   if (event === 'user-prompt' && parsed.prompt) {
-    const decision = asyncReplyDecision(parsed.prompt);
-    if (decision)
+    const kind = payload.origin?.kind;
+    const origin =
+      parsed.promptOrigin ??
+      (payload.isMeta ||
+      payload.isSidechain ||
+      payload.isCompactSummary ||
+      ['system', 'sdk'].includes(payload.promptSource) ||
+      ['system', 'task-notification'].includes(kind)
+        ? 'harness'
+        : kind === 'peer' || kind === 'agent'
+          ? 'agent'
+          : kind === 'human' ||
+              ['typed', 'queued', 'suggestion_accepted'].includes(payload.promptSource)
+            ? 'human'
+            : undefined);
+    const providerMessage =
+      origin === 'agent' ||
+      origin === 'harness' ||
+      (origin !== 'human' && isSyntheticPrompt(parsed.prompt));
+    const decision = providerMessage ? null : asyncReplyDecision(parsed.prompt);
+    if (providerMessage)
+      batch.records.push({
+        kind: 'tool_call',
+        origin: origin ?? 'harness',
+        toolName: 'Provider message',
+        text: parsed.prompt,
+        ts: timestamp,
+        sourceId: 'hook-provider:' + digest(canonical(payload)),
+      });
+    else if (decision)
       batch.records.push({
         kind: 'decision',
         text: decision.text,
         sourceId: decision.sourceId,
         ts: timestamp,
       });
-    else if (!isSyntheticPrompt(parsed.prompt)) {
+    else {
       // Do not dedupe equal prompts unless the HOST provides an invocation identity.
       const key =
         requestId ?? (payload.timestamp ? digest(canonical(payload)) : randomUUID());
       batch.records.push({
         id: `rec_${randomUUID()}`,
         kind: 'prompt',
+        origin,
         text: parsed.prompt,
         sourceId: `hook:${key}`,
         requestId,

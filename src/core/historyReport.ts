@@ -25,6 +25,8 @@ import { sanitizeReportData } from './shareReport.ts';
 import { buildManifest, verifySubmission } from './submission.ts';
 import { scanResidual } from './sanitize.ts';
 import { dataPath } from './dataHome.ts';
+import { auditHistory } from './historyAudit.ts';
+import { isSyntheticPrompt } from './syntheticPrompt.ts';
 
 export interface HistoryReportOptions extends ReportRenderOptions {
   title?: string;
@@ -43,6 +45,27 @@ export function buildHistoryReport(
     const groups = new Set(records.map((r) => r.turnId ?? r.id));
     records = store.records({ kind: 'all' }).filter((r) => groups.has(r.turnId ?? r.id));
   }
+  // Older capture rows remain immutable; report projection also classifies them
+  // before an explicit historical repair has been applied.
+  const previous = new Map<string, string>();
+  const redirects = new Map<string, string>();
+  records = records.map((r) => {
+    if (r.kind !== 'prompt') return { ...r };
+    if (r.origin !== 'human' && isSyntheticPrompt(r.text ?? '')) {
+      const turn = previous.get(r.sessionId);
+      if (turn) redirects.set(r.turnId ?? r.id, turn);
+      return {
+        ...r,
+        kind: 'tool_call' as const,
+        origin: 'harness' as const,
+        turnId: turn,
+      };
+    }
+    previous.set(r.sessionId, r.turnId ?? r.id);
+    return { ...r };
+  });
+  for (const r of records)
+    if (r.turnId && redirects.has(r.turnId)) r.turnId = redirects.get(r.turnId);
   const sessions = new Map(store.sessions().map((s) => [s.id, s]));
   if (options.author)
     records = records.filter(
@@ -158,6 +181,7 @@ export function buildHistoryReport(
       const event: Event = {
         id,
         type: kind as Event['type'],
+        origin: record.origin,
         text: text ?? '',
         timestamp: ts,
         actorSlug,
@@ -194,31 +218,55 @@ export function buildHistoryReport(
   for (const record of records) {
     if (record.kind === 'audit') continue;
     const group = record.turnId ?? `unanchored:${record.sessionId}`;
+    if (!record.turnId) {
+      const event = events.find((e) => e.event.id === record.id);
+      if (event) event.event.turnId = group;
+      const artifact = artifacts.find((a) => a.id === record.id);
+      if (artifact) artifact.turnId = group;
+      for (const item of structured)
+        if (item.sessionId === record.sessionId && !item.turnId) item.turnId = group;
+    }
     if (prompts.has(group)) continue;
     const session = sessions.get(record.sessionId)!;
     events.push({
       event: {
         id: group,
         type: 'prompt',
-        text: '[The provider did not supply a prompt for this work.]',
+        text: 'Captured work without a linked prompt',
         timestamp: record.ts,
         actorSlug: session.authorId,
         tool: session.tool,
-        tags: ['missing-prompt'],
+        tags: ['unattributed-work'],
       },
       sessionId: session.id,
       actorSlug: session.authorId,
     });
     prompts.add(group);
   }
-  const turns = buildTurns(events, artifacts, null, structured, (ref) => diffs.get(ref));
-  for (const turn of turns)
+  const built = buildTurns(events, artifacts, null, structured, (ref) => diffs.get(ref));
+  const turns = built.filter((t) => !t.prompt.tags?.includes('unattributed-work'));
+  const unattributedWork = built
+    .filter((t) => t.prompt.tags?.includes('unattributed-work'))
+    .map(({ prompt, ...work }) => ({
+      ...work,
+      events: work.events.filter(
+        (e) =>
+          !(e.type === 'user_text' && e.sourceId === prompt.id && e.text === prompt.text),
+      ),
+    }));
+  for (const turn of [...turns, ...unattributedWork])
     for (const change of turn.codeChanges) change.capturedOnly = true;
-  const actualEvents = events.filter((e) => !e.event.tags?.includes('missing-prompt'));
+  const actualEvents = events.filter((e) => !e.event.tags?.includes('unattributed-work'));
   const allEvents = actualEvents
     .map((e) => e.event)
     .sort((a, b) => a.timestamp.localeCompare(b.timestamp));
-  const authorIds = [...new Set(records.map((r) => sessions.get(r.sessionId)!.authorId))];
+  const authorIds = [
+    ...new Set(
+      records
+        .filter((r) => r.kind !== 'audit')
+        .map((r) => sessions.get(r.sessionId)!.authorId),
+    ),
+  ];
   const contributors = authorIds.map((slug) => ({
     slug,
     name: store.authorName(slug),
@@ -230,7 +278,9 @@ export function buildHistoryReport(
     project?.displayName ??
     (selection.kind === 'sessions' ? 'Selected conversations' : 'My work');
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
+    coverage: auditHistory(store, selection).coverage,
+    unattributedWork,
     project: project?.displayName ?? null,
     displayName,
     generatedAt: new Date().toISOString(),
@@ -238,9 +288,14 @@ export function buildHistoryReport(
       ? { slug: options.author, name: store.authorName(options.author) }
       : null,
     summary: {
-      sessions: new Set(records.map((r) => r.sessionId)).size,
+      sessions: new Set(records.filter((r) => r.kind !== 'audit').map((r) => r.sessionId))
+        .size,
       events: actualEvents.length,
       artifacts: artifacts.length,
+      fileGroups: [...turns, ...unattributedWork].reduce(
+        (n, t) => n + t.codeChanges.length,
+        0,
+      ),
       decisions: allEvents.filter((e) => e.type === 'decision').length,
       plans: allEvents.filter((e) => e.type === 'plan').length,
       stats: buildSessionStats(turns),

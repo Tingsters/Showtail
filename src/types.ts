@@ -57,6 +57,7 @@ import type {
 
 /** A single recorded event in a work session. One JSONL line = one Event. */
 export interface Event {
+  origin?: 'human' | 'agent' | 'harness';
   /** Short unique id, e.g. "evt_lqz3k8_a1b2". */
   id: string;
   /** ISO-8601 timestamp, e.g. "2026-06-12T14:03:00.000Z". */
@@ -411,7 +412,9 @@ export interface Contributor {
 /** The structured (JSON) form of a generated report. */
 export interface ReportData {
   /** Structured JSON export contract. Existing summary fields remain backward compatible. */
-  schemaVersion: 2;
+  schemaVersion: 2 | 3;
+  coverage?: import('./core/historyAudit.ts').HistoryCoverage;
+  unattributedWork?: Omit<Turn, 'prompt'>[];
   /** The *configured* project name (from `config.project`), or null if unset. */
   project: string | null;
   /**
@@ -429,6 +432,7 @@ export interface ReportData {
     sessions: number;
     events: number;
     artifacts: number;
+    fileGroups?: number;
     /** How many `decision` events (AskUserQuestion choices) the student made. */
     decisions: number;
     /** How many `plan` events (plan-mode plans the AI proposed) were captured. */
@@ -484,6 +488,14 @@ export interface ReportPlan {
 
 /** One AI-suggested code change within a turn (diff text resolved for rendering). */
 export interface TurnCodeChange {
+  /** Every captured snapshot/patch, in capture order; no revisions are discarded. */
+  revisions?: {
+    recordId: string;
+    timestamp: string;
+    diff?: string;
+    diffLines?: number;
+    sha256?: string;
+  }[];
   path: string;
   /** Central reports show captured content without promising a live workspace link. */
   capturedOnly?: boolean;

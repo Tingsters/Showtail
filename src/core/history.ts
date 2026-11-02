@@ -17,9 +17,10 @@ import { readMachineIdentity, syntheticIdentity } from './identity.ts';
 import { redact } from './redact.ts';
 import { withholdSensitiveParts, ALWAYS_CAPTURE_TOOLS } from './conversationPrivacy.ts';
 import { isSensitivePath } from './sensitivePaths.ts';
+import { isSyntheticPrompt } from './syntheticPrompt.ts';
 import type { ConversationEvent, RedactConfig } from '../types.ts';
 
-export const HISTORY_VERSION = 1;
+export const HISTORY_VERSION = 2;
 export const CONTROL_VERSION = 2;
 export type RecordKind =
   | 'prompt'
@@ -68,6 +69,8 @@ export interface SessionInput {
   automaticSince?: string;
 }
 export interface RecordInput {
+  origin?: 'human' | 'agent' | 'harness';
+  duplicateOf?: string;
   id?: string;
   kind: RecordKind;
   ts?: string;
@@ -198,6 +201,31 @@ export function workspaceRoot(path: string, workspaces: string[] = []): string {
   return marker ?? declared ?? start;
 }
 
+/** The Git common directory identifies a repository across its worktrees. */
+export function repositoryIdentity(path: string): string | undefined {
+  if (/^\\\\[^?]/.test(path) || !existsSync(path)) return;
+  let root: string;
+  try {
+    root = workspaceRoot(path);
+  } catch {
+    return;
+  }
+  let git = join(root, '.git');
+  if (!existsSync(git)) return;
+  try {
+    const pointer = readFileSync(git, 'utf8').match(/^gitdir:\s*(.+)/m)?.[1];
+    if (pointer) git = resolve(root, pointer.trim());
+  } catch {
+    /* directory */
+  }
+  try {
+    git = resolve(git, readFileSync(join(git, 'commondir'), 'utf8').trim());
+  } catch {
+    /* main checkout */
+  }
+  return pathIdentity(git);
+}
+
 export function canonical(value: unknown): string {
   const sort = (v: any): any =>
     Array.isArray(v)
@@ -218,6 +246,10 @@ export class HistoryStore {
   readonly home: string;
   readonly db: Database;
   readonly readonly: boolean;
+  repairSchema = false;
+  private overlayCache?: Map<string, Partial<HistoryRecord>>;
+  private authorCache?: Map<string, string>;
+  private projectCache?: ProjectView[];
   constructor(options: { readonly?: boolean } = {}) {
     this.home = options.readonly ? dataHome() : ensureDataHome();
     this.readonly = options.readonly === true;
@@ -256,12 +288,23 @@ export class HistoryStore {
           `PRAGMA journal_mode = ${fixed ? 'WAL' : 'DELETE'}; PRAGMA synchronous = FULL;`,
         );
         if (version === 0) this.initialize();
+        this.transaction(() =>
+          this.db.exec(`
+          CREATE TABLE IF NOT EXISTS repair_receipts(id TEXT PRIMARY KEY, ts TEXT NOT NULL, payload TEXT NOT NULL);
+          CREATE TABLE IF NOT EXISTS record_overlays(record_id TEXT PRIMARY KEY REFERENCES records(id), patch TEXT NOT NULL, repair_id TEXT NOT NULL REFERENCES repair_receipts(id));
+          CREATE TABLE IF NOT EXISTS ancestor_aliases(session_id TEXT NOT NULL REFERENCES sessions(id), source_id TEXT NOT NULL, record_id TEXT NOT NULL REFERENCES records(id), repair_id TEXT NOT NULL REFERENCES repair_receipts(id), PRIMARY KEY(session_id, source_id));
+          CREATE TABLE IF NOT EXISTS author_overrides(source TEXT PRIMARY KEY REFERENCES authors(id), target TEXT NOT NULL REFERENCES authors(id), repair_id TEXT NOT NULL REFERENCES repair_receipts(id));
+          CREATE TABLE IF NOT EXISTS source_reads(session_id TEXT PRIMARY KEY REFERENCES sessions(id), payload TEXT NOT NULL);
+          PRAGMA user_version = 2;
+        `),
+        ).immediate();
         // Existing v1 stores also need this index: current-record reads correlate
         // supersession lookups once per row, including large imported histories.
         this.db.exec(
           'CREATE INDEX IF NOT EXISTS records_supersedes ON records(supersedes_id) WHERE supersedes_id IS NOT NULL',
         );
-      } else if (version !== HISTORY_VERSION) throw new Error('HISTORY_NOT_INITIALIZED');
+      } else if (version < 1) throw new Error('HISTORY_NOT_INITIALIZED');
+      this.repairSchema = !this.readonly || version >= 2;
     } catch (error) {
       this.db.close();
       throw error;
@@ -305,6 +348,9 @@ export class HistoryStore {
           this.db.exec(nested ? `RELEASE ${savepoint}` : 'COMMIT');
           return value;
         } catch (error) {
+          this.overlayCache = undefined;
+          this.authorCache = undefined;
+          this.projectCache = undefined;
           if (this.db.inTransaction)
             this.db.exec(
               nested ? `ROLLBACK TO ${savepoint}; RELEASE ${savepoint}` : 'ROLLBACK',
@@ -347,6 +393,72 @@ export class HistoryStore {
       PRAGMA user_version = 1;
     `),
     ).immediate();
+  }
+
+  /** Corrections affect the view; original capture rows remain hash-verifiable. */
+  effectiveAuthor(id: string): string {
+    if (!this.repairSchema) return id;
+    this.authorCache ??= new Map(
+      (this.query('SELECT source,target FROM author_overrides').all() as Row[]).map(
+        (r) => [r.source, r.target],
+      ),
+    );
+    const seen = new Set<string>();
+    while (this.authorCache.has(id) && !seen.has(id)) {
+      seen.add(id);
+      id = this.authorCache.get(id)!;
+    }
+    return id;
+  }
+  currentAuthor(): { id: string; name: string } {
+    return this.localAuthor();
+  }
+  private overlays(): Map<string, Partial<HistoryRecord>> {
+    return (this.overlayCache ??= new Map(
+      this.repairSchema
+        ? (this.query('SELECT record_id,patch FROM record_overlays').all() as Row[]).map(
+            (r) => [r.record_id, JSON.parse(r.patch)],
+          )
+        : [],
+    ));
+  }
+  overlayRecord(id: string, patch: Partial<HistoryRecord>, repairId: string): void {
+    const allowed = new Set([
+      'kind',
+      'turnId',
+      'model',
+      'sourceId',
+      'origin',
+      'duplicateOf',
+      'context',
+    ]);
+    if (Object.keys(patch).some((k) => !allowed.has(k)))
+      throw new Error('INVALID_REPAIR_OVERLAY');
+    const merged = { ...this.overlays().get(id), ...patch };
+    this.query(
+      'INSERT INTO record_overlays VALUES (?,?,?) ON CONFLICT(record_id) DO UPDATE SET patch=excluded.patch,repair_id=excluded.repair_id',
+    ).run(id, canonical(merged), repairId);
+    this.overlayCache = undefined;
+  }
+  mapAuthor(source: string, target: string, repairId: string): void {
+    if (source === target || this.effectiveAuthor(target) === source)
+      throw new Error('AUTHOR_MAPPING_CYCLE');
+    this.query(
+      'INSERT INTO author_overrides VALUES (?,?,?) ON CONFLICT(source) DO UPDATE SET target=excluded.target,repair_id=excluded.repair_id',
+    ).run(source, target, repairId);
+    this.authorCache = undefined;
+  }
+  sourceReads(): { sessionId: string; [key: string]: any }[] {
+    return this.repairSchema
+      ? (this.query('SELECT session_id,payload FROM source_reads').all() as Row[]).map(
+          (r) => ({ sessionId: r.session_id, ...JSON.parse(r.payload) }),
+        )
+      : [];
+  }
+  noteSourceRead(sessionId: string, payload: Record<string, unknown>): void {
+    this.query(
+      'INSERT INTO source_reads VALUES (?,?) ON CONFLICT(session_id) DO UPDATE SET payload=excluded.payload',
+    ).run(sessionId, canonical(payload));
   }
 
   private localAuthor(): { id: string; name: string } {
@@ -406,7 +518,7 @@ export class HistoryStore {
       id: r.id,
       tool: r.tool,
       nativeSessionId: r.native_id,
-      authorId: r.author_id,
+      authorId: this.effectiveAuthor(r.author_id),
       cwd: r.cwd && isUsableWorkspacePath(r.cwd) ? r.cwd : null,
       workspacePaths: JSON.parse(r.workspaces).filter(isUsableWorkspacePath),
       startedAt: r.started_at,
@@ -421,6 +533,22 @@ export class HistoryStore {
     return (
       this.query('SELECT * FROM sessions ORDER BY last_seen DESC, id').all() as Row[]
     ).map((r) => this.sessionFromRow(r));
+  }
+  workSessions(selection?: HistorySelection): HistorySession[] {
+    const ids = selection
+      ? new Set(
+          this.records(selection)
+            .filter((r) => r.kind !== 'audit')
+            .map((r) => r.sessionId),
+        )
+      : new Set(
+          (
+            this.query(
+              "SELECT DISTINCT session_id FROM records WHERE kind!='audit'",
+            ).all() as Row[]
+          ).map((r) => r.session_id),
+        );
+    return this.sessions().filter((s) => ids.has(s.id));
   }
   endSession(id: string, at?: string): void {
     this.query('UPDATE sessions SET ended_at=COALESCE(?,last_seen) WHERE id=?').run(
@@ -459,7 +587,14 @@ export class HistoryStore {
     const row = this.query(
       'SELECT r.* FROM source_aliases a JOIN records r ON r.id=a.record_id WHERE a.session_id=? AND a.source_id=?',
     ).get(sessionId, sourceId) as Row | null;
-    return row ? this.hydrate(row) : undefined;
+    const ancestor =
+      !row && this.repairSchema
+        ? (this.query(
+            'SELECT r.* FROM ancestor_aliases a JOIN records r ON r.id=a.record_id WHERE a.session_id=? AND a.source_id=?',
+          ).get(sessionId, sourceId) as Row | null)
+        : null;
+    const found = row || ancestor ? this.hydrate(row ?? ancestor!) : undefined;
+    return found?.duplicateOf ? this.record(found.duplicateOf) : found;
   }
   alias(sessionId: string, sourceId: string, recordId: string): void {
     const record = this.record(recordId);
@@ -491,6 +626,7 @@ export class HistoryStore {
       hash: r.hash,
       supersedesId: r.supersedes_id ?? undefined,
       redacted: r.redacted,
+      ...this.overlays().get(r.id),
     };
   }
 
@@ -500,6 +636,19 @@ export class HistoryStore {
     options: { continueCapture?: () => boolean } = {},
   ): { record?: HistoryRecord; inserted: boolean } {
     const settings = historySettings();
+    if (
+      input.kind === 'prompt' &&
+      (input.origin === 'agent' ||
+        input.origin === 'harness' ||
+        (input.origin !== 'human' && isSyntheticPrompt(input.text ?? '')))
+    ) {
+      input = {
+        ...input,
+        kind: 'tool_call',
+        origin: 'harness',
+        toolName: 'Provider message',
+      };
+    }
     if (input.file && !isUsableWorkspacePath(input.file)) {
       input = {
         ...input,
@@ -567,8 +716,17 @@ export class HistoryStore {
                 : v;
         clean.conversationRef = this.putObject(canonical(visit(safe)));
       }
-      const payload = canonical(clean);
       const prior = sourceId ? this.bySource(sessionId, sourceId) : undefined;
+      // A transcript enriches the same captured event; it must retain the original
+      // import provenance and metadata the provider does not repeat.
+      if (prior)
+        for (const [key, value] of Object.entries(this.payload(prior.id)))
+          if (
+            clean[key] === undefined &&
+            !['textRef', 'diffRef', 'conversationRef'].includes(key)
+          )
+            clean[key] = value;
+      const payload = canonical(clean);
       if (prior?.transcriptFinal === true && input.transcriptFinal !== true)
         return { record: prior, inserted: false };
       let turnId =
@@ -658,6 +816,11 @@ export class HistoryStore {
   ): HistoryRecord[] {
     const where: string[] = [];
     const args: string[] = [];
+    const turn = this.repairSchema
+      ? "COALESCE(json_extract(o.patch,'$.turnId'),r.turn_id,r.id)"
+      : 'COALESCE(r.turn_id,r.id)';
+    if (this.repairSchema && !options.includeSuperseded)
+      where.push("json_extract(o.patch,'$.duplicateOf') IS NULL");
     if (!options.includeSuperseded)
       where.push(
         'NOT EXISTS (SELECT 1 FROM records newer WHERE newer.supersedes_id=r.id)',
@@ -673,7 +836,7 @@ export class HistoryStore {
     }
     if (selection.kind === 'project') {
       where.push(
-        `EXISTS (SELECT 1 FROM turn_projects p WHERE p.turn_id=COALESCE(r.turn_id,r.id) AND p.project_id=? AND (p.origin='manual' OR NOT EXISTS (SELECT 1 FROM manual_turns m WHERE m.turn_id=p.turn_id)))`,
+        `EXISTS (SELECT 1 FROM turn_projects p WHERE p.turn_id=${turn} AND p.project_id=? AND (p.origin='manual' OR NOT EXISTS (SELECT 1 FROM manual_turns m WHERE m.turn_id=p.turn_id)))`,
       );
       args.push(selection.projectId);
     }
@@ -691,7 +854,7 @@ export class HistoryStore {
     }
     return (
       this.query(
-        `SELECT r.* FROM records r JOIN sessions s ON s.id=r.session_id ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY r.ts,r.session_id,r.seq`,
+        `SELECT r.* FROM records r JOIN sessions s ON s.id=r.session_id ${this.repairSchema ? 'LEFT JOIN record_overlays o ON o.record_id=r.id' : ''} ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY r.ts,r.session_id,r.seq`,
       ).all(...args) as Row[]
     ).map((r) => this.hydrate(r));
   }
@@ -715,6 +878,36 @@ export class HistoryStore {
           : session.cwd
             ? [workspaceRoot(session.cwd, workspaces)]
             : [];
+    if (!record.file && !roots.some((root) => repositoryIdentity(root))) {
+      const prior = this.query(
+        `SELECT r.id,COALESCE(json_extract(o.patch,'$.turnId'),r.turn_id) AS turn_id FROM records r
+         LEFT JOIN record_overlays o ON o.record_id=r.id
+         WHERE r.session_id=? AND COALESCE(json_extract(o.patch,'$.kind'),r.kind)='prompt'
+         AND json_extract(o.patch,'$.duplicateOf') IS NULL AND r.id!=? AND r.ts<=?
+         AND NOT EXISTS(SELECT 1 FROM records n WHERE n.supersedes_id=r.id)
+         ORDER BY r.ts DESC,r.seq DESC LIMIT 1`,
+      ).get(session.id, record.id, record.ts ?? new Date().toISOString()) as Row | null;
+      if (prior) {
+        const memberships = this.query(
+          'SELECT DISTINCT p.project_id FROM turn_projects p WHERE p.turn_id=?',
+        ).all(prior.turn_id ?? prior.id) as Row[];
+        if (memberships.length) {
+          for (const p of memberships)
+            this.query("INSERT OR IGNORE INTO turn_projects VALUES (?,?,'context')").run(
+              group,
+              p.project_id,
+            );
+          return;
+        }
+      }
+    }
+    // A provider scratch file is evidence within the current turn, not a project.
+    if (
+      record.file &&
+      /[\\/]scratchpad[\\/]/i.test(record.file) &&
+      !roots.some((root) => repositoryIdentity(root))
+    )
+      return;
     if (record.file)
       this.query("DELETE FROM turn_projects WHERE turn_id=? AND origin='context'").run(
         group,
@@ -739,38 +932,48 @@ export class HistoryStore {
     const old = this.query('SELECT project_id FROM project_roots WHERE key=?').get(
       key,
     ) as Row | null;
-    const id = old?.project_id ?? legacyId ?? `prj_${randomUUID()}`;
+    const repo = !old && !legacyId ? repositoryIdentity(root) : undefined;
+    const sibling = repo
+      ? (this.query('SELECT project_id,path FROM project_roots').all() as Row[]).find(
+          (r) => repositoryIdentity(r.path) === repo,
+        )
+      : undefined;
+    const id =
+      old?.project_id ?? sibling?.project_id ?? legacyId ?? `prj_${randomUUID()}`;
     this.query('INSERT OR IGNORE INTO projects VALUES (?,?)').run(
       id,
       name || basename(root) || root,
     );
     if (name) this.query('UPDATE projects SET name=? WHERE id=?').run(name, id);
-    this.query('INSERT OR IGNORE INTO project_roots VALUES (?,?,?,1)').run(
+    this.query('INSERT OR IGNORE INTO project_roots VALUES (?,?,?,?)').run(
       id,
       resolve(root),
       key,
+      sibling ? 0 : 1,
     );
+    if (!old || name) this.projectCache = undefined;
     return this.projects().find((p) => p.projectId === id)!;
   }
   projects(): ProjectView[] {
-    return (this.query('SELECT * FROM projects ORDER BY name,id').all() as Row[]).flatMap(
-      (p) => {
-        const roots = (
-          this.query(
-            'SELECT path,current FROM project_roots WHERE project_id=? ORDER BY current DESC,path',
-          ).all(p.id) as Row[]
-        ).filter((r) => isUsableWorkspacePath(r.path));
-        if (!roots.length) return [];
-        return [
-          {
-            projectId: p.id,
-            displayName: p.name,
-            roots: roots.map((r) => r.path),
-            projectRoot: roots.find((r) => r.current)?.path ?? null,
-          },
-        ];
-      },
-    );
+    if (this.projectCache) return this.projectCache;
+    return (this.projectCache = (
+      this.query('SELECT * FROM projects ORDER BY name,id').all() as Row[]
+    ).flatMap((p) => {
+      const roots = (
+        this.query(
+          'SELECT path,current FROM project_roots WHERE project_id=? ORDER BY current DESC,path',
+        ).all(p.id) as Row[]
+      ).filter((r) => isUsableWorkspacePath(r.path));
+      if (!roots.length) return [];
+      return [
+        {
+          projectId: p.id,
+          displayName: p.name,
+          roots: roots.map((r) => r.path),
+          projectRoot: roots.find((r) => r.current)?.path ?? null,
+        },
+      ];
+    }));
   }
   resolveProject(selector: string): ProjectView {
     selector = this.meta(`projectAlias:${selector}`) ?? selector;
@@ -841,6 +1044,7 @@ export class HistoryStore {
         'INSERT INTO project_roots VALUES (?,?,?,1) ON CONFLICT(key) DO UPDATE SET current=1',
       ).run(project.projectId, resolve(path), pathIdentity(path));
     }).immediate();
+    this.projectCache = undefined;
     return this.resolveProject(project.projectId);
   }
   assign(selector: string, projectIds: string[]): void {
@@ -867,7 +1071,10 @@ export class HistoryStore {
     const row = this.query(
       'SELECT record_id FROM imports WHERE source=? AND source_id=?',
     ).get(source, id) as Row | null;
-    return row ? this.record(row.record_id) : undefined;
+    const original = row ? this.record(row.record_id) : undefined;
+    return original?.sourceId
+      ? (this.bySource(original.sessionId, original.sourceId) ?? original)
+      : original;
   }
   noteImport(source: string, id: string, recordId: string): void {
     this.query('INSERT OR IGNORE INTO imports VALUES (?,?,?)').run(source, id, recordId);
@@ -933,6 +1140,53 @@ export class HistoryStore {
       }
     }
     checks.push({ name: 'history-chains', ok: !badChains.length, details: badChains });
+    if (this.repairSchema) {
+      const bad: string[] = [];
+      for (const row of this.query('SELECT * FROM repair_receipts').all() as Row[]) {
+        const operations = JSON.parse(row.payload).operations;
+        if (
+          !operations ||
+          row.id !== 'repair_' + digest(canonical(operations)).slice(0, 32)
+        )
+          bad.push(row.id);
+      }
+      const receipts = new Map(
+        (this.query('SELECT * FROM repair_receipts').all() as Row[]).map((r) => [
+          r.id,
+          JSON.parse(r.payload).operations,
+        ]),
+      );
+      for (const r of this.query('SELECT * FROM record_overlays').all() as Row[]) {
+        const o = receipts
+          .get(r.repair_id)
+          ?.overlays?.find((o: any) => o.id === r.record_id);
+        if (!o || canonical(o.patch) !== canonical(JSON.parse(r.patch)))
+          bad.push(r.record_id);
+      }
+      for (const r of this.query('SELECT * FROM author_overrides').all() as Row[]) {
+        if (
+          !receipts
+            .get(r.repair_id)
+            ?.authors?.some((a: any) => a.source === r.source && a.target === r.target)
+        )
+          bad.push(r.source);
+      }
+      for (const r of this.query('SELECT * FROM ancestor_aliases').all() as Row[]) {
+        if (
+          !receipts
+            .get(r.repair_id)
+            ?.bindings?.some(
+              (a: any) =>
+                a.ancestor &&
+                a.sessionId === r.session_id &&
+                a.sourceId === r.source_id &&
+                a.recordId === r.record_id,
+            )
+        )
+          bad.push(r.source_id);
+      }
+      checks.push({ name: 'repair-receipts', ok: !bad.length, details: bad });
+    }
     return { ok: checks.every((c) => c.ok), checks };
   }
 }

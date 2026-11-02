@@ -22,6 +22,13 @@ import {
 } from '../core/historyCapture.ts';
 import { exportHistory, writeHistoryReport } from '../core/historyReport.ts';
 import { importLegacy } from '../core/legacyImport.ts';
+import { auditHistory } from '../core/historyAudit.ts';
+import {
+  prepareRepair,
+  applyRepair,
+  repairPreview,
+  backupHistory,
+} from '../core/historyRepair.ts';
 import {
   readGlobalConfig,
   writeGlobalConfig,
@@ -201,7 +208,7 @@ function status(opts: Options): Record<string, any> {
   if (historyExists()) {
     using store = new HistoryStore({ readonly: true });
     selected = opts.project ? selection(store, opts) : undefined;
-    sessions = store.sessions().length;
+    sessions = store.workSessions(selected).length;
     projects = store.projects();
   }
   const selectedTool = opts.tool ? tools[0] : undefined;
@@ -425,7 +432,9 @@ export async function runHistoryCli(argv = process.argv): Promise<void> {
           : opts,
       )!;
       const records = store.records(scoped);
-      const ids = new Set(records.map((r) => r.sessionId));
+      const ids = new Set(
+        records.filter((r) => r.kind !== 'audit').map((r) => r.sessionId),
+      );
       let sessions = store.sessions().filter((s) => ids.has(s.id));
       if (opts.unassigned)
         sessions = sessions.filter((s) =>
@@ -456,7 +465,7 @@ export async function runHistoryCli(argv = process.argv): Promise<void> {
     .action(async (path, opts) => {
       using store = currentStore();
       const scoped = await requireSelection(store, opts, path);
-      if (opts.sync !== false) await catchUpHistory(store);
+      if (opts.sync !== false) await catchUpHistory(store, scoped);
       if (!['html', 'md', 'json'].includes(opts.format))
         throw new Error('INVALID_REPORT_FORMAT');
       const result = writeHistoryReport(store, scoped, {
@@ -505,7 +514,7 @@ export async function runHistoryCli(argv = process.argv): Promise<void> {
         return;
       }
       const scoped = await requireSelection(store, opts, path);
-      if (opts.sync !== false) await catchUpHistory(store);
+      if (opts.sync !== false) await catchUpHistory(store, scoped);
       if (opts.pr) {
         const result = previewPr(store, scoped, opts);
         if (opts.json) print(result);
@@ -536,6 +545,62 @@ export async function runHistoryCli(argv = process.argv): Promise<void> {
           );
       }
     });
+  addScope(
+    program
+      .command('audit')
+      .description('Read-only checks of report quality and source coverage'),
+  ).action(async (opts) => {
+    using store = new HistoryStore({ readonly: true });
+    const scoped = await requireSelection(store, opts);
+    print(envelope(auditHistory(store, scoped)));
+  });
+  addScope(
+    program
+      .command('repair')
+      .description(
+        'Preview or apply audited history corrections; projects stay untouched',
+      ),
+  )
+    .option('--dry-run', 'preview changes without writing (default)')
+    .option('--apply', 'apply corrections after creating a consistent backup')
+    .option(
+      '--backfill',
+      'explicitly recover history from linked local provider transcripts',
+    )
+    .option(
+      '--map-author <source=target>',
+      'audited attribution override; target can be current',
+      (value, previous: string[] = []) => [...previous, value],
+    )
+    .option(
+      '--include-turn <id>',
+      'include a confirmed planning turn in the selected project',
+      (value, previous: string[] = []) => [...previous, value],
+    )
+    .action(async (opts) => {
+      if (opts.apply && opts.dryRun) throw new Error('REPAIR_MODE_CONFLICT');
+      const reader = new HistoryStore({ readonly: true });
+      let plan: Awaited<ReturnType<typeof prepareRepair>>;
+      let backupPath: string | undefined;
+      try {
+        const scoped = await requireSelection(reader, opts);
+        plan = await prepareRepair(reader, scoped, {
+          backfill: opts.backfill,
+          authorMaps: opts.mapAuthor,
+          includeTurns: opts.includeTurn,
+        });
+        if (opts.apply) backupPath = backupHistory(reader);
+      } finally {
+        reader.close();
+      }
+      if (!opts.apply) {
+        print(envelope({ dryRun: true, ...repairPreview(plan!) }));
+        return;
+      }
+      using writer = new HistoryStore();
+      const result = applyRepair(writer, plan!);
+      print(envelope({ ...result, backupPath }));
+    });
   program
     .command('verify')
     .description('Check central content, references, and history integrity')
@@ -547,6 +612,10 @@ export async function runHistoryCli(argv = process.argv): Promise<void> {
       const result = store.verify();
       const output = envelope({
         ...result,
+        quality: auditHistory(
+          store,
+          project ? { kind: 'project', projectId: project.projectId } : { kind: 'all' },
+        ).quality,
         projectId: project?.projectId ?? null,
         projectRoot: project?.projectRoot ?? null,
         meaning: 'Internal integrity only; does not prove authorship or completeness.',

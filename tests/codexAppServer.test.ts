@@ -115,16 +115,18 @@ describe('threadToTranscript: Codex 0.163 (real recorded thread)', () => {
     }
   });
 
-  test('keeps the file parser source-id schemes so earlier captures dedupe', () => {
+  test('uses stable native item IDs so inserted history cannot renumber prompts', () => {
     const root = makeTempDir();
     try {
       const entries = load<ThreadEntry[]>('appserver-0.163-items.json', root);
       const t = threadToTranscript('thread-163', entries, { root });
       expect(t.messages.find((m) => m.role === 'user')!.sourceId).toBe(
-        'codex:user:thread-163:0',
+        'codex:user:thread-163:item:' +
+          (entries.find((e) => (e.item as any).type === 'userMessage')!.item as any).id,
       );
       expect(t.messages.filter((m) => m.role === 'assistant')[0]!.sourceId).toBe(
-        'codex:asst:thread-163:0',
+        'codex:asst:thread-163:item:' +
+          (entries.find((e) => (e.item as any).type === 'agentMessage')!.item as any).id,
       );
       expect(t.messages.find((m) => m.role === 'edit')!.sourceId).toMatch(
         /^codex:edit:exec-/,

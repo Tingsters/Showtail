@@ -59,6 +59,11 @@ export interface RedactConfig {
 
 /** One message of a normalized transcript used for stop-time reconciliation. */
 export interface HookTranscriptMessage {
+  /** Explicit provider evidence takes precedence over text-envelope heuristics. */
+  origin?: 'human' | 'agent' | 'harness';
+  /** Typed submission time when a provider delivers a queued prompt later. */
+  submittedAt?: string;
+  context?: { cwd?: string | null; workspacePaths?: string[] };
   /** 'user' | 'assistant' | 'decision' | 'plan' | 'edit' | 'tool_call' | 'recap'. */
   role: string;
   text: string;

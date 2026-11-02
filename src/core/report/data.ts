@@ -119,7 +119,11 @@ export function buildTurns(
   // as prompt events; skip them here so they don't render as giant "prompt" blocks.
   // Their trailing AI/edits fall back (below) to the previous real prompt's turn.
   const prompts = withSession
-    .filter((x) => x.event.type === 'prompt' && !isSyntheticPrompt(x.event.text))
+    .filter(
+      (x) =>
+        x.event.type === 'prompt' &&
+        (x.event.origin === 'human' || !isSyntheticPrompt(x.event.text)),
+    )
     .sort((a, b) => a.event.timestamp.localeCompare(b.event.timestamp));
 
   const turns: Turn[] = prompts.map(({ event, sessionId }) => ({
@@ -240,9 +244,17 @@ export function buildTurns(
     // edit — a live snapshot (file hash, no diff) and a transcript-reconciled
     // import (diff, no hash; e.g. Codex `apply_patch`). Collapse them so the file
     // shows once, preferring the entry that carries a diff.
+    const revision = {
+      recordId: a.id,
+      timestamp: a.timestamp,
+      diff,
+      diffLines: a.diffLines,
+      sha256: a.sha256,
+    };
     const existing = turn.codeChanges.find((c) => c.path === a.path);
     if (existing) {
-      if (!existing.diff && diff) {
+      (existing.revisions ??= []).push(revision);
+      if (diff) {
         existing.diff = diff;
         existing.diffLines = a.diffLines;
       }
@@ -251,6 +263,7 @@ export function buildTurns(
       continue;
     }
     turn.codeChanges.push({
+      revisions: [revision],
       path: a.path,
       linkPath: a.linkPath,
       diff,

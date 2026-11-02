@@ -18,7 +18,7 @@ for (const tool of [
   'antigravity-ide',
 ]) {
   test(`${tool}: native transcript edits cross project boundaries`, () =>
-    fixture(({ dir, project }) => {
+    fixture(async ({ dir, project }) => {
       const other = join(dir, 'other-project');
       mkdirSync(other);
       writeFileSync(join(other, 'package.json'), '{}');
@@ -127,7 +127,7 @@ for (const tool of [
         ];
       const path = join(dir, 'native.jsonl');
       writeFileSync(path, records.map((record) => JSON.stringify(record)).join('\n'));
-      const transcript = getPlugin(tool)!.migration!.read(
+      const transcript = await getPlugin(tool)!.migration!.read(
         { path, providerSessionId: 'multi', mtimeMs: Date.now(), cwd: project },
         project,
       );
@@ -151,7 +151,7 @@ for (const tool of [
 }
 
 test('Codex app-server central mapping retains absolute cross-project file changes', () =>
-  fixture(({ dir, project }) => {
+  fixture(async ({ dir, project }) => {
     const file = join(dir, 'another-project', 'index.ts');
     const transcript = threadToTranscript(
       'multi',

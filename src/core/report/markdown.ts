@@ -93,12 +93,14 @@ export function buildMarkdown(
   const fmt = turnsPlaceholder ? timeToken : staticUtc;
   return [
     ...metadataSection(data, fmt),
+    ...coverageSection(data),
     ...contributorsSection(data),
     ...toolsSection(data, fmt),
     ...modelsSection(data),
     ...sessionStatsSection(data),
     ...plansSection(data),
     ...turnsSection(data, turnsPlaceholder, resolveAiMode(opts)),
+    ...unattributedSection(data, turnsPlaceholder, resolveAiMode(opts)),
     ...authorshipSection(data),
   ].join('\n');
 }
@@ -349,6 +351,21 @@ function turnMarkdown(lines: string[], turn: Turn, ai: AiMode, author?: string):
       }
     } else if (item.kind === 'code') {
       const code = item.change;
+      if ((code.revisions?.length ?? 0) > 1) {
+        lines.push(`_Captured revisions — ${code.path.replace(/`/g, '')}:_`, '');
+        for (const [i, r] of code.revisions!.entries()) {
+          lines.push(`Revision ${i + 1} · ${r.timestamp}`, '');
+          if (r.diff) {
+            const fence = fenceFor(r.diff);
+            lines.push(fence + 'diff', r.diff, fence, '');
+          } else
+            lines.push(
+              `Captured snapshot${r.sha256 ? ' · ' + r.sha256 : ' (content unavailable)'}.`,
+              '',
+            );
+        }
+        continue;
+      }
       const stat = code.diffLines
         ? ` (~${code.diffLines} line${pluralS(code.diffLines)})`
         : '';
@@ -380,4 +397,56 @@ function toolCallBlock(event: Event): string {
   const label = event.toolName ?? 'Tool';
   const badge = event.isError ? ' ⚠️ _error_' : '';
   return `**${label}**${badge}\n\n${event.text}\n`;
+}
+
+function coverageSection(data: ReportData): string[] {
+  if (!data.coverage) return [];
+  const c = data.coverage;
+  const warnings = [...new Set(c.sources.flatMap((s) => s.warningCodes))];
+  return [
+    '## Capture coverage',
+    '',
+    `**${c.status}** · ${c.sources.filter((s) => s.status === 'reconciled').length} of ${c.sources.length} conversations reconciled with available sources.`,
+    '',
+    c.meaning,
+    '',
+    ...(warnings.length ? ['Source notes: ' + warnings.join(', ') + '.', ''] : []),
+    ...(data.summary.fileGroups !== undefined
+      ? [
+          `${data.summary.artifacts} captured edits in ${data.summary.fileGroups} file groups. Expand revision history to inspect repeated edits.`,
+          '',
+        ]
+      : []),
+  ];
+}
+function unattributedSection(data: ReportData, html: boolean, ai: AiMode): string[] {
+  if (!data.unattributedWork?.length) return [];
+  if (html) return ['SHOWTAIL_UNATTRIBUTED_WORK', ''];
+  const lines = [
+    '## Work without a linked prompt',
+    '',
+    'These captured records have no established human prompt.',
+    '',
+  ];
+  for (const work of data.unattributedWork) {
+    lines.push(`### ${toolLabel(work.tool)} · ${work.sessionId}`, '');
+    for (const e of work.events.filter((e) => e.type === 'user_text'))
+      lines.push('Unlinked provider user message:', '', e.text ?? '', '');
+    for (const c of work.codeChanges) {
+      lines.push('Captured file: ' + c.path.replace(/`/g, ''), '');
+      for (const r of c.revisions ?? [{ timestamp: c.timestamp, diff: c.diff }])
+        if (r.diff) {
+          const fence = fenceFor(r.diff);
+          lines.push(r.timestamp, fence + 'diff', r.diff, fence, '');
+        }
+    }
+    for (const e of [
+      ...work.decisions,
+      ...work.plans,
+      ...(ai === 'off' ? [] : work.aiOutputs),
+    ])
+      lines.push(e.text, '');
+    for (const e of work.toolCalls) lines.push(toolCallBlock(e), '');
+  }
+  return lines;
 }

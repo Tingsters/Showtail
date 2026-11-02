@@ -54,7 +54,11 @@ import {
   statSync,
 } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
-import { readThreadTranscript } from './appServer.ts';
+import {
+  readThreadTranscript,
+  threadToTranscript,
+  type ThreadEntry,
+} from './appServer.ts';
 import { hostHome } from '../paths/hostHome.ts';
 import { toRepoRelative } from '../paths/pathUtil.ts';
 import {
@@ -78,6 +82,9 @@ import type {
 
 /** A normalized message recovered from a Codex rollout. */
 export interface CodexMessage {
+  origin?: 'human' | 'agent' | 'harness';
+  requestId?: string;
+  context?: { cwd?: string | null; workspacePaths?: string[] };
   /**
    * "user" (typed prompt), "assistant" (text reply), "edit" (a file changed),
    * "plan" (a todo/plan list Codex built via `update_plan`), or "decision" (a
@@ -362,6 +369,78 @@ export function parseCodexTranscript(
     } catch {
       // Skip malformed lines, never throw.
     }
+  }
+
+  // Current rollouts persist typed items; response_item/user also contains
+  // harness instructions, so it must never be the fallback source for prompts.
+  const completed = objs.filter(
+    (o) =>
+      prop(o, 'type') === 'event_msg' &&
+      prop(prop(o, 'payload'), 'type') === 'item_completed',
+  );
+  if (
+    completed.some(
+      (o) => prop(prop(prop(o, 'payload'), 'item'), 'type') === 'UserMessage',
+    )
+  ) {
+    const meta = objs.find((o) => prop(o, 'type') === 'session_meta');
+    const sid = asString(prop(prop(meta, 'payload'), 'id')) ?? '?';
+    let activeModel: string | undefined;
+    let activeCwd: string | undefined;
+    const itemCwds = new Map<unknown, string | undefined>();
+    const itemModels = new Map<unknown, string | undefined>();
+    for (const frame of objs) {
+      if (prop(frame, 'type') === 'turn_context')
+        activeCwd = asString(prop(prop(frame, 'payload'), 'cwd')) ?? activeCwd;
+      if (prop(frame, 'type') === 'turn_context')
+        activeModel = asString(prop(prop(frame, 'payload'), 'model')) ?? activeModel;
+      if (prop(prop(frame, 'payload'), 'type') === 'item_completed') {
+        itemModels.set(frame, activeModel);
+        itemCwds.set(frame, activeCwd);
+      }
+    }
+    const entries: ThreadEntry[] = completed.map((o) => {
+      const p = prop(o, 'payload') as Record<string, any>;
+      const raw = p.item as Record<string, any>;
+      const item: Record<string, any> = {
+        ...raw,
+        type: String(raw.type).replace(/^./, (c) => c.toLowerCase()),
+      };
+      if (raw.type === 'AgentMessage')
+        item.text = (raw.content ?? [])
+          .filter((c: any) => c.type === 'Text' || c.type === 'text')
+          .map((c: any) => c.text ?? '')
+          .join('');
+      if (raw.type === 'CommandExecution') {
+        item.aggregatedOutput = raw.aggregated_output;
+        item.exitCode = raw.exit_code;
+      }
+      if (raw.type === 'FileChange' && raw.changes && !Array.isArray(raw.changes)) {
+        item.changes = Object.entries(raw.changes).map(([path, value]) => {
+          const c = value as Record<string, any>;
+          return {
+            path,
+            kind: { type: String(c.type).toLowerCase() },
+            diff: c.unified_diff ?? c.content ?? '',
+          };
+        });
+      }
+      return {
+        turnId: p.turn_id,
+        model: itemModels.get(o),
+        cwd: itemCwds.get(o),
+        item,
+        startedAtMs: p.started_at_ms,
+        completedAtMs:
+          p.completed_at_ms ?? Date.parse(asString(prop(o, 'timestamp')) ?? ''),
+      };
+    });
+    const context = objs.find((o) => prop(o, 'type') === 'turn_context');
+    return threadToTranscript(sid, entries, {
+      root,
+      includeOutsideEdits: options.includeOutsideEdits,
+      model: asString(prop(prop(context, 'payload'), 'model')),
+    });
   }
 
   // call_id → the tool call's output string (used to resolve decision answers).
@@ -822,7 +901,11 @@ export function parseCodexRollout(
   root: string,
   options: { includeOutsideEdits?: boolean } = {},
 ): HookTranscript {
-  return codexToHookTranscript(parseCodexTranscript(content, root, options));
+  const parsed = parseCodexTranscript(content, root, options);
+  const transcript = codexToHookTranscript(parsed);
+  const warning = rolloutFormatWarning(content, parsed);
+  if (warning) transcript.warnings = [warning];
+  return transcript;
 }
 
 /**
@@ -834,6 +917,9 @@ export function codexToHookTranscript(parsed: CodexTranscript): HookTranscript {
   for (const m of parsed.messages) {
     messages.push({
       role: m.role,
+      origin: m.origin,
+      requestId: m.requestId,
+      context: m.context,
       text: m.text,
       timestamp: m.timestamp,
       sourceId: m.sourceId,

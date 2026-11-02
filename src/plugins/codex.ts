@@ -14,7 +14,7 @@ import {
   resolveCodexTarget,
   writeCodexInstructions,
 } from '../core/codex.ts';
-import { readThreadTranscript } from '../core/codexAppServer.ts';
+import { readThreadTranscript, openCodexRpc } from '../core/codexAppServer.ts';
 import {
   codexToHookTranscript,
   findRollouts,
@@ -344,10 +344,44 @@ export const codexPlugin: EnvironmentPlugin = {
         mtimeMs: info.mtimeMs,
         cwd: rolloutCwdFromFile(info.path),
       })),
-    read(candidate, root) {
-      return parseCodexRollout(readFileSync(candidate.path, 'utf8'), root, {
+    async read(candidate, root) {
+      const fallback = parseCodexRollout(readFileSync(candidate.path, 'utf8'), root, {
         includeOutsideEdits: true,
       });
+      try {
+        const read = await readThreadTranscript(candidate.providerSessionId, {
+          root,
+          includeOutsideEdits: true,
+          openRpc: () => openCodexRpc({ requestTimeoutMs: 5000 }),
+        });
+        const preferred = codexToHookTranscript(read.transcript);
+        // Per-turn rollout context is more precise than a thread's current model.
+        const nativeModels = new Map(
+          fallback.messages
+            .filter((m) => m.role === 'assistant' && m.model)
+            .map((m) => [m.sourceId, m.model]),
+        );
+        for (const m of preferred.messages)
+          if (nativeModels.has(m.sourceId)) m.model = nativeModels.get(m.sourceId);
+        const nativeContexts = new Map(
+          fallback.messages.filter((m) => m.context).map((m) => [m.sourceId, m.context]),
+        );
+        for (const m of preferred.messages)
+          if (nativeContexts.has(m.sourceId)) m.context = nativeContexts.get(m.sourceId);
+        if (
+          preferred.messages.some((m) => m.role === 'user') &&
+          preferred.messages.filter((m) => m.role === 'user').length >=
+            fallback.messages.filter((m) => m.role === 'user').length
+        )
+          return preferred;
+      } catch {
+        /* The exact thread's rollout remains available offline. */
+      }
+      fallback.warnings = [
+        ...(fallback.warnings ?? []),
+        'CODEX_FILE_FALLBACK: app-server history unavailable or incomplete; reconciled the local rollout.',
+      ];
+      return fallback;
     },
   },
 };

@@ -53,7 +53,8 @@ export function renderHtml(data: ReportData, opts?: ReportRenderOptions): string
     // the sentinel — Showtail captures its own sessions — so running this global
     // regex after the splice would match and corrupt that content.
     .replace(TIME_TOKEN, (_m, iso: string) => timeTag(iso))
-    .replace(`<p>${TURNS_PLACEHOLDER}</p>`, turnsHtml(data, mode));
+    .replace(`<p>${TURNS_PLACEHOLDER}</p>`, turnsHtml(data, mode))
+    .replace('<p>SHOWTAIL_UNATTRIBUTED_WORK</p>', unattributedHtml(data, mode));
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -345,6 +346,32 @@ function renderTimelineItem(item: TurnItem): string {
     return renderToolRow(item.event, true);
   }
   const code = item.change;
+  if ((code.revisions?.length ?? 0) > 1) {
+    return (
+      '<details class="code"><summary>' +
+      escapeHtml(code.path) +
+      ' · ' +
+      code.revisions!.length +
+      ' captured revisions</summary>' +
+      code
+        .revisions!.map(
+          (r, i) =>
+            '<details class="code"><summary>Revision ' +
+            (i + 1) +
+            ' · ' +
+            timeTag(r.timestamp) +
+            '</summary>' +
+            (r.diff
+              ? diffHtml(r.diff)
+              : '<p>Captured snapshot' +
+                (r.sha256 ? ' · ' + escapeHtml(r.sha256) : ' (content unavailable)') +
+                '</p>') +
+            '</details>',
+        )
+        .join('') +
+      '</details>'
+    );
+  }
   const stat = code.diffLines
     ? ` (~${code.diffLines} line${pluralS(code.diffLines)})`
     : '';
@@ -553,4 +580,42 @@ function diffHtml(diff: string): string {
     );
   });
   return `<pre class="diff">${rows.join('')}</pre>`;
+}
+
+function unattributedHtml(data: ReportData, mode: AiMode): string {
+  if (!data.unattributedWork?.length) return '';
+  return (
+    '<h2>Work without a linked prompt</h2><p>These captured records have no established human prompt. They remain separate from your prompt history.</p>' +
+    data.unattributedWork
+      .map(
+        (work) =>
+          '<details class="code"><summary>' +
+          escapeHtml(toolLabel(work.tool)) +
+          ' · ' +
+          escapeHtml(work.sessionId) +
+          '</summary>' +
+          work.events
+            .filter((e) => e.type === 'user_text')
+            .map(
+              (e) =>
+                '<p>Unlinked provider user message</p>' + renderRichText(e.text ?? ''),
+            )
+            .join('') +
+          work.codeChanges
+            .map((change) => renderTimelineItem({ kind: 'code', change }))
+            .join('') +
+          work.decisions
+            .map((event) => renderTimelineItem({ kind: 'decision', event }))
+            .join('') +
+          work.plans
+            .map((event) => renderTimelineItem({ kind: 'plan', event }))
+            .join('') +
+          (mode === 'off' || !work.aiOutputs.length
+            ? ''
+            : renderAiBlock(work.aiOutputs)) +
+          (work.toolCalls.length ? renderToolRun(work.toolCalls) : '') +
+          '</details>',
+      )
+      .join('')
+  );
 }

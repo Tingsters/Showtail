@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+## 0.22.0 — Capture recovery and accurate reports
+
+- Capture Claude text/image prompts and current Codex typed rollout items; share
+  exact-thread reading between live capture, import, and catch-up.
+- Classify harness and subagent messages separately from student prompts.
+- Add read-only history audits and explicit, backed-up historical repair with
+  transcript recovery, attribution overrides, and verifiable repair receipts.
+- Preserve captured edit revisions and show unanchored work separately in schema
+  v3 reports. Count conversations independently of legacy audit containers.
+- Surface source coverage and degraded reads; scope report catch-up to selection.
+- Recover legacy enrichment metadata and preserve project focus across follow-ups
+  and Git worktrees without changing project folders.
+
 ## 0.21.1 — Reject malformed legacy project paths
 
 - Keep malformed provider filenames as redacted, unresolved evidence instead of

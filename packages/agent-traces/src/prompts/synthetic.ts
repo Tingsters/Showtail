@@ -24,7 +24,7 @@
  * a real prompt is far worse than keeping a stray line.
  */
 const SYNTHETIC_PROMPT_RE =
-  /^<(task-notification|system-reminder|local-command-caveat|command-name|command-message|command-args|command-stdout|command-stderr|user-prompt-submit-hook|session-start-hook|send_user_message_question_reply)\b/;
+  /^<(agent-message|task-notification|system-reminder|local-command-[\w-]+|command-name|command-message|command-args|command-stdout|command-stderr|user-prompt-submit-hook|session-start-hook|send_user_message_question_reply)\b/;
 
 const COMPACT_SUMMARY_RE =
   /^This session is being continued from a previous conversation that ran out of context/;

@@ -182,6 +182,8 @@ export async function openCodexRpc(opts: OpenRpcOptions = {}): Promise<CodexRpc>
 
 /** One persisted item with its turn and (when the store records them) timestamps. */
 export interface ThreadEntry {
+  cwd?: string;
+  model?: string;
   turnId?: string;
   item: unknown;
   startedAtMs?: number;
@@ -374,8 +376,18 @@ export function threadToTranscript(
         });
         continue;
       }
-      const sourceId = `codex:user:${threadId}:${userSeq++}`;
-      messages.push({ role: 'user', text, timestamp, sourceId });
+      const sourceId = id
+        ? `codex:user:${threadId}:item:${id}`
+        : `codex:user:${threadId}:${userSeq++}`;
+      messages.push({
+        role: 'user',
+        origin: 'human',
+        ...(entry.cwd ? { context: { cwd: entry.cwd } } : {}),
+        requestId: entry.turnId,
+        text,
+        timestamp,
+        sourceId,
+      });
       events.push({
         sequence: eventSeq++,
         type: 'user_text',
@@ -402,13 +414,15 @@ export function threadToTranscript(
         }
       }
       if (!text) continue;
-      const sourceId = `codex:asst:${threadId}:${asstSeq++}`;
+      const sourceId = id
+        ? `codex:asst:${threadId}:item:${id}`
+        : `codex:asst:${threadId}:${asstSeq++}`;
       messages.push({
         role: 'assistant',
         text,
         timestamp,
         sourceId,
-        model: opts.model,
+        model: entry.model ?? opts.model,
         isFinal: prop(item, 'phase') === 'final_answer',
       });
       events.push({
@@ -426,7 +440,7 @@ export function threadToTranscript(
         const path = asString(prop(change, 'path'));
         if (!path) continue;
         const file = opts.includeOutsideEdits
-          ? resolve(opts.root, path)
+          ? resolve(entry.cwd ?? opts.root, path)
           : toRepoRelative(opts.root, path);
         if (
           !file ||

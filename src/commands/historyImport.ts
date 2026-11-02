@@ -80,7 +80,10 @@ export async function runHistoryImport(
       );
     cwd = candidate.cwd ?? null;
     transcriptPath = candidate.path;
-    transcript = plugin.migration.read(candidate, cwd ?? options.cwd ?? process.cwd());
+    transcript = await plugin.migration.read(
+      candidate,
+      cwd ?? options.cwd ?? process.cwd(),
+    );
     nativeId = transcript.sessionId ?? candidate.providerSessionId;
     for (const plan of plugin.migration.planFiles?.(candidate) ?? [])
       transcript.messages.push({
@@ -216,14 +219,28 @@ export async function runHistoryImport(
     sessionId: session.id,
     imported,
     messages: transcript.messages.length,
+    warnings: transcript.warnings ?? [],
   };
 }
 
 /** Catch up only known sessions; never scan project folders to find storage. */
-export async function catchUpHistory(store: HistoryStore): Promise<number> {
+export async function catchUpHistory(
+  store: HistoryStore,
+  selection?: import('../core/history.ts').HistorySelection,
+): Promise<number> {
   let captured = 0;
+  const selected =
+    selection && selection.kind !== 'all'
+      ? new Set(
+          store
+            .records(selection)
+            .filter((r) => r.kind !== 'audit')
+            .map((r) => r.sessionId),
+        )
+      : undefined;
   const candidatesByTool = new Map<string, MigrationTranscriptCandidate[]>();
   for (const session of store.sessions()) {
+    if (selected && !selected.has(session.id)) continue;
     if (!automaticCaptureEnabled(session.tool)) continue;
     const plugin = migrationPlugins().find((p) => p.id === session.tool);
     if (!plugin) continue;
@@ -241,7 +258,10 @@ export async function catchUpHistory(store: HistoryStore): Promise<number> {
             .get(plugin.id)
             ?.find((c) => c.providerSessionId === session.nativeSessionId);
       if (!candidate) continue;
-      const transcript = plugin.migration.read(candidate, session.cwd ?? store.home);
+      const transcript = await plugin.migration.read(
+        candidate,
+        session.cwd ?? store.home,
+      );
       const config = readGlobalConfig();
       const enabledAt = toolCaptureEnabledAt(plugin.cliName);
       const epoch = config.captureResumedAt ?? config.captureSince;
@@ -266,7 +286,11 @@ export async function catchUpHistory(store: HistoryStore): Promise<number> {
         },
       });
     } catch {
-      /* Existing history remains usable while a provider is unavailable. */
+      store.noteSourceRead(session.id, {
+        status: 'unavailable',
+        warningCodes: ['SOURCE_READ_FAILED'],
+        readAt: new Date().toISOString(),
+      });
     }
   }
   return captured;

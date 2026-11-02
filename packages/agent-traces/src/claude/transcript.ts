@@ -71,6 +71,9 @@ function idSnippet(text: string): string {
 
 /** A normalized message recovered from a transcript. */
 export interface ClaudeMessage {
+  origin?: 'human' | 'agent' | 'harness';
+  submittedAt?: string;
+  context?: { cwd?: string | null; workspacePaths?: string[] };
   /**
    * "user" (a typed prompt), "assistant" (a text reply), "edit" (a file the AI
    * changed), "decision" (a choice the student made when the AI paused to ask),
@@ -472,6 +475,7 @@ export function parseClaudeTranscript(
     pendingDuration = undefined;
   };
 
+  const queuedSubmissions = new Map<string, string[]>();
   for (const rawLine of content.split(/\r?\n/)) {
     const line = rawLine.trim();
     if (!line) continue;
@@ -502,6 +506,15 @@ export function parseClaudeTranscript(
     }
 
     const type = prop(obj, 'type');
+    if (type === 'queue-operation' && prop(obj, 'operation') === 'enqueue') {
+      const text = asString(prop(obj, 'content'))?.trim();
+      const timestamp = asString(prop(obj, 'timestamp'));
+      if (text && timestamp) {
+        const list = queuedSubmissions.get(text) ?? [];
+        list.push(timestamp);
+        queuedSubmissions.set(text, list);
+      }
+    }
     if (type === 'user') {
       collectDecisionAnswers(obj, answersByToolId);
       collectToolResults(obj, toolResultsByToolId);
@@ -549,6 +562,8 @@ export function parseClaudeTranscript(
       if (note) messages.push(note);
       const msg = handleUser(obj);
       if (msg) {
+        if (prop(obj, 'promptSource') === 'queued')
+          msg.submittedAt = queuedSubmissions.get(msg.text)?.shift();
         // A genuine typed prompt opens a new turn — any duration still pending
         // from the previous turn never got its recap, so flush it now, then
         // start this turn's token accounting fresh.
@@ -772,21 +787,31 @@ function handleTaskNotification(obj: unknown): ClaudeMessage | null {
 
 /** A real typed prompt: string content, not a tool result or a tooling wrapper. */
 function handleUser(obj: unknown): ClaudeMessage | null {
-  const content = asString(prop(prop(obj, 'message'), 'content'));
-  if (content === undefined) return null; // tool_result lines carry an array.
+  const raw = prop(prop(obj, 'message'), 'content');
+  const content =
+    asString(raw) ??
+    (asArray(raw) ?? [])
+      .filter((part) => prop(part, 'type') === 'text')
+      .map((part) => asString(prop(part, 'text')) ?? '')
+      .join('\n');
 
   const source = prop(obj, 'promptSource');
   // Keep every genuine user prompt; drop only tooling/programmatic sources.
   if (typeof source === 'string' && NON_USER_PROMPT_SOURCES.has(source)) return null;
 
   const text = content.trim();
-  if (!text || isSyntheticPrompt(text)) return null;
+  const human = prop(prop(obj, 'origin'), 'kind') === 'human';
+  if (!text || (!human && isSyntheticPrompt(text))) return null;
 
   return {
     role: 'user',
     text,
     timestamp: asString(prop(obj, 'timestamp')),
     sourceId: asString(prop(obj, 'uuid')) ?? `cc:user:${idSnippet(text)}`,
+    origin: human ? 'human' : undefined,
+    ...(asString(prop(obj, 'cwd'))
+      ? { context: { cwd: asString(prop(obj, 'cwd')) } }
+      : {}),
   };
 }
 
