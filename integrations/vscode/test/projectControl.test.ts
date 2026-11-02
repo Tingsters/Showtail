@@ -37,7 +37,7 @@ mock.module('vscode', () => ({
 const { ProjectControlController, projectControlToolResult } =
   await import('../src/projectControl');
 
-const CLAIMS_KEY = 'showtail.projectControl.claims.v1';
+const CLAIMS_KEY = 'showtail.projectControl.claims.v2';
 const root = resolve(import.meta.dir, '..');
 const reportPath = join(import.meta.dir, 'showtailProtocol.test.ts');
 const selection = {
@@ -62,7 +62,7 @@ function state(initial: Record<string, unknown> = {}) {
 
 function claimFor(selected: typeof selection, path: string) {
   return {
-    showtailProjectControl: 'showtail-project-control/v1',
+    showtailProjectControl: 'showtail-project-control/v2',
     claimId: 'claim_previous',
     action: 'report',
     ...selected,

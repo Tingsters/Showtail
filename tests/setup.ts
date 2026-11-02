@@ -1,7 +1,13 @@
 import { afterEach } from 'bun:test';
 import { readdirSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { physicalPath } from '../src/core/dataHome.ts';
+
+function isTemporaryPath(path: string): boolean {
+  const rel = relative(physicalPath(tmpdir()), physicalPath(path));
+  return !!rel && rel !== '..' && !rel.startsWith('..' + sep) && !isAbsolute(rel);
+}
 
 /**
  * Per-process root for every pinned temp home below.
@@ -82,13 +88,9 @@ function sweepRunRoots(): void {
 sweepRunRoots();
 process.on('exit', sweepRunRoots);
 
-// Give in-process tests a deterministic student identity so `runInit` and the
-// hooks can establish an author folder without prompting or shelling out to
-// gh/git. `SHOWTAIL_IDENTITY_HOME` keeps the machine-identity cache inside the
-// OS temp dir, never the developer's real `~/.config/showtail`.
+// Keep all test capture and identity state in a private temporary Showtail home.
 process.env.SHOWTAIL_IDENTITY_EMAIL ??= 'tester@example.com';
 process.env.SHOWTAIL_IDENTITY_NAME ??= 'Test Student';
-process.env.SHOWTAIL_IDENTITY_HOME ??= join(RUN_ROOT, 'identity');
 
 // Isolate the machine-global durable ledger (`SHOWTAIL_HOME`) for the whole test
 // run, so hooks never write to the developer's real `~/.showtail-cli/ledger`.
@@ -104,7 +106,7 @@ process.env.SHOWTAIL_HOME ??= join(RUN_ROOT, 'home');
 // the suite destroy their live ledger after every single test, silently and
 // unrecoverably. Fail loudly instead; the honor-external escape hatch is only
 // meant for pointing at *another temp dir*.
-if (!resolve(process.env.SHOWTAIL_HOME).startsWith(resolve(tmpdir()))) {
+if (!isTemporaryPath(process.env.SHOWTAIL_HOME)) {
   throw new Error(
     `Refusing to run tests with SHOWTAIL_HOME=${process.env.SHOWTAIL_HOME}: it is ` +
       `outside ${tmpdir()}, and the afterEach hook deletes the ledger under it. ` +
@@ -112,35 +114,11 @@ if (!resolve(process.env.SHOWTAIL_HOME).startsWith(resolve(tmpdir()))) {
   );
 }
 
-// Clear the shared machine-global state after each test. The per-project `.showtail/`
-// is already isolated by its temp dir, but the ledger AND global config live under
-// `SHOWTAIL_HOME`: tests reuse native session ids (e.g. `sess-1`) so ledger records
-// would leak, and global config keys (`captureSince`, `autoInit`) written by one test
-// (e.g. `setup`) would leak into the next and change surfacing/backfill behavior.
-// Best-effort; never throws.
+// Clear only the validated temporary Showtail home between tests.
 afterEach(() => {
-  const home = process.env.SHOWTAIL_HOME ?? '';
-  try {
-    // maxRetries covers Windows, which releases file handles asynchronously and
-    // so intermittently fails an immediate delete with EBUSY/EPERM (see cleanup()
-    // in helpers.ts). Silently swallowing that here would leak ledger records into
-    // the next test, which is exactly what this hook exists to prevent.
-    rmSync(join(home, 'ledger'), {
-      recursive: true,
-      force: true,
-      maxRetries: 5,
-      retryDelay: 50,
-    });
-    rmSync(join(home, 'capture-consent'), {
-      recursive: true,
-      force: true,
-      maxRetries: 5,
-      retryDelay: 50,
-    });
-    rmSync(join(home, 'config.json'), { force: true, maxRetries: 5, retryDelay: 50 });
-  } catch {
-    /* ignore */
-  }
+  const home = resolve(process.env.SHOWTAIL_HOME ?? '');
+  if (!isTemporaryPath(home)) throw new Error('Unsafe test home cleanup');
+  rmSync(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 });
 
 // Cap `findRoot`'s upward walk at the OS temp dir for the entire test run. Test

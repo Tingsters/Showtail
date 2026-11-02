@@ -28,8 +28,8 @@ describe('copilot-cli install / uninstall', () => {
     try {
       // Mark dir as a Showtail project so project-scope resolution stops here.
       mkdirSync(join(dir, '.showtail'), { recursive: true });
-      await runCopilotCliInstall({ project: true, cwd: dir });
-      const target = resolveCopilotCliTarget('project', dir);
+      await runCopilotCliInstall({ user: true, cwd: dir });
+      const target = resolveCopilotCliTarget('user', dir);
 
       expect(existsSync(target.instructionsFile)).toBe(true);
       const body = readFileSync(target.instructionsFile, 'utf8');
@@ -66,9 +66,9 @@ describe('copilot-cli install / uninstall', () => {
     const dir = makeTempDir();
     try {
       mkdirSync(join(dir, '.showtail'), { recursive: true });
-      await runCopilotCliInstall({ project: true, cwd: dir });
-      await runCopilotCliInstall({ project: true, cwd: dir });
-      const target = resolveCopilotCliTarget('project', dir);
+      await runCopilotCliInstall({ user: true, cwd: dir });
+      await runCopilotCliInstall({ user: true, cwd: dir });
+      const target = resolveCopilotCliTarget('user', dir);
 
       const body = readFileSync(target.instructionsFile, 'utf8');
       expect(body.match(/showtail:start/g)?.length).toBe(1);
@@ -86,29 +86,13 @@ describe('copilot-cli install / uninstall', () => {
     const dir = makeTempDir();
     try {
       mkdirSync(join(dir, '.showtail'), { recursive: true });
-      await runCopilotCliInstall({ project: true, cwd: dir });
-      const target = resolveCopilotCliTarget('project', dir);
+      await runCopilotCliInstall({ user: true, cwd: dir });
+      const target = resolveCopilotCliTarget('user', dir);
       expect(copilotCliHooksInstalledAt(target.hooksFile)).toBe(true);
 
-      await runCopilotCliInstall({ project: true, hooks: false, cwd: dir });
+      await runCopilotCliInstall({ user: true, hooks: false, cwd: dir });
       expect(existsSync(target.instructionsFile)).toBe(true);
       expect(copilotCliHooksInstalledAt(target.hooksFile)).toBe(false);
-    } finally {
-      cleanup(dir);
-    }
-  });
-
-  test('--no-hooks leaves automatic capture active when the other scope has hooks', async () => {
-    const dir = makeTempDir();
-    try {
-      mkdirSync(join(dir, '.showtail'), { recursive: true });
-      await runCopilotCliInstall({ user: true, cwd: dir });
-      await runCopilotCliInstall({ project: true, cwd: dir });
-      await runCopilotCliInstall({ project: true, hooks: false, cwd: dir });
-      expect(copilotCliAutoCaptureActive(dir)).toBe(true);
-      expect(
-        copilotCliHooksInstalledAt(resolveCopilotCliTarget('user', dir).hooksFile),
-      ).toBe(true);
     } finally {
       cleanup(dir);
     }
@@ -143,9 +127,9 @@ describe('copilot-cli install / uninstall', () => {
     const dir = makeTempDir();
     try {
       mkdirSync(join(dir, '.showtail'), { recursive: true });
-      const target = resolveCopilotCliTarget('project', dir);
+      const target = resolveCopilotCliTarget('user', dir);
 
-      await runCopilotCliInstall({ project: true, cwd: dir });
+      await runCopilotCliInstall({ user: true, cwd: dir });
       expect(existsSync(target.instructionsFile)).toBe(true);
       expect(readFileSync(target.instructionsFile, 'utf8')).toContain('showtail:start');
 
@@ -160,8 +144,8 @@ describe('copilot-cli install / uninstall', () => {
     const dir = makeTempDir();
     try {
       mkdirSync(join(dir, '.showtail'), { recursive: true });
-      await runCopilotCliInstall({ project: true, cwd: dir });
-      const target = resolveCopilotCliTarget('project', dir);
+      await runCopilotCliInstall({ user: true, cwd: dir });
+      const target = resolveCopilotCliTarget('user', dir);
 
       // The student appends their own notes after our block.
       const withNotes =
@@ -183,8 +167,8 @@ describe('copilot-cli install / uninstall', () => {
     const dir = makeTempDir();
     try {
       mkdirSync(join(dir, '.showtail'), { recursive: true });
-      await runCopilotCliInstall({ project: true, hooks: false, cwd: dir });
-      const state = copilotCliInstructionsState(resolveCopilotCliTarget('project', dir));
+      await runCopilotCliInstall({ user: true, hooks: false, cwd: dir });
+      const state = copilotCliInstructionsState(resolveCopilotCliTarget('user', dir));
       expect(state.installed).toBe(true);
       expect(state.upToDate).toBe(true);
       expect(state.userEdited).toBe(false);
@@ -225,46 +209,12 @@ describe('copilot-cli install / uninstall', () => {
     }
   });
 
-  test('VS Code setup refreshes existing CLI blocks but preserves edited ones', async () => {
-    const dir = makeTempDir();
-    try {
-      mkdirSync(join(dir, '.showtail'), { recursive: true });
-      await runCopilotCliInstall({ project: true, hooks: false, cwd: dir });
-      const target = resolveCopilotCliTarget('project', dir);
-      const current = readFileSync(target.instructionsFile, 'utf8');
-      const parsed = parseBlock(current)!;
-      const stale =
-        current.slice(0, parsed.startIndex) +
-        blockFor('# Old Showtail CLI instructions') +
-        current.slice(parsed.endIndex);
-      writeFileSync(target.instructionsFile, stale);
-
-      await runCopilotInstall({ cwd: dir, extension: false });
-      expect(copilotCliInstructionsState(target).upToDate).toBe(true);
-
-      const updated = readFileSync(target.instructionsFile, 'utf8');
-      writeFileSync(
-        target.instructionsFile,
-        updated.replace('Copilot CLI lifecycle hooks own', 'My customized hooks own'),
-      );
-      const edited = readFileSync(target.instructionsFile, 'utf8');
-      await runCopilotInstall({ cwd: dir, extension: false });
-      expect(readFileSync(target.instructionsFile, 'utf8')).toBe(edited);
-      expect(copilotCliInstructionsState(target).userEdited).toBe(true);
-
-      await runCopilotInstall({ cwd: dir, extension: false, force: true });
-      expect(copilotCliInstructionsState(target).upToDate).toBe(true);
-    } finally {
-      cleanup(dir);
-    }
-  });
-
   test('CLI auto-connect refreshes an existing project instruction block', async () => {
     const dir = makeTempDir();
     try {
       mkdirSync(join(dir, '.showtail'), { recursive: true });
-      await runCopilotCliInstall({ project: true, hooks: false, cwd: dir });
-      const target = resolveCopilotCliTarget('project', dir);
+      await runCopilotCliInstall({ user: true, hooks: false, cwd: dir });
+      const target = resolveCopilotCliTarget('user', dir);
       const current = readFileSync(target.instructionsFile, 'utf8');
       const parsed = parseBlock(current)!;
       writeFileSync(
@@ -362,7 +312,7 @@ describe('copilot-cli detection and hook disable state', () => {
     try {
       process.env.COPILOT_HOME = home;
       mkdirSync(join(dir, '.showtail'), { recursive: true });
-      await runCopilotCliInstall({ project: true, cwd: dir });
+      await runCopilotCliInstall({ user: true, cwd: dir });
       expect(copilotCliAutoCaptureActive(dir)).toBe(true);
 
       writeFileSync(

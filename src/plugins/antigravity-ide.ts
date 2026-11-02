@@ -13,7 +13,6 @@ import {
   runAntigravityIdeInstall,
   runAntigravityIdeUninstall,
 } from '../commands/antigravityIde.ts';
-import { runImportAntigravityIde } from '../commands/importAntigravityIde.ts';
 import {
   antigravityIdeAutoCaptureActive,
   antigravityIdeInstalledOnHost,
@@ -60,9 +59,12 @@ function antigravityIdeGetTranscript(raw: unknown, root: string): HookTranscript
   if (isVsCodeExtensionPayload(raw)) return vscodeExtensionTranscript(raw);
   const sid = extractSessionId(raw as HookPayload | null);
   const info = locateAntigravityIdeTranscript(sid);
-  if (!info) return null;
+  if (!sid || !info || info.sessionId !== sid) return null;
   try {
-    return readAntigravityIdeTranscript(info, root);
+    return readAntigravityIdeTranscript(info, root, {
+      includeEdits: true,
+      includeOutsideEdits: true,
+    });
   } catch {
     return null; // Unreadable/unsupported transcript — nothing to capture.
   }
@@ -75,17 +77,12 @@ export const antigravityIdePlugin: EnvironmentPlugin = {
   label: 'Antigravity IDE',
 
   connect: {
-    scopes: ['user', 'project'],
+    scopes: ['user'],
     flags: [
       {
         name: 'user',
         flag: '--user',
-        description: 'install for your user, all projects',
-      },
-      {
-        name: 'project',
-        flag: '--project',
-        description: 'install for this project only [default]',
+        description: 'install for your user, all projects [default]',
       },
       {
         name: 'force',
@@ -93,7 +90,7 @@ export const antigravityIdePlugin: EnvironmentPlugin = {
         description: 'overwrite existing instructions (take the latest)',
       },
     ],
-    applicableFlags: ['user', 'project', 'force'],
+    applicableFlags: ['user', 'force'],
 
     detect: () => antigravityIdeInstalledOnHost() || homeDirExists('.antigravity-ide'),
 
@@ -174,7 +171,8 @@ export const antigravityIdePlugin: EnvironmentPlugin = {
       // canonical (final) plan file even after later edits.
       planFiles(raw) {
         if (isVsCodeExtensionPayload(raw)) return [];
-        return antigravityIdePlanFiles(extractSessionId(raw as HookPayload | null));
+        const sid = extractSessionId(raw as HookPayload | null);
+        return sid ? antigravityIdePlanFiles(sid) : [];
       },
       // This IDE build only dispatches PostToolUse hooks (PreInvocation/Stop never
       // fire), so reconcile the transcript on post-edit instead of waiting for a
@@ -192,15 +190,6 @@ export const antigravityIdePlugin: EnvironmentPlugin = {
     description:
       'Import an Antigravity IDE conversation (its brain transcript) into your trail.',
     shape: 'transcript',
-    run: (source, opts) =>
-      runImportAntigravityIde(source, {
-        list: opts.list,
-        withResponses: opts.withResponses,
-        file: opts.file,
-        session: opts.session,
-        cwd: opts.cwd,
-        auto: opts.auto,
-      }),
   },
 
   migration: {
@@ -218,7 +207,7 @@ export const antigravityIdePlugin: EnvironmentPlugin = {
           mtimeMs: candidate.mtimeMs,
         },
         root,
-        { includeEdits: true },
+        { includeEdits: true, includeOutsideEdits: true },
       );
     },
     planFiles: (candidate) => antigravityIdePlanFiles(candidate.providerSessionId),

@@ -67,10 +67,10 @@ describe('resolveIdentity', () => {
 });
 
 describe('machine identity cache', () => {
-  test('round-trips through the SHOWTAIL_IDENTITY_HOME-scoped file', () => {
+  test('round-trips through the SHOWTAIL_HOME-scoped file', () => {
     const home = makeTempDir();
-    const prev = process.env.SHOWTAIL_IDENTITY_HOME;
-    process.env.SHOWTAIL_IDENTITY_HOME = home;
+    const prev = process.env.SHOWTAIL_HOME;
+    process.env.SHOWTAIL_HOME = home;
     try {
       expect(readMachineIdentity()).toBeNull();
       writeMachineIdentity({
@@ -85,8 +85,8 @@ describe('machine identity cache', () => {
       expect(cached?.slug).toBe('m-at-x-dev');
       expect(cached?.machineId).toBe('machine-1');
     } finally {
-      if (prev === undefined) delete process.env.SHOWTAIL_IDENTITY_HOME;
-      else process.env.SHOWTAIL_IDENTITY_HOME = prev;
+      if (prev === undefined) delete process.env.SHOWTAIL_HOME;
+      else process.env.SHOWTAIL_HOME = prev;
       cleanup(home);
     }
   });

@@ -29,13 +29,13 @@ describe('claude-code assets stay in sync with the single source of truth', () =
     expect(SKILL_MD).not.toContain('showtail artifact');
     expect(SKILL_MD).toContain('showtail log --type decision');
     expect(SKILL_MD).toContain('showtail projects "<student-project-wording>" --json');
-    expect(SKILL_MD).toContain('showtail report --project "<trail-id>" --json --no-open');
-    expect(SKILL_MD).toContain('showtail verify --project "<trail-id>" --json');
     expect(SKILL_MD).toContain(
-      'showtail status --project "<trail-id>" --json --tool claude',
+      'showtail report --project "<project-id>" --json --no-open',
     );
+    expect(SKILL_MD).toContain('showtail verify --project "<project-id>" --json');
+    expect(SKILL_MD).toContain('showtail status --json --tool claude');
     expect(SKILL_MD).toContain("Claude's terminal working directory");
-    expect(SKILL_MD).toContain('returned `trailId` and `root`');
+    expect(SKILL_MD).toContain('returned `projectId` and `projectRoot`');
     expect(SKILL_MD).not.toMatch(/^\s*showtail (?:report|verify|status)(?:\s+#.*)?\s*$/m);
     expect(SKILL_MD).not.toMatch(/`showtail (?:report|verify|status)`/);
   });

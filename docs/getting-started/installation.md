@@ -12,14 +12,14 @@ also **turns tracking on for you** — it connects the AI tools it finds and pre
 integrations that are safe to configure before their host exists, so there is no setup
 command. If you add an AI tool later, install it before Showtail when possible or run
 `showtail connect <tool>` before that tool's first session. Use `showtail setup --off` to
-disable automatic creation of new project trails; disconnect a tool to stop its capture.
+pause all automatic capture; disconnect a tool to stop only that tool.
 
 Before running the installer, note the user-level changes it makes:
 
 - downloads the Showtail executable and bundled VS Code extension into the
   Showtail installation directory;
 - adds that directory to your user `PATH`;
-- creates machine-local state under `~/.showtail-cli/`;
+- creates machine-local state under `~/.showtail/`;
 - enables automatic local capture and may add Showtail hooks, instructions, or
   an extension to detected AI tools.
 
@@ -88,19 +88,12 @@ Showtail never overwrites Bun or a source checkout. `showtail update --check`
 still works there, but installing a newer version means pulling the repository and
 rebuilding it.
 
-### Upgrading older trails
+### Importing older trails
 
-When an upgrade introduces richer transcript history, an existing installation
-gets one migration offer. Pressing Enter accepts: Showtail scans your home folder
-for existing `.showtail/` projects, previews the eligible repositories and
-sessions, then asks once before adding recovered details. The scan starts only
-after you opt in and nothing is uploaded.
-
-The macOS/Linux installer reads this prompt from the controlling terminal even
-though the installer itself is piped through `bash`. If an upgrade has no terminal
-(for example a source build updated in the background), the offer waits for the
-next interactive Showtail command. Choosing no dismisses it; you can always run
-`showtail migrate` later inside a project.
+Imports are explicit and leave originals untouched. Preview with
+`showtail import legacy --from <old-home-or-project> --dry-run --json`, then repeat
+without `--dry-run`. You can repeat `--from` for several sources. Showtail never
+scans your home folder for projects or silently migrates them.
 
 ## Option 2: Install with Bun
 
@@ -121,10 +114,10 @@ bun run build
 
 The binary is written to `dist/showtail`.
 
-!!! note "Bun / from-source installs turn on the same way"
-    The one-line installer turns tracking on as it runs. With Bun or a from-source
-    build there's no installer step, so Showtail turns tracking on **the first time you
-    run any `showtail` command** instead — still no setup command to remember.
+!!! note "Enable capture explicitly"
+    The one-line installer runs setup. With Bun or a from-source build, run
+    `showtail setup` once to connect available tools and enable capture. Read-only
+    status and report commands never install integrations on your behalf.
 
 ## Option 3: Build from source
 

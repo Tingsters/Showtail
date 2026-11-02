@@ -18,7 +18,7 @@ function stripComments(src: string): string {
 
 describe('core stays tool-agnostic', () => {
   test('the hook dispatcher has no per-tool branching', () => {
-    const code = stripComments(read('commands/hook.ts'));
+    const code = stripComments(read('core/historyCapture.ts'));
     // No `tool === 'claude'` / `=== 'codex'` style branches.
     expect(code).not.toMatch(/===\s*['"](claude|codex|copilot|gemini|chatgpt)/i);
     // The dispatcher never selects a tool-specific payload extractor itself —
@@ -40,7 +40,11 @@ describe('core stays tool-agnostic', () => {
   });
 
   test('setup detection is registry-driven and names no tool', () => {
-    const code = stripComments(read('commands/setup.ts'));
+    const code = stripComments(
+      read('commands/historyCli.ts')
+        .split('async function setup')[1]!
+        .split('export async function')[0]!,
+    );
     for (const name of ['claude', 'codex', 'copilot', 'gemini', 'chatgpt']) {
       expect(code).not.toContain(`'${name}`);
     }

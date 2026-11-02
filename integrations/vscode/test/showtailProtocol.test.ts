@@ -347,7 +347,7 @@ describe('metadata-first project control', () => {
     expect(
       parseProjectResolution({
         stdout: JSON.stringify({
-          schemaVersion: 2,
+          schemaVersion: 999,
           state: 'selected',
           selection: selectedProject,
         }),
@@ -495,7 +495,7 @@ describe('metadata-first project control', () => {
     const status = createProjectControlMarker('claim_status', 'status', selectedProject);
     const malformed = {
       ...report,
-      showtailProjectControl: 'showtail-project-control/v2',
+      showtailProjectControl: 'showtail-project-control/v999',
     };
 
     expect(parseProjectControlMarker(report)).toEqual(report);

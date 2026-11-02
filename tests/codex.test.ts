@@ -24,8 +24,8 @@ describe('codex install / uninstall', () => {
       // Mark dir as a Showtail project so project-scope resolution stops here
       // (otherwise findRoot can walk up to a stray ~/.showtail).
       mkdirSync(join(dir, '.showtail'), { recursive: true });
-      await runCodexInstall({ project: true, yes: true, cwd: dir });
-      const target = resolveCodexTarget('project', dir);
+      await runCodexInstall({ user: true, yes: true, cwd: dir });
+      const target = resolveCodexTarget('user', dir);
 
       expect(existsSync(target.agentsFile)).toBe(true);
       expect(readFileSync(target.agentsFile, 'utf8')).toContain('showtail:start');
@@ -48,9 +48,9 @@ describe('codex install / uninstall', () => {
       // Mark dir as a Showtail project so project-scope resolution stops here
       // (otherwise findRoot can walk up to a stray ~/.showtail).
       mkdirSync(join(dir, '.showtail'), { recursive: true });
-      await runCodexInstall({ project: true, yes: true, cwd: dir });
-      await runCodexInstall({ project: true, yes: true, cwd: dir });
-      const target = resolveCodexTarget('project', dir);
+      await runCodexInstall({ user: true, yes: true, cwd: dir });
+      await runCodexInstall({ user: true, yes: true, cwd: dir });
+      const target = resolveCodexTarget('user', dir);
 
       const agents = readFileSync(target.agentsFile, 'utf8');
       expect(agents.match(/showtail:start/g)?.length).toBe(1);
@@ -73,8 +73,8 @@ describe('codex install / uninstall', () => {
       // (otherwise findRoot can walk up to a stray ~/.showtail).
       mkdirSync(join(dir, '.showtail'), { recursive: true });
       console.log = (...args: unknown[]) => void lines.push(args.join(' '));
-      await runCodexInstall({ project: true, hooks: false, cwd: dir });
-      const target = resolveCodexTarget('project', dir);
+      await runCodexInstall({ user: true, hooks: false, cwd: dir });
+      const target = resolveCodexTarget('user', dir);
       expect(existsSync(target.agentsFile)).toBe(true);
       expect(existsSync(target.hooksFile)).toBe(false);
       expect(existsSync(target.configToml)).toBe(false);
@@ -95,11 +95,11 @@ describe('codex install / uninstall', () => {
     const dir = makeTempDir();
     try {
       mkdirSync(join(dir, '.showtail'), { recursive: true });
-      const target = resolveCodexTarget('project', dir);
-      await runCodexInstall({ project: true, yes: true, cwd: dir });
+      const target = resolveCodexTarget('user', dir);
+      await runCodexInstall({ user: true, yes: true, cwd: dir });
       expect(codexHooksInstalledAt(target.hooksFile)).toBe(true);
 
-      await runCodexInstall({ project: true, hooks: false, cwd: dir });
+      await runCodexInstall({ user: true, hooks: false, cwd: dir });
 
       expect(existsSync(target.agentsFile)).toBe(true);
       expect(codexHooksInstalledAt(target.hooksFile)).toBe(false);
@@ -115,9 +115,10 @@ describe('codex install / uninstall', () => {
       // Mark dir as a Showtail project so project-scope resolution stops here
       // (otherwise findRoot can walk up to a stray ~/.showtail).
       mkdirSync(join(dir, '.showtail'), { recursive: true });
-      const target = resolveCodexTarget('project', dir);
+      const target = resolveCodexTarget('user', dir);
+      mkdirSync(target.codexDir, { recursive: true });
       writeFileSync(target.agentsFile, '# My project rules\n\nUse tabs.\n');
-      await runCodexInstall({ project: true, yes: true, cwd: dir });
+      await runCodexInstall({ user: true, yes: true, cwd: dir });
       const after = readFileSync(target.agentsFile, 'utf8');
       expect(after).toContain('# My project rules');
       expect(after).toContain('Use tabs.');
@@ -139,8 +140,8 @@ describe('codex install / uninstall', () => {
       // Mark dir as a Showtail project so project-scope resolution stops here
       // (otherwise findRoot can walk up to a stray ~/.showtail).
       mkdirSync(join(dir, '.showtail'), { recursive: true });
-      await runCodexInstall({ project: true, yes: true, cwd: dir });
-      const target = resolveCodexTarget('project', dir);
+      await runCodexInstall({ user: true, yes: true, cwd: dir });
+      const target = resolveCodexTarget('user', dir);
 
       // Simulate a hand-edit inside the managed block.
       const edited = readFileSync(target.agentsFile, 'utf8').replace(
@@ -151,11 +152,11 @@ describe('codex install / uninstall', () => {
       expect(codexInstructionsState(target).userEdited).toBe(true);
 
       // A normal re-install must NOT clobber the edit.
-      await runCodexInstall({ project: true, yes: true, cwd: dir });
+      await runCodexInstall({ user: true, yes: true, cwd: dir });
       expect(readFileSync(target.agentsFile, 'utf8')).toContain('my notes');
 
       // --force restores the canonical body.
-      await runCodexInstall({ project: true, yes: true, force: true, cwd: dir });
+      await runCodexInstall({ user: true, yes: true, force: true, cwd: dir });
       expect(readFileSync(target.agentsFile, 'utf8')).not.toContain('my notes');
       expect(codexInstructionsState(target).upToDate).toBe(true);
     } finally {
@@ -243,14 +244,14 @@ describe('codex AGENTS body', () => {
     expect(AGENTS_BODY).not.toContain('showtail artifact');
     expect(AGENTS_BODY).toContain('showtail projects "<student-project-wording>" --json');
     expect(AGENTS_BODY).toContain(
-      'showtail report --project "<trail-id>" --json --no-open',
+      'showtail report --project "<project-id>" --json --no-open',
     );
-    expect(AGENTS_BODY).toContain('showtail verify --project "<trail-id>" --json');
+    expect(AGENTS_BODY).toContain('showtail verify --project "<project-id>" --json');
     expect(AGENTS_BODY).toContain(
-      'showtail status --project "<trail-id>" --json --tool codex',
+      'showtail status --project "<project-id>" --json --tool codex',
     );
     expect(AGENTS_BODY).toContain("agent terminal's working directory");
-    expect(AGENTS_BODY).toContain('returned `trailId` and `root`');
+    expect(AGENTS_BODY).toContain('returned `projectId` and `projectRoot`');
     expect(AGENTS_BODY).not.toMatch(
       /^\s*showtail (?:report|verify|status)(?:\s+#.*)?\s*$/m,
     );
@@ -317,7 +318,7 @@ describe('legacy HOME-level Codex instructions cleanup', () => {
     };
   }
 
-  test('removes an untouched fingerprinted block and preserves surrounding user text', () => {
+  test('leaves legacy home instructions untouched during user installation', () => {
     const dir = makeTempDir();
     try {
       const target = userTarget(dir);
@@ -331,7 +332,7 @@ describe('legacy HOME-level Codex instructions cleanup', () => {
       const legacy = readFileSync(target.legacyAgentsFile, 'utf8');
       expect(legacy).toContain('# My rules');
       expect(legacy).toContain('Keep this too.');
-      expect(legacy).not.toContain('showtail:start');
+      expect(legacy).toContain('showtail:start');
       expect(readFileSync(target.agentsFile, 'utf8')).toContain('showtail:start');
     } finally {
       cleanup(dir);

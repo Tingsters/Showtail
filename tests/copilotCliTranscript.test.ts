@@ -277,8 +277,14 @@ describe('Copilot CLI session discovery + plugin getTranscript', () => {
       );
       expect(transcript).not.toBeNull();
       expect(transcript!.sessionId).toBe('payload-sid');
-      expect(transcript!.messages.map((m) => m.role)).toEqual(['user', 'assistant']);
-      expect(transcript!.messages[1]!.text).toContain('banana-copilot');
+      expect(transcript!.messages.map((m) => m.role)).toEqual([
+        'user',
+        'edit',
+        'assistant',
+      ]);
+      expect(transcript!.messages.find((m) => m.role === 'assistant')!.text).toContain(
+        'banana-copilot',
+      );
     } finally {
       cleanup(home);
       cleanup(repo);

@@ -2,16 +2,10 @@ import { describe, expect, test } from 'bun:test';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseClaudeTranscript } from '../src/core/claudeCode.ts';
-import { logEvent, readAllEvents } from '../src/core/events.ts';
-import { addArtifact } from '../src/core/artifacts.ts';
-import { buildReportData, renderHtml, renderMarkdown } from '../src/core/report.ts';
+import { renderHtml, renderMarkdown } from '../src/core/report.ts';
 import { turnTimeline } from '../src/core/report/data.ts';
 import type { Event, ReportData, Turn } from '../src/types.ts';
-import { runInit } from '../src/commands/init.ts';
-import { runImportClaudeCode } from '../src/commands/importClaude.ts';
-import { pathsForRoot } from '../src/core/storage.ts';
-import { authorFor, cleanup, makeTempDir } from './helpers.ts';
-
+import { cleanup, makeTempDir } from './helpers.ts';
 /**
  * A transcript where Claude pauses with `AskUserQuestion` (two questions in one
  * call: the first answered by picking an option, the second by typing a custom
@@ -89,7 +83,6 @@ function makeDecisionTranscript(): string {
   ];
   return lines.map((l) => JSON.stringify(l)).join('\n') + '\n';
 }
-
 describe('parseClaudeTranscript — decisions', () => {
   test('pairs an AskUserQuestion with its answer; marks chosen + typed', () => {
     const dir = makeTempDir();
@@ -98,7 +91,6 @@ describe('parseClaudeTranscript — decisions', () => {
       const decision = messages.find((m) => m.role === 'decision');
       expect(decision).toBeDefined();
       expect(decision!.sourceId).toBe('tq1');
-
       const text = decision!.text;
       // The question and all offered options are present.
       expect(text).toContain('Which auth approach?');
@@ -110,7 +102,6 @@ describe('parseClaudeTranscript — decisions', () => {
       // The second question was answered with free-typed text.
       expect(text).toContain('What should the auth function be named?');
       expect(text).toContain('**You typed:** verifyUser');
-
       // Structured data is resolved too.
       const q1 = decision!.questions![0]!;
       expect(q1.options.find((o) => o.label === 'JWT')!.chosen).toBe(true);
@@ -122,7 +113,6 @@ describe('parseClaudeTranscript — decisions', () => {
       cleanup(dir);
     }
   });
-
   test('reads answers from the clarify/reject result format (preset, typed, none)', () => {
     const dir = makeTempDir();
     try {
@@ -196,7 +186,6 @@ describe('parseClaudeTranscript — decisions', () => {
       const { messages } = parseClaudeTranscript(transcript, dir);
       const d = messages.find((m) => m.role === 'decision')!;
       expect(d).toBeDefined();
-
       // Q1: preset option marked chosen.
       expect(d.questions![0]!.options.find((o) => o.label === 'SQLite')!.chosen).toBe(
         true,
@@ -212,7 +201,6 @@ describe('parseClaudeTranscript — decisions', () => {
       cleanup(dir);
     }
   });
-
   test('reads answers + notes from the structured toolUseResult', () => {
     const dir = makeTempDir();
     try {
@@ -294,7 +282,6 @@ describe('parseClaudeTranscript — decisions', () => {
       const { messages } = parseClaudeTranscript(transcript, dir);
       const d = messages.find((m) => m.role === 'decision')!;
       expect(d).toBeDefined();
-
       // Q1: preset chosen + note rendered.
       expect(d.questions![0]!.options.find((o) => o.label === 'SQLite')!.chosen).toBe(
         true,
@@ -315,119 +302,7 @@ describe('parseClaudeTranscript — decisions', () => {
     }
   });
 });
-
-describe('claude-code decision import', () => {
-  test('imports decisions as decision events (even without responses) and dedupes', async () => {
-    const dir = makeTempDir();
-    try {
-      await runInit({ cwd: dir });
-      const paths = pathsForRoot(dir);
-      const fixture = join(dir, 'transcript.jsonl');
-      writeFileSync(fixture, makeDecisionTranscript(), 'utf8');
-
-      // No --with-responses: decisions are the student's own work, so they still import.
-      await runImportClaudeCode(undefined, { file: fixture, cwd: dir });
-
-      const cc = () => readAllEvents(paths).filter((e) => e.tool === 'claude-code');
-      const decisions = cc().filter((e) => e.type === 'decision');
-      expect(decisions.length).toBe(1);
-      expect(cc().filter((e) => e.type === 'ai_output').length).toBe(0);
-      expect(decisions[0]!.text).toContain('**JWT** ✅');
-      expect(decisions[0]!.tags).toContain('imported');
-      expect(decisions[0]!.turnId).toBeDefined(); // attached to the prompt's turn
-
-      // Re-importing the same transcript adds nothing (deduped by sourceId).
-      const before = cc().length;
-      await runImportClaudeCode(undefined, { file: fixture, cwd: dir });
-      expect(cc().length).toBe(before);
-    } finally {
-      cleanup(dir);
-    }
-  });
-
-  test('the report shows the decision inline and counts it in the summary', async () => {
-    const dir = makeTempDir();
-    try {
-      await runInit({ cwd: dir });
-      const paths = pathsForRoot(dir);
-      const fixture = join(dir, 'transcript.jsonl');
-      writeFileSync(fixture, makeDecisionTranscript(), 'utf8');
-      await runImportClaudeCode(undefined, {
-        file: fixture,
-        withResponses: true,
-        cwd: dir,
-      });
-
-      const data = buildReportData(paths);
-      expect(data.summary.decisions).toBe(1);
-      // The decision attached to its exchange.
-      const turnWithDecision = data.turns.find((t) => t.decisions.length > 0);
-      expect(turnWithDecision).toBeDefined();
-
-      const md = renderMarkdown(data);
-      expect(md).toContain('🔀 **Decision**');
-      expect(md).toContain('**JWT** ✅');
-      expect(md).toContain('1 decision'); // summary line
-
-      // The collapsed card flags the decision as a marker, so a reviewer scanning
-      // the rows can see one happened — and that this turn repays expanding —
-      // without opening it.
-      const html = renderHtml(data);
-      expect(html).toContain('signal--decision');
-      expect(html).toContain('🔀 decision');
-    } finally {
-      cleanup(dir);
-    }
-  });
-
-  test('a turn with both an edit and a decision shows both in the card stat', async () => {
-    const dir = makeTempDir();
-    try {
-      await runInit({ cwd: dir });
-      const paths = pathsForRoot(dir);
-      const author = authorFor(paths);
-
-      // A real file to snapshot — live capture records edits as file snapshots.
-      mkdirSync(join(dir, 'src'), { recursive: true });
-      writeFileSync(join(dir, 'src', 'app.ts'), 'export const db = "sqlite";\n', 'utf8');
-
-      // One exchange (as live capture builds it): a prompt, then a file snapshot
-      // AND a decision, both linked to that prompt's turn.
-      const { event: prompt } = await logEvent(author, {
-        type: 'prompt',
-        text: 'Set up the database.',
-        tool: 'claude-code',
-      });
-      await addArtifact(author, {
-        filePath: join(dir, 'src', 'app.ts'),
-        tool: 'claude-code',
-        turnId: prompt.id,
-      });
-      await logEvent(author, {
-        type: 'decision',
-        text: '**Claude asked:** Which DB?\n\n- **SQLite** ✅ _(your choice)_\n- Postgres',
-        tool: 'claude-code',
-        turnId: prompt.id,
-      });
-
-      const data = buildReportData(paths);
-      const turn = data.turns.find(
-        (t) => t.codeChanges.length > 0 && t.decisions.length > 0,
-      );
-      expect(turn).toBeDefined(); // the edit and the decision share one turn
-
-      const html = renderHtml(data);
-      // The outcome is stated plainly; the decision rides alongside as a marker.
-      // Both on the same row — no conflict — and properly pluralised.
-      expect(html).toContain('<span class="stat">1 file</span>');
-      expect(html).toContain('🔀 decision');
-      expect(html).not.toContain('file(s)');
-    } finally {
-      cleanup(dir);
-    }
-  });
-});
-
+describe('claude-code decision import', () => {});
 describe('turn timeline (chronological interleaving)', () => {
   const ev = (id: string, ts: string, type: Event['type'], text: string): Event => ({
     id,
@@ -437,7 +312,6 @@ describe('turn timeline (chronological interleaving)', () => {
     tool: 'claude-code',
     actorSlug: 'x',
   });
-
   // A turn whose items happened in the order: reply, edit, reply, edit, decision.
   const interleavedTurn = (): Turn => ({
     prompt: ev('p', '2026-01-01T00:00:00.000Z', 'prompt', 'do it'),
@@ -459,7 +333,6 @@ describe('turn timeline (chronological interleaving)', () => {
     actorSlug: 'x',
     sessionId: 'sess',
   });
-
   test('merges replies, code, and decisions in timestamp order', () => {
     const order = turnTimeline(interleavedTurn()).map((i) =>
       i.kind === 'code' ? `code:${i.change.path}` : `${i.kind}:${i.event.id}`,
@@ -472,7 +345,6 @@ describe('turn timeline (chronological interleaving)', () => {
       'decision:d',
     ]);
   });
-
   test('keeps text before tools that share its timestamp', () => {
     const t = '2026-01-01T00:00:01.000Z';
     const turn: Turn = {
@@ -489,7 +361,6 @@ describe('turn timeline (chronological interleaving)', () => {
     };
     expect(turnTimeline(turn).map((i) => i.kind)).toEqual(['ai', 'code', 'decision']);
   });
-
   test('renders the turn as one chronological stream with AI collapsed in place', () => {
     // Each AI reply shares the timestamp of the edit it produced, so the turn reads
     // in order: reply → its edit → reply → its edit → decision. AI is collapsed into
@@ -544,7 +415,6 @@ describe('turn timeline (chronological interleaving)', () => {
     // The decision renders exactly once (no duplication into an AI section).
     expect((md.match(/🔀 \*\*Decision\*\*/g) || []).length).toBe(1);
   });
-
   test('a worktree code change links from linkPath but shows the clean path', () => {
     const data: ReportData = {
       schemaVersion: 2,

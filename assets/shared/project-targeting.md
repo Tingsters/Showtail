@@ -1,15 +1,10 @@
-## Project targeting is metadata-first
+## Project views
 
-Project controls must resolve a Showtail project before they run. Treat the stable trail ID
-as the identity and its current path as a validated, moveable hint.
+All captured work lives in Showtail's central history. A project ID selects a view;
+its `projectRoot` is context, not a storage location. Resolve named views with
+`showtail projects "<student wording>" --json`, and pass `selection.projectId` to
+report and submission commands. Ambiguity requires a local choice. Never change
+membership merely because the student requested a different project's report.
+Folderless work is selected by session ID; all-history reports require `--all`.
 
-- Never choose from the terminal working directory, workspace folder, generated chat title,
-  recency, or a path produced by the model itself.
-- Preserve the student's project wording when asking Showtail to resolve a target. Do not
-  invent, expand, or reorder it into a filesystem path.
-- Continue automatically only when Showtail returns one selected trail. If it reports an
-  ambiguity, conflict, or confirmation requirement, let the student choose locally.
-- Run the requested control with the selected trail ID and verify that the returned `trailId`
-  and `root` still match before opening or presenting any result.
-- Keep report targeting separate from edit ownership: asking for project B's report must not
-  move files or captured edits away from project A.
+Never choose from the terminal working directory for a named project. Resolve its stable project ID.

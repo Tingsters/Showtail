@@ -60,15 +60,21 @@ function antigravityCliGetTranscript(raw: unknown, root: string): HookTranscript
   const tp = extractAgyTranscriptPath(p ?? {});
   if (tp && existsSync(tp)) {
     try {
-      return parseAntigravityCliTranscript(readFileSync(tp, 'utf8'), root, sid);
+      return parseAntigravityCliTranscript(readFileSync(tp, 'utf8'), root, sid, {
+        includeEdits: true,
+        includeOutsideEdits: true,
+      });
     } catch {
       /* fall through to disk discovery */
     }
   }
   const info = locateAntigravityCliTranscript(sid);
-  if (!info) return null;
+  if (!sid || !info || info.sessionId !== sid) return null;
   try {
-    return readAntigravityCliTranscript(info, root);
+    return readAntigravityCliTranscript(info, root, {
+      includeEdits: true,
+      includeOutsideEdits: true,
+    });
   } catch {
     return null; // Unreadable/unsupported transcript — nothing to capture.
   }
@@ -81,17 +87,12 @@ export const antigravityCliPlugin: EnvironmentPlugin = {
   label: 'Antigravity CLI',
 
   connect: {
-    scopes: ['user', 'project'],
+    scopes: ['user'],
     flags: [
       {
         name: 'user',
         flag: '--user',
-        description: 'install for your user, all projects',
-      },
-      {
-        name: 'project',
-        flag: '--project',
-        description: 'install for this project only [default]',
+        description: 'install for your user, all projects [default]',
       },
       {
         name: 'hooks',
@@ -104,7 +105,7 @@ export const antigravityCliPlugin: EnvironmentPlugin = {
         description: 'overwrite existing instructions (take the latest)',
       },
     ],
-    applicableFlags: ['user', 'project', 'hooks', 'force'],
+    applicableFlags: ['user', 'hooks', 'force'],
 
     detect: () => commandOnPath('agy') || homeDirExists('.gemini'),
 
@@ -180,7 +181,8 @@ export const antigravityCliPlugin: EnvironmentPlugin = {
       // Surface it so the report can link to the saved plan file.
       planFiles(raw) {
         const p = raw as AgyHookPayload & HookPayload;
-        return antigravityCliPlanFiles(extractAgySessionId(p) ?? extractSessionId(p));
+        const sid = extractAgySessionId(p) ?? extractSessionId(p);
+        return sid ? antigravityCliPlanFiles(sid) : [];
       },
     },
   },
@@ -200,7 +202,7 @@ export const antigravityCliPlugin: EnvironmentPlugin = {
           mtimeMs: candidate.mtimeMs,
         },
         root,
-        { includeEdits: true },
+        { includeEdits: true, includeOutsideEdits: true },
       );
     },
     planFiles: (candidate) => antigravityCliPlanFiles(candidate.providerSessionId),

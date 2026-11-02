@@ -19,7 +19,7 @@ bun.lockb
 Thumbs.db
 *.log
 
-# Showtail's own working trail. It holds raw prompts, AI replies and diffs, so it is private
+# Legacy Showtail's own working trail. It holds raw prompts, AI replies and diffs, so it is private
 # (Showtail ignores it itself by default; this repo no longer opts in via commitTrail).
 # Share work with `showtail submit` instead. See docs/concepts/sharing.md.
 .showtail/

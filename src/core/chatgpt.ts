@@ -6,18 +6,17 @@ import {
   type ParsedMessage,
   type TranscriptParseOptions,
   type TranscriptResult,
-} from './importCommon.ts';
+} from './conversationReader.ts';
 
 // The generic import machinery lives in importCommon.ts. Re-export the parts
 // callers historically imported from here so existing imports keep working.
 export {
-  importConversation,
   type ParsedConversation,
   type ParsedMessage,
   type TranscriptResult,
   type ImportOptions,
   type ImportResult,
-} from './importCommon.ts';
+} from './conversationReader.ts';
 
 const BROWSER_UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';

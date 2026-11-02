@@ -19,7 +19,6 @@ import {
   copilotCliInstructionsState,
   findCopilotCliExecutable,
   installCopilotCliHooks,
-  refreshExistingCopilotCliInstructions,
   resolveCopilotCliTarget,
   writeCopilotCliInstructions,
 } from '../core/copilotCli.ts';
@@ -53,7 +52,10 @@ function copilotCliGetTranscript(raw: unknown, root: string): HookTranscript | n
   const info = findCopilotCliSession(sid);
   if (!info || !existsSync(info.path)) return null;
   try {
-    const transcript = parseCopilotCliTranscript(readFileSync(info.path, 'utf8'), root);
+    const transcript = parseCopilotCliTranscript(readFileSync(info.path, 'utf8'), root, {
+      includeOutsideEdits: true,
+      includeEdits: true,
+    });
     if (transcript.sessionId && transcript.sessionId !== info.sessionId) return null;
     return { ...transcript, sessionId: transcript.sessionId ?? info.sessionId };
   } catch {
@@ -68,22 +70,17 @@ export const copilotCliPlugin: EnvironmentPlugin = {
   label: 'GitHub Copilot CLI',
 
   connect: {
-    scopes: ['user', 'project'],
+    scopes: ['user'],
     flags: [
       {
         name: 'user',
         flag: '--user',
-        description: 'install for your user, all projects',
-      },
-      {
-        name: 'project',
-        flag: '--project',
-        description: 'install for this project only [default]',
+        description: 'install for your user, all projects [default]',
       },
       {
         name: 'hooks',
         flag: '--no-hooks',
-        description: 'disable auto-capture hooks at the selected scope',
+        description: 'disable automatic capture hooks for your user',
       },
       {
         name: 'force',
@@ -91,7 +88,7 @@ export const copilotCliPlugin: EnvironmentPlugin = {
         description: 'overwrite existing instructions (take the latest)',
       },
     ],
-    applicableFlags: ['user', 'project', 'hooks', 'force'],
+    applicableFlags: ['user', 'hooks', 'force'],
 
     detect: () => findCopilotCliExecutable() !== null,
 
@@ -105,7 +102,6 @@ export const copilotCliPlugin: EnvironmentPlugin = {
       installCopilotCliHooks(target);
       // Automatic sweeps run around machine-readable commands too, so they must
       // never print. Status surfaces any customized block that still needs review.
-      refreshExistingCopilotCliInstructions(cwd);
       return { hooks: true };
     },
 
@@ -191,7 +187,9 @@ export const copilotCliPlugin: EnvironmentPlugin = {
         mtimeMs: info.mtimeMs,
       })),
     read(candidate, root) {
-      return readCopilotCliSessionFile(candidate.path, root);
+      return readCopilotCliSessionFile(candidate.path, root, {
+        includeOutsideEdits: true,
+      });
     },
   },
 };

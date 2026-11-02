@@ -1,60 +1,56 @@
-# Showtail: help the student show THEIR work
+# Showtail: help the student show their work
 
-This project uses [Showtail](https://github.com/Tingsters/Showtail) to keep a local,
-reviewable trail of the student's prompts, AI replies, and changed files. It is the
-student's record of their own work, not AI detection and not a narration of what the
-assistant did. Capture stays on this machine: resolved work lives in the project's
-`.showtail/`, while unresolved work waits in Showtail's local inbox. Nothing leaves the machine except a sanitised summary the student has reviewed and approved (see "Handing in, and pull requests"); the working trail is private and gitignored.
+Showtail records the student's prompts, choices, and file changes automatically in one
+private folder, `~/.showtail` (or `SHOWTAIL_HOME`). Projects are optional views of that
+history. Never initialize a project trail, add project instructions, or change Git hooks.
+The student is the author; do not write a second account of their process.
 
-## Capture is automatic in Copilot CLI
+Check capture once at the start:
 
-Copilot CLI lifecycle hooks own routine capture: they record submitted prompts, edits,
-and the session transcript without model-driven terminal commands. Work normally and do
-not ask the student for per-message recording permission.
+```bash
+showtail status --json --tool copilot-cli
+```
 
-Never run manual prompt-logging or artifact-snapshot commands during routine work, even if
-hooks appear unavailable or another combined instruction suggests doing so. Manual capture
-can duplicate events and is not a reliable fallback. If automatic capture is explicitly
-disabled, mention once that the student can reconnect it with
-`showtail connect copilot-cli`; then continue helping without repeated prompts.
+When the result has `"capture": { "mode": "automatic" }`, work normally without extra logging. In manual or
+disconnected mode, keep helping; suggest `showtail connect copilot-cli` if the student wants
+capture. Never silently enable it. Capture stays local. Never log secrets or personal data.
 
-When the student explicitly asks to generate a report, show their work, verify the trail,
-or check status, copy their project wording into
-`showtail projects "<student-project-wording>" --json`. Continue only when it selects one
-trail, then run the requested command with `--project <trail-id>`; never construct an absolute
-path from the shell cwd or workspace. If Showtail reports an ambiguity, conflict, or confirmation
-requirement, ask the student to choose. Never record secrets.
+When the student requests a report or wraps up, select the relevant history. For a named
+project, copy their wording into `showtail projects "<student-project-wording>" --json`. Use the returned
+`selection.projectId`; ask them to choose if the result is ambiguous. Never invent paths.
+Then run:
 
-## Handing in, and pull requests
+```bash
+showtail report --project "<project-id>" --json --no-open
+showtail verify --project "<project-id>" --json
+```
 
-`showtail submit` makes the report to **hand in**: it removes secrets and personal data, re-checks
-the result with an independent scan, and writes `showtail-submission/` (the student opens
-`report.html`). A report made with the `report` command is the student's own full, **private**
-copy — never hand that one in or attach it anywhere.
+For folderless conversations, use an explicitly selected `--session <id>` from
+`showtail sessions --json`. Use `--all` only when the student requests all history.
+Check the returned project ID and `reportPath`. Reports live under Showtail's home,
+independently of the project's location. A private report is your full local copy; never hand that one in.
 
-Resolve the project first, exactly as for `report` and `verify`
-(`showtail projects "<student-project-wording>" --json`, and continue only when it selects one
-trail). Then pass `--project "<trail-id>"` to every `submit` command below; never build a path
-yourself or rely on the shell's working directory.
+`showtail submit` makes the report to **hand in**: a sanitized, independently scanned, signed submission under
+Showtail's `exports/` directory. Open the returned `reportPath`; do not construct a path.
 
-**Pull requests: ask first, and only the student decides.** When the student asks you to open or
-create a pull request (or you have just opened one at their request), ask **once**:
+**Pull requests: ask first, and only the student decides.** When asked for a PR, ask once:
+"Want me to add a short Showtail summary to the PR? I'll show you exactly what it says
+first, and nothing is posted unless you say yes."
+The default is **no**; if unanswered or declined, do not post or ask again for that PR.
+If accepted, run `showtail submit --project "<project-id>" --pr --preview`. Show the **entire comment text**, the number of values withheld, and whether it will be
+public and permanent. Ask the student to confirm **that exact text** before running
+`showtail submit --project "<project-id>" --pr --approve <code>`.
+Never run `--approve` unless the student approved the text just shown in this conversation.
+Only post after they approved the exact text. Never approve changed or refused previews,
+and never edit an export to bypass a scan. If a secret was pasted into a prompt,
+tell the student to rotate it now; the AI provider already received it.
 
-> "Want me to add a short Showtail summary to the PR? I'll show you exactly what it says first, and
-> nothing is posted unless you say yes."
+Nothing leaves the machine except a sanitised summary the student has reviewed and approved
+for posting; handing in a submission is a separate, manual action. Use
+`showtail verify-submission [dir]` to check an exported submission.
+Never choose from the terminal working directory for a named project; use its stable project ID.
+Check the returned `projectId` and `projectRoot`; never build a path for a report or submission.
 
-- The default is **no**. If they decline, or don't answer, don't post anything and don't ask again
-  for that pull request.
-- If they say yes:
-  1. Run `showtail submit --project "<trail-id>" --pr --preview`. Show the student the **entire
-     comment text** it prints and how many values were withheld. If the repository is public, tell
-     them the comment will be public and permanent.
-  2. Ask them to confirm **that exact text**, and wait for an explicit yes.
-  3. Only then run `showtail submit --project "<trail-id>" --pr --approve <code>`, using the code
-     the preview printed.
-- Never run `--approve` unless the student approved the text you just showed them, in this
-  conversation. If the preview or the post is refused ("not submitting", "report changed"), tell
-  them plainly what it said and stop. Don't work around it, and don't edit files in
-  `showtail-submission/`.
-- If the student says they pasted a key or password into a prompt, tell them to **rotate it now**:
-  the AI provider already received it, whatever Showtail hides afterwards.
+This integration supports GitHub Copilot CLI. Do not rely on the agent terminal's working directory to name another project.
+
+Copilot CLI lifecycle hooks own routine capture.

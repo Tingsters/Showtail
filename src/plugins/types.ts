@@ -285,6 +285,4 @@ export interface ImportCapability {
   description: string;
   /** Whether the source argument is a share URL or an on-disk transcript target. */
   shape: ImportShape;
-  /** Run the import. */
-  run(source: string | undefined, opts: ImportRunOptions): Promise<void>;
 }

@@ -53,7 +53,7 @@ import {
   readdirSync,
   statSync,
 } from 'node:fs';
-import { basename, join } from 'node:path';
+import { basename, join, resolve } from 'node:path';
 import { readThreadTranscript } from './appServer.ts';
 import { hostHome } from '../paths/hostHome.ts';
 import { toRepoRelative } from '../paths/pathUtil.ts';
@@ -323,7 +323,11 @@ export async function readCodexSession(
  * `custom_tool_call`s — the de-noised forms, so the wrapped `response_item`
  * duplicates don't double-count.
  */
-export function parseCodexTranscript(content: string, root: string): CodexTranscript {
+export function parseCodexTranscript(
+  content: string,
+  root: string,
+  options: { includeOutsideEdits?: boolean } = {},
+): CodexTranscript {
   const messages: CodexMessage[] = [];
   const events: HookTranscriptEvent[] = [];
   let eventSequence = 0;
@@ -478,8 +482,12 @@ export function parseCodexTranscript(content: string, root: string): CodexTransc
       // Per-file CLEAN diffs (matches the live-hook formatting), keeping edits
       // inside the repo and out of bookkeeping dirs. A Delete carries no body, so
       // reconstruct its removed lines from the file's last add/update.
-      const edits = editsFromEnvelope(envelope, (p) => toRepoRelative(root, p)).filter(
-        (e) => !e.file.startsWith('..') && !isInternalPath(e.file),
+      const edits = editsFromEnvelope(envelope, (p) =>
+        options.includeOutsideEdits ? resolve(root, p) : toRepoRelative(root, p),
+      ).filter(
+        (e) =>
+          (options.includeOutsideEdits || !e.file.startsWith('..')) &&
+          !isInternalPath(e.file),
       );
       for (const e of edits) {
         if (e.deleted) {
@@ -809,8 +817,12 @@ export function rolloutFormatWarning(
  * carries no `approved` flag (it runs headless and never asks), so the reconcile
  * tags it with no approval badge — distinct from Claude, which resolves true/false.
  */
-export function parseCodexRollout(content: string, root: string): HookTranscript {
-  return codexToHookTranscript(parseCodexTranscript(content, root));
+export function parseCodexRollout(
+  content: string,
+  root: string,
+  options: { includeOutsideEdits?: boolean } = {},
+): HookTranscript {
+  return codexToHookTranscript(parseCodexTranscript(content, root, options));
 }
 
 /**

@@ -402,27 +402,3 @@ export function copilotCliHooksGloballyDisabled(): boolean {
     return false;
   }
 }
-
-export interface CopilotCliInstructionRefresh {
-  installed: string[];
-  updateAvailable: string[];
-}
-
-/** Refresh only CLI instruction blocks that already exist at user/project scope. */
-export function refreshExistingCopilotCliInstructions(
-  cwd: string = process.cwd(),
-  options: WriteOptions = {},
-): CopilotCliInstructionRefresh {
-  const installed: string[] = [];
-  const updateAvailable: string[] = [];
-  for (const scope of ['user', 'project'] as const) {
-    const target = resolveCopilotCliTarget(scope, cwd);
-    const before = copilotCliInstructionsState(target);
-    if (!before.installed) continue;
-    installed.push(target.instructionsFile);
-    writeCopilotCliInstructions(target, options);
-    const after = copilotCliInstructionsState(target);
-    if (after.updateAvailable) updateAvailable.push(target.instructionsFile);
-  }
-  return { installed, updateAvailable };
-}

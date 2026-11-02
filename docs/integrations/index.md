@@ -3,15 +3,14 @@
 Showtail works with many AI coding tools. Tools with lifecycle hooks (Claude
 Code, Codex) capture your prompts and edits **live** as you work; hosted chat
 apps (ChatGPT, Gemini) are **import-based** — you bring a shared conversation
-into the trail after the fact. Whichever you use, every event joins one shared,
-cross-tool timeline.
+into the trail after the fact. Whichever you use, every event joins one personal history in `~/.showtail`, with optional project views.
 
 Pick your tool below, or scan the capability matrix to see exactly what each
 integration can do today.
 
 ## Integration capability matrix
 
-Showtail works with many AI coding tools, and support depth varies by tool. This table shows what each integration can do today — every ✅ is backed by an end-to-end test, so it genuinely works against the real tool.
+Showtail works with many AI coding tools, and support depth varies by tool. This table shows what each integration can do today — support is checked with recorded provider fixtures and central-store tests. Live host behavior can vary by version.
 
 <!-- showtail:start sha=d9d2769ee079 -->
 | Capability | Claude Code | OpenAI Codex | ChatGPT | Copilot (VS Code) | Copilot CLI | Copilot Desktop | Antigravity CLI | Antigravity IDE | Google Gemini | Zed | Notes |

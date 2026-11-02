@@ -11,13 +11,6 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { activeAuthorPaths, ensureAuthor } from '../src/core/authors.ts';
-import { ensureMachineId, slugifyEmail } from '../src/core/identity.ts';
-import {
-  authorPaths,
-  type AuthorPaths,
-  type ShowtailPaths,
-} from '../src/core/storage.ts';
 
 /** The deterministic test identity seeded in tests/setup.ts. */
 export const TEST_EMAIL = 'tester@example.com';
@@ -83,7 +76,7 @@ export function envWithHome(home: string): NodeJS.ProcessEnv {
  */
 export function enableAutoInit(home: string, setupCompletedAt?: string): void {
   mkdirSync(home, { recursive: true });
-  const config: Record<string, unknown> = { version: 1, autoInit: true };
+  const config: Record<string, unknown> = { version: 2, captureEnabled: true };
   if (setupCompletedAt) config.setupCompletedAt = setupCompletedAt;
   writeFileSync(join(home, 'config.json'), JSON.stringify(config) + '\n', 'utf8');
 }
@@ -236,30 +229,6 @@ export function stubInstalledExtensionCli(
 }
 
 /**
- * The active author's paths for an initialized test project. `runInit` (run with
- * the identity env from setup.ts) establishes the author; this resolves it.
- */
-export function authorFor(paths: ShowtailPaths): AuthorPaths {
-  const author = activeAuthorPaths(paths);
-  if (!author) {
-    throw new Error(
-      'No active author. Call runInit({cwd}) first (setup.ts seeds the identity env).',
-    );
-  }
-  return author;
-}
-
-/**
- * Create an author folder directly (no init) for a given email — used by tests
- * that exercise multi-author behavior without spinning up two machines.
- */
-export function seedAuthor(paths: ShowtailPaths, email: string): AuthorPaths {
-  const machineId = ensureMachineId();
-  ensureAuthor(paths, { email, name: email }, machineId);
-  return authorPaths(paths, slugifyEmail(email), machineId);
-}
-
-/**
  * Remove a temp directory created with {@link makeTempDir}.
  *
  * `maxRetries` is for Windows: two dozen test files spawn the real CLI and then
@@ -302,21 +271,4 @@ export function spawnEnv(): NodeJS.ProcessEnv {
     SHOWTAIL_IDENTITY_HOME:
       process.env.SHOWTAIL_IDENTITY_HOME ?? join(tmpdir(), 'showtail-test-identity'),
   };
-}
-
-/**
- * `showtail init`, then opt the trail into git (`settings.commitTrail`). The
- * working trail is private by default; the tests of the committed-trail workflow
- * (merge-through-git, verify's git-history anchor) opt in explicitly.
- */
-export async function runInitCommitted(dir: string): Promise<void> {
-  const { runInit, ensureTrailIgnore } = await import('../src/commands/init.ts');
-  const { pathsForRoot, readConfig, writeConfig } =
-    await import('../src/core/storage.ts');
-  await runInit({ cwd: dir });
-  const paths = pathsForRoot(dir);
-  const config = readConfig(paths);
-  config.settings.commitTrail = true;
-  writeConfig(paths, config);
-  ensureTrailIgnore(paths);
 }

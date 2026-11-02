@@ -3,7 +3,14 @@ import { execFile, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { delimiter, dirname, isAbsolute, join, resolve as resolvePath, sep } from 'node:path';
+import {
+  delimiter,
+  dirname,
+  isAbsolute,
+  join,
+  resolve as resolvePath,
+  sep,
+} from 'node:path';
 import { promisify } from 'node:util';
 import {
   ProjectControlController,
@@ -18,12 +25,10 @@ import {
   chatCommandRequiresProject,
   chatSessionId,
   copilotImportArgs,
-  copilotManagedRefreshArgs,
   extensionHookArgs,
   extensionHookPayload,
   latestProjectControlClaimId,
   latestReportProjectControlClaimId,
-  managedRefreshSucceeded,
   type AssistantCapture,
   type CliResult,
   type CaptureConsent,
@@ -91,7 +96,11 @@ async function runShowtailResult(args: string[], cwd: string): Promise<CliResult
   // This runs a program with the workspace as its cwd: never in a workspace the user
   // has not trusted.
   if (!vscode.workspace.isTrusted) {
-    return { stdout: '', stderr: 'Showtail does nothing in an untrusted workspace.', exitCode: 1 };
+    return {
+      stdout: '',
+      stderr: 'Showtail does nothing in an untrusted workspace.',
+      exitCode: 1,
+    };
   }
   try {
     const { stdout, stderr } = await execFileAsync(showtailBin(), args, { cwd });
@@ -252,6 +261,12 @@ async function runExtensionHook(
 
 /** Skip Showtail/Git/dependency bookkeeping files. */
 function isInternalPath(p: string): boolean {
+  const setting = process.env.SHOWTAIL_HOME;
+  const home = resolvePath(
+    setting?.replace(/^~[\\/]/, homedir() + '/') || join(homedir(), '.showtail'),
+  ).toLowerCase();
+  const path = resolvePath(p).toLowerCase();
+  if (path === home || path.startsWith(home + sep)) return true;
   return /(^|[\\/])(\.showtail|\.git|\.claude|node_modules)([\\/]|$)/.test(p);
 }
 
@@ -353,7 +368,6 @@ export function activate(context: vscode.ExtensionContext): void {
   if (isAntigravityHost()) {
     registerAntigravity(context);
   } else {
-    void maybeAutoInstallCopilot(context);
     registerCopilotChatCapture(context);
   }
 }
@@ -419,7 +433,6 @@ function registerCopilotChatCapture(context: vscode.ExtensionContext): void {
                 : 'unknown';
             if (!automaticCaptureSucceeded(imported, consentAfter)) return;
             output.appendLine(`Captured native Copilot Chat from ${file}`);
-            await maybeAutoInstallCopilot(context);
           })();
         }, 2000),
       );
@@ -490,111 +503,6 @@ function registerAntigravity(context: vscode.ExtensionContext): void {
     output.appendLine(`transcript watch unavailable: ${(err as Error).message}`);
   }
   void scheduleAntigravityImport(); // capture anything already on disk at startup
-}
-
-/**
- * Keep the Copilot instructions (`.github/copilot-instructions.md`) set up and
- * current once capture has created the project-local trail:
- *   - if the instructions are already present, refresh them to the latest
- *     (a no-op when already current — `showtail connect copilot` only rewrites
- *     on change), so updates ship automatically on the next open;
- *   - if they're absent, install them the first time only (tracked in
- *     workspaceState) so we never fight a later manual `disconnect copilot`.
- * Activation itself is read-only for untracked folders. The first meaningful
- * prompt goes through the hook/import ledger and creates the trail; capture then
- * calls this again to install instructions without a separate setup command.
- */
-async function maybeAutoInstallCopilot(context: vscode.ExtensionContext): Promise<void> {
-  const roots = workspaceRoots();
-  if ((await captureConsent('github-copilot', roots[0] ?? homedir())) !== 'enabled') {
-    return;
-  }
-  for (const cwd of roots) {
-    if (!existsSync(join(cwd, '.showtail', 'config.json'))) continue;
-
-    const key = `showtail.autoInstalledCopilot:${cwd}`;
-    const sentinel = join(cwd, '.github', 'instructions', 'showtail.instructions.md');
-
-    if (existsSync(sentinel)) {
-      const refreshed = await runShowtailResult(copilotManagedRefreshArgs(), cwd);
-      const consentAfter =
-        refreshed.exitCode === 0
-          ? await captureConsent('github-copilot', cwd)
-          : 'unknown';
-      if (!managedRefreshSucceeded(refreshed, existsSync(sentinel), consentAfter)) {
-        continue;
-      }
-      await context.workspaceState.update(key, true);
-      output.appendLine(
-        `Showtail Copilot instructions checked for ${cwd} (untouched blocks refreshed).`,
-      );
-      await maybeNotifyUpdate(context, cwd);
-      continue;
-    }
-
-    // An absent sentinel after a successful install means the student explicitly
-    // disconnected this project. Remember per root so a multi-root window never
-    // lets one project's choice control another's.
-    if (context.workspaceState.get<boolean>(key)) continue;
-
-    const installed = await runShowtailResult(copilotManagedRefreshArgs(), cwd);
-    const consentAfter =
-      installed.exitCode === 0 ? await captureConsent('github-copilot', cwd) : 'unknown';
-    if (!managedRefreshSucceeded(installed, existsSync(sentinel), consentAfter)) {
-      continue;
-    }
-    await context.workspaceState.update(key, true);
-    output.appendLine(`Auto-installed Showtail Copilot instructions in ${cwd}.`);
-    void vscode.window.showInformationMessage(
-      `Showtail set up Copilot instructions for ${cwd}.`,
-    );
-  }
-}
-
-/**
- * When the instructions were customized AND a newer Showtail version exists,
- * nudge once (per update episode) — never overwriting the user's edits.
- */
-async function maybeNotifyUpdate(
-  context: vscode.ExtensionContext,
-  cwd: string,
-): Promise<void> {
-  const NOTIFY_KEY = `showtail.copilotUpdateNotified:${cwd}`;
-  const status = await runShowtail(captureStatusArgs('github-copilot'), cwd);
-  let updateAvailable = false;
-  try {
-    const parsed = status ? JSON.parse(status) : null;
-    const copilot = parsed?.tools?.find((t: { tool: string }) => t.tool === 'copilot');
-    updateAvailable = copilot?.updateAvailable === true;
-  } catch {
-    updateAvailable = false;
-  }
-
-  if (!updateAvailable) {
-    if (context.workspaceState.get<boolean>(NOTIFY_KEY)) {
-      await context.workspaceState.update(NOTIFY_KEY, false); // reset for next time
-    }
-    return;
-  }
-  if (context.workspaceState.get<boolean>(NOTIFY_KEY)) return; // already nudged this episode
-  await context.workspaceState.update(NOTIFY_KEY, true);
-
-  const choice = await vscode.window.showInformationMessage(
-    'Showtail: a newer version of the Copilot instructions is available. Your edits were kept.',
-    'Apply update',
-    'Keep mine',
-  );
-  if (choice === 'Apply update') {
-    const sentinel = join(cwd, '.github', 'instructions', 'showtail.instructions.md');
-    const refreshed = await runShowtailResult(copilotManagedRefreshArgs(true), cwd);
-    const consentAfter =
-      refreshed.exitCode === 0 ? await captureConsent('github-copilot', cwd) : 'unknown';
-    if (!managedRefreshSucceeded(refreshed, existsSync(sentinel), consentAfter)) {
-      return;
-    }
-    await context.workspaceState.update(NOTIFY_KEY, false);
-    output.appendLine('Applied the latest Showtail Copilot instructions.');
-  }
 }
 
 /**
@@ -714,7 +622,6 @@ function registerChatParticipant(
       if (captured !== undefined) {
         promptCaptured = true;
         if (tool === 'github-copilot') {
-          await maybeAutoInstallCopilot(context);
         }
         stream.markdown('_Captured your prompt with Showtail._\n\n');
       }
@@ -808,7 +715,6 @@ function registerSaveCapture(
               antigravitySaveContext = capture;
               void scheduleAntigravityImport();
             } else {
-              await maybeAutoInstallCopilot(context);
             }
           });
         }, 1500),

@@ -297,7 +297,7 @@ await launchWindowsReplacement(${JSON.stringify({
         `Launcher fixture failed (${launched.status}): ${launched.stderr || launched.stdout}`,
       );
     }
-    await waitForFile(resultFile);
+    await waitForFile(resultFile, helperFile);
     expect(readFileSync(target, 'utf8')).toContain('0.16.0');
     expect(readResult(resultFile)).toMatchObject({ ok: true, version: '0.16.0' });
   }, 20_000);
@@ -353,9 +353,18 @@ function readResult(file: string): Record<string, unknown> {
   >;
 }
 
-async function waitForFile(file: string): Promise<void> {
+async function waitForFile(file: string, helperFile: string): Promise<void> {
   for (let attempt = 0; attempt < 100; attempt++) {
-    if (existsSync(file)) return;
+    try {
+      // Set-Content creates the result before closing its Windows file handle.
+      // The helper removes itself only after writing and cleanup have finished.
+      if (existsSync(file) && !existsSync(helperFile)) {
+        readResult(file);
+        return;
+      }
+    } catch {
+      /* The background writer still owns the file; retry. */
+    }
     await Bun.sleep(50);
   }
   throw new Error(`Timed out waiting for ${file}.`);

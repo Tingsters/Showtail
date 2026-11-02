@@ -31,7 +31,7 @@ describe('copilot assets stay in sync with the single source of truth', () => {
       expect(body).not.toContain('showtail log');
       expect(body).not.toContain('showtail artifact');
       expect(body.toLowerCase()).toMatch(/(?:do not|never) run/);
-      expect(body).toContain('stable trail ID');
+      expect(body).toContain('stable project ID');
       expect(body).toContain('Never choose from the terminal working directory');
     }
   });

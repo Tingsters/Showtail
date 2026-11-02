@@ -485,6 +485,8 @@ export interface ReportPlan {
 /** One AI-suggested code change within a turn (diff text resolved for rendering). */
 export interface TurnCodeChange {
   path: string;
+  /** Central reports show captured content without promising a live workspace link. */
+  capturedOnly?: boolean;
   /** Trail-root-relative path for the report link, when it differs from `path`. */
   linkPath?: string;
   /** The suggested diff/new-content, resolved from the object store (if captured). */

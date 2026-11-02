@@ -37,7 +37,7 @@
  */
 
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
-import { isAbsolute, join, relative } from 'node:path';
+import { isAbsolute, join, relative, resolve } from 'node:path';
 import { hostHome } from '../paths/hostHome.ts';
 import { asArray, asString, isObject, prop } from '../util/parse.ts';
 import type {
@@ -388,7 +388,7 @@ export function parseAntigravityCliTranscript(
   content: string,
   root: string,
   sessionId?: string,
-  options: { includeEdits?: boolean } = {},
+  options: { includeEdits?: boolean; includeOutsideEdits?: boolean } = {},
 ): HookTranscript {
   const messages: HookTranscriptMessage[] = [];
   const events: HookTranscriptEvent[] = [];
@@ -497,8 +497,14 @@ export function parseAntigravityCliTranscript(
         for (const match of contentText.matchAll(/file:\/\/([^\s)'\"]+)/g)) {
           const decoded = decodeFileUri(match[1]!);
           if (!decoded || decoded.includes('/.system_generated/')) continue;
-          const path = displayEditPath(decoded, root);
-          if (path.startsWith('..') || isInternalPath(path)) continue;
+          const path = options.includeOutsideEdits
+            ? resolve(root, decoded)
+            : displayEditPath(decoded, root);
+          if (
+            (!options.includeOutsideEdits && path.startsWith('..')) ||
+            isInternalPath(path)
+          )
+            continue;
           messages.push({
             role: 'edit',
             text: contentText.trim() || `Antigravity edited ${path}`,
@@ -653,7 +659,7 @@ export function parseAntigravityCliTranscript(
 export function readAntigravityCliTranscript(
   info: AntigravityCliTranscriptInfo,
   root: string,
-  options: { includeEdits?: boolean } = {},
+  options: { includeEdits?: boolean; includeOutsideEdits?: boolean } = {},
 ): HookTranscript {
   if (!existsSync(info.path)) {
     throw new Error(`Antigravity transcript not found: ${info.path}`);

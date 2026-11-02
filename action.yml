@@ -1,319 +1,89 @@
-name: "Showtail verify"
-description: >-
-  Verify a student's Showtail trail in CI: install the showtail binary and run
-  `showtail verify --json`, with a human-readable summary in the job summary.
+name: Showtail verify
+description: Verify the integrity of a sanitized, signed Showtail export.
 author: Tingsters
-
 branding:
   icon: check-circle
   color: purple
-
 inputs:
   path:
-    description: >-
-      Directory of the submission to verify — the folder that contains the
-      committed `.showtail/`. Relative to the workspace.
+    description: Directory containing report.html, report.md, manifest.json, and manifest.sig, relative to the workspace.
     required: false
-    default: "."
+    default: showtail-submission
   version:
-    description: >-
-      Which Showtail to install: "latest", or a release tag such as "v0.13.2".
-      Pin a tag for a stable grading gate.
+    description: Showtail release tag, or latest. Pin a tag for a stable grading gate.
     required: false
-    default: "latest"
-  mode:
-    description: >-
-      What to verify. "trail" (default) checks a committed `.showtail/` trail (the course
-      repo must set `settings.commitTrail`). "submission" checks the signed, sanitised
-      `showtail-submission/` folder students commit by default.
-    required: false
-    default: "trail"
-  submission-dir:
-    description: >-
-      With `mode: submission`: the submission folder, relative to `path`.
-    required: false
-    default: "showtail-submission"
+    default: latest
   fail-on-invalid:
-    description: >-
-      Fail the step when the trail does not verify. Set to "false" to report the
-      result (output + job summary) without failing the workflow.
+    description: Set to false to report an invalid submission without failing the step.
     required: false
-    default: "true"
-
+    default: 'true'
 outputs:
   ok:
-    description: '"true" when every check passed, otherwise "false".'
+    description: Whether the signature, file hashes, and residual scan passed.
     value: ${{ steps.verify.outputs.ok }}
   checks-json:
-    description: >-
-      The raw `showtail verify --json` result:
-      {"ok":bool,"checks":[{"name","ok","details","skipped"?}]}. A check carrying
-      `skipped` reported ok but examined nothing (e.g. "shallow-clone").
+    description: The raw verify-submission JSON result.
     value: ${{ steps.verify.outputs.checks-json }}
-
 runs:
   using: composite
   steps:
-    - name: Install Showtail
+    - name: Install Showtail without capture
       shell: bash
       env:
         INPUT_VERSION: ${{ inputs.version }}
       run: |
         set -euo pipefail
-
-        tmp="${RUNNER_TEMP:-${TMPDIR:-/tmp}}"
-        bin_dir="$tmp/showtail-bin"
+        scratch="${RUNNER_TEMP:-${TMPDIR:-/tmp}}"
+        bin_dir="$scratch/showtail-bin"
         mkdir -p "$bin_dir"
-
-        # Verification must not mutate the runner. Two escape hatches do that here:
-        #   * SHOWTAIL_DISABLE_FIRST_RUN=1 suppresses the first-run bootstrap, which
-        #     would otherwise turn tracking on and write capture-hook config into the
-        #     runner's ~/.claude, ~/.codex, ... (see ensureFirstRunSetup in src).
-        #   * SHOWTAIL_HOME / SHOWTAIL_IDENTITY_HOME move the machine-level state
-        #     (global config, ledger, cached identity) into RUNNER_TEMP, so the
-        #     installer's best-effort identity seeding lands in scratch space.
         export SHOWTAIL_DISABLE_FIRST_RUN=1
-        export SHOWTAIL_HOME="$tmp/showtail-state/home"
-        export SHOWTAIL_IDENTITY_HOME="$tmp/showtail-state/identity"
-
-        # PATH first: install.sh only edits the shell profile when its target dir is
-        # missing from PATH, so exporting it here keeps the runner's HOME untouched.
+        export SHOWTAIL_HOME="$scratch/showtail-state"
         export PATH="$bin_dir:$PATH"
         export SHOWTAIL_BIN_DIR="$bin_dir"
         export SHOWTAIL_VERSION="$INPUT_VERSION"
-
         bash "$GITHUB_ACTION_PATH/install.sh"
-
-        # Hand the binary to the following step (and to the rest of the job).
         echo "$bin_dir" >> "$GITHUB_PATH"
         showtail --version
-
-    - name: Verify trail
+    - name: Verify signed export
       id: verify
       shell: bash
       env:
         INPUT_PATH: ${{ inputs.path }}
         INPUT_FAIL_ON_INVALID: ${{ inputs.fail-on-invalid }}
-        INPUT_MODE: ${{ inputs.mode }}
-        INPUT_SUBMISSION_DIR: ${{ inputs.submission-dir }}
       run: |
-        # The runner already runs this with `bash --noprofile --norc -eo pipefail`,
-        # so every command below must either succeed or handle its own failure —
-        # note the `|| status=$?` on the verify call, whose exit 3 is expected.
         set -uo pipefail
-
-        tmp="${RUNNER_TEMP:-${TMPDIR:-/tmp}}"
-        summary="${GITHUB_STEP_SUMMARY:-/dev/null}"
-        out="${GITHUB_OUTPUT:-/dev/null}"
-        json="$tmp/showtail-verify.json"
-        errlog="$tmp/showtail-verify.err"
-
-        # Same containment as the install step: no bootstrap, no writes outside RUNNER_TEMP.
-        export SHOWTAIL_DISABLE_FIRST_RUN=1
-        export SHOWTAIL_HOME="$tmp/showtail-state/home"
-        export SHOWTAIL_IDENTITY_HOME="$tmp/showtail-state/identity"
-
-        case "$(printf '%s' "$INPUT_FAIL_ON_INVALID" | tr '[:upper:]' '[:lower:]')" in
-          false|0|no) fail_on_invalid=false ;;
-          *) fail_on_invalid=true ;;   # anything unrecognized fails closed
-        esac
-
-        cd "$INPUT_PATH" || {
-          echo "::error::Showtail: path not found: $INPUT_PATH"
-          exit 1
-        }
-
-        # mode: submission — verify the signed, sanitised `showtail-submission/` folder
-        # instead of a committed trail. This is the check for the default (private-trail)
-        # workflow, where students commit the submission, not `.showtail/`.
-        if [ "$INPUT_MODE" = "submission" ]; then
-          sub_dir="${INPUT_SUBMISSION_DIR:-showtail-submission}"
-          sub_status=0
-          showtail verify-submission "$sub_dir" --json >"$json" 2>"$errlog" || sub_status=$?
-          if [ "$sub_status" -ne 0 ] && [ "$sub_status" -ne 3 ]; then
-            {
-              echo "## Showtail submission verification"
-              echo
-              echo "**\`showtail verify-submission\` could not run in \`$INPUT_PATH/$sub_dir\` (exit $sub_status).**"
-              echo
-              echo "Check that the submission folder is committed and the pinned \`version\` has"
-              echo "\`verify-submission\` (use \`latest\`)."
-              echo
-              echo '```'
-              cat "$errlog"
-              echo '```'
-            } >> "$summary"
-            cat "$errlog" >&2
-            echo "::error::Showtail: verify-submission could not run in '$INPUT_PATH/$sub_dir' (exit $sub_status)."
-            exit 1
-          fi
-          sub_ok=false
-          if command -v jq >/dev/null 2>&1; then
-            # -s: read the first JSON document only, so an error envelope printed after the
-            # result can never turn this into a jq runtime error.
-            sub_ok=$(jq -rs 'if (.[0].ok // false) then "true" else "false" end' "$json" 2>/dev/null || true)
-          elif [ "$sub_status" -eq 0 ]; then
-            sub_ok=true
-          fi
-          [ "$sub_ok" = "true" ] || sub_ok=false
-          {
-            echo "ok=$sub_ok"
-            echo "checks-json<<SHOWTAIL_JSON_EOF"
-            cat "$json"
-            echo "SHOWTAIL_JSON_EOF"
-          } >> "$out"
-          {
-            echo "## Showtail submission verification"
-            echo
-            if [ "$sub_ok" = "true" ]; then
-              echo "**PASS — the submission is unchanged since it was signed.**"
-              echo
-              echo "> This shows the report files were not edited after \`showtail submit\`. It does"
-              echo "> not show who made them."
-            else
-              echo "**FAIL — the submission did not verify:**"
-              echo
-              if command -v jq >/dev/null 2>&1; then
-                jq -rs '.[0].problems[]? | "- " + .' "$json"
-              else
-                echo '```json'
-                cat "$json"
-                echo '```'
-              fi
-            fi
-          } >> "$summary"
-          if [ "$sub_ok" = "true" ]; then
-            echo "Showtail: the submission verified."
-            exit 0
-          fi
-          if [ "$fail_on_invalid" = "false" ]; then
-            echo "::warning::Showtail: the submission did not verify (reported only; fail-on-invalid is false)."
-            exit 0
-          fi
-          echo "::error::Showtail: the submission did not verify — see the job summary."
-          exit 1
-        fi
-
-        # `actions/checkout` defaults to fetch-depth: 1 — a shallow clone with
-        # essentially no history. One of `verify`'s checks holds the journal
-        # (append-only by construction) against its own git history, and a
-        # shallow checkout leaves it nothing to read: it reports "not verified"
-        # rather than passing, which is right, but an educator should not have to
-        # dig that out of a check's details. Say it at the top of the summary.
-        shallow=false
-        if [ "$(git rev-parse --is-shallow-repository 2>/dev/null || echo unknown)" = "true" ]; then
-          shallow=true
-        fi
-
+        scratch="${RUNNER_TEMP:-${TMPDIR:-/tmp}}"
+        export SHOWTAIL_HOME="$scratch/showtail-state"
+        json="$scratch/showtail-verify.json"
+        errlog="$scratch/showtail-verify.err"
         status=0
-        showtail verify --json >"$json" 2>"$errlog" || status=$?
-
-        # `verify` exits 0 (valid) or 3 (invalid). Anything else means the command
-        # itself could not run — a broken setup, not a student's tampered trail — so
-        # it always fails the step, whatever fail-on-invalid says.
-        if [ "$status" -ne 0 ] && [ "$status" -ne 3 ]; then
-          {
-            echo "## Showtail trail verification"
-            echo
-            echo "**\`showtail verify\` could not run in \`$INPUT_PATH\` (exit $status).**"
-            echo
-            echo "Check that the submission has a committed \`.showtail/\` folder. If the"
-            echo "error mentions an unknown \`--json\` option, the pinned \`version\` predates"
-            echo "machine-readable verify — use \`latest\`."
-            echo
-            echo '```'
-            cat "$errlog"
-            echo '```'
-          } >> "$summary"
-          cat "$errlog" >&2
-          echo "::error::Showtail: verify could not run in '$INPUT_PATH' (exit $status)."
-          exit 1
-        fi
-
-        # Branch on the stable fields only: top-level `ok`, and each check's
-        # `name`/`ok`. `details` is human text and may be reworded at any time.
+        showtail verify-submission "$INPUT_PATH" --json >"$json" 2>"$errlog" || status=$?
         ok=false
-        if command -v jq >/dev/null 2>&1; then
-          ok=$(jq -r 'if .ok then "true" else "false" end' "$json" 2>/dev/null || true)
-        elif [ "$status" -eq 0 ]; then
-          ok=true
-        fi
-        [ "$ok" = "true" ] || ok=false
-
+        if [ "$status" -eq 0 ]; then ok=true; fi
         {
           echo "ok=$ok"
-          echo "checks-json<<SHOWTAIL_JSON_EOF"
+          echo 'checks-json<<SHOWTAIL_JSON_EOF'
           cat "$json"
-          echo "SHOWTAIL_JSON_EOF"
-        } >> "$out"
-
-        # --- Job summary: what an educator reads in the checks tab ---------------
+          echo 'SHOWTAIL_JSON_EOF'
+        } >> "$GITHUB_OUTPUT"
         {
-          echo "## Showtail trail verification"
+          echo '## Showtail submission verification'
           echo
-          echo "Project: \`$INPUT_PATH\` — Showtail \`$(showtail --version 2>/dev/null || echo unknown)\`"
-          echo
-          if [ "$shallow" = "true" ]; then
-            echo "> **Shallow checkout — the journal's git history was NOT checked.** The"
-            echo "> trail's strongest guarantee is that its journal only ever grows, which"
-            echo "> is verified against git history; a depth-1 checkout has none. Add"
-            echo "> \`with: { fetch-depth: 0 }\` to your \`actions/checkout\` step."
-            echo
-          fi
-          if command -v jq >/dev/null 2>&1; then
-            total=$(jq -r '.checks | length' "$json")
-            failed=$(jq -r '[.checks[] | select(.ok | not)] | length' "$json")
-            if [ "$ok" = "true" ]; then
-              echo "**PASS — the trail is intact.** All $total checks passed."
-            else
-              echo "**FAIL — the trail did not verify.** $failed of $total checks failed:"
-              echo
-              jq -r '.checks[] | select(.ok | not) | "- " + .name' "$json"
-              echo
-              echo "> A failing check means the recorded trail was **modified after it was"
-              echo "> written**. Students editing their own source files after a snapshot is"
-              echo "> normal work and never fails."
-            fi
-            echo
-            echo "### Checks"
-            echo
-            jq -r '
-              .checks[]
-              | (if .ok then "PASS" else "FAIL" end) as $mark
-              | (if .ok then 8 else 40 end) as $cap
-              | (.details // []) as $d
-              | "- **" + $mark + "** " + .name,
-                ( ( if ($d | length) > $cap
-                    then $d[0:$cap] + ["... and " + (($d | length) - $cap | tostring) + " more"]
-                    else $d end )[]
-                  | "  - " + . )
-            ' "$json"
+          if [ "$ok" = true ]; then
+            echo '**PASS: exported files are unchanged since signing.**'
           else
-            echo "_\`jq\` is not available on this runner, so the raw result is shown._"
-            echo
-            echo '```json'
-            cat "$json"
-            echo '```'
+            echo '**FAIL: the submission did not verify.**'
           fi
-        } >> "$summary"
-
-        if [ "$shallow" = "true" ]; then
-          echo "::warning::Showtail: shallow checkout — the journal's git history was not checked. Set fetch-depth: 0 on actions/checkout."
-        fi
-
-        if [ "$ok" = "true" ]; then
-          echo "Showtail: the trail verified — all checks passed."
-          exit 0
-        fi
-
-        if [ "$fail_on_invalid" = "false" ]; then
-          {
-            echo
-            echo "> \`fail-on-invalid: false\` — reported without failing the workflow."
-          } >> "$summary"
-          echo "::warning::Showtail: the trail did not verify (reported only; fail-on-invalid is false)."
-          exit 0
-        fi
-
-        echo "::error::Showtail: the trail did not verify — see the job summary."
-        exit 1
+          echo
+          echo 'This checks integrity. It does not prove identity, authorship, or completeness.'
+          echo
+          echo '```json'
+          cat "$json"
+          echo '```'
+        } >> "$GITHUB_STEP_SUMMARY"
+        if [ "$ok" = true ]; then exit 0; fi
+        cat "$errlog" >&2
+        case "$INPUT_FAIL_ON_INVALID" in
+          false|0|no) exit 0 ;;
+          *) exit 1 ;;
+        esac

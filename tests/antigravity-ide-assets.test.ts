@@ -28,9 +28,9 @@ describe('antigravity-ide assets stay in sync with the single source of truth', 
     expect(AGY_IDE_BODY).toContain(
       'showtail projects "<student-project-wording>" --json',
     );
-    expect(AGY_IDE_BODY).toContain('--project "<trail-id>"');
+    expect(AGY_IDE_BODY).toContain('--project "<project-id>"');
     expect(AGY_IDE_BODY).toContain("agent terminal's working directory");
-    expect(AGY_IDE_BODY).toContain('returned `trailId` and `root`');
+    expect(AGY_IDE_BODY).toContain('returned `projectId` and `projectRoot`');
     expect(AGY_IDE_BODY).not.toMatch(
       /^\s*showtail (?:report|verify|status)(?:\s+#.*)?\s*$/m,
     );

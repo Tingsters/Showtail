@@ -1,16 +1,4 @@
-/**
- * Student identity: who is sitting at this machine. Showtail needs a stable,
- * per-student key so that when teammates share a git repo each one's prompts and
- * edits land in their own folder (`authors/<slug>/`) and merge without conflict.
- *
- * Identity is resolved once and cached at the machine level (not per repo), so a
- * student who set up Showtail in one project is recognized in every other one
- * without re-prompting. The resolution order is: an explicit env override (for
- * automation/CI/tests) → the GitHub CLI (`gh api user`) → the student's git
- * config (`user.email`/`user.name`) → `GIT_AUTHOR_EMAIL`/`EMAIL` env → an interactive
- * prompt. When none resolve, callers may fall back to {@link syntheticIdentity} (a
- * computer-derived placeholder) so work is never dropped.
- */
+/** Local identity stored beside the central history; sessions retain their original attribution. */
 import { existsSync } from 'node:fs';
 import { homedir, hostname, userInfo } from 'node:os';
 import { join } from 'node:path';
@@ -18,6 +6,7 @@ import { randomUUID } from 'node:crypto';
 import { createInterface } from 'node:readline';
 import { ghApiUser, gitUser } from './git.ts';
 import { readJson, writeJson } from './storage.ts';
+import { dataPath } from './dataHome.ts';
 
 /** A student's resolved identity. `email` is the stable key; `name` is for display. */
 export interface Identity {
@@ -56,9 +45,9 @@ export function syntheticIdentity(): Identity {
 
 /** The machine-level cache: an identity plus its derived slug and a machine id. */
 export interface CachedIdentity extends Identity {
-  /** Folder key derived from the email (see {@link slugifyEmail}). */
+  /** Stable author key derived from the email (see {@link slugifyEmail}). */
   slug: string;
-  /** Random per-machine id used to shard the journal (one student, two laptops). */
+  /** Random identifier for this local Showtail installation. */
   machineId: string;
   /**
    * True when this is a computer-derived placeholder ({@link syntheticIdentity}) used
@@ -84,21 +73,9 @@ export function slugifyEmail(email: string): string {
     .replace(/^-+|-+$/g, '');
 }
 
-/**
- * Where the machine-level identity cache lives. Honors `SHOWTAIL_IDENTITY_HOME`
- * (used to keep tests hermetic, mirroring `SHOWTAIL_ROOT_CEILING`), then the
- * platform config dir: `%APPDATA%/showtail` on Windows, `$XDG_CONFIG_HOME` (or
- * `~/.config`) `/showtail` elsewhere.
- */
+/** Identity shares the one Showtail data home. */
 export function machineIdentityPath(): string {
-  const override = process.env.SHOWTAIL_IDENTITY_HOME;
-  const dir =
-    override && override.length > 0
-      ? override
-      : process.platform === 'win32'
-        ? join(process.env.APPDATA ?? join(homedir(), 'AppData', 'Roaming'), 'showtail')
-        : join(process.env.XDG_CONFIG_HOME ?? join(homedir(), '.config'), 'showtail');
-  return join(dir, 'identity.json');
+  return dataPath('identity.json');
 }
 
 /** The cached machine identity, or null if this machine has none yet. */

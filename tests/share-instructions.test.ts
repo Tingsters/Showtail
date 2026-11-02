@@ -94,9 +94,9 @@ describe('submit follows the same project-targeting discipline as report and ver
   for (const file of FULL) {
     test(`${file} resolves the project and passes --project, never a built path`, () => {
       const text = read(file);
-      expect(text).toContain('showtail submit --project "<trail-id>" --pr --preview');
+      expect(text).toContain('showtail submit --project "<project-id>" --pr --preview');
       expect(text).toContain(
-        'showtail submit --project "<trail-id>" --pr --approve <code>',
+        'showtail submit --project "<project-id>" --pr --approve <code>',
       );
       expect(text).toContain('showtail projects "<student-project-wording>" --json');
       expect(text).toContain('never build a path');

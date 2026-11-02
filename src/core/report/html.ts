@@ -348,10 +348,11 @@ function renderTimelineItem(item: TurnItem): string {
   const stat = code.diffLines
     ? ` (~${code.diffLines} line${pluralS(code.diffLines)})`
     : '';
-  const fileLink =
-    `<a class="file-link" href="${escapeHtml(fileHref(code.linkPath ?? code.path))}" ` +
-    'target="_blank" rel="noopener" onclick="event.stopPropagation()">' +
-    `${escapeHtml(code.path)}</a>`;
+  const fileLink = code.capturedOnly
+    ? `<span class="file-link">${escapeHtml(code.path)}</span>`
+    : `<a class="file-link" href="${escapeHtml(fileHref(code.linkPath ?? code.path))}" ` +
+      'target="_blank" rel="noopener" onclick="event.stopPropagation()">' +
+      `${escapeHtml(code.path)}</a>`;
   if (code.diff) {
     // A diff was captured — show it in an expandable card. The pieces join with
     // newlines to match the surrounding card markup exactly.

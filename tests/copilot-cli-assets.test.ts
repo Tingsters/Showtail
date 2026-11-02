@@ -47,9 +47,9 @@ describe('copilot-cli assets stay in sync with the single source of truth', () =
     expect(COPILOT_BODY).toContain(
       'showtail projects "<student-project-wording>" --json',
     );
-    expect(COPILOT_BODY).toContain('--project <trail-id>');
+    expect(COPILOT_BODY).toContain('--project "<project-id>"');
     expect(COPILOT_BODY).toContain('Never choose from the terminal working directory');
-    expect(COPILOT_BODY).toContain('returned `trailId`');
+    expect(COPILOT_BODY).toContain('returned `projectId`');
     expect(COPILOT_BODY).not.toMatch(
       /^\s*showtail (?:report|verify|status)(?:\s+#.*)?\s*$/m,
     );

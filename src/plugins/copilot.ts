@@ -1,6 +1,5 @@
 /**
- * GitHub Copilot — project-scoped instructions in `.github/`, plus a VS Code
- * extension that does the actual capture. It uses Showtail's internal hook/import
+ * GitHub Copilot — a user-installed VS Code extension captures native chat and edits. It uses Showtail's internal hook/import
  * surfaces, but installs no host lifecycle hooks, so `hooksActive` remains N/A.
  *
  * It also imports: native Copilot Chat persists every session to disk as JSON
@@ -9,13 +8,12 @@
  * the same path. See src/core/copilotChatTranscript.ts.
  */
 import { runCopilotInstall, runCopilotUninstall } from '../commands/copilot.ts';
-import { runImportCopilot } from '../commands/importCopilot.ts';
 import { copilotState, resolveCopilotTarget } from '../core/copilot.ts';
 import {
   copilotCliInstructionsState,
   resolveCopilotCliTarget,
 } from '../core/copilotCli.ts';
-import { findChatSessions, readChatSessionFile } from '../core/copilotChatTranscript.ts';
+import { findChatSessions, readChatSessionFile } from '../core/copilotChatReader.ts';
 import {
   findVsCodeCli,
   installVsCodeExtension,
@@ -37,7 +35,7 @@ export const copilotPlugin: EnvironmentPlugin = {
   label: 'GitHub Copilot',
 
   connect: {
-    scopes: ['project'],
+    scopes: ['user'],
     flags: [
       {
         name: 'extension',
@@ -62,8 +60,7 @@ export const copilotPlugin: EnvironmentPlugin = {
     prewireSafe: false,
 
     // Install the Showtail VS Code extension hands-off when VS Code is present. It
-    // watches immediately without initializing folders on open; the first meaningful
-    // prompt (or an explicit report/track) creates the project trail, then instructions.
+    // sends native chat and edits to the central store without project initialization.
     autoConnect() {
       return installVsCodeExtension().installed ? { hooks: false } : null;
     },
@@ -72,7 +69,7 @@ export const copilotPlugin: EnvironmentPlugin = {
     setupGuidance: [
       'VS Code detected. For GitHub Copilot capture, install the extension:',
       `  code --install-extension ${MARKETPLACE_ID}`,
-      '  (It watches immediately; the project trail appears after meaningful work.)',
+      '  (It records supported work in your central Showtail history.)',
     ],
 
     install: (opts) =>
@@ -118,16 +115,6 @@ export const copilotPlugin: EnvironmentPlugin = {
       "With no target, opens an interactive picker of this project's sessions " +
       '(choose one or several); --list prints the same list non-interactively.',
     shape: 'transcript',
-    run: (source, opts) =>
-      runImportCopilot(source, {
-        list: opts.list,
-        withResponses: opts.withResponses,
-        file: opts.file,
-        session: opts.session,
-        quiet: opts.quiet,
-        auto: opts.auto,
-        cwd: opts.cwd,
-      }),
   },
 
   migration: {
@@ -138,6 +125,7 @@ export const copilotPlugin: EnvironmentPlugin = {
         mtimeMs: info.mtimeMs,
         cwd: info.cwd,
       })),
-    read: (candidate, root) => readChatSessionFile(candidate.path, root),
+    read: (candidate, root) =>
+      readChatSessionFile(candidate.path, root, { includeOutsideEdits: true }),
   },
 };

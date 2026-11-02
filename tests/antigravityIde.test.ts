@@ -51,8 +51,8 @@ describe('antigravity-ide install / uninstall', () => {
     const dir = makeTempDir();
     try {
       mkdirSync(join(dir, '.showtail'), { recursive: true });
-      await runAntigravityIdeInstall({ project: true, cwd: dir });
-      const target = resolveAntigravityIdeTarget('project', dir);
+      await runAntigravityIdeInstall({ user: true, cwd: dir });
+      const target = resolveAntigravityIdeTarget('user', dir);
 
       expect(existsSync(target.contextFile)).toBe(true);
       expect(readFileSync(target.contextFile, 'utf8')).toContain('showtail:start');
@@ -72,9 +72,9 @@ describe('antigravity-ide install / uninstall', () => {
     const dir = makeTempDir();
     try {
       mkdirSync(join(dir, '.showtail'), { recursive: true });
-      await runAntigravityIdeInstall({ project: true, cwd: dir });
-      await runAntigravityIdeInstall({ project: true, cwd: dir });
-      const target = resolveAntigravityIdeTarget('project', dir);
+      await runAntigravityIdeInstall({ user: true, cwd: dir });
+      await runAntigravityIdeInstall({ user: true, cwd: dir });
+      const target = resolveAntigravityIdeTarget('user', dir);
       const context = readFileSync(target.contextFile, 'utf8');
       expect(context.match(/showtail:start/g)?.length).toBe(1);
     } finally {
@@ -88,7 +88,7 @@ describe('antigravity-ide install / uninstall', () => {
   test('the named-bundle hook machinery writes the IDE-recognized events', () => {
     const dir = makeTempDir();
     try {
-      const target = resolveAntigravityIdeTarget('project', dir);
+      const target = resolveAntigravityIdeTarget('user', dir);
       installAntigravityIdeHooks(target);
       expect(target.hooksFile).toBe(join(geminiHomeDir, 'config', 'hooks.json'));
       expect(antigravityIdeHooksInstalledAt(target.hooksFile)).toBe(true);
@@ -108,7 +108,7 @@ describe('antigravity-ide install / uninstall', () => {
     const dir = makeTempDir();
     try {
       mkdirSync(join(dir, '.showtail'), { recursive: true });
-      const target = resolveAntigravityIdeTarget('project', dir);
+      const target = resolveAntigravityIdeTarget('user', dir);
       // A user's pre-existing, unrelated named bundle must survive disconnect, and
       // a hooks bundle left by an older Showtail must be cleaned up.
       const foreign = { 'their-tool': { enabled: true, Stop: [{ hooks: [] }] } };
@@ -140,7 +140,7 @@ describe('antigravity-ide install / uninstall', () => {
         'tingsters.showtail',
         'antigravity-ide',
       );
-      const project = resolveAntigravityIdeTarget('project', dir);
+      const project = resolveAntigravityIdeTarget('user', dir);
       const user = resolveAntigravityIdeTarget('user', dir);
       writeAntigravityIdeInstructions(project);
       writeAntigravityIdeInstructions(user);
@@ -197,11 +197,11 @@ describe('antigravity-ide install / uninstall', () => {
     const dir = makeTempDir();
     try {
       mkdirSync(join(dir, '.showtail'), { recursive: true });
-      await runAntigravityIdeInstall({ project: true, cwd: dir });
+      await runAntigravityIdeInstall({ user: true, cwd: dir });
       expect(existsSync(join(dir, 'GEMINI.md'))).toBe(false);
       expect(existsSync(join(dir, 'AGENTS.md'))).toBe(false);
-      const target = resolveAntigravityIdeTarget('project', dir);
-      expect(target.contextFile).toContain('.agents');
+      const target = resolveAntigravityIdeTarget('user', dir);
+      expect(target.contextFile).toContain(process.env.GEMINI_HOME!);
       expect(target.contextFile).toContain('AGY-IDE.showtail.md');
     } finally {
       cleanup(dir);
@@ -212,9 +212,9 @@ describe('antigravity-ide install / uninstall', () => {
     const dir = makeTempDir();
     try {
       mkdirSync(join(dir, '.showtail'), { recursive: true });
-      await runAntigravityIdeInstall({ project: true, cwd: dir });
+      await runAntigravityIdeInstall({ user: true, cwd: dir });
       const state = antigravityIdeInstructionsState(
-        resolveAntigravityIdeTarget('project', dir),
+        resolveAntigravityIdeTarget('user', dir),
       );
       expect(state.installed).toBe(true);
       expect(state.upToDate).toBe(true);
@@ -263,7 +263,7 @@ describe('antigravity-ide install / uninstall', () => {
       process.env.SHOWTAIL_ANTIGRAVITY_CLI = join(dir, 'missing-ide-cli');
       console.log = (...args: unknown[]) => void lines.push(args.join(' '));
 
-      await runAntigravityIdeInstall({ project: true, cwd: dir });
+      await runAntigravityIdeInstall({ user: true, cwd: dir });
 
       const output = lines.join('\n');
       expect(output).toContain('automatic capture is not active yet');

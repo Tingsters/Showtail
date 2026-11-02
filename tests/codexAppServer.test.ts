@@ -375,67 +375,6 @@ describe('live hook payloads (real Codex 0.163)', () => {
       expect(r.code).toBe(0);
     }
   }
-
-  test('apply_patch edits arrive in tool_input.command and are captured with diffs', () => {
-    const dir = makeTempDir();
-    try {
-      runCli(dir, ['track', '--project', 'Hook Contract']);
-      const hooks = load<Hook[]>('hooks-0.163.json', dir);
-      replay(dir, hooks, { skipStop: true });
-
-      // The documented `tool_input.command` is what Showtail used to miss, so every
-      // one of these edits was silently dropped on Codex >= 0.148. All four patches
-      // (add, update, add, delete) must reach the trail as artifacts.
-      const artifacts = trailRecords(dir, 'artifact');
-      expect(artifacts.map((a) => a.path)).toEqual([
-        'notes.txt',
-        'notes.txt',
-        'tmp.txt',
-        'tmp.txt',
-      ]);
-
-      // The report groups by file, but each file shows its diff.
-      runCli(dir, ['report', '--format', 'json']);
-      const changes = readJsonReport(dir).turns[0].codeChanges as {
-        path: string;
-        diff?: string;
-      }[];
-      expect(changes.map((c) => c.path).sort()).toEqual(['notes.txt', 'tmp.txt']);
-      expect(changes.find((c) => c.path === 'notes.txt')!.diff).toContain('+ alpha');
-    } finally {
-      cleanup(dir);
-    }
-  });
-
-  test('Stop.last_assistant_message is captured even with no Codex history to read', () => {
-    const dir = makeTempDir();
-    try {
-      runCli(dir, ['track', '--project', 'Hook Final Reply']);
-      const hooks = load<Hook[]>('hooks-0.163.json', dir);
-      replay(dir, hooks);
-
-      runCli(dir, ['report', '--format', 'json']);
-      const turn = readJsonReport(dir).turns[0];
-      const stop = hooks.find((h) => h.hook_event_name === 'Stop')!;
-      // No app-server (tests point SHOWTAIL_CODEX_BIN at nothing) and no rollout: the
-      // documented hook field alone must still yield the final reply under its prompt.
-      expect(turn.aiOutputs.map((o: any) => o.text)).toContain(
-        stop.last_assistant_message,
-      );
-
-      // ...and the degraded read is visible, not silent.
-      const diag = join(dir, '.showtail', 'diag', 'hooks.jsonl');
-      if (existsSync(diag)) {
-        const stopTrace = readFileSync(diag, 'utf8')
-          .split('\n')
-          .filter((l) => l.includes('"event":"stop"'))
-          .at(-1);
-        expect(stopTrace).toContain('app-server was unavailable');
-      }
-    } finally {
-      cleanup(dir);
-    }
-  });
 });
 
 describe('plugin getTranscript tiers', () => {

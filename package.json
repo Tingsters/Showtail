@@ -1,7 +1,7 @@
 {
   "name": "showtail",
-  "version": "0.20.1",
-  "description": "Show your work: automatically capture the prompts you send to AI and the files you change into a verifiable, repo-local provenance trail educators can review.",
+  "version": "0.21.0",
+  "description": "Show your work: one private, local history of your AI prompts and file changes, without modifying project folders.",
   "type": "module",
   "license": "Apache-2.0",
   "bin": {
@@ -22,6 +22,7 @@
     "format:check": "bun x prettier --check \"src/**/*.ts\" \"tests/**/*.ts\"",
     "license:check": "bun run scripts/verify-licenses.ts",
     "verify:matrix": "bun run scripts/verify-changed.ts",
+    "verify:integrations": "bun run scripts/verify-changed.ts",
     "build": "bun build --compile ./src/cli.ts --outfile dist/showtail",
     "build:all": "bash scripts/build-all.sh",
     "build:release:non-windows": "bash scripts/build-non-windows.sh"

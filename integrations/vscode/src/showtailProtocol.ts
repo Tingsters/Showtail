@@ -2,7 +2,7 @@ import { lstatSync, realpathSync } from 'node:fs';
 import { basename, posix, win32 } from 'node:path';
 
 export const SHOWTAIL_VSCODE_HOOK_PROTOCOL = 'showtail-vscode-extension-hook/v1';
-export const SHOWTAIL_PROJECT_CONTROL_PROTOCOL = 'showtail-project-control/v1';
+export const SHOWTAIL_PROJECT_CONTROL_PROTOCOL = 'showtail-project-control/v2';
 
 export type ExtensionHookTool = 'github-copilot' | 'antigravity-ide';
 export type ExtensionHookEvent =
@@ -302,6 +302,7 @@ export type ProjectResolutionState =
 export type ProjectSelectionMode = 'authoritative' | 'corroborated';
 
 export interface ProjectSelection {
+  home?: string;
   trailId: string;
   root: string;
   displayName: string;
@@ -321,6 +322,9 @@ export interface ProjectResolution {
 }
 
 export interface ProjectControlMarker {
+  home?: string;
+  projectId?: string;
+  projectRoot?: string;
   showtailProjectControl: typeof SHOWTAIL_PROJECT_CONTROL_PROTOCOL;
   claimId: string;
   action: ProjectControlAction;
@@ -410,7 +414,13 @@ interface ReportDetails {
 }
 
 export type ReportResult =
-  | ({ ok: true; root: string; path: string; trailId?: string } & ReportDetails)
+  | ({
+      ok: true;
+      root: string;
+      path: string;
+      trailId?: string;
+      home?: string;
+    } & ReportDetails)
   | ({ ok: false; message: string } & ReportDetails);
 
 export interface ProjectCommandResult {
@@ -476,10 +486,17 @@ function projectSelection(
   const trailId = safeIdentifier(item.trailId);
   const root = nonEmptyString(item.root);
   const parsedRoot = root ? absolutePath(root) : null;
+  const home =
+    item.home === undefined
+      ? undefined
+      : typeof item.home === 'string'
+        ? absolutePath(item.home)
+        : null;
   if (
     !trailId ||
+    home === null ||
     !parsedRoot ||
-    (requireMetadata && !/^trl_[A-Za-z0-9_-]+$/.test(trailId)) ||
+    (requireMetadata && !/^(?:trl|prj)_[A-Za-z0-9_-]+$/.test(trailId)) ||
     (requireMetadata &&
       item.crossWorkspace !== undefined &&
       typeof item.crossWorkspace !== 'boolean')
@@ -501,6 +518,7 @@ function projectSelection(
   if (!mode || !evidence) return null;
   return {
     trailId,
+    ...(home ? { home: home.value } : {}),
     root: parsedRoot.value,
     displayName,
     mode,
@@ -512,6 +530,35 @@ function projectSelection(
 /** Parse the compact project catalog/resolution response without trusting loose paths. */
 export function parseProjectResolution(result: CliResult): ProjectResolution {
   const payload = jsonObject(result.stdout.trim());
+  if (payload?.schemaVersion === 2) {
+    const adapt = (value: unknown): unknown => {
+      const item = relocationObject(value);
+      return item
+        ? {
+            ...item,
+            trailId: item.projectId,
+            root: item.projectRoot,
+            home: payload.home,
+            mode: 'authoritative',
+            evidence: ['central-project-view'],
+          }
+        : value;
+    };
+    return parseProjectResolution({
+      ...result,
+      exitCode: payload.errorCode === 'AMBIGUOUS_PROJECT' ? 0 : result.exitCode,
+      stdout: JSON.stringify({
+        ...payload,
+        state: payload.errorCode === 'AMBIGUOUS_PROJECT' ? 'ambiguous' : payload.state,
+        schemaVersion: 1,
+        selection: adapt(payload.selection),
+        projects: Array.isArray(payload.projects) ? payload.projects.map(adapt) : [],
+        candidates: Array.isArray(payload.candidates)
+          ? payload.candidates.map(adapt)
+          : [],
+      }),
+    });
+  }
   if (!payload) {
     const detail = [result.stderr, result.stdout]
       .map((value) => value.trim())
@@ -809,6 +856,38 @@ export function parseReportResult(
   options: ReportValidationOptions = {},
 ): ReportResult {
   const payload = jsonObject(result.stdout.trim());
+  if (payload?.schemaVersion === 2 && result.exitCode === 0) {
+    const home = typeof payload.home === 'string' ? absolutePath(payload.home) : null;
+    const path =
+      typeof payload.reportPath === 'string' ? absolutePath(payload.reportPath) : null;
+    const root =
+      typeof payload.projectRoot === 'string' ? absolutePath(payload.projectRoot) : null;
+    const selected = absolutePath(selectedProject);
+    const id = safeIdentifier(payload.projectId);
+    const reports = home ? absolutePath(home.api.join(home.value, 'reports')) : null;
+    if (
+      !home ||
+      !path ||
+      !reports ||
+      !pathIsWithin(reports, path) ||
+      !root ||
+      !selected ||
+      !pathsAreEqual(root, selected) ||
+      (options.expectedTrailId && id !== options.expectedTrailId)
+    )
+      return {
+        ok: false,
+        message:
+          'Showtail returned an invalid central report location or project identity. No report was opened.',
+      };
+    return {
+      ok: true,
+      root: root.value,
+      path: path.value,
+      trailId: id ?? undefined,
+      home: home.value,
+    };
+  }
   const details = reportDetails(payload);
   if (result.exitCode === 0) {
     const returnedTrailId = safeIdentifier(payload?.trailId);
@@ -932,8 +1011,8 @@ export function parseResolvedProjectCommandResult(
 ): ProjectCommandResult {
   const parsed = parseProjectCommandResult(result);
   if (!parsed.ok || !parsed.payload) return parsed;
-  const trailId = safeIdentifier(parsed.payload.trailId);
-  const rootText = nonEmptyString(parsed.payload.root);
+  const trailId = safeIdentifier(parsed.payload.projectId ?? parsed.payload.trailId);
+  const rootText = nonEmptyString(parsed.payload.projectRoot ?? parsed.payload.root);
   const expectedRoot = absolutePath(selection.root);
   const root = rootText ? absolutePath(rootText) : null;
   if (!trailId || trailId !== selection.trailId) {
@@ -969,6 +1048,9 @@ export function createProjectControlMarker(
     action,
     trailId: selection.trailId,
     root: selection.root,
+    projectId: selection.trailId,
+    projectRoot: selection.root,
+    ...(selection.home ? { home: selection.home } : {}),
     displayName: selection.displayName,
     mode: selection.mode,
     evidence: selection.evidence,
@@ -996,7 +1078,11 @@ export function parseProjectControlMarker(value: unknown): ProjectControlMarker 
 
   const reportPath = nonEmptyString(item.reportPath) ?? undefined;
   if (reportPath) {
-    const root = absolutePath(selection.root);
+    const root = absolutePath(
+      selection.home
+        ? absolutePath(selection.home)!.api.join(selection.home, 'reports')
+        : selection.root,
+    );
     const report = absolutePath(reportPath);
     if (!root || !report || !pathIsWithin(root, report)) return null;
   }
@@ -1064,6 +1150,20 @@ export function reportPathFromClaim(
   selection: ProjectSelection,
 ): string | undefined {
   if (claim.trailId !== selection.trailId || !claim.reportPath) return undefined;
+  if (claim.home && selection.home) {
+    const home = absolutePath(selection.home);
+    const oldHome = absolutePath(claim.home);
+    const report = absolutePath(claim.reportPath);
+    const reports = home ? absolutePath(home.api.join(home.value, 'reports')) : null;
+    return home &&
+      oldHome &&
+      pathsAreEqual(home, oldHome) &&
+      report &&
+      reports &&
+      pathIsWithin(reports, report)
+      ? report.value
+      : undefined;
+  }
   const oldRoot = absolutePath(claim.root);
   const oldReport = absolutePath(claim.reportPath);
   const newRoot = absolutePath(selection.root);

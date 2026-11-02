@@ -52,7 +52,7 @@ export function locateAntigravityIdeTranscript(
 export function readAntigravityIdeTranscript(
   info: AntigravityIdeTranscriptInfo,
   root: string,
-  options: { includeEdits?: boolean } = {},
+  options: { includeEdits?: boolean; includeOutsideEdits?: boolean } = {},
 ): HookTranscript {
   return readAntigravityCliTranscript(info, root, options);
 }

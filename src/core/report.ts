@@ -8,7 +8,7 @@
  * This barrel re-exports the public surface so callers keep importing from
  * `core/report.ts`.
  */
-export { buildReportData, buildToolBlocks, buildTurns } from './report/data.ts';
+export { buildToolBlocks, buildTurns } from './report/data.ts';
 export {
   type AiMode,
   renderMarkdown,

@@ -83,9 +83,7 @@ export async function runAntigravityIdeInstall(
     console.log(
       'Install the extension and restart Antigravity IDE before you begin working.',
     );
-    console.log(
-      'Once enabled, capture stays local and resolves into project .showtail/ trails.',
-    );
+    console.log('Once enabled, capture stays in your central Showtail home.');
   }
 }
 

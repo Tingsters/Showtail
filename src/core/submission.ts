@@ -2,8 +2,7 @@
  * The submission: the sanitised report a student hands in (or attaches to a pull
  * request), plus a signed manifest that makes it tamper-evident.
  *
- * Layout, written under `<project>/showtail-submission/` (deliberately outside the
- * private, self-ignoring `.showtail/`):
+ * Layout, written under the central Showtail home in `exports/<id>/`:
  *
  *   report.html     the report, rendered from sanitised data
  *   report.md       the same report as Markdown
@@ -27,10 +26,10 @@ import {
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { showtailHome } from './globalConfig.ts';
+import { dataPath } from './dataHome.ts';
 import { scanResidual } from './sanitize.ts';
 import { SHOWTAIL_VERSION } from './version.ts';
 
-export const SUBMISSION_DIR = 'showtail-submission';
 export const MANIFEST_FILE = 'manifest.json';
 export const SIGNATURE_FILE = 'manifest.sig';
 const REPORT_FILES = ['report.html', 'report.md'] as const;
@@ -65,7 +64,7 @@ interface StoredKey {
 }
 
 function keyFile(): string {
-  return join(showtailHome(), 'signing-key.json');
+  return dataPath('signing-key.json');
 }
 
 /** The student's signing key pair, created (owner-only) the first time it is needed. */
@@ -141,24 +140,6 @@ export function buildManifest(input: SubmissionInput): {
     createPrivateKey(key.privateKey),
   );
   return { manifest, manifestJson, signature: signature.toString('base64') };
-}
-
-/** Write the submission folder. Returns its path. */
-export function writeSubmission(
-  root: string,
-  input: SubmissionInput,
-): {
-  dir: string;
-  manifest: SubmissionManifest;
-} {
-  const dir = join(root, SUBMISSION_DIR);
-  mkdirSync(dir, { recursive: true });
-  const { manifest, manifestJson, signature } = buildManifest(input);
-  writeFileSync(join(dir, 'report.html'), input.html, 'utf8');
-  writeFileSync(join(dir, 'report.md'), input.markdown, 'utf8');
-  writeFileSync(join(dir, MANIFEST_FILE), manifestJson, 'utf8');
-  writeFileSync(join(dir, SIGNATURE_FILE), signature + '\n', 'utf8');
-  return { dir, manifest };
 }
 
 export interface SubmissionCheck {

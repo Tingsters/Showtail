@@ -19,7 +19,7 @@ Usage:
 
 Examples:
   ./scripts/docker-test.sh --version
-  ./scripts/docker-test.sh track --project "Docker Test"
+  ./scripts/docker-test.sh setup
   ./scripts/docker-test.sh shell
   ./scripts/docker-test.sh shell -lc 'showtail status --json'
 

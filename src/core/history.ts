@@ -1,0 +1,886 @@
+/** Central, transactional history. Projects are indexes, never storage destinations. */
+import { Database } from 'bun:sqlite';
+import { createHash, randomUUID } from 'node:crypto';
+import {
+  chmodSync,
+  existsSync,
+  readFileSync,
+  readdirSync,
+  realpathSync,
+  statSync,
+} from 'node:fs';
+import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { homedir } from 'node:os';
+import { dataHome, dataPath, ensureDataHome, physicalPath } from './dataHome.ts';
+import { readGlobalConfig } from './globalConfig.ts';
+import { readMachineIdentity, syntheticIdentity } from './identity.ts';
+import { redact } from './redact.ts';
+import { withholdSensitiveParts, ALWAYS_CAPTURE_TOOLS } from './conversationPrivacy.ts';
+import { isSensitivePath } from './sensitivePaths.ts';
+import type { ConversationEvent, RedactConfig } from '../types.ts';
+
+export const HISTORY_VERSION = 1;
+export const CONTROL_VERSION = 2;
+export type RecordKind =
+  | 'prompt'
+  | 'ai_output'
+  | 'edit'
+  | 'decision'
+  | 'plan'
+  | 'tool_call'
+  | 'recap'
+  | 'conversation_event'
+  | 'audit';
+export interface HistorySettings {
+  captureAiOutput?: boolean;
+  captureCode?: boolean;
+  captureToolCalls?: boolean;
+  captureToolOutput?: boolean;
+  redact?: RedactConfig;
+}
+export function historySettings(): HistorySettings {
+  return (readGlobalConfig() as { settings?: HistorySettings }).settings ?? {};
+}
+export interface HistorySession {
+  id: string;
+  tool: string;
+  nativeSessionId: string;
+  authorId: string;
+  cwd: string | null;
+  workspacePaths: string[];
+  startedAt: string;
+  lastSeenAt: string;
+  endedAt?: string;
+  currentTurnId?: string;
+  transcriptPath?: string;
+  automaticSince?: string;
+}
+export interface SessionInput {
+  endedAt?: string;
+  tool: string;
+  nativeSessionId?: string;
+  cwd?: string | null;
+  workspacePaths?: string[];
+  startedAt?: string;
+  authorId?: string;
+  authorName?: string;
+  transcriptPath?: string;
+  automaticSince?: string;
+}
+export interface RecordInput {
+  id?: string;
+  kind: RecordKind;
+  ts?: string;
+  sourceId?: string;
+  turnId?: string;
+  text?: string;
+  diff?: string;
+  file?: string;
+  sha256?: string;
+  deleted?: boolean;
+  approved?: boolean;
+  model?: string;
+  tags?: string[];
+  toolName?: string;
+  isError?: boolean;
+  gitCommit?: string;
+  gitBranch?: string;
+  durationMs?: number;
+  inputTokens?: number;
+  outputTokens?: number;
+  cacheReadTokens?: number;
+  cacheCreationTokens?: number;
+  conversationEvent?: ConversationEvent;
+  context?: { cwd?: string | null; workspacePaths?: string[] };
+  provenance?: {
+    source: string;
+    id: string;
+    batch?: string;
+    legacyIntegrity?: 'unverified';
+  };
+  /** A correlation key supplied by the provider, never a prompt-text fingerprint. */
+  requestId?: string;
+  transcriptFinal?: boolean;
+}
+export interface HistoryRecord extends RecordInput {
+  id: string;
+  sessionId: string;
+  sequence: number;
+  ts: string;
+  capturedAt: string;
+  turnId?: string;
+  prev: string | null;
+  hash: string;
+  supersedesId?: string;
+  redacted: number;
+}
+export interface ProjectView {
+  projectId: string;
+  displayName: string;
+  roots: string[];
+  projectRoot: string | null;
+}
+export type HistorySelection =
+  | { kind: 'all'; tool?: string; since?: string; until?: string }
+  | { kind: 'project'; projectId: string; tool?: string; since?: string; until?: string }
+  | {
+      kind: 'sessions';
+      sessionIds: string[];
+      tool?: string;
+      since?: string;
+      until?: string;
+    };
+
+type Row = Record<string, any>;
+const MARKERS = [
+  'package.json',
+  'pyproject.toml',
+  'Cargo.toml',
+  'go.mod',
+  'pom.xml',
+  'Makefile',
+  'requirements.txt',
+  'CMakeLists.txt',
+];
+export const digest = (text: string): string =>
+  createHash('sha256').update(text).digest('hex');
+
+export function pathIdentity(path: string): string {
+  const value = physicalPath(path);
+  return process.platform === 'win32' ? value.toLowerCase() : value;
+}
+export function containsPath(root: string, path: string): boolean {
+  const rel = relative(pathIdentity(root), pathIdentity(path));
+  return (
+    rel === '' ||
+    (!rel.startsWith('..' + (process.platform === 'win32' ? '\\' : '/')) &&
+      rel !== '..' &&
+      !isAbsolute(rel))
+  );
+}
+
+/** Read project evidence only. A .showtail directory is deliberately not evidence. */
+export function workspaceRoot(path: string, workspaces: string[] = []): string {
+  let dir = resolve(path);
+  try {
+    if (!statSync(dir).isDirectory()) dir = dirname(dir);
+  } catch {
+    /* A caller passes dirname for deleted files. */
+  }
+  const start = dir;
+  let marker: string | undefined;
+  while (true) {
+    if (pathIdentity(dir) === pathIdentity(homedir()) && dir !== start) break;
+    if (existsSync(join(dir, '.git'))) return dir;
+    if (!marker && MARKERS.some((name) => existsSync(join(dir, name)))) marker = dir;
+    const parent = dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  const declared = workspaces
+    .filter((root) => containsPath(root, start))
+    .sort((a, b) => b.length - a.length)[0];
+  return marker ?? declared ?? start;
+}
+
+export function canonical(value: unknown): string {
+  const sort = (v: any): any =>
+    Array.isArray(v)
+      ? v.map(sort)
+      : v && typeof v === 'object'
+        ? Object.fromEntries(
+            Object.keys(v)
+              .sort()
+              .filter((key) => v[key] !== undefined)
+              .map((key) => [key, sort(v[key])]),
+          )
+        : v;
+  return JSON.stringify(sort(value));
+}
+
+/** No fallback to an empty database on corruption or an unknown schema version. */
+export class HistoryStore {
+  readonly home: string;
+  readonly db: Database;
+  readonly readonly: boolean;
+  constructor(options: { readonly?: boolean } = {}) {
+    this.home = options.readonly ? dataHome() : ensureDataHome();
+    this.readonly = options.readonly === true;
+    this.db = new Database(dataPath('history.sqlite'), {
+      readonly: this.readonly,
+      create: !this.readonly,
+      strict: true,
+    });
+    try {
+      this.db.exec(
+        'PRAGMA busy_timeout = 1000; PRAGMA foreign_keys = ON; PRAGMA secure_delete = ON;',
+      );
+      const version = (this.query('PRAGMA user_version').get() as Row).user_version;
+      if (version > HISTORY_VERSION)
+        throw new Error(
+          `HISTORY_NEWER_THAN_BINARY: store version ${version}; update Showtail before opening it.`,
+        );
+      if (!this.readonly) {
+        chmodSync(dataPath('history.sqlite'), 0o600);
+        const sqlite = String(
+          (this.query('SELECT sqlite_version() AS version').get() as Row).version,
+        );
+        const [major, minor, patch] = sqlite.split('.').map(Number) as [
+          number,
+          number,
+          number,
+        ];
+        const fixed =
+          major > 3 ||
+          (major === 3 &&
+            (minor > 51 ||
+              (minor === 51 && patch >= 3) ||
+              (minor === 50 && patch >= 7) ||
+              (minor === 44 && patch >= 6)));
+        this.db.exec(
+          `PRAGMA journal_mode = ${fixed ? 'WAL' : 'DELETE'}; PRAGMA synchronous = FULL;`,
+        );
+        if (version === 0) this.initialize();
+      } else if (version !== HISTORY_VERSION) throw new Error('HISTORY_NOT_INITIALIZED');
+    } catch (error) {
+      this.db.close();
+      throw error;
+    }
+  }
+  close(): void {
+    this.db.close(true);
+  }
+  [Symbol.dispose](): void {
+    this.close();
+  }
+
+  /** Finalize each statement promptly; never hold a reader open across hooks. */
+  query(sql: string) {
+    const call = (method: 'get' | 'all' | 'run', args: any[]) => {
+      const statement = this.db.prepare(sql);
+      try {
+        return (statement[method] as (...values: any[]) => any).apply(statement, args);
+      } finally {
+        statement.finalize();
+      }
+    };
+    return {
+      get: (...args: any[]): any => call('get', args),
+      all: (...args: any[]): any[] => call('all', args),
+      run: (...args: any[]): any => call('run', args),
+    };
+  }
+
+  /** Explicit SQL boundaries avoid retaining Bun's cached transaction statements. */
+  transaction<T>(fn: () => T): { immediate: () => T } {
+    return {
+      immediate: () => {
+        const nested = this.db.inTransaction;
+        const savepoint = `showtail_${randomUUID().replace(/-/g, '')}`;
+        this.db.exec(nested ? `SAVEPOINT ${savepoint}` : 'BEGIN IMMEDIATE');
+        try {
+          const value = fn();
+          if (value instanceof Promise)
+            throw new Error('History transactions must be synchronous.');
+          this.db.exec(nested ? `RELEASE ${savepoint}` : 'COMMIT');
+          return value;
+        } catch (error) {
+          if (this.db.inTransaction)
+            this.db.exec(
+              nested ? `ROLLBACK TO ${savepoint}; RELEASE ${savepoint}` : 'ROLLBACK',
+            );
+          throw error;
+        }
+      },
+    };
+  }
+
+  private initialize(): void {
+    this.transaction(() =>
+      this.db.exec(`
+      CREATE TABLE IF NOT EXISTS authors (id TEXT PRIMARY KEY, name TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS sessions (
+        id TEXT PRIMARY KEY, tool TEXT NOT NULL, native_id TEXT NOT NULL, author_id TEXT NOT NULL REFERENCES authors(id),
+        cwd TEXT, workspaces TEXT NOT NULL, started_at TEXT NOT NULL, last_seen TEXT NOT NULL,
+        ended_at TEXT, current_turn TEXT, transcript_path TEXT, automatic_since TEXT, UNIQUE(tool, native_id)
+      );
+      CREATE TABLE IF NOT EXISTS objects (hash TEXT PRIMARY KEY, content TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS records (
+        id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id), seq INTEGER NOT NULL,
+        ts TEXT NOT NULL, captured_at TEXT NOT NULL, kind TEXT NOT NULL, turn_id TEXT,
+        source_id TEXT, payload TEXT NOT NULL, prev TEXT, hash TEXT NOT NULL,
+        supersedes_id TEXT REFERENCES records(id), redacted INTEGER NOT NULL DEFAULT 0,
+        UNIQUE(session_id, seq)
+      );
+      CREATE INDEX IF NOT EXISTS records_turn ON records(turn_id);
+      CREATE INDEX IF NOT EXISTS records_time ON records(ts);
+      CREATE TABLE IF NOT EXISTS source_aliases (
+        session_id TEXT NOT NULL REFERENCES sessions(id), source_id TEXT NOT NULL,
+        record_id TEXT NOT NULL REFERENCES records(id), PRIMARY KEY(session_id, source_id)
+      );
+      CREATE TABLE IF NOT EXISTS projects (id TEXT PRIMARY KEY, name TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS project_roots (project_id TEXT NOT NULL REFERENCES projects(id), path TEXT NOT NULL, key TEXT NOT NULL UNIQUE, current INTEGER NOT NULL DEFAULT 1);
+      CREATE TABLE IF NOT EXISTS turn_projects (turn_id TEXT NOT NULL, project_id TEXT NOT NULL REFERENCES projects(id), origin TEXT NOT NULL, PRIMARY KEY(turn_id, project_id, origin));
+      CREATE TABLE IF NOT EXISTS manual_turns (turn_id TEXT PRIMARY KEY);
+      CREATE TABLE IF NOT EXISTS imports (source TEXT NOT NULL, source_id TEXT NOT NULL, record_id TEXT NOT NULL REFERENCES records(id), PRIMARY KEY(source, source_id));
+      CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+      PRAGMA user_version = 1;
+    `),
+    ).immediate();
+  }
+
+  private localAuthor(): { id: string; name: string } {
+    const identity = readMachineIdentity() ?? syntheticIdentity();
+    const email = process.env.SHOWTAIL_IDENTITY_EMAIL ?? identity.email;
+    return {
+      id: 'author_' + digest(email).slice(0, 24),
+      name: process.env.SHOWTAIL_IDENTITY_NAME ?? identity.name,
+    };
+  }
+
+  ensureSession(input: SessionInput): HistorySession {
+    const nativeId = input.nativeSessionId || `synthetic:${randomUUID()}`;
+    const id = 'ses_' + digest(`${input.tool}\0${nativeId}`).slice(0, 24);
+    const author = this.localAuthor();
+    const authorId = input.authorId ?? author.id;
+    const now = new Date().toISOString();
+    this.transaction(() => {
+      this.query(
+        'INSERT INTO authors(id, name) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET name=excluded.name',
+      ).run(authorId, input.authorName ?? author.name);
+      const existing = this.session(id);
+      const paths = [
+        ...new Set([
+          ...(existing?.workspacePaths ?? []),
+          ...(input.workspacePaths ?? []),
+        ]),
+      ];
+      this.query(
+        `INSERT INTO sessions (id,tool,native_id,author_id,cwd,workspaces,started_at,last_seen,transcript_path,automatic_since)
+        VALUES (?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET
+        cwd=CASE WHEN ? THEN excluded.cwd ELSE sessions.cwd END, workspaces=excluded.workspaces, started_at=MIN(sessions.started_at,excluded.started_at),
+        transcript_path=COALESCE(excluded.transcript_path,sessions.transcript_path), automatic_since=COALESCE(excluded.automatic_since,sessions.automatic_since)`,
+      ).run(
+        id,
+        input.tool,
+        nativeId,
+        authorId,
+        input.cwd ?? null,
+        JSON.stringify(paths),
+        input.startedAt ?? now,
+        input.startedAt ?? now,
+        input.transcriptPath ?? null,
+        input.automaticSince ?? null,
+        input.cwd !== undefined ? 1 : 0,
+      );
+    }).immediate();
+    return this.session(id)!;
+  }
+
+  session(id: string): HistorySession | undefined {
+    const row = this.query('SELECT * FROM sessions WHERE id=?').get(id) as Row | null;
+    return row ? this.sessionFromRow(row) : undefined;
+  }
+  private sessionFromRow(r: Row): HistorySession {
+    return {
+      id: r.id,
+      tool: r.tool,
+      nativeSessionId: r.native_id,
+      authorId: r.author_id,
+      cwd: r.cwd,
+      workspacePaths: JSON.parse(r.workspaces),
+      startedAt: r.started_at,
+      lastSeenAt: r.last_seen,
+      endedAt: r.ended_at ?? undefined,
+      currentTurnId: r.current_turn ?? undefined,
+      transcriptPath: r.transcript_path ?? undefined,
+      automaticSince: r.automatic_since ?? undefined,
+    };
+  }
+  sessions(): HistorySession[] {
+    return (
+      this.query('SELECT * FROM sessions ORDER BY last_seen DESC, id').all() as Row[]
+    ).map((r) => this.sessionFromRow(r));
+  }
+  endSession(id: string, at?: string): void {
+    this.query('UPDATE sessions SET ended_at=COALESCE(?,last_seen) WHERE id=?').run(
+      at ?? null,
+      id,
+    );
+  }
+  setCurrentTurn(sessionId: string, turnId: string): void {
+    this.query('UPDATE sessions SET current_turn=? WHERE id=?').run(turnId, sessionId);
+  }
+  authorName(id: string): string {
+    return String(
+      (this.query('SELECT name FROM authors WHERE id=?').get(id) as Row | null)?.name ??
+        id,
+    );
+  }
+
+  object(ref: string): string | undefined {
+    if (!/^[a-f0-9]{64}$/.test(ref)) throw new Error('Invalid content address.');
+    return (this.query('SELECT content FROM objects WHERE hash=?').get(ref) as Row | null)
+      ?.content;
+  }
+  private putObject(content: string): string {
+    const hash = digest(content);
+    this.query('INSERT OR IGNORE INTO objects(hash,content) VALUES (?,?)').run(
+      hash,
+      content,
+    );
+    return hash;
+  }
+  record(id: string): HistoryRecord | undefined {
+    const row = this.query('SELECT * FROM records WHERE id=?').get(id) as Row | null;
+    return row ? this.hydrate(row) : undefined;
+  }
+  bySource(sessionId: string, sourceId: string): HistoryRecord | undefined {
+    const row = this.query(
+      'SELECT r.* FROM source_aliases a JOIN records r ON r.id=a.record_id WHERE a.session_id=? AND a.source_id=?',
+    ).get(sessionId, sourceId) as Row | null;
+    return row ? this.hydrate(row) : undefined;
+  }
+  alias(sessionId: string, sourceId: string, recordId: string): void {
+    const record = this.record(recordId);
+    if (!record || record.sessionId !== sessionId)
+      throw new Error('Source alias must reference a record in the same session.');
+    this.query(
+      'INSERT INTO source_aliases VALUES (?,?,?) ON CONFLICT(session_id,source_id) DO UPDATE SET record_id=excluded.record_id',
+    ).run(sessionId, sourceId, recordId);
+  }
+  private hydrate(r: Row): HistoryRecord {
+    const payload = JSON.parse(r.payload);
+    const { textRef, diffRef, conversationRef, ...rest } = payload;
+    return {
+      ...rest,
+      id: r.id,
+      sessionId: r.session_id,
+      sequence: r.seq,
+      ts: r.ts,
+      capturedAt: r.captured_at,
+      kind: r.kind,
+      turnId: r.turn_id ?? undefined,
+      sourceId: r.source_id ?? undefined,
+      ...(textRef ? { text: this.object(textRef) ?? '[captured content missing]' } : {}),
+      ...(diffRef ? { diff: this.object(diffRef) ?? '[captured diff missing]' } : {}),
+      ...(conversationRef
+        ? { conversationEvent: JSON.parse(this.object(conversationRef) ?? 'null') }
+        : {}),
+      prev: r.prev,
+      hash: r.hash,
+      supersedesId: r.supersedes_id ?? undefined,
+      redacted: r.redacted,
+    };
+  }
+
+  append(
+    sessionId: string,
+    input: RecordInput,
+    options: { continueCapture?: () => boolean } = {},
+  ): { record?: HistoryRecord; inserted: boolean } {
+    const settings = historySettings();
+    if (
+      (input.kind === 'ai_output' && settings.captureAiOutput === false) ||
+      (input.kind === 'tool_call' && settings.captureToolCalls === false)
+    )
+      return { inserted: false };
+    if (
+      input.file &&
+      (containsPath(this.home, input.file) || isSensitivePath(input.file))
+    )
+      return { inserted: false };
+    if (input.conversationEvent) {
+      const e = input.conversationEvent;
+      const always = e.toolName && ALWAYS_CAPTURE_TOOLS.has(e.toolName.toLowerCase());
+      if (
+        !always &&
+        ((e.type === 'assistant_text' && settings.captureAiOutput === false) ||
+          ((e.type === 'tool_use' || e.type === 'tool_result') &&
+            settings.captureToolCalls === false))
+      )
+        return { inserted: false };
+    }
+    return this.transaction(() => {
+      if (options.continueCapture?.() === false) return { inserted: false };
+      const session = this.session(sessionId);
+      if (!session) throw new Error(`Unknown session ${sessionId}.`);
+      const {
+        id: requestedId,
+        kind,
+        ts,
+        sourceId,
+        turnId: requestedTurn,
+        text,
+        diff,
+        conversationEvent,
+        ...metadata
+      } = input;
+      const clean: Row = { ...metadata };
+      let redacted = 0;
+      const scrub = (value: string): string => {
+        const result = redact(value, settings.redact);
+        redacted += result.hits;
+        return result.text;
+      };
+      if (text !== undefined) clean.textRef = this.putObject(scrub(text));
+      if (diff !== undefined && settings.captureCode !== false)
+        clean.diffRef = this.putObject(scrub(diff));
+      if (conversationEvent) {
+        const safe = withholdSensitiveParts(conversationEvent, settings);
+        // Redact values independently: regexes must never damage JSON escaping.
+        const visit = (v: any): any =>
+          typeof v === 'string'
+            ? scrub(v)
+            : Array.isArray(v)
+              ? v.map(visit)
+              : v && typeof v === 'object'
+                ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, visit(x)]))
+                : v;
+        clean.conversationRef = this.putObject(canonical(visit(safe)));
+      }
+      const payload = canonical(clean);
+      const prior = sourceId ? this.bySource(sessionId, sourceId) : undefined;
+      if (prior?.transcriptFinal === true && input.transcriptFinal !== true)
+        return { record: prior, inserted: false };
+      let turnId =
+        requestedTurn ??
+        (kind === 'prompt'
+          ? undefined
+          : input.requestId
+            ? (this.bySource(sessionId, `prompt:${input.requestId}`)?.turnId ??
+              session.currentTurnId)
+            : session.currentTurnId);
+      if (
+        prior &&
+        prior.kind === kind &&
+        canonical(this.payload(prior.id)) === payload &&
+        (kind === 'prompt' || (prior.turnId ?? null) === (turnId ?? null))
+      )
+        return { record: prior, inserted: false };
+      const id =
+        requestedId && !this.record(requestedId) ? requestedId : `rec_${randomUUID()}`;
+      if (kind === 'prompt') turnId = prior?.turnId ?? prior?.id ?? id;
+      const tail = this.query(
+        'SELECT seq,hash FROM records WHERE session_id=? ORDER BY seq DESC LIMIT 1',
+      ).get(sessionId) as Row | null;
+      const sequence = (tail?.seq ?? 0) + 1;
+      const capturedAt = new Date().toISOString();
+      if (ts && !Number.isFinite(Date.parse(ts)))
+        throw new Error('Record timestamp must be a valid ISO date.');
+      const timestamp = ts ? new Date(ts).toISOString() : capturedAt;
+      const header = {
+        id,
+        sessionId,
+        sequence,
+        ts: timestamp,
+        capturedAt,
+        kind,
+        turnId: turnId ?? null,
+        sourceId: sourceId ?? null,
+        payload: clean,
+        prev: tail?.hash ?? null,
+        supersedesId: prior?.id ?? null,
+        redacted,
+      };
+      const hash = digest(canonical(header));
+      this.query('INSERT INTO records VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)').run(
+        id,
+        sessionId,
+        sequence,
+        timestamp,
+        capturedAt,
+        kind,
+        turnId ?? null,
+        sourceId ?? null,
+        payload,
+        tail?.hash ?? null,
+        hash,
+        prior?.id ?? null,
+        redacted,
+      );
+      if (prior)
+        this.query(
+          'UPDATE source_aliases SET record_id=? WHERE session_id=? AND record_id=?',
+        ).run(id, sessionId, prior.id);
+      if (sourceId) this.alias(sessionId, sourceId, id);
+      if (kind === 'prompt') this.setCurrentTurn(sessionId, turnId!);
+      this.query(
+        'UPDATE sessions SET last_seen=MAX(last_seen,?), ended_at=NULL WHERE id=?',
+      ).run(timestamp, sessionId);
+      if (input.provenance)
+        this.query('INSERT OR IGNORE INTO imports VALUES (?,?,?)').run(
+          input.provenance.source,
+          input.provenance.id,
+          id,
+        );
+      this.inferProjects(session, { ...input, id, turnId });
+      return { record: this.record(id)!, inserted: true };
+    }).immediate();
+  }
+  private payload(id: string): Row {
+    return JSON.parse(
+      (this.query('SELECT payload FROM records WHERE id=?').get(id) as Row).payload,
+    );
+  }
+
+  records(
+    selection: HistorySelection = { kind: 'all' },
+    options: { sessionId?: string; includeSuperseded?: boolean } = {},
+  ): HistoryRecord[] {
+    const where: string[] = [];
+    const args: string[] = [];
+    if (!options.includeSuperseded)
+      where.push(
+        'NOT EXISTS (SELECT 1 FROM records newer WHERE newer.supersedes_id=r.id)',
+      );
+    if (options.sessionId) {
+      where.push('r.session_id=?');
+      args.push(options.sessionId);
+    }
+    if (selection.kind === 'sessions') {
+      if (!selection.sessionIds.length) return [];
+      where.push(`r.session_id IN (${selection.sessionIds.map(() => '?').join(',')})`);
+      args.push(...selection.sessionIds);
+    }
+    if (selection.kind === 'project') {
+      where.push(
+        `EXISTS (SELECT 1 FROM turn_projects p WHERE p.turn_id=COALESCE(r.turn_id,r.id) AND p.project_id=? AND (p.origin='manual' OR NOT EXISTS (SELECT 1 FROM manual_turns m WHERE m.turn_id=p.turn_id)))`,
+      );
+      args.push(selection.projectId);
+    }
+    if (selection.tool) {
+      where.push('s.tool=?');
+      args.push(selection.tool);
+    }
+    if (selection.since) {
+      where.push('r.ts>=?');
+      args.push(selection.since);
+    }
+    if (selection.until) {
+      where.push('r.ts<=?');
+      args.push(selection.until);
+    }
+    return (
+      this.query(
+        `SELECT r.* FROM records r JOIN sessions s ON s.id=r.session_id ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY r.ts,r.session_id,r.seq`,
+      ).all(...args) as Row[]
+    ).map((r) => this.hydrate(r));
+  }
+
+  private inferProjects(
+    session: HistorySession,
+    record: RecordInput & { id: string },
+  ): void {
+    const group = record.turnId ?? record.id;
+    if (record.kind !== 'prompt' && record.kind !== 'edit') return;
+    const workspaces = record.context?.workspacePaths ?? session.workspacePaths;
+    const roots = record.file
+      ? [workspaceRoot(dirname(record.file), workspaces)]
+      : record.context?.cwd
+        ? [workspaceRoot(record.context.cwd, workspaces)]
+        : workspaces.length === 1
+          ? [workspaceRoot(workspaces[0]!, workspaces)]
+          : session.cwd
+            ? [workspaceRoot(session.cwd, workspaces)]
+            : [];
+    if (record.file)
+      this.query("DELETE FROM turn_projects WHERE turn_id=? AND origin='context'").run(
+        group,
+      );
+    for (const root of roots) {
+      if (containsPath(this.home, root) || pathIdentity(root) === pathIdentity(homedir()))
+        continue;
+      const project = this.registerProject(root);
+      this.query('INSERT OR IGNORE INTO turn_projects VALUES (?,?,?)').run(
+        group,
+        project.projectId,
+        record.file ? 'edit' : 'context',
+      );
+    }
+  }
+  registerProject(root: string, name?: string, legacyId?: string): ProjectView {
+    const key = pathIdentity(root);
+    const old = this.query('SELECT project_id FROM project_roots WHERE key=?').get(
+      key,
+    ) as Row | null;
+    const id = old?.project_id ?? legacyId ?? `prj_${randomUUID()}`;
+    this.query('INSERT OR IGNORE INTO projects VALUES (?,?)').run(
+      id,
+      name || basename(root) || root,
+    );
+    if (name) this.query('UPDATE projects SET name=? WHERE id=?').run(name, id);
+    this.query('INSERT OR IGNORE INTO project_roots VALUES (?,?,?,1)').run(
+      id,
+      resolve(root),
+      key,
+    );
+    return this.projects().find((p) => p.projectId === id)!;
+  }
+  projects(): ProjectView[] {
+    return (this.query('SELECT * FROM projects ORDER BY name,id').all() as Row[]).map(
+      (p) => {
+        const roots = this.query(
+          'SELECT path,current FROM project_roots WHERE project_id=? ORDER BY current DESC,path',
+        ).all(p.id) as Row[];
+        return {
+          projectId: p.id,
+          displayName: p.name,
+          roots: roots.map((r) => r.path),
+          projectRoot: roots.find((r) => r.current)?.path ?? null,
+        };
+      },
+    );
+  }
+  resolveProject(selector: string): ProjectView {
+    selector = this.meta(`projectAlias:${selector}`) ?? selector;
+    const projects = this.projects();
+    const exact = projects.filter(
+      (p) =>
+        p.projectId === selector ||
+        p.roots.some((r) => pathIdentity(r) === pathIdentity(selector)),
+    );
+    const containing = isAbsolute(selector) ? this.projectForPath(selector) : undefined;
+    const matches = exact.length
+      ? exact
+      : containing
+        ? [containing]
+        : projects.filter((p) => p.displayName.toLowerCase() === selector.toLowerCase());
+    if (matches.length !== 1)
+      throw Object.assign(
+        new Error(
+          matches.length
+            ? 'AMBIGUOUS_PROJECT: choose a project ID.'
+            : `PROJECT_NOT_FOUND: ${selector}`,
+        ),
+        { candidates: matches },
+      );
+    return matches[0]!;
+  }
+  projectForPath(path: string): ProjectView | undefined {
+    const matches = this.projects().flatMap((p) =>
+      p.roots.filter((r) => containsPath(r, path)).map((r) => ({ p, length: r.length })),
+    );
+    matches.sort((a, b) => b.length - a.length);
+    return matches[0]?.p;
+  }
+  relinkProject(id: string, path: string): ProjectView {
+    const project = this.resolveProject(id);
+    this.transaction(() => {
+      const existing = this.projectForPath(path);
+      if (existing && existing.projectId !== project.projectId)
+        throw new Error(
+          'PROJECT_PATH_CONFLICT: the new path already belongs to another view.',
+        );
+      this.query('UPDATE project_roots SET current=0 WHERE project_id=?').run(
+        project.projectId,
+      );
+      this.query(
+        'INSERT INTO project_roots VALUES (?,?,?,1) ON CONFLICT(key) DO UPDATE SET current=1',
+      ).run(project.projectId, resolve(path), pathIdentity(path));
+    }).immediate();
+    return this.resolveProject(project.projectId);
+  }
+  assign(selector: string, projectIds: string[]): void {
+    const projects = projectIds.map((id) => this.resolveProject(id));
+    const records = this.session(selector)
+      ? this.records({ kind: 'all' }, { sessionId: selector })
+      : [this.record(selector)].filter((r): r is HistoryRecord => !!r);
+    if (!records.length) throw new Error(`WORK_NOT_FOUND: ${selector}`);
+    this.transaction(() => {
+      for (const turn of new Set(records.map((r) => r.turnId ?? r.id))) {
+        this.query('INSERT OR IGNORE INTO manual_turns VALUES (?)').run(turn);
+        this.query("DELETE FROM turn_projects WHERE turn_id=? AND origin='manual'").run(
+          turn,
+        );
+        for (const project of projects)
+          this.query("INSERT INTO turn_projects VALUES (?,?,'manual')").run(
+            turn,
+            project.projectId,
+          );
+      }
+    }).immediate();
+  }
+  importRecord(source: string, id: string): HistoryRecord | undefined {
+    const row = this.query(
+      'SELECT record_id FROM imports WHERE source=? AND source_id=?',
+    ).get(source, id) as Row | null;
+    return row ? this.record(row.record_id) : undefined;
+  }
+  noteImport(source: string, id: string, recordId: string): void {
+    this.query('INSERT OR IGNORE INTO imports VALUES (?,?,?)').run(source, id, recordId);
+  }
+  meta(key: string): string | undefined {
+    return (this.query('SELECT value FROM meta WHERE key=?').get(key) as Row | null)
+      ?.value;
+  }
+  setMeta(key: string, value: string): void {
+    this.query(
+      'INSERT INTO meta VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',
+    ).run(key, value);
+  }
+
+  verify(): { ok: boolean; checks: { name: string; ok: boolean; details: string[] }[] } {
+    const checks: { name: string; ok: boolean; details: string[] }[] = [];
+    const integrity = this.query('PRAGMA integrity_check').all() as Row[];
+    checks.push({
+      name: 'database',
+      ok: integrity.every((r) => Object.values(r)[0] === 'ok'),
+      details: integrity.map((r) => String(Object.values(r)[0])),
+    });
+    const foreign = this.query('PRAGMA foreign_key_check').all();
+    checks.push({
+      name: 'references',
+      ok: !foreign.length,
+      details: foreign.map((r) => canonical(r)),
+    });
+    const objects = this.query('SELECT * FROM objects').all() as Row[];
+    const badObjects = objects
+      .filter((r) => digest(r.content) !== r.hash)
+      .map((r) => r.hash);
+    checks.push({ name: 'content', ok: !badObjects.length, details: badObjects });
+    const badChains: string[] = [];
+    for (const session of this.sessions()) {
+      let prev: string | null = null;
+      let seq = 0;
+      for (const r of this.query(
+        'SELECT * FROM records WHERE session_id=? ORDER BY seq',
+      ).all(session.id) as Row[]) {
+        const header = {
+          id: r.id,
+          sessionId: r.session_id,
+          sequence: r.seq,
+          ts: r.ts,
+          capturedAt: r.captured_at,
+          kind: r.kind,
+          turnId: r.turn_id,
+          sourceId: r.source_id,
+          payload: JSON.parse(r.payload),
+          prev: r.prev,
+          supersedesId: r.supersedes_id,
+          redacted: r.redacted,
+        };
+        if (r.prev !== prev || r.seq !== ++seq || digest(canonical(header)) !== r.hash)
+          badChains.push(r.id);
+        for (const key of ['textRef', 'diffRef', 'conversationRef']) {
+          const ref = header.payload[key];
+          if (ref && !this.query('SELECT 1 FROM objects WHERE hash=?').get(ref))
+            badChains.push(`${r.id}:missing-${key}`);
+        }
+        prev = r.hash;
+      }
+    }
+    checks.push({ name: 'history-chains', ok: !badChains.length, details: badChains });
+    return { ok: checks.every((c) => c.ok), checks };
+  }
+}
+
+export function historyExists(): boolean {
+  return existsSync(dataPath('history.sqlite'));
+}
+export function pendingCount(): number {
+  const dir = dataPath('pending');
+  return existsSync(dir)
+    ? readdirSync(dir).filter((name) => name.endsWith('.json')).length
+    : 0;
+}

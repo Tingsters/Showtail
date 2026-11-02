@@ -115,60 +115,6 @@ export interface WriteOptions {
   force?: boolean;
 }
 
-export type LegacyCodexCleanupResult =
-  | 'not-applicable'
-  | 'absent'
-  | 'removed'
-  | 'preserved-edited'
-  | 'preserved-unknown';
-
-const CODEX_SHOWTAIL_HEADING = '# Showtail: help the student show THEIR work';
-
-function samePath(left: string, right: string): boolean {
-  const a = resolve(left);
-  const b = resolve(right);
-  return process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b;
-}
-
-/**
- * Remove the obsolete HOME-level Codex block only when its own fingerprint
- * proves it is unchanged Showtail content. Unknown or edited blocks are left
- * byte-for-byte intact so refresh can never erase user instructions.
- */
-export function cleanupLegacyCodexInstructions(
-  target: CodexTarget,
-): LegacyCodexCleanupResult {
-  const file = target.legacyAgentsFile;
-  if (target.scope !== 'user' || !file || samePath(file, target.agentsFile)) {
-    return 'not-applicable';
-  }
-  if (!existsSync(file)) return 'absent';
-
-  const current = readFileSync(file, 'utf8');
-  const parsed = parseBlock(current);
-  if (!parsed) return 'absent';
-
-  if (parsed.sha === undefined || shortHash(parsed.inner) !== parsed.sha) {
-    console.warn(
-      `Showtail kept the legacy instructions in ${file} because the managed block was edited or has no verifiable fingerprint.`,
-    );
-    return 'preserved-edited';
-  }
-  if (!parsed.inner.startsWith(CODEX_SHOWTAIL_HEADING)) {
-    console.warn(
-      `Showtail kept the legacy managed block in ${file} because it is not a recognized Codex instruction block.`,
-    );
-    return 'preserved-unknown';
-  }
-
-  const stripped = (current.slice(0, parsed.startIndex) + current.slice(parsed.endIndex))
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
-  if (stripped.length === 0) rmSync(file, { force: true });
-  else writeFileSync(file, stripped + '\n', 'utf8');
-  return 'removed';
-}
-
 /** Install or refresh the Showtail managed block in AGENTS.md. */
 export function writeCodexInstructions(
   target: CodexTarget,
@@ -177,9 +123,6 @@ export function writeCodexInstructions(
   mkdirSync(dirOf(target.agentsFile), { recursive: true });
   // AGENTS.md has no frontmatter, so the preamble is empty.
   applyManagedBlock(target.agentsFile, AGENTS_BODY, '', options.force ?? false);
-  // Install the canonical user-scoped file first; only then retire a safe,
-  // untouched block left at the old HOME-level location.
-  cleanupLegacyCodexInstructions(target);
 }
 
 export interface CodexInstructionsState {

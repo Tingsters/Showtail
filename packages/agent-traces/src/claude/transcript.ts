@@ -325,7 +325,7 @@ function isDir(path: string): boolean {
 // --- Parsing ---------------------------------------------------------------
 
 export interface ClaudeTranscriptOptions {
-  /** Preserve absolute outside-root edit paths so the ledger can route the whole session. */
+  /** Return absolute edit paths across workspace boundaries for central capture. */
   includeOutsideEdits?: boolean;
 }
 
@@ -898,7 +898,8 @@ function relForEdit(
   if (typeof filePath !== 'string' || !filePath) return null;
   const abs = resolve(root, filePath);
   if (isInternalPath(abs)) return null;
-  if (!isPathUnder(abs, root)) return includeOutside ? abs : null;
+  if (includeOutside) return abs;
+  if (!isPathUnder(abs, root)) return null;
   const rel = toRepoRelative(root, abs);
   if (isInternalPath(rel)) return null;
   return rel;

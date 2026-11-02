@@ -9,9 +9,9 @@ import type { InstallScope } from '../plugins/types.ts';
 
 export type { InstallScope };
 
-/** Map `--user`/`--project` flags to the install scope (project is the default). */
+/** Connections always use the host tool's user-level settings. */
 export function scopeOf(options: { user?: boolean }): InstallScope {
-  return options.user ? 'user' : 'project';
+  return 'user';
 }
 
 /**
@@ -56,14 +56,11 @@ export function printPrivacyNote(opts: {
   console.log(
     `  logs each prompt you submit and snapshots each file ${opts.editSubject} edits. Capture`,
   );
-  console.log('  stays local: resolved work is projected into the project .showtail/;');
-  console.log('  unresolved work waits in the local inbox. Nothing leaves your machine.');
+  console.log('  stays in your private Showtail home (~/.showtail or SHOWTAIL_HOME).');
+  console.log('  Project folders stay untouched. Nothing leaves your machine.');
   console.log('  Review with `showtail report`. To opt out, re-run with --no-hooks, or');
   console.log(
     `  stop this tool everywhere with \`showtail disconnect ${opts.disconnectName}\`.`,
-  );
-  console.log(
-    `  Use \`--${opts.scope}\` only if you intentionally want a scope-limited removal.`,
   );
 }
 

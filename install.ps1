@@ -122,7 +122,7 @@ try {
 # loses work. Once-only and idempotent; best-effort so a hiccup never fails the install.
 Write-Host ''
 try {
-  & $target setup --first-run --offer-migration
+  & $target setup --first-run
 } catch {
   Write-Host 'Showtail is installed. Tracking will turn on the first time you use it.'
 }

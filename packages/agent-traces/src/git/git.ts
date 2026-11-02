@@ -31,6 +31,7 @@ async function runGit(args: string[], cwd: string): Promise<string | undefined> 
     const { stdout } = await execFileAsync('git', [...SAFE_GIT_CONFIG, ...args], {
       cwd,
       maxBuffer: GIT_MAX_BUFFER,
+      env: { ...process.env, GIT_OPTIONAL_LOCKS: '0' },
     });
     return stdout.trim();
   } catch {

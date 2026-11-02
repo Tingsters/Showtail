@@ -1,17 +1,13 @@
+import { disableToolCapture } from '../src/core/globalConfig.ts';
 import { describe, expect, test } from 'bun:test';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { runInit } from '../src/commands/init.ts';
-import { addArtifact } from '../src/core/artifacts.ts';
-import { logEvent } from '../src/core/events.ts';
-import { buildReportData, buildToolBlocks, renderMarkdown } from '../src/core/report.ts';
-import { pathsForRoot } from '../src/core/storage.ts';
+import { buildToolBlocks, renderMarkdown } from '../src/core/report.ts';
 import { toolCaptureStatus, toolStatuses } from '../src/core/tools.ts';
 import { writeGlobalConfig } from '../src/core/globalConfig.ts';
 import { connectPlugins } from '../src/plugins/registry.ts';
 import type { Event } from '../src/types.ts';
-import { authorFor, cleanup, makeTempDir } from './helpers.ts';
-
+import { cleanup, makeTempDir } from './helpers.ts';
 function evt(tool: string, ts: string): Event {
   return {
     id: 'e' + ts,
@@ -22,44 +18,7 @@ function evt(tool: string, ts: string): Event {
     actorSlug: 'tester-at-example-com',
   };
 }
-
 describe('cross-tool attribution', () => {
-  test('logEvent defaults tool to cli and honors an explicit tool', async () => {
-    const dir = makeTempDir();
-    try {
-      await runInit({ cwd: dir });
-      const paths = pathsForRoot(dir);
-      const author = authorFor(paths);
-      const a = await logEvent(author, { type: 'prompt', text: 'hi' });
-      const b = await logEvent(author, {
-        type: 'ai_output',
-        text: 'here is x',
-        tool: 'github-copilot',
-      });
-      expect(a.event.tool).toBe('cli');
-      expect(b.event.tool).toBe('github-copilot');
-    } finally {
-      cleanup(dir);
-    }
-  });
-
-  test('addArtifact records the tool', async () => {
-    const dir = makeTempDir();
-    try {
-      await runInit({ cwd: dir });
-      const paths = pathsForRoot(dir);
-      const author = authorFor(paths);
-      writeFileSync(join(dir, 'a.txt'), 'x');
-      const { artifact: art } = await addArtifact(author, {
-        filePath: 'a.txt',
-        tool: 'github-copilot',
-      });
-      expect(art.tool).toBe('github-copilot');
-    } finally {
-      cleanup(dir);
-    }
-  });
-
   test('buildToolBlocks collapses contiguous tools and marks switches', () => {
     const blocks = buildToolBlocks([
       evt('claude-code', '2026-06-12T10:00:00.000Z'),
@@ -78,34 +37,7 @@ describe('cross-tool attribution', () => {
     expect(blocks[0]!.from).toBe('2026-06-12T10:00:00.000Z');
     expect(blocks[0]!.to).toBe('2026-06-12T10:05:00.000Z');
   });
-
-  test('report shows a Tools-used section and per-event tool badges', async () => {
-    const dir = makeTempDir();
-    try {
-      await runInit({ cwd: dir, project: 'Mixed' });
-      const paths = pathsForRoot(dir);
-      const author = authorFor(paths);
-      await logEvent(author, { type: 'prompt', text: 'q1', tool: 'github-copilot' });
-      await logEvent(author, { type: 'ai_output', text: 'd1', tool: 'claude-code' });
-      await logEvent(author, { type: 'prompt', text: 'q2', tool: 'codex' });
-
-      const data = buildReportData(paths);
-      const tools = data.tools.map((t) => t.tool).sort();
-      expect(tools).toContain('claude-code');
-      expect(tools).toContain('github-copilot');
-      expect(tools).toContain('codex');
-
-      const md = renderMarkdown(data);
-      expect(md).toContain('## Tools used');
-      expect(md).toContain('GitHub Copilot');
-      expect(md).toContain('Claude Code');
-      expect(md).toContain('OpenAI Codex');
-    } finally {
-      cleanup(dir);
-    }
-  });
 });
-
 describe('tool capture status', () => {
   test('reports automatic, manual, and disconnected modes', () => {
     expect(
@@ -135,7 +67,6 @@ describe('tool capture status', () => {
       hooksActive: false,
     });
   });
-
   test('treats only active native integrations as automatic and resolves aliases', () => {
     expect(
       toolCaptureStatus('copilot', [
@@ -172,7 +103,6 @@ describe('tool capture status', () => {
       connected: true,
       hooksActive: true,
     });
-
     expect(
       toolCaptureStatus('antigravity-ide', [
         {
@@ -190,7 +120,6 @@ describe('tool capture status', () => {
       hooksActive: false,
     });
   });
-
   test('filters tool status by CLI name, id, or alias', () => {
     const dir = makeTempDir();
     try {
@@ -202,7 +131,6 @@ describe('tool capture status', () => {
       cleanup(dir);
     }
   });
-
   test('a global stop overrides stale state for every hook-backed plugin', () => {
     const cwd = makeTempDir();
     const home = makeTempDir();
@@ -213,16 +141,12 @@ describe('tool capture status', () => {
     );
     try {
       process.env.SHOWTAIL_HOME = home;
-      writeGlobalConfig({
-        version: 1,
-        captureDisabledTools: hookPlugins.map((plugin) => plugin.cliName),
-      });
+      for (const plugin of hookPlugins) disableToolCapture(plugin.cliName);
       for (const plugin of hookPlugins) {
         plugin.connect.status = () => {
           throw new Error(`status probe must not run for disabled ${plugin.cliName}`);
         };
       }
-
       const statuses = new Map(toolStatuses(cwd).map((status) => [status.tool, status]));
       for (const plugin of hookPlugins) {
         expect(statuses.get(plugin.cliName)).toEqual(

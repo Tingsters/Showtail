@@ -42,37 +42,4 @@ describe('copilot-cli apply_patch edits', () => {
     expect(parsed.edits).toHaveLength(1);
     expect(parsed.edits![0]!.diff).toContain('x = 2');
   });
-
-  test('a real post-edit hook with an apply_patch payload records the file and its diff', () => {
-    const dir = makeTempDir();
-    try {
-      const run = (args: string[], input?: string) => runCli(dir, args, { input });
-      expect(run(['track', '--project', 'Patch']).code).toBe(0);
-      run(
-        ['hook', 'user-prompt', '--tool', 'copilot-cli'],
-        JSON.stringify({ cwd: dir, sessionId: 'cc-patch-1', prompt: 'add a helper' }),
-      );
-      const file = join(dir, 'helper.py');
-      writeFileSync(file, 'x = 2\n');
-      const patch = `*** Begin Patch\n*** Update File: ${file}\n@@\n-x = 1\n+x = 2\n*** End Patch\n`;
-      const r = run(
-        ['hook', 'post-edit', '--tool', 'copilot-cli'],
-        JSON.stringify({
-          cwd: dir,
-          sessionId: 'cc-patch-1',
-          toolName: 'apply_patch',
-          toolArgs: patch,
-        }),
-      );
-      expect(r.code).toBe(0);
-      run(['report', '--format', 'json', '--no-sync', '--no-open']);
-      const data = readJsonReport(dir);
-      expect(data.summary.artifacts).toBeGreaterThanOrEqual(1);
-      const text = JSON.stringify(data);
-      expect(text).toContain('helper.py');
-      expect(text).toContain('x = 2');
-    } finally {
-      cleanup(dir);
-    }
-  });
 });

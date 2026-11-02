@@ -1,0 +1,306 @@
+import { randomUUID } from 'node:crypto';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { basename, join, relative } from 'node:path';
+import type { Artifact, ConversationEvent, Event, ReportData } from '../types.ts';
+import {
+  HistoryStore,
+  containsPath,
+  digest,
+  type HistoryRecord,
+  type HistorySelection,
+} from './history.ts';
+import {
+  buildAuthorshipStatement,
+  buildModelUsage,
+  buildReportPlans,
+  buildSessionStats,
+  buildToolBlocks,
+  buildToolUsage,
+  buildTurns,
+} from './report/data.ts';
+import { renderHtml } from './report/html.ts';
+import { renderMarkdown, type ReportRenderOptions } from './report/markdown.ts';
+import { PLAN_APPROVED_TAG, PLAN_REVISED_TAG } from './plans.ts';
+import { sanitizeReportData } from './shareReport.ts';
+import { buildManifest, verifySubmission } from './submission.ts';
+import { scanResidual } from './sanitize.ts';
+import { dataPath } from './dataHome.ts';
+
+export interface HistoryReportOptions extends ReportRenderOptions {
+  title?: string;
+  author?: string;
+}
+
+/** Build the existing portable report model directly from the central store. */
+export function buildHistoryReport(
+  store: HistoryStore,
+  selection: HistorySelection,
+  options: HistoryReportOptions = {},
+): ReportData {
+  let records = store.records(selection);
+  // A selected reply/edit keeps its opening prompt and neighboring captured context.
+  const groups = new Set(records.map((r) => r.turnId ?? r.id));
+  records = store.records({ kind: 'all' }).filter((r) => groups.has(r.turnId ?? r.id));
+  const sessions = new Map(store.sessions().map((s) => [s.id, s]));
+  if (options.author)
+    records = records.filter(
+      (r) => sessions.get(r.sessionId)?.authorId === options.author,
+    );
+  const project =
+    selection.kind === 'project' ? store.resolveProject(selection.projectId) : undefined;
+  const baseLabel = (file: string): string => {
+    const root =
+      project?.roots.find((r) => containsPath(r, file)) ??
+      store.projectForPath(file)?.roots.find((r) => containsPath(r, file));
+    return root ? relative(root, file).replace(/\\/g, '/') : basename(file);
+  };
+  const files = [...new Set(records.flatMap((r) => (r.file ? [r.file] : [])))];
+  const labels = new Map(files.map((file) => [file, baseLabel(file)]));
+  for (const file of files) {
+    const label = baseLabel(file);
+    if (files.some((other) => other !== file && baseLabel(other) === label)) {
+      const view = store.projectForPath(file);
+      labels.set(
+        file,
+        `${view?.displayName ?? 'Files'}-${digest(file).slice(0, 8)}/${label}`,
+      );
+    }
+  }
+  const fileLabel = (file: string): string => labels.get(file) ?? baseLabel(file);
+  const events: { event: Event; sessionId: string; actorSlug: string }[] = [];
+  const artifacts: Artifact[] = [];
+  const structured: {
+    event: ConversationEvent;
+    sessionId: string;
+    actorSlug: string;
+    turnId?: string;
+    tool: string;
+  }[] = [];
+  const diffs = new Map<string, string>();
+  for (const record of records) {
+    const session = sessions.get(record.sessionId)!;
+    const actorSlug = session.authorId;
+    if (record.kind === 'edit') {
+      const ref = record.diff !== undefined ? digest(record.diff) : undefined;
+      if (ref) diffs.set(ref, record.diff!);
+      artifacts.push({
+        id: record.id,
+        path: fileLabel(record.file ?? 'unknown-file'),
+        sha256: record.sha256 ?? '',
+        timestamp: record.ts,
+        sessionId: record.sessionId,
+        actorSlug,
+        tool: session.tool,
+        turnId: record.turnId,
+        diffHash: ref,
+        diffLines: record.diff?.split('\n').length,
+      });
+    } else if (record.kind === 'conversation_event' && record.conversationEvent) {
+      structured.push({
+        event: record.conversationEvent,
+        sessionId: record.sessionId,
+        actorSlug,
+        turnId: record.turnId,
+        tool: session.tool,
+      });
+    } else if (record.kind !== 'audit') {
+      const {
+        id,
+        kind,
+        text,
+        ts,
+        sourceId,
+        turnId,
+        model,
+        toolName,
+        isError,
+        gitCommit,
+        gitBranch,
+        durationMs,
+        inputTokens,
+        outputTokens,
+        cacheReadTokens,
+        cacheCreationTokens,
+      } = record;
+      const event: Event = {
+        id,
+        type: kind as Event['type'],
+        text: text ?? '',
+        timestamp: ts,
+        actorSlug,
+        sourceId,
+        turnId,
+        tool: session.tool,
+        model,
+        toolName,
+        isError,
+        gitCommit,
+        gitBranch,
+        durationMs,
+        inputTokens,
+        outputTokens,
+        cacheReadTokens,
+        cacheCreationTokens,
+        tags:
+          record.tags ??
+          (record.approved === true
+            ? [PLAN_APPROVED_TAG]
+            : record.approved === false
+              ? [PLAN_REVISED_TAG]
+              : undefined),
+      };
+      if (kind === 'prompt' && record.turnId && record.turnId !== id)
+        event.id = record.turnId;
+      events.push({ event, sessionId: record.sessionId, actorSlug });
+    }
+  }
+  // Path-only and assistant-only providers must still produce a reviewable report.
+  const prompts = new Set(
+    events.filter((r) => r.event.type === 'prompt').map((r) => r.event.id),
+  );
+  for (const record of records) {
+    if (record.kind === 'audit') continue;
+    const group = record.turnId ?? `unanchored:${record.sessionId}`;
+    if (prompts.has(group)) continue;
+    const session = sessions.get(record.sessionId)!;
+    events.push({
+      event: {
+        id: group,
+        type: 'prompt',
+        text: '[The provider did not supply a prompt for this work.]',
+        timestamp: record.ts,
+        actorSlug: session.authorId,
+        tool: session.tool,
+        tags: ['missing-prompt'],
+      },
+      sessionId: session.id,
+      actorSlug: session.authorId,
+    });
+    prompts.add(group);
+  }
+  const turns = buildTurns(events, artifacts, null, structured, (ref) => diffs.get(ref));
+  for (const turn of turns)
+    for (const change of turn.codeChanges) change.capturedOnly = true;
+  const actualEvents = events.filter((e) => !e.event.tags?.includes('missing-prompt'));
+  const allEvents = actualEvents
+    .map((e) => e.event)
+    .sort((a, b) => a.timestamp.localeCompare(b.timestamp));
+  const authorIds = [...new Set(records.map((r) => sessions.get(r.sessionId)!.authorId))];
+  const contributors = authorIds.map((slug) => ({
+    slug,
+    name: store.authorName(slug),
+    events: actualEvents.filter((e) => e.actorSlug === slug).length,
+    artifacts: artifacts.filter((a) => a.actorSlug === slug).length,
+  }));
+  const displayName =
+    options.title ??
+    project?.displayName ??
+    (selection.kind === 'sessions' ? 'Selected conversations' : 'My work');
+  return {
+    schemaVersion: 2,
+    project: project?.displayName ?? null,
+    displayName,
+    generatedAt: new Date().toISOString(),
+    scope: options.author
+      ? { slug: options.author, name: store.authorName(options.author) }
+      : null,
+    summary: {
+      sessions: new Set(records.map((r) => r.sessionId)).size,
+      events: actualEvents.length,
+      artifacts: artifacts.length,
+      decisions: allEvents.filter((e) => e.type === 'decision').length,
+      plans: allEvents.filter((e) => e.type === 'plan').length,
+      stats: buildSessionStats(turns),
+    },
+    contributors,
+    tools: buildToolUsage(allEvents),
+    models: buildModelUsage(allEvents),
+    toolTimeline: buildToolBlocks(allEvents),
+    turns,
+    plans: buildReportPlans(allEvents),
+    redactionCount: records.reduce((n, r) => n + r.redacted, 0),
+    authorship: buildAuthorshipStatement(
+      displayName,
+      contributors,
+      options.author ? store.authorName(options.author) : null,
+    ),
+  };
+}
+
+export function writeHistoryReport(
+  store: HistoryStore,
+  selection: HistorySelection,
+  options: HistoryReportOptions = {},
+): { reportPath: string; markdownPath: string; jsonPath: string; data: ReportData } {
+  const data = buildHistoryReport(store, selection, options);
+  const dir = dataPath('reports', randomUUID());
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const reportPath = join(dir, 'report.html');
+  const markdownPath = join(dir, 'report.md');
+  const jsonPath = join(dir, 'report.json');
+  writeFileSync(reportPath, renderHtml(data, options), { mode: 0o600 });
+  writeFileSync(markdownPath, renderMarkdown(data, options), { mode: 0o600 });
+  writeFileSync(jsonPath, JSON.stringify({ ...data, selection }, null, 2) + '\n', {
+    mode: 0o600,
+  });
+  store.setMeta('lastReport', reportPath);
+  return { reportPath, markdownPath, jsonPath, data };
+}
+
+export function exportHistory(
+  store: HistoryStore,
+  selection: HistorySelection,
+  options: HistoryReportOptions = {},
+): {
+  exportId: string;
+  dir: string;
+  data: ReportData;
+  manifest: ReturnType<typeof buildManifest>['manifest'];
+} {
+  const project =
+    selection.kind === 'project' ? store.resolveProject(selection.projectId) : undefined;
+  const result = sanitizeReportData(
+    buildHistoryReport(store, selection, options),
+    project?.projectRoot ?? undefined,
+  );
+  if (result.findings.length)
+    throw new Error(
+      'SUBMISSION_SCAN_BLOCKED: residual sensitive values found; no submission was written.',
+    );
+  const markdown = renderMarkdown(result.data, options);
+  const html = renderHtml(result.data, options);
+  if (
+    scanResidual(markdown, { structural: true }).length ||
+    scanResidual(html, { structural: true }).length
+  )
+    throw new Error(
+      'SUBMISSION_SCAN_BLOCKED: rendered output failed the independent scan.',
+    );
+  const signed = buildManifest({
+    html,
+    markdown,
+    scope: result.data.scope?.name ?? null,
+    summary: { ...result.data.summary, turns: result.data.turns.length },
+    withheld: { total: result.withheld, byLabel: result.byLabel },
+    scanFindings: 0,
+  });
+  const exportId = `exp_${randomUUID()}`;
+  const dir = dataPath('exports', exportId);
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  for (const [name, content] of Object.entries({
+    'report.html': html,
+    'report.md': markdown,
+    'manifest.json': signed.manifestJson,
+    'manifest.sig': signed.signature + '\n',
+  }))
+    writeFileSync(join(dir, name), content, { mode: 0o600 });
+  const verified = verifySubmission(dir);
+  if (!verified.ok)
+    throw new Error('SUBMISSION_VERIFICATION_FAILED: ' + verified.problems.join(', '));
+  store.setMeta('lastExport', dir);
+  store.setMeta(`export:${exportId}:selection`, canonicalSelection(selection));
+  return { exportId, dir, data: result.data, manifest: signed.manifest };
+}
+function canonicalSelection(selection: HistorySelection): string {
+  return JSON.stringify(selection);
+}

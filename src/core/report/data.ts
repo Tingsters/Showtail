@@ -1,4 +1,3 @@
-import { basename } from 'node:path';
 import type {
   Artifact,
   Contributor,
@@ -15,18 +14,20 @@ import type {
 import type { ConversationEvent } from '../../types.ts';
 import { labelForModel, labelForTool } from '../../plugins/registry.ts';
 import { PLAN_APPROVED_TAG, PLAN_REVISED_TAG, splitPlanText } from '../plans.ts';
-import { readAllArtifacts } from '../artifacts.ts';
-import { authorPaths, readConfig, readSessions, type ShowtailPaths } from '../storage.ts';
-import { readJournal } from '../journal.ts';
-import { authorSlugs, readAllAuthors } from '../authors.ts';
-import { readAllEventsWithSession, type EventWithSession } from '../events.ts';
-import { readObject } from '../objects.ts';
+interface EventWithSession {
+  event: Event;
+  sessionId: string;
+  actorSlug: string;
+}
 import { asyncReplyDecision } from '../decisions.ts';
 import { isSyntheticPrompt } from '../syntheticPrompt.ts';
-import {
-  readAllConversationEventsWithSession,
-  type ConversationEventWithSession,
-} from '../conversationEvents.ts';
+interface ConversationEventWithSession {
+  event: ConversationEvent;
+  sessionId: string;
+  actorSlug: string;
+  turnId?: string;
+  tool: string;
+}
 
 /** The tool an event flowed through (defaults to "cli" for older/manual events). */
 export function toolOf(event: Event): Tool {
@@ -71,96 +72,6 @@ export function nameBySlugMap(contributors: Contributor[]): Map<string, string> 
 }
 
 /** Options controlling the scope of a generated report. */
-export interface ReportScope {
-  /** Limit the report to a single author (per-student report). Omit for the team report. */
-  authorSlug?: string;
-  /** Override the descriptive name in the title for this report (beats config.project). */
-  title?: string;
-}
-
-/**
- * Build the structured report data from everything recorded in the project.
- * With no `authorSlug`, this is the combined *team* report spanning every
- * contributor; with one, it's that single student's report.
- */
-export function buildReportData(
-  paths: ShowtailPaths,
-  scope: ReportScope = {},
-): ReportData {
-  const config = readConfig(paths);
-  const authors = readAllAuthors(paths);
-  const nameBySlug = new Map(authors.map((a) => [a.slug, a.name]));
-
-  // Pull everything, then narrow to the scoped author when one is requested.
-  const onlySlug = scope.authorSlug;
-  const withSession = readAllEventsWithSession(paths).filter(
-    (x) => !onlySlug || x.actorSlug === onlySlug,
-  );
-  const events = withSession.map((x) => x.event);
-  const artifacts = readAllArtifacts(paths).filter(
-    (a) => !onlySlug || a.actorSlug === onlySlug,
-  );
-  const conversationEvents = readAllConversationEventsWithSession(paths).filter(
-    (event) => !onlySlug || event.actorSlug === onlySlug,
-  );
-
-  const tools = buildToolUsage(events);
-  const models = buildModelUsage(events);
-  const sorted = sortByTime(events);
-
-  const slugsInScope = onlySlug ? [onlySlug] : authorSlugs(paths);
-  const contributors = buildContributors(
-    slugsInScope,
-    nameBySlug,
-    withSession,
-    artifacts,
-  );
-
-  // Count the actual session records (a session can exist before it has events).
-  const sessionCount = slugsInScope.reduce(
-    (n, slug) => n + readSessions(authorPaths(paths, slug)).length,
-    0,
-  );
-  const scopeName = onlySlug ? (nameBySlug.get(onlySlug) ?? onlySlug) : null;
-
-  // The descriptive subject for the title: an explicit override, else the
-  // configured project name, else the repo/folder name — so a report is never
-  // a bare "Showtail Report" even when no project name was ever set.
-  const displayName = scope.title ?? config.project ?? basename(paths.root);
-
-  // Built before the summary: session stats are derived from each turn's chosen
-  // recap, so a turn that captured more than one never double-counts.
-  const turns = buildTurns(withSession, artifacts, paths, conversationEvents);
-
-  return {
-    schemaVersion: 2,
-    project: config.project ?? null,
-    displayName,
-    generatedAt: new Date().toISOString(),
-    scope: onlySlug ? { slug: onlySlug, name: scopeName ?? onlySlug } : null,
-    summary: {
-      sessions: sessionCount,
-      events: events.length,
-      artifacts: artifacts.length,
-      decisions: events.filter((e) => e.type === 'decision').length,
-      plans: events.filter((e) => e.type === 'plan').length,
-      stats: buildSessionStats(turns),
-    },
-    contributors,
-    tools,
-    models,
-    toolTimeline: buildToolBlocks(sorted),
-    turns,
-    plans: buildReportPlans(sorted),
-    redactionCount: countRedactions(paths, slugsInScope),
-    authorship: buildAuthorshipStatement(displayName, contributors, scopeName),
-  };
-}
-
-function sortByTime(events: Event[]): Event[] {
-  return [...events].sort((a, b) => a.timestamp.localeCompare(b.timestamp));
-}
-
 /**
  * The report's top-level Plans index: every `plan` event, in time order, with
  * its approval status, revision feedback, and a link to the saved plan file.
@@ -190,41 +101,6 @@ export function buildReportPlans(events: Event[]): ReportPlan[] {
   return plans;
 }
 
-/** Per-author contribution totals for the contributors list. */
-function buildContributors(
-  slugs: string[],
-  nameBySlug: Map<string, string>,
-  withSession: EventWithSession[],
-  artifacts: Artifact[],
-): Contributor[] {
-  const eventsBy = new Map<string, number>();
-  for (const x of withSession) {
-    eventsBy.set(x.actorSlug, (eventsBy.get(x.actorSlug) ?? 0) + 1);
-  }
-  const artifactsBy = new Map<string, number>();
-  for (const a of artifacts) {
-    const slug = a.actorSlug ?? '';
-    artifactsBy.set(slug, (artifactsBy.get(slug) ?? 0) + 1);
-  }
-  return slugs
-    .map((slug) => ({
-      slug,
-      name: nameBySlug.get(slug) ?? slug,
-      events: eventsBy.get(slug) ?? 0,
-      artifacts: artifactsBy.get(slug) ?? 0,
-    }))
-    .sort((a, b) => b.events - a.events || a.slug.localeCompare(b.slug));
-}
-
-/** Total number of secrets/PII Showtail scrubbed across the in-scope authors. */
-function countRedactions(paths: ShowtailPaths, slugs: string[]): number {
-  let total = 0;
-  for (const slug of slugs) {
-    for (const e of readJournal(authorPaths(paths, slug))) total += e.redacted ?? 0;
-  }
-  return total;
-}
-
 /**
  * Group the event stream into "turns": each prompt plus the AI text outputs and
  * code changes it produced. A turn is linked by `turnId` where present, and by
@@ -234,8 +110,9 @@ function countRedactions(paths: ShowtailPaths, slugs: string[]): number {
 export function buildTurns(
   withSession: EventWithSession[],
   artifacts: Artifact[],
-  paths: ShowtailPaths,
+  _paths: unknown,
   conversationEvents: ConversationEventWithSession[] = [],
+  resolveDiff?: (ref: string) => string | undefined,
 ): Turn[] {
   // Only genuine student prompts open turns. Older trails captured harness-injected
   // user-role envelopes (`<task-notification>` subagent results, `<system-reminder>`)
@@ -358,7 +235,7 @@ export function buildTurns(
       (a.turnId ? turnByPrompt.get(a.turnId) : undefined) ??
       fallback(a.timestamp, a.actorSlug ?? '', a.sessionId ?? '');
     if (!turn) continue;
-    const diff = a.diffHash ? (readObject(paths, a.diffHash) ?? undefined) : undefined;
+    const diff = a.diffHash && resolveDiff ? resolveDiff(a.diffHash) : undefined;
     // De-dupe one file per turn: a host can produce two artifacts for the same
     // edit — a live snapshot (file hash, no diff) and a transcript-reconciled
     // import (diff, no hash; e.g. Codex `apply_patch`). Collapse them so the file
@@ -701,7 +578,7 @@ export function filesChanged(turns: Turn[]): number {
 }
 
 /** Count events per tool, busiest first. */
-function buildToolUsage(events: Event[]): ToolUsage[] {
+export function buildToolUsage(events: Event[]): ToolUsage[] {
   const counts = new Map<Tool, number>();
   for (const e of events) {
     const t = toolOf(e);
@@ -713,7 +590,7 @@ function buildToolUsage(events: Event[]): ToolUsage[] {
 }
 
 /** Count events per model (only those with a captured model), busiest first. */
-function buildModelUsage(events: Event[]): ModelUsage[] {
+export function buildModelUsage(events: Event[]): ModelUsage[] {
   const counts = new Map<string, number>();
   for (const e of events) {
     if (e.model) counts.set(e.model, (counts.get(e.model) ?? 0) + 1);
@@ -754,7 +631,7 @@ function betterRecap(current: Event | undefined, candidate: Event): Event {
  * Undefined when no recap was captured, so the report omits the section
  * entirely rather than showing all-zero stats.
  */
-function buildSessionStats(turns: Turn[]): ReportData['summary']['stats'] {
+export function buildSessionStats(turns: Turn[]): ReportData['summary']['stats'] {
   const recaps = turns.map((t) => t.recap).filter((r): r is Event => r !== undefined);
   if (recaps.length === 0) return undefined;
   const stats = {
@@ -799,7 +676,7 @@ export function buildToolBlocks(sortedEvents: Event[]): ToolBlock[] {
  * first-person attestation; for the combined team report it names every
  * contributor and attests the work is the team's own.
  */
-function buildAuthorshipStatement(
+export function buildAuthorshipStatement(
   displayName: string,
   contributors: Contributor[],
   scopeName: string | null,

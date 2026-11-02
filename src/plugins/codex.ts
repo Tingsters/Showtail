@@ -5,7 +5,6 @@
  */
 import { existsSync, readFileSync } from 'node:fs';
 import { runCodexInstall, runCodexUninstall } from '../commands/codex.ts';
-import { runImportCodex } from '../commands/importCodex.ts';
 import {
   codexAutoCaptureActive,
   codexHooksFeatureEnabled,
@@ -24,7 +23,7 @@ import {
   rolloutCwdFromFile,
   rolloutFormatWarning,
   type CodexRolloutInfo,
-} from '../core/codexTranscript.ts';
+} from '@showtail/agent-traces/codex/transcript';
 import { asString, prop } from '../core/parse.ts';
 import { commandOnPath, homeDirExists } from '../core/detect.ts';
 import {
@@ -57,9 +56,8 @@ function codexEditTool(payload: HookPayload): CodexEditTool | undefined {
 /**
  * Locate the rollout file this hook payload belongs to. Codex hook payloads
  * don't carry a transcript path, so we find it ourselves: prefer the rollout
- * whose name matches the payload's session id; otherwise fall back to the most
- * recently modified rollout (the one this just-stopped session wrote). Returns
- * null when nothing plausible is on disk.
+ * whose name matches the payload's session id. Returns null when that exact
+ * session cannot be located.
  */
 function locateRollout(payload: HookPayload | null): CodexRolloutInfo | null {
   const rollouts = findRollouts();
@@ -69,7 +67,7 @@ function locateRollout(payload: HookPayload | null): CodexRolloutInfo | null {
     const byId = rollouts.find((r) => r.sessionId === sid);
     if (byId) return byId;
   }
-  return rollouts[0]!; // newest first
+  return null; // A different conversation must never supply this session's history.
 }
 
 /**
@@ -88,7 +86,9 @@ function rolloutSupplement(
     const hinted = asString(prop(raw, 'transcript_path'));
     const path = hinted && existsSync(hinted) ? hinted : locateRollout(raw)?.path;
     if (!path || !existsSync(path)) return [];
-    return parseCodexRollout(readFileSync(path, 'utf8'), root).messages.filter(
+    return parseCodexRollout(readFileSync(path, 'utf8'), root, {
+      includeOutsideEdits: true,
+    }).messages.filter(
       (m) => (m.role === 'plan' || m.role === 'decision') && !have.has(m.sourceId),
     );
   } catch {
@@ -106,7 +106,7 @@ function rolloutFallback(
     const path = hinted && existsSync(hinted) ? hinted : locateRollout(raw)?.path;
     if (!path || !existsSync(path)) return { transcript: null, warnings: [] };
     const content = readFileSync(path, 'utf8');
-    const parsed = parseCodexTranscript(content, root);
+    const parsed = parseCodexTranscript(content, root, { includeOutsideEdits: true });
     const warning = rolloutFormatWarning(content, parsed);
     const transcript = codexToHookTranscript(parsed);
     return {
@@ -153,7 +153,11 @@ async function codexGetTranscript(
   let transcript: HookTranscript | null = null;
   if (threadId) {
     try {
-      const read = await readThreadTranscript(threadId, { root, model });
+      const read = await readThreadTranscript(threadId, {
+        root,
+        model,
+        includeOutsideEdits: true,
+      });
       transcript = codexToHookTranscript(read.transcript);
       if (transcript.messages.length === 0) {
         warnings.push(
@@ -214,17 +218,12 @@ export const codexPlugin: EnvironmentPlugin = {
   label: 'OpenAI Codex',
 
   connect: {
-    scopes: ['user', 'project'],
+    scopes: ['user'],
     flags: [
       {
         name: 'user',
         flag: '--user',
-        description: 'install for your user, all projects',
-      },
-      {
-        name: 'project',
-        flag: '--project',
-        description: 'install for this project only [default]',
+        description: 'install for your user, all projects [default]',
       },
       {
         name: 'hooks',
@@ -242,7 +241,7 @@ export const codexPlugin: EnvironmentPlugin = {
         description: 'overwrite existing instructions (take the latest)',
       },
     ],
-    applicableFlags: ['user', 'project', 'hooks', 'yes', 'force'],
+    applicableFlags: ['user', 'hooks', 'yes', 'force'],
 
     detect: () => commandOnPath('codex') || homeDirExists('.codex'),
 
@@ -335,14 +334,6 @@ export const codexPlugin: EnvironmentPlugin = {
       "With no target, opens an interactive picker of this project's sessions " +
       '(choose one or several); --list prints the same list non-interactively.',
     shape: 'transcript',
-    run: (source, opts) =>
-      runImportCodex(source, {
-        list: opts.list,
-        withResponses: opts.withResponses,
-        file: opts.file,
-        session: opts.session,
-        cwd: opts.cwd,
-      }),
   },
 
   migration: {
@@ -354,7 +345,9 @@ export const codexPlugin: EnvironmentPlugin = {
         cwd: rolloutCwdFromFile(info.path),
       })),
     read(candidate, root) {
-      return parseCodexRollout(readFileSync(candidate.path, 'utf8'), root);
+      return parseCodexRollout(readFileSync(candidate.path, 'utf8'), root, {
+        includeOutsideEdits: true,
+      });
     },
   },
 };

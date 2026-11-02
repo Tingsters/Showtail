@@ -25,8 +25,8 @@ import {
   type StoredProjectControlClaim,
 } from './showtailProtocol';
 
-const CLAIMS_KEY = 'showtail.projectControl.claims.v1';
-const FOCUS_KEY = 'showtail.projectControl.focus.v1';
+const CLAIMS_KEY = 'showtail.projectControl.claims.v2';
+const FOCUS_KEY = 'showtail.projectControl.focus.v2';
 const MAX_CLAIMS = 20;
 const MAX_COMPLETED_PRIOR_CLAIMS = 50;
 const COMPLETED_PRIOR_CLAIM_FALLBACK_MS = 1_000;

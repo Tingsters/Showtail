@@ -39,7 +39,7 @@
  */
 
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
-import { join, relative } from 'node:path';
+import { isAbsolute, join, relative, resolve } from 'node:path';
 import { hostHome } from '../paths/hostHome.ts';
 import { asString, prop } from '../util/parse.ts';
 import type {
@@ -159,9 +159,10 @@ export function findCopilotCliSession(sessionId?: string): CopilotCliSessionInfo
 export function readCopilotCliSessionFile(
   path: string,
   root: string,
+  options: { includeOutsideEdits?: boolean } = {},
 ): CopilotCliTranscript {
   if (!existsSync(path)) throw new Error(`Copilot CLI session not found: ${path}`);
-  return parseCopilotCliSession(readFileSync(path, 'utf8'), root);
+  return parseCopilotCliSession(readFileSync(path, 'utf8'), root, options);
 }
 
 /** Normalize a possibly-absolute path to a repo-relative, posix-separated path. */
@@ -199,6 +200,7 @@ function editedFile(args: unknown): string | undefined {
 export function parseCopilotCliSession(
   content: string,
   root: string,
+  options: { includeOutsideEdits?: boolean } = {},
 ): CopilotCliTranscript {
   const messages: CopilotCliMessage[] = [];
   const events: HookTranscriptEvent[] = [];
@@ -209,6 +211,7 @@ export function parseCopilotCliSession(
   let userSeq = 0;
   let asstSeq = 0;
   let toolSeq = 0;
+  let editRoot = root;
 
   for (const rawLine of content.split(/\r?\n/)) {
     const line = rawLine.trim();
@@ -228,6 +231,8 @@ export function parseCopilotCliSession(
     if (type === 'session.start') {
       const id = asString(prop(data, 'sessionId'));
       if (id && !sessionId) sessionId = id;
+      const cwd = asString(prop(prop(data, 'context'), 'cwd'));
+      if (options.includeOutsideEdits && cwd && isAbsolute(cwd)) editRoot = cwd;
       continue;
     }
 
@@ -295,8 +300,11 @@ export function parseCopilotCliSession(
       });
       const file = editedFile(prop(data, 'arguments'));
       if (!file) continue; // Not a file edit (e.g. rename_session, shell).
-      const rel = toRel(file, root);
-      if (rel.startsWith('..') || isInternalPath(rel)) continue;
+      const rel = options.includeOutsideEdits
+        ? resolve(editRoot, file)
+        : toRel(file, root);
+      if ((!options.includeOutsideEdits && rel.startsWith('..')) || isInternalPath(rel))
+        continue;
       messages.push({
         role: 'edit',
         text: `Copilot edited ${rel}`,
@@ -354,21 +362,25 @@ export function parseCopilotCliSession(
 /**
  * Parse an `events.jsonl` into the tool-agnostic {@link HookTranscript} the
  * generic stop reconcile in commands/hook.ts consumes. `edit` messages are
- * dropped — the post-edit hook already records those — leaving prompts and
- * assistant replies. (No plan/decision messages are emitted; see the file
+ * omitted by default; central capture opts in to recover edits missed by hooks. (No plan/decision messages are emitted; see the file
  * header for why Copilot CLI records none.)
  */
-export function parseCopilotCliTranscript(content: string, root: string): HookTranscript {
-  const parsed = parseCopilotCliSession(content, root);
+export function parseCopilotCliTranscript(
+  content: string,
+  root: string,
+  options: { includeEdits?: boolean; includeOutsideEdits?: boolean } = {},
+): HookTranscript {
+  const parsed = parseCopilotCliSession(content, root, options);
   const messages: HookTranscriptMessage[] = [];
   for (const m of parsed.messages) {
-    if (m.role === 'edit') continue;
+    if (m.role === 'edit' && !options.includeEdits) continue;
     messages.push({
       role: m.role,
       text: m.text,
       timestamp: m.timestamp,
       sourceId: m.sourceId,
       model: m.model,
+      files: m.files,
     });
   }
   return { sessionId: parsed.sessionId, messages, events: parsed.events };

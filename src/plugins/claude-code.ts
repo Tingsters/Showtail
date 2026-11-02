@@ -6,7 +6,6 @@
  */
 import { existsSync } from 'node:fs';
 import { runSkillInstall, runSkillUninstall } from '../commands/skill.ts';
-import { runImportClaudeCode } from '../commands/importClaude.ts';
 import {
   autoCaptureActive,
   installHooks,
@@ -15,7 +14,10 @@ import {
   writeSkill,
 } from '../core/skill.ts';
 import { commandOnPath, homeDirExists } from '../core/detect.ts';
-import { findTranscripts, readTranscriptFile } from '../core/claudeCode.ts';
+import {
+  findTranscripts,
+  readTranscriptFile,
+} from '@showtail/agent-traces/claude/transcript';
 import {
   extractEditedFiles,
   extractPrompt,
@@ -40,17 +42,12 @@ export const claudeCodePlugin: EnvironmentPlugin = {
   label: 'Claude Code',
 
   connect: {
-    scopes: ['user', 'project'],
+    scopes: ['user'],
     flags: [
       {
         name: 'user',
         flag: '--user',
-        description: 'install for your user, all projects',
-      },
-      {
-        name: 'project',
-        flag: '--project',
-        description: 'install for this project only [default]',
+        description: 'install for your user, all projects [default]',
       },
       {
         name: 'hooks',
@@ -63,7 +60,7 @@ export const claudeCodePlugin: EnvironmentPlugin = {
         description: 'overwrite existing instructions/skill (take the latest)',
       },
     ],
-    applicableFlags: ['user', 'project', 'hooks', 'force'],
+    applicableFlags: ['user', 'hooks', 'force'],
 
     detect: () => commandOnPath('claude') || homeDirExists('.claude'),
 
@@ -122,7 +119,7 @@ export const claudeCodePlugin: EnvironmentPlugin = {
         const tp = (raw as HookPayload)?.transcript_path;
         if (typeof tp !== 'string' || !existsSync(tp)) return null;
         try {
-          return readTranscriptFile(tp, root);
+          return readTranscriptFile(tp, root, { includeOutsideEdits: true });
         } catch {
           return null; // Unknown/unsupported transcript format — nothing to capture.
         }
@@ -146,14 +143,6 @@ export const claudeCodePlugin: EnvironmentPlugin = {
       "With no target, opens an interactive picker of this project's sessions " +
       '(choose one or several); --list prints the same list non-interactively.',
     shape: 'transcript',
-    run: (source, opts) =>
-      runImportClaudeCode(source, {
-        list: opts.list,
-        withResponses: opts.withResponses,
-        file: opts.file,
-        session: opts.session,
-        cwd: opts.cwd,
-      }),
   },
 
   migration: {
@@ -164,6 +153,7 @@ export const claudeCodePlugin: EnvironmentPlugin = {
         mtimeMs: info.mtimeMs,
         cwd: info.cwd,
       })),
-    read: (candidate, root) => readTranscriptFile(candidate.path, root),
+    read: (candidate, root) =>
+      readTranscriptFile(candidate.path, root, { includeOutsideEdits: true }),
   },
 };

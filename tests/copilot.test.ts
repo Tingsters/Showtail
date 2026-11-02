@@ -22,10 +22,10 @@ const blockOf = (sha: string, inner: string): string =>
   `<!-- showtail:start sha=${sha} -->\n${inner}\n<!-- showtail:end -->\n`;
 
 describe('copilot integration', () => {
-  test('install writes both instruction files', async () => {
+  test('legacy instruction helper preserves both instruction file formats', async () => {
     const dir = makeTempDir();
     try {
-      await runCopilotInstall({ cwd: dir, extension: false });
+      writeCopilotInstructions(resolveCopilotTarget(dir));
       const target = resolveCopilotTarget(dir);
       expect(existsSync(target.instructionsFile)).toBe(true);
       expect(existsSync(target.pathInstructionsFile)).toBe(true);
@@ -88,9 +88,9 @@ describe('copilot integration', () => {
   test('uninstall deletes copilot-instructions.md when only our block was there', async () => {
     const dir = makeTempDir();
     try {
-      await runCopilotInstall({ cwd: dir, extension: false });
+      writeCopilotInstructions(resolveCopilotTarget(dir));
       const target = resolveCopilotTarget(dir);
-      await runCopilotUninstall({ cwd: dir });
+      removeCopilotInstructions(target);
       expect(existsSync(target.instructionsFile)).toBe(false);
       expect(copilotInstalled(target)).toBe(false);
     } finally {
@@ -109,7 +109,7 @@ describe('copilot integration', () => {
         VSCODE_EXTENSION_ID,
         'code',
       );
-      await runCopilotInstall({ cwd: dir, extension: false });
+      writeCopilotInstructions(resolveCopilotTarget(dir));
 
       const result = await runCopilotUninstall({ cwd: dir, all: true });
 
@@ -178,9 +178,9 @@ describe('copilot integration', () => {
     for (const instructions of [COPILOT_INSTRUCTIONS, SHOWTAIL_PATH_INSTRUCTIONS]) {
       expect(instructions).toContain('showtail_project_control');
       expect(instructions).toContain('student-project-wording');
-      expect(instructions).toContain('--project <trail-id>');
-      expect(instructions).toContain('stable trail ID');
-      expect(instructions).toContain('returned `trailId`');
+      expect(instructions).toContain('--project <project-id>');
+      expect(instructions).toContain('stable project ID');
+      expect(instructions).toContain('returned `projectId`');
       expect(instructions).not.toMatch(
         /^\s*showtail (?:report|verify|status)(?:\s+#.*)?\s*$/m,
       );
@@ -200,14 +200,14 @@ describe('copilot instructions respect user edits (fingerprint)', () => {
       // Edit a line inside the managed block of the path-specific file.
       const file = target.pathInstructionsFile;
       const edited = readFileSync(file, 'utf8').replace(
-        'Showtail provenance',
-        'MY OWN provenance',
+        'Showtail: help the student',
+        'MY OWN instructions',
       );
       writeFileSync(file, edited, 'utf8');
 
       // A normal refresh (no --force) must keep the edit.
       writeCopilotInstructions(target);
-      expect(readFileSync(file, 'utf8')).toContain('MY OWN provenance');
+      expect(readFileSync(file, 'utf8')).toContain('MY OWN instructions');
 
       const state = copilotState(target);
       expect(state.userEdited).toBe(true);
@@ -226,14 +226,17 @@ describe('copilot instructions respect user edits (fingerprint)', () => {
       const file = target.pathInstructionsFile;
       writeFileSync(
         file,
-        readFileSync(file, 'utf8').replace('Showtail provenance', 'MY OWN provenance'),
+        readFileSync(file, 'utf8').replace(
+          'Showtail: help the student',
+          'MY OWN instructions',
+        ),
         'utf8',
       );
 
       writeCopilotInstructions(target, { force: true });
       const after = readFileSync(file, 'utf8');
-      expect(after).not.toContain('MY OWN provenance');
-      expect(after).toContain('Showtail provenance');
+      expect(after).not.toContain('MY OWN instructions');
+      expect(after).toContain('Showtail: help the student');
       expect(copilotState(target).userEdited).toBe(false);
     } finally {
       cleanup(dir);
@@ -248,14 +251,14 @@ describe('copilot instructions respect user edits (fingerprint)', () => {
       const file = target.pathInstructionsFile;
       // Add user content after the end marker, and edit inside the block.
       let content = readFileSync(file, 'utf8');
-      content = content.replace('Showtail provenance', 'MY OWN provenance');
+      content = content.replace('Showtail: help the student', 'MY OWN instructions');
       content = content.trimEnd() + '\n\n## My extra rules\nAlways add a test.\n';
       writeFileSync(file, content, 'utf8');
 
       writeCopilotInstructions(target);
       const after = readFileSync(file, 'utf8');
       expect(after).toContain('## My extra rules');
-      expect(after).toContain('MY OWN provenance'); // edit kept too
+      expect(after).toContain('MY OWN instructions'); // edit kept too
     } finally {
       cleanup(dir);
     }

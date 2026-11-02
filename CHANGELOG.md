@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+## 0.21.0 — Central, non-invasive history
+
+- Breaking: one private `~/.showtail` home (or absolute `SHOWTAIL_HOME`) now owns
+  history, identity, settings, pending capture, reports, and signed exports.
+- Replaced per-project journals and projection/placement with transactional SQLite
+  history and optional project views. Ordinary capture never modifies repositories.
+- Connections use user-level tool settings. Removed project initialization, Git
+  guards, automatic home scans, and editor-written project instructions.
+- Added explicit, idempotent, read-only legacy import with dry-run validation and
+  an audited recovery option for damaged legacy journals.
+- Reports remain available after source folders move or disappear. Folderless and
+  multi-project work can be selected by conversation or as complete history.
+- Queued records are redacted before persistence and cannot cross consent epochs.
+  PR comments still require review and explicit approval of the exact preview.
+- CI verification accepts sanitized signed exports; private working history stays local.
+
 ## 0.20.1 — Report performance and capture fixes
 
 - Reports reuse ledger records across turns and pending-work summaries, reducing

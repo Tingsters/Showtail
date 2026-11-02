@@ -28,7 +28,7 @@ describe('skill assets + install', () => {
   test('writeSkill keeps frontmatter on top and wraps the body in a marker', () => {
     const dir = makeTempDir();
     try {
-      const target = resolveTarget('project', dir);
+      const target = resolveTarget('user', dir);
       const file = writeSkill(target);
       expect(file.endsWith('SKILL.md')).toBe(true);
 
@@ -48,7 +48,7 @@ describe('skill assets + install', () => {
   test('fresh install is up to date with no update available', () => {
     const dir = makeTempDir();
     try {
-      const target = resolveTarget('project', dir);
+      const target = resolveTarget('user', dir);
       writeSkill(target);
       const state = skillState(target);
       expect(state.installed).toBe(true);
@@ -63,7 +63,7 @@ describe('skill assets + install', () => {
   test('missing install reports not installed', () => {
     const dir = makeTempDir();
     try {
-      const state = skillState(resolveTarget('project', dir));
+      const state = skillState(resolveTarget('user', dir));
       expect(state.installed).toBe(false);
       expect(state.updateAvailable).toBe(false);
     } finally {
@@ -74,7 +74,7 @@ describe('skill assets + install', () => {
   test('writeSkill is idempotent and round-trips', () => {
     const dir = makeTempDir();
     try {
-      const target = resolveTarget('project', dir);
+      const target = resolveTarget('user', dir);
       writeSkill(target);
       const first = readFileSync(target.skillFile, 'utf8');
       writeSkill(target);
@@ -89,7 +89,7 @@ describe('skill assets + install', () => {
   test('a stale install (older body) reports updateAvailable', () => {
     const dir = makeTempDir();
     try {
-      const target = resolveTarget('project', dir);
+      const target = resolveTarget('user', dir);
       mkdirSync(target.skillDir, { recursive: true });
       const { preamble } = splitFrontmatter(SKILL_MD);
       // Simulate an older shipped version: an untouched block with different text.
@@ -107,7 +107,7 @@ describe('skill assets + install', () => {
   test('a user edit inside the block reports userEdited', () => {
     const dir = makeTempDir();
     try {
-      const target = resolveTarget('project', dir);
+      const target = resolveTarget('user', dir);
       writeSkill(target);
       // Hand-edit the managed body without updating the sha stamp.
       const current = readFileSync(target.skillFile, 'utf8');
@@ -184,7 +184,7 @@ describe('skill assets + install', () => {
   test('installHooks then uninstallHooks round-trips settings.json on disk', () => {
     const dir = makeTempDir();
     try {
-      const target = resolveTarget('project', dir);
+      const target = resolveTarget('user', dir);
       installHooks(target);
       expect(existsSync(target.settingsFile)).toBe(true);
       const after = readJson<Record<string, any>>(target.settingsFile);
@@ -201,8 +201,8 @@ describe('skill assets + install', () => {
   test('install enables hooks by default and writes skill + settings', async () => {
     const dir = makeTempDir();
     try {
-      await runSkillInstall({ project: true, cwd: dir });
-      const target = resolveTarget('project', dir);
+      await runSkillInstall({ user: true, cwd: dir });
+      const target = resolveTarget('user', dir);
       expect(existsSync(target.skillFile)).toBe(true);
       expect(hooksInstalledAt(target.settingsFile)).toBe(true);
 
@@ -220,8 +220,8 @@ describe('skill assets + install', () => {
     const realLog = console.log;
     try {
       console.log = (...args: unknown[]) => void lines.push(args.join(' '));
-      await runSkillInstall({ project: true, hooks: false, cwd: dir });
-      const target = resolveTarget('project', dir);
+      await runSkillInstall({ user: true, hooks: false, cwd: dir });
+      const target = resolveTarget('user', dir);
       expect(existsSync(target.skillFile)).toBe(true);
       expect(existsSync(target.settingsFile)).toBe(false);
       expect(hooksInstalledAt(target.settingsFile)).toBe(false);
@@ -240,11 +240,11 @@ describe('skill assets + install', () => {
   test('install --no-hooks removes hooks from an earlier connect', async () => {
     const dir = makeTempDir();
     try {
-      const target = resolveTarget('project', dir);
-      await runSkillInstall({ project: true, cwd: dir });
+      const target = resolveTarget('user', dir);
+      await runSkillInstall({ user: true, cwd: dir });
       expect(hooksInstalledAt(target.settingsFile)).toBe(true);
 
-      await runSkillInstall({ project: true, hooks: false, cwd: dir });
+      await runSkillInstall({ user: true, hooks: false, cwd: dir });
 
       expect(existsSync(target.skillFile)).toBe(true);
       expect(hooksInstalledAt(target.settingsFile)).toBe(false);
@@ -259,7 +259,7 @@ describe('skill assets + install', () => {
     try {
       // Installing project hooks must flip detection to true regardless of any
       // ambient user-scope state.
-      installHooks(resolveTarget('project', dir));
+      installHooks(resolveTarget('user', dir));
       expect(autoCaptureActive(dir)).toBe(true);
     } finally {
       cleanup(dir);

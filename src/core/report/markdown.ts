@@ -352,7 +352,9 @@ function turnMarkdown(lines: string[], turn: Turn, ai: AiMode, author?: string):
       const stat = code.diffLines
         ? ` (~${code.diffLines} line${pluralS(code.diffLines)})`
         : '';
-      const link = `[\`${code.path}\`](${fileHref(code.linkPath ?? code.path)})`;
+      const link = code.capturedOnly
+        ? `\`${code.path.replace(/`/g, '')}\``
+        : `[\`${code.path}\`](${fileHref(code.linkPath ?? code.path)})`;
       if (code.diff) {
         lines.push(`_Suggested code — ${link}${stat}:_`, '');
         const fence = fenceFor(code.diff);

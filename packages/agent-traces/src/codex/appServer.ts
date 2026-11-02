@@ -23,6 +23,7 @@
  *   thread/read {threadId} — thread metadata (model, cwd, cliVersion)
  */
 import { spawn } from 'node:child_process';
+import { resolve } from 'node:path';
 import {
   answeredAsyncQuestions,
   asyncQuestionsFrom,
@@ -307,6 +308,8 @@ function userText(item: unknown): string {
 }
 
 export interface MapOptions {
+  /** Preserve absolute edits across project boundaries for a central history. */
+  includeOutsideEdits?: boolean;
   /** The project root: edits outside it, or in `.showtail`/`.codex`, are dropped. */
   root: string;
   /** The model in effect (e.g. from the hook payload), stamped onto replies. */
@@ -422,8 +425,15 @@ export function threadToTranscript(
       for (const change of asArray(prop(item, 'changes')) ?? []) {
         const path = asString(prop(change, 'path'));
         if (!path) continue;
-        const file = toRepoRelative(opts.root, path);
-        if (!file || file.startsWith('..') || INTERNAL_PATH_RE.test(file)) continue;
+        const file = opts.includeOutsideEdits
+          ? resolve(opts.root, path)
+          : toRepoRelative(opts.root, path);
+        if (
+          !file ||
+          (!opts.includeOutsideEdits && file.startsWith('..')) ||
+          INTERNAL_PATH_RE.test(file)
+        )
+          continue;
         const kind =
           asString(prop(prop(change, 'kind'), 'type')) ?? asString(prop(change, 'kind'));
         const diff = asString(prop(change, 'diff')) ?? '';
@@ -547,6 +557,7 @@ export async function readThreadTranscript(
     const thread = await readThread(rpc, threadId);
     const transcript = threadToTranscript(threadId, thread.entries, {
       root: opts.root,
+      includeOutsideEdits: opts.includeOutsideEdits,
       model: opts.model ?? thread.model,
     });
     return { transcript, via: thread.via, cliVersion: thread.cliVersion };

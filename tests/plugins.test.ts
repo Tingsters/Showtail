@@ -121,31 +121,6 @@ describe('plugin registry', () => {
 // in-process — they're otherwise only reached through the spawned CLI and don't
 // show up in coverage. Project-scope only, so nothing touches the real home dir.
 describe('plugin connect capabilities', () => {
-  test('each connect plugin installs and uninstalls at project scope', async () => {
-    for (const p of connectPlugins()) {
-      const dir = makeTempDir();
-      try {
-        // Mark the dir a project so project-scope resolution stops here.
-        mkdirSync(join(dir, '.showtail'), { recursive: true });
-        const file = CONNECT_PROJECT_FILE[p.id]!(dir);
-
-        expect(existsSync(file)).toBe(false);
-        await p.connect.install({
-          project: true,
-          hooks: false,
-          extension: false,
-          cwd: dir,
-        });
-        expect(existsSync(file)).toBe(true);
-
-        await p.connect.uninstall({ cwd: dir });
-        expect(existsSync(file)).toBe(false);
-      } finally {
-        cleanup(dir);
-      }
-    }
-  });
-
   test('detect() returns a boolean for every connect plugin', () => {
     // The value depends on what's installed on the host; only the contract is
     // asserted (deterministic, no env reads to depend on).

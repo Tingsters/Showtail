@@ -25,8 +25,8 @@ describe('antigravity-cli install / uninstall', () => {
     try {
       // Mark dir as a Showtail project so project-scope resolution stops here.
       mkdirSync(join(dir, '.showtail'), { recursive: true });
-      await runAntigravityCliInstall({ project: true, cwd: dir });
-      const target = resolveAntigravityCliTarget('project', dir);
+      await runAntigravityCliInstall({ user: true, cwd: dir });
+      const target = resolveAntigravityCliTarget('user', dir);
 
       expect(existsSync(target.contextFile)).toBe(true);
       expect(readFileSync(target.contextFile, 'utf8')).toContain('showtail:start');
@@ -52,9 +52,9 @@ describe('antigravity-cli install / uninstall', () => {
     const dir = makeTempDir();
     try {
       mkdirSync(join(dir, '.showtail'), { recursive: true });
-      await runAntigravityCliInstall({ project: true, cwd: dir });
-      await runAntigravityCliInstall({ project: true, cwd: dir });
-      const target = resolveAntigravityCliTarget('project', dir);
+      await runAntigravityCliInstall({ user: true, cwd: dir });
+      await runAntigravityCliInstall({ user: true, cwd: dir });
+      const target = resolveAntigravityCliTarget('user', dir);
 
       const context = readFileSync(target.contextFile, 'utf8');
       expect(context.match(/showtail:start/g)?.length).toBe(1);
@@ -77,8 +77,8 @@ describe('antigravity-cli install / uninstall', () => {
     try {
       mkdirSync(join(dir, '.showtail'), { recursive: true });
       console.log = (...args: unknown[]) => void lines.push(args.join(' '));
-      await runAntigravityCliInstall({ project: true, hooks: false, cwd: dir });
-      const target = resolveAntigravityCliTarget('project', dir);
+      await runAntigravityCliInstall({ user: true, hooks: false, cwd: dir });
+      const target = resolveAntigravityCliTarget('user', dir);
       expect(existsSync(target.contextFile)).toBe(true);
       expect(existsSync(target.hooksFile)).toBe(false);
       expect(antigravityCliHooksInstalledAt(target.hooksFile)).toBe(false);
@@ -98,11 +98,11 @@ describe('antigravity-cli install / uninstall', () => {
     const dir = makeTempDir();
     try {
       mkdirSync(join(dir, '.showtail'), { recursive: true });
-      const target = resolveAntigravityCliTarget('project', dir);
-      await runAntigravityCliInstall({ project: true, cwd: dir });
+      const target = resolveAntigravityCliTarget('user', dir);
+      await runAntigravityCliInstall({ user: true, cwd: dir });
       expect(antigravityCliHooksInstalledAt(target.hooksFile)).toBe(true);
 
-      await runAntigravityCliInstall({ project: true, hooks: false, cwd: dir });
+      await runAntigravityCliInstall({ user: true, hooks: false, cwd: dir });
 
       expect(existsSync(target.contextFile)).toBe(true);
       expect(antigravityCliHooksInstalledAt(target.hooksFile)).toBe(false);
@@ -115,14 +115,14 @@ describe('antigravity-cli install / uninstall', () => {
     const dir = makeTempDir();
     try {
       mkdirSync(join(dir, '.showtail'), { recursive: true });
-      await runAntigravityCliInstall({ project: true, cwd: dir });
+      await runAntigravityCliInstall({ user: true, cwd: dir });
       // The dedicated rules file must live in .agents/, NOT the shared GEMINI.md
       // or AGENTS.md (codex) at the project root.
       expect(existsSync(join(dir, 'GEMINI.md'))).toBe(false);
       expect(existsSync(join(dir, 'AGENTS.md'))).toBe(false);
-      const target = resolveAntigravityCliTarget('project', dir);
-      expect(target.contextFile).toContain('.agents');
-      expect(target.hooksFile).toContain('.agents');
+      const target = resolveAntigravityCliTarget('user', dir);
+      expect(target.contextFile).toContain(process.env.GEMINI_HOME!);
+      expect(target.hooksFile).toContain(process.env.GEMINI_HOME!);
     } finally {
       cleanup(dir);
     }
@@ -132,9 +132,9 @@ describe('antigravity-cli install / uninstall', () => {
     const dir = makeTempDir();
     try {
       mkdirSync(join(dir, '.showtail'), { recursive: true });
-      await runAntigravityCliInstall({ project: true, hooks: false, cwd: dir });
+      await runAntigravityCliInstall({ user: true, hooks: false, cwd: dir });
       const state = antigravityCliInstructionsState(
-        resolveAntigravityCliTarget('project', dir),
+        resolveAntigravityCliTarget('user', dir),
       );
       expect(state.installed).toBe(true);
       expect(state.upToDate).toBe(true);
@@ -170,7 +170,7 @@ describe('antigravity-cli install / uninstall', () => {
     const dir = makeTempDir();
     try {
       mkdirSync(join(dir, '.showtail'), { recursive: true });
-      const target = resolveAntigravityCliTarget('project', dir);
+      const target = resolveAntigravityCliTarget('user', dir);
       // A user already has their own block in hooks.json.
       mkdirSync(join(dir, '.agents'), { recursive: true });
       writeJson(target.hooksFile, {
