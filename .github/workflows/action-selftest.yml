@@ -49,7 +49,7 @@ jobs:
         run: |
           set -euo pipefail
           test "$RESULT_OK" = true
-          printf '%s' "$RESULT_JSON" | jq -e '.ok == true and .manifest.format == 1' > /dev/null
+          printf '%s' "$RESULT_JSON" | jq -e '.ok == true and (.problems | length) == 0' > /dev/null
 
       - name: Tamper with the signed HTML
         run: |
