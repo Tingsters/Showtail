@@ -1,15 +1,6 @@
 name: Action self-test
 
-# Exercise `action.yml` on GitHub's own runner, which nothing else does. The
-# unit/integration suite covers `showtail verify`; it cannot cover the composite
-# action's moving parts — `${{ inputs.* }}` interpolation, `$GITHUB_ACTION_PATH`,
-# output wiring between steps, `$GITHUB_PATH` propagation, or the step summary.
-# Those were only ever emulated locally before this workflow existed.
-#
-# The action is referenced as `./` on purpose: this must test the action as
-# checked out, not whatever `@v0` currently points at, so a break is caught before
-# it is tagged.
-
+# Exercise the composite action with a signed export built from this checkout.
 on:
   workflow_dispatch:
   push:
@@ -23,119 +14,60 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-        with:
-          # The action's own git-history check needs real history — the same
-          # `fetch-depth: 0` the educator docs insist on.
-          fetch-depth: 0
-
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: 1.4.0
-
       - run: bun install --frozen-lockfile
 
-      # A submission to grade: a small project with a committed trail, built with
-      # this checkout's CLI rather than a released binary, so the fixture matches
-      # the code under test.
-      - name: Build a committed fixture trail
+      - name: Build a signed fixture export
         env:
-          SHOWTAIL_DISABLE_FIRST_RUN: "1"
           SHOWTAIL_IDENTITY_EMAIL: student@example.com
           SHOWTAIL_IDENTITY_NAME: Test Student
         run: |
           set -euo pipefail
+          export SHOWTAIL_HOME="$RUNNER_TEMP/showtail-fixture"
           mkdir -p fixture
           cd fixture
           printf 'def solve(items, cap):\n    return 0\n' > solver.py
-          bun run ../src/cli.ts track .
-          # The working trail is private by default (it ignores itself in git). This
-          # fixture stands in for a course repo that opts in to committing it, which is
-          # what makes the trail verifiable, so opt in and let `track` repair the ignore file.
-          jq '.settings.commitTrail = true' .showtail/config.json > .showtail/config.json.tmp
-          mv .showtail/config.json.tmp .showtail/config.json
-          bun run ../src/cli.ts track .
           bun run ../src/cli.ts log -t prompt -x 'help me start a knapsack solver'
           bun run ../src/cli.ts artifact solver.py
           bun run ../src/cli.ts log -t prompt -x 'now add memoization'
-          cd ..
-          git config user.email student@example.com
-          git config user.name 'Test Student'
-          # -f: this repo's own .gitignore ignores `.showtail/` (so does Showtail's default), and
-          # the fixture is deliberately committing its trail.
-          git add -A -f fixture
-          git commit -q -m 'fixture: coursework with its trail'
+          bun run ../src/cli.ts submit --all --no-sync --json > "$RUNNER_TEMP/export.json"
+          export_dir="$(jq -r '.exportPath' "$RUNNER_TEMP/export.json")"
+          cp -R "$export_dir" submission
 
-      - name: A valid trail passes
+      - name: A valid export passes
         id: valid
         uses: ./
         with:
-          path: fixture
+          path: fixture/submission
 
       - name: Assert it reported ok
+        env:
+          RESULT_OK: ${{ steps.valid.outputs.ok }}
+          RESULT_JSON: ${{ steps.valid.outputs.checks-json }}
         run: |
           set -euo pipefail
-          echo 'ok=${{ steps.valid.outputs.ok }}'
-          test '${{ steps.valid.outputs.ok }}' = 'true'
-          # The outputs must be usable, not merely present.
-          echo '${{ steps.valid.outputs.checks-json }}' | jq -e '.ok == true' > /dev/null
-          echo '${{ steps.valid.outputs.checks-json }}' \
-            | jq -e '[.checks[] | select(.name == "journal history is append-only (git)")] | length == 1' > /dev/null
+          test "$RESULT_OK" = true
+          printf '%s' "$RESULT_JSON" | jq -e '.ok == true and .manifest.format == 1' > /dev/null
 
-      # Now the case that matters: a trail edited after the fact. Leaving `prev`
-      # alone breaks the hash chain, which is the cheapest tamper to produce and
-      # enough to prove the action surfaces a failure.
-      - name: Tamper with the committed trail
+      - name: Tamper with the signed HTML
         run: |
           set -euo pipefail
-          log="$(find fixture/.showtail/authors -name '*.log' | head -1)"
-          test -n "$log"
-          # Rewrite the first entry that carries a preview, whichever line that
-          # is. An earlier version of this step pinned line 1 and a literal
-          # prompt string; the sed silently matched nothing, the commit was empty,
-          # and the step would have "passed" having tampered with nothing. Assert
-          # the mutation landed instead of assuming it.
-          python3 - "$log" <<'PY'
-          import json, sys
-          path = sys.argv[1]
-          with open(path) as fh:
-              entries = [json.loads(line) for line in fh if line.strip()]
-          for entry in entries:
-              if entry.get('textPreview'):
-                  entry['textPreview'] = 'I wrote the solver myself'
-                  break
-          else:
-              sys.exit('no journal entry carries a textPreview to tamper with')
-          with open(path, 'w') as fh:
-              for entry in entries:
-                  fh.write(json.dumps(entry, separators=(',', ':')) + '\n')
-          PY
-          # `prev` is deliberately left alone, so the hash chain breaks — the
-          # cheapest tamper to produce, and enough to prove the action reports it.
-          if git diff --quiet -- "$log"; then
-            echo "::error::the tamper changed nothing; this test would prove nothing"
-            exit 1
-          fi
-          git add -A fixture
-          # This synthetic commit models an attacker rewriting the trail. Let it
-          # reach the verifier even when the install step added Showtail's guard.
-          git -c core.hooksPath=/dev/null commit -q -m 'tweak'
+          printf '\nChanged after signing\n' >> fixture/submission/report.html
 
-      # `fail-on-invalid: false` so the step reports without failing the job —
-      # this also covers that input, which is otherwise untested on a runner.
-      - name: A tampered trail is reported, not passed
+      - name: A tampered export is reported, not passed
         id: tampered
         uses: ./
         with:
-          path: fixture
+          path: fixture/submission
           fail-on-invalid: "false"
 
-      - name: Assert it reported not-ok
+      - name: Assert it reported the changed file
+        env:
+          RESULT_OK: ${{ steps.tampered.outputs.ok }}
+          RESULT_JSON: ${{ steps.tampered.outputs.checks-json }}
         run: |
           set -euo pipefail
-          echo 'ok=${{ steps.tampered.outputs.ok }}'
-          test '${{ steps.tampered.outputs.ok }}' = 'false'
-          echo '${{ steps.tampered.outputs.checks-json }}' | jq -e '.ok == false' > /dev/null
-          # Name the check that caught it, so a pass here can't come from some
-          # unrelated failure.
-          echo '${{ steps.tampered.outputs.checks-json }}' \
-            | jq -e '[.checks[] | select(.ok == false) | .name] | index("journal chain is unbroken") != null' > /dev/null
+          test "$RESULT_OK" = false
+          printf '%s' "$RESULT_JSON" | jq -e '.ok == false and any(.problems[]; contains("report.html was changed"))' > /dev/null
