@@ -76,6 +76,7 @@ export interface RecordInput {
   text?: string;
   diff?: string;
   file?: string;
+  unresolvedPath?: boolean;
   sha256?: string;
   deleted?: boolean;
   approved?: boolean;
@@ -159,8 +160,22 @@ export function containsPath(root: string, path: string): boolean {
   );
 }
 
+/** Provider text and legacy command fragments are never workspace identities. */
+export function isUsableWorkspacePath(path: string): boolean {
+  if (!isAbsolute(path) || path.length > 32767 || /[\x00-\x1f\x7f]/.test(path))
+    return false;
+  const checked = process.platform === 'win32' ? path.replace(/^\\\\\?\\/, '') : path;
+  if (process.platform === 'win32' && /[<>:"|?*]/.test(checked.replace(/^[A-Za-z]:/, '')))
+    return false;
+  return checked.split(/[\\/]/).every((part) => part.length <= 255);
+}
+
 /** Read project evidence only. A .showtail directory is deliberately not evidence. */
 export function workspaceRoot(path: string, workspaces: string[] = []): string {
+  if (!isUsableWorkspacePath(path))
+    throw new Error(
+      'INVALID_PROJECT_PATH: workspace paths must be absolute file-system paths.',
+    );
   let dir = resolve(path);
   try {
     if (!statSync(dir).isDirectory()) dir = dirname(dir);
@@ -241,6 +256,11 @@ export class HistoryStore {
           `PRAGMA journal_mode = ${fixed ? 'WAL' : 'DELETE'}; PRAGMA synchronous = FULL;`,
         );
         if (version === 0) this.initialize();
+        // Existing v1 stores also need this index: current-record reads correlate
+        // supersession lookups once per row, including large imported histories.
+        this.db.exec(
+          'CREATE INDEX IF NOT EXISTS records_supersedes ON records(supersedes_id) WHERE supersedes_id IS NOT NULL',
+        );
       } else if (version !== HISTORY_VERSION) throw new Error('HISTORY_NOT_INITIALIZED');
     } catch (error) {
       this.db.close();
@@ -354,7 +374,7 @@ export class HistoryStore {
           ...(existing?.workspacePaths ?? []),
           ...(input.workspacePaths ?? []),
         ]),
-      ];
+      ].filter(isUsableWorkspacePath);
       this.query(
         `INSERT INTO sessions (id,tool,native_id,author_id,cwd,workspaces,started_at,last_seen,transcript_path,automatic_since)
         VALUES (?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET
@@ -365,7 +385,7 @@ export class HistoryStore {
         input.tool,
         nativeId,
         authorId,
-        input.cwd ?? null,
+        input.cwd && isUsableWorkspacePath(input.cwd) ? input.cwd : null,
         JSON.stringify(paths),
         input.startedAt ?? now,
         input.startedAt ?? now,
@@ -387,8 +407,8 @@ export class HistoryStore {
       tool: r.tool,
       nativeSessionId: r.native_id,
       authorId: r.author_id,
-      cwd: r.cwd,
-      workspacePaths: JSON.parse(r.workspaces),
+      cwd: r.cwd && isUsableWorkspacePath(r.cwd) ? r.cwd : null,
+      workspacePaths: JSON.parse(r.workspaces).filter(isUsableWorkspacePath),
       startedAt: r.started_at,
       lastSeenAt: r.last_seen,
       endedAt: r.ended_at ?? undefined,
@@ -480,6 +500,14 @@ export class HistoryStore {
     options: { continueCapture?: () => boolean } = {},
   ): { record?: HistoryRecord; inserted: boolean } {
     const settings = historySettings();
+    if (input.file && !isUsableWorkspacePath(input.file)) {
+      input = {
+        ...input,
+        text: input.text ?? `Unresolved provider file path: ${input.file}`,
+        file: undefined,
+        unresolvedPath: true,
+      };
+    }
     if (
       (input.kind === 'ai_output' && settings.captureAiOutput === false) ||
       (input.kind === 'tool_call' && settings.captureToolCalls === false)
@@ -672,12 +700,15 @@ export class HistoryStore {
     session: HistorySession,
     record: RecordInput & { id: string },
   ): void {
+    if (record.unresolvedPath) return;
     const group = record.turnId ?? record.id;
     if (record.kind !== 'prompt' && record.kind !== 'edit') return;
-    const workspaces = record.context?.workspacePaths ?? session.workspacePaths;
+    const workspaces = (record.context?.workspacePaths ?? session.workspacePaths).filter(
+      isUsableWorkspacePath,
+    );
     const roots = record.file
       ? [workspaceRoot(dirname(record.file), workspaces)]
-      : record.context?.cwd
+      : record.context?.cwd && isUsableWorkspacePath(record.context.cwd)
         ? [workspaceRoot(record.context.cwd, workspaces)]
         : workspaces.length === 1
           ? [workspaceRoot(workspaces[0]!, workspaces)]
@@ -700,6 +731,10 @@ export class HistoryStore {
     }
   }
   registerProject(root: string, name?: string, legacyId?: string): ProjectView {
+    if (!isUsableWorkspacePath(root))
+      throw new Error(
+        'INVALID_PROJECT_PATH: workspace paths must be absolute file-system paths.',
+      );
     const key = pathIdentity(root);
     const old = this.query('SELECT project_id FROM project_roots WHERE key=?').get(
       key,
@@ -718,34 +753,43 @@ export class HistoryStore {
     return this.projects().find((p) => p.projectId === id)!;
   }
   projects(): ProjectView[] {
-    return (this.query('SELECT * FROM projects ORDER BY name,id').all() as Row[]).map(
+    return (this.query('SELECT * FROM projects ORDER BY name,id').all() as Row[]).flatMap(
       (p) => {
-        const roots = this.query(
-          'SELECT path,current FROM project_roots WHERE project_id=? ORDER BY current DESC,path',
-        ).all(p.id) as Row[];
-        return {
-          projectId: p.id,
-          displayName: p.name,
-          roots: roots.map((r) => r.path),
-          projectRoot: roots.find((r) => r.current)?.path ?? null,
-        };
+        const roots = (
+          this.query(
+            'SELECT path,current FROM project_roots WHERE project_id=? ORDER BY current DESC,path',
+          ).all(p.id) as Row[]
+        ).filter((r) => isUsableWorkspacePath(r.path));
+        if (!roots.length) return [];
+        return [
+          {
+            projectId: p.id,
+            displayName: p.name,
+            roots: roots.map((r) => r.path),
+            projectRoot: roots.find((r) => r.current)?.path ?? null,
+          },
+        ];
       },
     );
   }
   resolveProject(selector: string): ProjectView {
     selector = this.meta(`projectAlias:${selector}`) ?? selector;
     const projects = this.projects();
-    const exact = projects.filter(
-      (p) =>
-        p.projectId === selector ||
-        p.roots.some((r) => pathIdentity(r) === pathIdentity(selector)),
+    const identified = projects.find((p) => p.projectId === selector);
+    if (identified) return identified;
+    const named = projects.filter(
+      (p) => p.displayName.toLowerCase() === selector.toLowerCase(),
     );
-    const containing = isAbsolute(selector) ? this.projectForPath(selector) : undefined;
-    const matches = exact.length
-      ? exact
-      : containing
-        ? [containing]
-        : projects.filter((p) => p.displayName.toLowerCase() === selector.toLowerCase());
+    const key = named.length ? undefined : pathIdentity(selector);
+    const root = key
+      ? (this.query('SELECT project_id FROM project_roots WHERE key=?').get(
+          key,
+        ) as Row | null)
+      : null;
+    const exact = root ? projects.filter((p) => p.projectId === root.project_id) : [];
+    const containing =
+      !named.length && isAbsolute(selector) ? this.projectForPath(selector) : undefined;
+    const matches = exact.length ? exact : containing ? [containing] : named;
     if (matches.length !== 1)
       throw Object.assign(
         new Error(
@@ -758,13 +802,31 @@ export class HistoryStore {
     return matches[0]!;
   }
   projectForPath(path: string): ProjectView | undefined {
-    const matches = this.projects().flatMap((p) =>
-      p.roots.filter((r) => containsPath(r, path)).map((r) => ({ p, length: r.length })),
-    );
+    const key = pathIdentity(path);
+    const views = new Map(this.projects().map((p) => [p.projectId, p]));
+    const matches = (
+      this.query('SELECT project_id,key,path FROM project_roots').all() as Row[]
+    )
+      .filter(
+        (r) =>
+          views.has(r.project_id) &&
+          isUsableWorkspacePath(r.path) &&
+          (key === r.key ||
+            key.startsWith(
+              r.key.endsWith(process.platform === 'win32' ? '\\' : '/')
+                ? r.key
+                : r.key + (process.platform === 'win32' ? '\\' : '/'),
+            )),
+      )
+      .map((r) => ({ p: views.get(r.project_id)!, length: r.key.length }));
     matches.sort((a, b) => b.length - a.length);
     return matches[0]?.p;
   }
   relinkProject(id: string, path: string): ProjectView {
+    if (!isUsableWorkspacePath(path))
+      throw new Error(
+        'INVALID_PROJECT_PATH: workspace paths must be absolute file-system paths.',
+      );
     const project = this.resolveProject(id);
     this.transaction(() => {
       const existing = this.projectForPath(path);

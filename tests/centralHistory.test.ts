@@ -300,6 +300,40 @@ describe('central history', () => {
       expect(store.session(first)!.endedAt).toBeDefined();
       expect(store.sessions()).toHaveLength(2);
     }));
+  test('malformed provider filenames remain unresolved evidence and never become project views', () =>
+    fixture(({ project }) => {
+      using store = new HistoryStore();
+      const session = store.ensureSession({
+        tool: 'cli',
+        nativeSessionId: 'bad-path',
+        cwd: project + '\ncommand text',
+      });
+      expect(session.cwd).toBeNull();
+      store.append(session.id, { kind: 'prompt', text: 'Review the recorded changes' });
+      const record = store.append(session.id, {
+        kind: 'edit',
+        file: project + '\npassword=SuperPrivateValue123',
+        diff: '+ preserved change',
+      }).record!;
+      expect(record.file).toBeUndefined();
+      expect(record.unresolvedPath).toBe(true);
+      expect(JSON.stringify(record)).not.toContain('SuperPrivateValue123');
+      expect(store.projects()).toHaveLength(0);
+      expect(() => store.registerProject(project + '\ncommand text')).toThrow(
+        'INVALID_PROJECT_PATH',
+      );
+      store
+        .query('INSERT INTO projects VALUES (?,?)')
+        .run('prj_invalid', 'Old malformed path');
+      store
+        .query('INSERT INTO project_roots VALUES (?,?,?,1)')
+        .run('prj_invalid', project + '\ncommand text', 'legacy-invalid');
+      expect(store.projects()).toHaveLength(0);
+      const report = buildHistoryReport(store, { kind: 'all' });
+      expect(report.turns[0]!.codeChanges[0]!.path).toBe('Unresolved provider file 1');
+      expect(report.turns[0]!.codeChanges[0]!.diff).toBe('+ preserved change');
+      expect(store.verify().ok).toBe(true);
+    }));
   test('automatic pause prevents both live writes and pending replay', async () =>
     fixture(async ({ project }) => {
       writeGlobalConfig({ version: 2, captureEnabled: false });

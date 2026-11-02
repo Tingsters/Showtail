@@ -1,6 +1,6 @@
 {
   "name": "showtail",
-  "version": "0.21.0",
+  "version": "0.21.1",
   "description": "Show your work: one private, local history of your AI prompts and file changes, without modifying project folders.",
   "type": "module",
   "license": "Apache-2.0",

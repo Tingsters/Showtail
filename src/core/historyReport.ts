@@ -1,11 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import { mkdirSync, writeFileSync } from 'node:fs';
-import { basename, join, relative } from 'node:path';
+import { basename, join, normalize, relative, sep } from 'node:path';
 import type { Artifact, ConversationEvent, Event, ReportData } from '../types.ts';
 import {
   HistoryStore,
-  containsPath,
   digest,
+  isUsableWorkspacePath,
   type HistoryRecord,
   type HistorySelection,
 } from './history.ts';
@@ -39,8 +39,10 @@ export function buildHistoryReport(
 ): ReportData {
   let records = store.records(selection);
   // A selected reply/edit keeps its opening prompt and neighboring captured context.
-  const groups = new Set(records.map((r) => r.turnId ?? r.id));
-  records = store.records({ kind: 'all' }).filter((r) => groups.has(r.turnId ?? r.id));
+  if (selection.since || selection.until) {
+    const groups = new Set(records.map((r) => r.turnId ?? r.id));
+    records = store.records({ kind: 'all' }).filter((r) => groups.has(r.turnId ?? r.id));
+  }
   const sessions = new Map(store.sessions().map((s) => [s.id, s]));
   if (options.author)
     records = records.filter(
@@ -48,25 +50,52 @@ export function buildHistoryReport(
     );
   const project =
     selection.kind === 'project' ? store.resolveProject(selection.projectId) : undefined;
-  const baseLabel = (file: string): string => {
-    const root =
-      project?.roots.find((r) => containsPath(r, file)) ??
-      store.projectForPath(file)?.roots.find((r) => containsPath(r, file));
-    return root ? relative(root, file).replace(/\\/g, '/') : basename(file);
-  };
+  // Reports use captured names; they never probe old disks, network shares, or source files.
+  const labelKey = (path: string) =>
+    process.platform === 'win32' ? normalize(path).toLowerCase() : normalize(path);
+  const roots = store.projects().flatMap((view) =>
+    view.roots.map((root) => ({
+      root,
+      key: labelKey(root),
+      name: view.displayName,
+      selected: view.projectId === project?.projectId,
+    })),
+  );
+  roots.sort(
+    (a, b) => Number(b.selected) - Number(a.selected) || b.key.length - a.key.length,
+  );
   const files = [...new Set(records.flatMap((r) => (r.file ? [r.file] : [])))];
-  const labels = new Map(files.map((file) => [file, baseLabel(file)]));
-  for (const file of files) {
-    const label = baseLabel(file);
-    if (files.some((other) => other !== file && baseLabel(other) === label)) {
-      const view = store.projectForPath(file);
-      labels.set(
-        file,
-        `${view?.displayName ?? 'Files'}-${digest(file).slice(0, 8)}/${label}`,
+  const info = new Map(
+    files.map((file) => {
+      if (!isUsableWorkspacePath(file))
+        return [file, { label: 'Unresolved provider file', name: 'Files' }] as const;
+      const key = labelKey(file);
+      const root = roots.find(
+        (r) => key === r.key || key.startsWith(r.key.endsWith(sep) ? r.key : r.key + sep),
       );
-    }
+      return [
+        file,
+        {
+          label: root ? relative(root.root, file).replace(/\\/g, '/') : basename(file),
+          name: root?.name ?? 'Files',
+        },
+      ] as const;
+    }),
+  );
+  const counts = new Map<string, number>();
+  for (const value of info.values())
+    counts.set(value.label, (counts.get(value.label) ?? 0) + 1);
+  const labels = new Map<string, string>();
+  for (const file of files) {
+    const value = info.get(file)!;
+    labels.set(
+      file,
+      counts.get(value.label)! > 1
+        ? `${value.name}-${digest(file).slice(0, 8)}/${value.label}`
+        : value.label,
+    );
   }
-  const fileLabel = (file: string): string => labels.get(file) ?? baseLabel(file);
+  const fileLabel = (file: string): string => labels.get(file) ?? basename(file);
   const events: { event: Event; sessionId: string; actorSlug: string }[] = [];
   const artifacts: Artifact[] = [];
   const structured: {
@@ -77,6 +106,7 @@ export function buildHistoryReport(
     tool: string;
   }[] = [];
   const diffs = new Map<string, string>();
+  let unresolvedIndex = 0;
   for (const record of records) {
     const session = sessions.get(record.sessionId)!;
     const actorSlug = session.authorId;
@@ -85,7 +115,10 @@ export function buildHistoryReport(
       if (ref) diffs.set(ref, record.diff!);
       artifacts.push({
         id: record.id,
-        path: fileLabel(record.file ?? 'unknown-file'),
+        path:
+          record.unresolvedPath || (record.file && !isUsableWorkspacePath(record.file))
+            ? `Unresolved provider file ${++unresolvedIndex}`
+            : fileLabel(record.file ?? 'unknown-file'),
         sha256: record.sha256 ?? '',
         timestamp: record.ts,
         sessionId: record.sessionId,

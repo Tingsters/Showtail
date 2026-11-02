@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## 0.21.1 — Reject malformed legacy project paths
+
+- Keep malformed provider filenames as redacted, unresolved evidence instead of
+  inferring project folders from command or diff text.
+- Hide invalid legacy project roots from views and reports while preserving
+  original history and backups.
+- Keep status probes concise and cache project roots and file labels when building
+  reports from large imported histories.
+
 ## 0.21.0 — Central, non-invasive history
 
 - Breaking: one private `~/.showtail` home (or absolute `SHOWTAIL_HOME`) now owns
