@@ -18,7 +18,8 @@ import {
 } from 'node:fs';
 import { join, resolve } from 'node:path';
 import type { EditedFile } from '../hooks/payload.ts';
-import type { HookTranscriptEvent, JsonValue } from '../model.ts';
+import { shellWritePaths } from '../hooks/shellWrites.ts';
+import type { HookTranscript, HookTranscriptEvent, JsonValue } from '../model.ts';
 import { hostHome } from '../paths/hostHome.ts';
 import { isPathUnder, toRepoRelative } from '../paths/pathUtil.ts';
 import { redact } from '../privacy/redact.ts';
@@ -123,6 +124,7 @@ export interface ClaudeTranscript {
   messages: ClaudeMessage[];
   events: HookTranscriptEvent[];
   warnings?: string[];
+  fileObservationCandidates?: HookTranscript['fileObservationCandidates'];
 }
 
 /** A transcript file found on disk for a given project. */
@@ -173,7 +175,9 @@ const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit']);
  * extra turn. A prior allowlist of just {typed, paste} dropped `queued` and
  * `suggestion_accepted` prompts and orphaned their replies.
  */
-const NON_USER_PROMPT_SOURCES = new Set(['system', 'sdk']);
+// `sdk` is a transport, including a user's real `claude -p` submission. Meta,
+// compaction and sidechain flags identify injected context independently.
+const NON_USER_PROMPT_SOURCES = new Set(['system']);
 
 /** Don't record edits to Showtail/Claude bookkeeping files. Mirrors hook.ts. */
 function isInternalPath(p: string): boolean {
@@ -453,6 +457,9 @@ export function parseClaudeTranscript(
   const messages: ClaudeMessage[] = [];
   const events: HookTranscriptEvent[] = [];
   const warnings = new Set<string>();
+  const fileObservationCandidates: NonNullable<
+    HookTranscript['fileObservationCandidates']
+  > = [];
   let eventSequence = 0;
   let sessionId: string | undefined;
   // The student's answers to AskUserQuestion arrive on *later* user lines, keyed
@@ -465,7 +472,7 @@ export function parseClaudeTranscript(
   const nativeResults = new Map<string, unknown>();
   const nativeTools = new Map<
     string,
-    { name?: string; input: unknown; timestamp?: string }
+    { name?: string; input: unknown; timestamp?: string; cwd?: string }
   >();
 
   // Per-turn token accumulation (reset each time a genuine user prompt opens a
@@ -577,19 +584,72 @@ export function parseClaudeTranscript(
             });
           }
           const bashDiff = prop(structured, 'bashEditDiff');
-          if (call?.name === 'Bash' && raw.isError !== true && bashDiff) {
-            const edits = nativeBashEdits(bashDiff, root, options);
+          const shell = call?.name === 'Bash' || call?.name === 'PowerShell';
+          const command = shell ? asString(prop(call.input, 'command')) : undefined;
+          const literalWrites = new Set(
+            command
+              ? shellWritePaths(command).flatMap((path) => {
+                  const file = relForEdit(
+                    resolve(call!.cwd ?? root, path),
+                    root,
+                    options.includeOutsideEdits === true,
+                  );
+                  return file ? [file] : [];
+                })
+              : [],
+          );
+          let nativeFiles = new Set<string>();
+          if (shell && bashDiff) {
+            const delta = nativeBashEdits(bashDiff, root, options);
+            nativeFiles = new Set(delta.map((edit) => edit.file));
+            const edits = delta.filter(
+              (edit) =>
+                raw.isError !== true &&
+                prop(structured, 'interrupted') !== true &&
+                literalWrites.has(edit.file),
+            );
             if (edits.length)
               messages.push({
                 role: 'edit',
-                text: 'Changes recorded by Bash',
+                text: `Changes recorded by ${call.name}`,
                 edits,
                 files: edits.map((e) => e.file),
                 timestamp,
                 sourceId: `${raw.toolUseId}:edits`,
               });
+            for (const edit of delta)
+              if (!edits.includes(edit))
+                fileObservationCandidates.push({
+                  sourceId: raw.toolUseId,
+                  toolName: call.name!,
+                  startedAt: call.timestamp,
+                  timestamp,
+                  files: [edit.file],
+                  basis: 'workspace-delta',
+                  diff: edit.diff,
+                  deleted: edit.deleted,
+                  toolOutcome:
+                    raw.isError === true || prop(structured, 'interrupted') === true
+                      ? 'failed'
+                      : 'succeeded',
+                });
             if (prop(bashDiff, 'moreFiles') || prop(bashDiff, 'unavailable'))
               warnings.add('BASH_DIFF_PARTIAL');
+          }
+          if (shell) {
+            const files = [...literalWrites].filter((file) => !nativeFiles.has(file));
+            if (files.length)
+              fileObservationCandidates.push({
+                sourceId: raw.toolUseId,
+                toolName: call.name!,
+                startedAt: call.timestamp,
+                timestamp,
+                files,
+                toolOutcome:
+                  raw.isError === true || prop(structured, 'interrupted') === true
+                    ? 'failed'
+                    : 'succeeded',
+              });
           }
         }
         if (raw.toolUseId && planToolIds.has(raw.toolUseId)) {
@@ -676,6 +736,7 @@ export function parseClaudeTranscript(
           name: toolName,
           input: prop(part, 'input'),
           timestamp,
+          cwd: asString(prop(obj, 'cwd')),
         });
         events.push({
           sequence: eventSequence++,
@@ -830,6 +891,7 @@ export function parseClaudeTranscript(
     messages,
     events,
     ...(warnings.size ? { warnings: [...warnings] } : {}),
+    ...(fileObservationCandidates.length ? { fileObservationCandidates } : {}),
   };
 }
 
@@ -961,7 +1023,7 @@ function handleTaskNotification(obj: unknown): ClaudeMessage | null {
   };
 }
 
-/** A real typed prompt: string content, not a tool result or a tooling wrapper. */
+/** A real user submission, including headless SDK transport, not tooling context. */
 function handleUser(obj: unknown, includeSidechains = false): ClaudeMessage | null {
   const raw = prop(prop(obj, 'message'), 'content');
   const content =
@@ -972,7 +1034,7 @@ function handleUser(obj: unknown, includeSidechains = false): ClaudeMessage | nu
       .join('\n');
 
   const source = prop(obj, 'promptSource');
-  // Keep every genuine user prompt; drop only tooling/programmatic sources.
+  // A programmatic transport does not make the submitted content system context.
   if (
     typeof source === 'string' &&
     NON_USER_PROMPT_SOURCES.has(source) &&

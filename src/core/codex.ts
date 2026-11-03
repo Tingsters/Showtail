@@ -34,11 +34,11 @@ export const CODEX_HOOK_EVENTS: HookEvents = {
   ],
   PostToolUse: [
     {
-      // `apply_patch` is Codex's structured edit tool; `shell_command` covers
-      // edits Codex makes by running raw shell (e.g. PowerShell `Set-Content`,
-      // redirects, `sed -i`) — common on Windows. Both fire `post-edit`; the
-      // hook then recovers the touched files from the payload or via git.
-      matcher: 'apply_patch|shell_command',
+      // Current Codex normalizes shell commands and unified exec to `Bash`.
+      // Older hosts emitted `shell_command`; retain that alias as well as the
+      // structured patch tool. Match whole names so unrelated tools do not
+      // trigger file observations.
+      matcher: '^(apply_patch|shell_command|Bash)$',
       hooks: [
         { type: 'command', command: 'showtail hook post-edit --tool codex', async: true },
       ],
@@ -50,6 +50,84 @@ export const CODEX_HOOK_EVENTS: HookEvents = {
 /** The exact JSON text of a `.codex/hooks.json` (for the asset-sync test). */
 export function codexHooksJson(): string {
   return JSON.stringify({ hooks: CODEX_HOOK_EVENTS }, null, 2) + '\n';
+}
+
+export const CODEX_HOOK_TRUST_GUIDANCE =
+  'Open /hooks in Codex to review and trust the Showtail callbacks. Until then, use showtail sync to collect saved native history.';
+
+/** Interpret Codex's documented hooks/list result; never grant trust ourselves. */
+export function codexHookHealth(result: unknown): {
+  hooksActive: boolean;
+  issues: { code: string; message: string }[];
+} {
+  const rows = (result as { data?: unknown[] } | null)?.data;
+  if (!Array.isArray(rows) || rows.length !== 1) return codexHookHealthUnavailable();
+  const row = rows[0] as { hooks?: unknown[]; errors?: unknown[] } | null;
+  if (!Array.isArray(row?.hooks)) return codexHookHealthUnavailable();
+  if (Array.isArray(row.errors) && row.errors.length) {
+    return {
+      hooksActive: false,
+      issues: [
+        {
+          code: 'HOOK_CONFIG_INVALID',
+          message: 'Codex could not load its hook configuration. Review /hooks in Codex.',
+        },
+      ],
+    };
+  }
+  const hooks = row.hooks.filter(
+    (hook): hook is Record<string, unknown> =>
+      !!hook &&
+      typeof hook === 'object' &&
+      (hook as Record<string, unknown>).handlerType === 'command' &&
+      typeof (hook as Record<string, unknown>).command === 'string' &&
+      (hook as { command: string }).command.includes('showtail hook') &&
+      /--tool\s+codex(?:\s|$)/.test((hook as { command: string }).command),
+  );
+  const required = ['sessionStart', 'postToolUse', 'stop'];
+  if (!required.every((event) => hooks.some((hook) => hook.eventName === event))) {
+    return {
+      hooksActive: false,
+      issues: [
+        {
+          code: 'HOOKS_NOT_LOADED',
+          message:
+            'Codex did not load all Showtail callbacks. Reconnect Codex and review /hooks.',
+        },
+      ],
+    };
+  }
+  if (hooks.some((hook) => hook.enabled !== true)) {
+    return {
+      hooksActive: false,
+      issues: [
+        {
+          code: 'HOOKS_DISABLED',
+          message: 'Enable the Showtail callbacks in Codex /hooks.',
+        },
+      ],
+    };
+  }
+  if (hooks.some((hook) => !['trusted', 'managed'].includes(String(hook.trustStatus)))) {
+    return {
+      hooksActive: false,
+      issues: [{ code: 'HOOK_TRUST_REQUIRED', message: CODEX_HOOK_TRUST_GUIDANCE }],
+    };
+  }
+  return { hooksActive: true, issues: [] };
+}
+
+export function codexHookHealthUnavailable() {
+  return {
+    hooksActive: false,
+    issues: [
+      {
+        code: 'HOOK_STATE_UNAVAILABLE',
+        message:
+          'Codex hook state could not be verified. Review /hooks in Codex; saved history remains available through showtail sync.',
+      },
+    ],
+  };
 }
 
 export interface CodexTarget {

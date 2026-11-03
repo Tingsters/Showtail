@@ -13,7 +13,6 @@ import {
 import { reportSkillFile } from '../core/reportDiscovery.ts';
 import type { ConnectUninstallResult } from '../plugins/types.ts';
 import {
-  printHooksEnabled,
   printInstallHeader,
   printPrivacyNote,
   printUninstallResult,
@@ -46,7 +45,7 @@ async function confirmDefaultYes(question: string): Promise<boolean> {
   }
 }
 
-/** Install (or refresh) the Codex AGENTS.md instructions and auto-capture hooks. */
+/** Install (or refresh) the deferred reporting skill and native-history callbacks. */
 export async function runCodexInstall(options: CodexInstallOptions): Promise<void> {
   const scope = scopeOf(options);
   const target = resolveCodexTarget(scope, options.cwd);
@@ -54,11 +53,12 @@ export async function runCodexInstall(options: CodexInstallOptions): Promise<voi
 
   const existed = existsSync(reportSkillFile('codex'));
   writeCodexInstructions(target, { force: options.force });
-  printInstallHeader('Codex instructions', reportSkillFile('codex'), scope, existed);
+  if (existsSync(reportSkillFile('codex')))
+    printInstallHeader('Codex reporting skill', reportSkillFile('codex'), scope, existed);
 
   if (withHooks) {
     installCodexHooks(target);
-    printHooksEnabled(target.hooksFile);
+    console.log(`Registered Codex observer callbacks: ${target.hooksFile}`);
 
     if (codexHooksFeatureEnabled(target.configToml)) {
       console.log(`  Codex hooks are already enabled in ${target.configToml}.`);
@@ -103,7 +103,7 @@ export async function runCodexInstall(options: CodexInstallOptions): Promise<voi
 
   console.log('');
   console.log(
-    'Then just work with Codex in this project — it reads AGENTS.md automatically.',
+    'Capture reads Codex saved history; ordinary coding needs no Showtail instructions.',
   );
 }
 

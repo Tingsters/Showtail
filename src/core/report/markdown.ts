@@ -101,6 +101,7 @@ export function buildMarkdown(
     ...plansSection(data),
     ...turnsSection(data, turnsPlaceholder, resolveAiMode(opts)),
     ...unattributedSection(data, turnsPlaceholder, resolveAiMode(opts)),
+    ...fileObservationsSection(data, turnsPlaceholder, fmt),
     ...authorshipSection(data),
   ].join('\n');
 }
@@ -278,6 +279,56 @@ function turnsSection(data: ReportData, turnsPlaceholder: boolean, ai: AiMode): 
 
 function authorshipSection(data: ReportData): string[] {
   return ['## Authorship statement', '', '> ' + data.authorship, ''];
+}
+
+/** File observations supplement incomplete native evidence; they are not edits. */
+function fileObservationsSection(
+  data: ReportData,
+  html: boolean,
+  fmt: (iso: string) => string,
+): string[] {
+  const observations =
+    data.fileObservations?.filter((observation) => !observation.editId) ?? [];
+  if (!observations.length) return [];
+  if (html) return ['SHOWTAIL_FILE_OBSERVATIONS', ''];
+  const lines = [
+    '## File observations',
+    '',
+    'These observations may include later or manual changes and work from other processes. File hashes describe state when observed. Persisted workspace diffs show changes seen during a shell command, with unverified authorship.',
+    '',
+  ];
+  for (const observation of observations) {
+    const workspaceDelta = observation.basis === 'workspace-delta';
+    const outcome = workspaceDelta
+      ? 'shell activity'
+      : observation.basis === 'shell-write-attempt'
+        ? observation.toolOutcome === 'failed'
+          ? 'a failed shell attempt'
+          : observation.toolOutcome === 'succeeded'
+            ? 'a successful shell attempt'
+            : 'a shell attempt'
+        : 'tool activity';
+    lines.push(
+      `- \`${observation.path.replace(/`/g, '')}\` · ${fmt(observation.observedAt)} · ${workspaceDelta ? 'during' : 'after'} ${outcome}${workspaceDelta ? ' · author unverified' : ''}`,
+    );
+    if (observation.sha256) lines.push(`  SHA-256: \`${observation.sha256}\``);
+    if (workspaceDelta && observation.diff) {
+      const fence = fenceFor(observation.diff);
+      lines.push(
+        '',
+        '<details><summary>Observed workspace diff</summary>',
+        '',
+        fence + 'diff',
+        observation.diff,
+        fence,
+        '',
+        '</details>',
+        '',
+      );
+    }
+  }
+  lines.push('');
+  return lines;
 }
 
 /** Render a report as student- and educator-friendly Markdown. */

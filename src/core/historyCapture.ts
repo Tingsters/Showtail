@@ -134,6 +134,13 @@ function safeBatch(batch: CaptureBatch): CaptureBatch {
       ? {
           ...batch.transcript,
           warnings: undefined,
+          fileObservationCandidates:
+            settings.captureCode === false
+              ? undefined
+              : batch.transcript.fileObservationCandidates?.map((candidate) => ({
+                  ...candidate,
+                  diff: candidate.diff ? scrub(candidate.diff) : undefined,
+                })),
           messages: batch.transcript.messages
             .filter(
               (m) =>
@@ -209,6 +216,21 @@ export function captureTranscript(
   transcript: HookTranscript,
   options: { since?: string; continueCapture?: () => boolean } = {},
 ): number {
+  if (
+    transcript.parentNativeSessionId &&
+    session.parentNativeSessionId !== transcript.parentNativeSessionId
+  )
+    session = store.ensureSession({
+      tool: session.tool,
+      nativeSessionId: session.nativeSessionId,
+      parentNativeSessionId: transcript.parentNativeSessionId,
+    });
+  if (session.parentNativeSessionId || transcript.inputOrigin === 'agent') {
+    for (const message of transcript.messages)
+      if (message.role === 'user') message.origin = 'agent';
+    for (const event of transcript.events ?? [])
+      if (event.type === 'user_text') event.origin = 'agent';
+  }
   return store
     .transaction(() => {
       let inserted = 0;
@@ -413,7 +435,8 @@ export function captureTranscript(
             m.origin !== 'agent' &&
             m.origin !== 'harness' &&
             (m.origin === 'human' || !isSyntheticPrompt(m.text)) &&
-            !asyncReplyDecision(m.text),
+            !asyncReplyDecision(m.text) &&
+            inWindow(m.submittedAt ?? m.timestamp, options.since),
         );
         const matched = prompts.filter(
           (m) => store.bySource(session.id, m.sourceId)?.kind === 'prompt',

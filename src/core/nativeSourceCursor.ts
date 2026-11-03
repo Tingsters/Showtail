@@ -1,9 +1,10 @@
 /** Replay the open Claude turn on append; retain offsets, never transcript text. */
 import { closeSync, openSync, readSync, statSync } from 'node:fs';
 import { sha256OfString } from './hash.ts';
+import { isSyntheticPrompt } from './syntheticPrompt.ts';
 
 interface Cursor {
-  version: 1;
+  version: 2;
   size: number;
   ino: number;
   offset: number;
@@ -33,7 +34,7 @@ export function readClaudeSource(
     } catch {}
     if (
       previous &&
-      (previous.version !== 1 ||
+      (previous.version !== 2 ||
         !Number.isInteger(previous.offset) ||
         previous.offset < 0 ||
         previous.offset > previous.size ||
@@ -46,7 +47,7 @@ export function readClaudeSource(
     const prefix = read(0, Math.min(prefixLength, st.size));
     const prefixHash = sha256OfString(prefix.toString('base64'));
     let offset =
-      previous?.version === 1 &&
+      previous?.version === 2 &&
       previous.ino === st.ino &&
       st.size >= previous.size &&
       prefixHash === previous.prefixHash
@@ -86,12 +87,22 @@ export function readClaudeSource(
       try {
         const obj = JSON.parse(buffer.subarray(start, end).toString('utf8'));
         const parts = obj.message?.content;
+        const text =
+          typeof parts === 'string'
+            ? parts
+            : Array.isArray(parts)
+              ? parts
+                  .filter((part) => part.type === 'text')
+                  .map((part) => part.text ?? '')
+                  .join('\n')
+              : '';
         const human =
           obj.type === 'user' &&
           !obj.isMeta &&
           !obj.isSidechain &&
           !obj.isCompactSummary &&
-          !['system', 'sdk'].includes(obj.promptSource) &&
+          obj.promptSource !== 'system' &&
+          (obj.origin?.kind === 'human' || !isSyntheticPrompt(text)) &&
           (typeof parts === 'string' ||
             (Array.isArray(parts) &&
               parts.some((p) => p.type === 'text') &&
@@ -103,7 +114,7 @@ export function readClaudeSource(
     return {
       content,
       checkpoint: JSON.stringify({
-        version: 1,
+        version: 2,
         size: st.size,
         ino: st.ino,
         offset: resume,

@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { mkdirSync, writeFileSync } from 'node:fs';
-import { basename, join, normalize, relative, sep } from 'node:path';
+import { basename, isAbsolute, join, normalize, relative, resolve, sep } from 'node:path';
+import { shellWritePaths } from '@showtail/agent-traces/hooks/shellWrites';
 import type { Artifact, ConversationEvent, Event, ReportData } from '../types.ts';
 import { dataPath } from './dataHome.ts';
 import {
@@ -39,16 +40,100 @@ export function buildHistoryReport(
   options: HistoryReportOptions = {},
 ): ReportData {
   let records = store.records(selection);
+  let observationRecords = store
+    .records(selection, { includeSuperseded: true })
+    .filter(
+      (r) =>
+        r.file &&
+        ((r.tags?.includes('observed-file-state') && r.sha256) ||
+          r.tags?.includes('observed-workspace-delta')),
+    );
   // A selected reply/edit keeps its opening prompt and neighboring captured context.
   if (selection.since || selection.until) {
     const groups = new Set(records.map((r) => r.turnId ?? r.id));
     records = store.records({ kind: 'all' }).filter((r) => groups.has(r.turnId ?? r.id));
   }
+  // Observing a file after a tool attempt is not evidence of an applied revision.
+  records = records.filter(
+    (r) =>
+      !r.tags?.includes('observed-file-state') &&
+      !r.tags?.includes('observed-workspace-delta'),
+  );
   // Older capture rows remain immutable; report projection also classifies them
   // before an explicit historical repair has been applied.
+  const sessions = new Map(store.sessions().map((s) => [s.id, s]));
+  const shellInputs = new Map<string, { command: string; cwd?: string | null }>();
+  for (const record of records) {
+    const event = record.conversationEvent;
+    const input = event?.input as { command?: unknown; cwd?: unknown } | undefined;
+    if (
+      event?.type === 'tool_use' &&
+      ['Bash', 'PowerShell'].includes(event.toolName ?? '') &&
+      event.toolUseId &&
+      typeof input?.command === 'string'
+    )
+      shellInputs.set(`${record.sessionId}\0${event.toolUseId}`, {
+        command: input.command,
+        cwd:
+          typeof input.cwd === 'string'
+            ? input.cwd
+            : ((record.turnId ? store.record(record.turnId)?.context?.cwd : undefined) ??
+              sessions.get(record.sessionId)?.cwd),
+      });
+  }
+  const unverifiedEditIds = new Set(
+    observationRecords
+      .filter((record) => record.tags?.includes('observed-workspace-delta'))
+      .flatMap((record) => (record.supersedesId ? [record.supersedesId] : [])),
+  );
+  const pathKey = (path: string) =>
+    process.platform === 'win32' ? normalize(path).toLowerCase() : normalize(path);
   const previous = new Map<string, string>();
   const redirects = new Map<string, string>();
   records = records.map((r) => {
+    const shellId =
+      r.kind === 'edit' && sessions.get(r.sessionId)?.tool === 'claude-code'
+        ? /^(.*):edits#/.exec(r.sourceId ?? '')?.[1]
+        : undefined;
+    const call = shellId ? shellInputs.get(`${r.sessionId}\0${shellId}`) : undefined;
+    if (
+      call &&
+      r.file &&
+      !shellWritePaths(call.command).some((path) => {
+        const absolute = isAbsolute(path)
+          ? path
+          : call.cwd
+            ? resolve(call.cwd, path)
+            : undefined;
+        return absolute && pathKey(absolute) === pathKey(r.file!);
+      })
+    ) {
+      const projected = {
+        ...r,
+        kind: 'audit' as const,
+        sha256: undefined,
+        duplicateOf: undefined,
+        tags: [...(r.tags ?? []), 'observed-workspace-delta'],
+        provenance: { source: 'native-workspace-delta', id: shellId! },
+      };
+      observationRecords.push(projected);
+      unverifiedEditIds.add(r.id);
+      return projected;
+    }
+    if (sessions.get(r.sessionId)?.parentNativeSessionId) {
+      if (r.kind === 'prompt')
+        return {
+          ...r,
+          kind: 'tool_call' as const,
+          origin: 'agent' as const,
+          toolName: 'Agent input',
+        };
+      if (r.conversationEvent?.type === 'user_text')
+        return {
+          ...r,
+          conversationEvent: { ...r.conversationEvent, origin: 'agent' as const },
+        };
+    }
     if (r.kind !== 'prompt') return { ...r };
     if (r.origin !== 'human' && isSyntheticPrompt(r.text ?? '')) {
       const turn = previous.get(r.sessionId);
@@ -65,11 +150,17 @@ export function buildHistoryReport(
   });
   for (const r of records)
     if (r.turnId && redirects.has(r.turnId)) r.turnId = redirects.get(r.turnId);
-  const sessions = new Map(store.sessions().map((s) => [s.id, s]));
-  if (options.author)
+  observationRecords = observationRecords.filter(
+    (record) => !record.duplicateOf || !unverifiedEditIds.has(record.duplicateOf),
+  );
+  if (options.author) {
     records = records.filter(
       (r) => sessions.get(r.sessionId)?.authorId === options.author,
     );
+    observationRecords = observationRecords.filter(
+      (r) => sessions.get(r.sessionId)?.authorId === options.author,
+    );
+  }
   const project =
     selection.kind === 'project' ? store.resolveProject(selection.projectId) : undefined;
   // Reports use captured names; they never probe old disks, network shares, or source files.
@@ -86,7 +177,11 @@ export function buildHistoryReport(
   roots.sort(
     (a, b) => Number(b.selected) - Number(a.selected) || b.key.length - a.key.length,
   );
-  const files = [...new Set(records.flatMap((r) => (r.file ? [r.file] : [])))];
+  const files = [
+    ...new Set(
+      [...records, ...observationRecords].flatMap((r) => (r.file ? [r.file] : [])),
+    ),
+  ];
   const info = new Map(
     files.map((file) => {
       if (!isUsableWorkspacePath(file))
@@ -278,19 +373,26 @@ export function buildHistoryReport(
     (selection.kind === 'sessions' ? 'Selected conversations' : 'My work');
   return {
     schemaVersion: 3,
-    fileObservations: store
-      .records(selection, { includeSuperseded: true })
-      .filter(
-        (r) =>
-          r.tags?.includes('observed-file-state') && r.duplicateOf && r.file && r.sha256,
-      )
-      .map((r) => ({
-        recordId: r.id,
-        editId: r.duplicateOf!,
-        path: fileLabel(r.file!),
-        sha256: r.sha256!,
-        observedAt: r.ts,
-      })),
+    fileObservations: observationRecords.map((r) => ({
+      recordId: r.id,
+      ...(r.duplicateOf ? { editId: r.duplicateOf } : {}),
+      ...(r.provenance?.source === 'native-shell-write-observation' ||
+      r.provenance?.source === 'native-workspace-delta'
+        ? {
+            toolCallId: store.bySource(r.sessionId, r.provenance.id)?.id,
+            basis: r.tags?.includes('observed-workspace-delta')
+              ? ('workspace-delta' as const)
+              : ('shell-write-attempt' as const),
+            toolOutcome: r.tags?.includes('tool-outcome:failed')
+              ? ('failed' as const)
+              : ('succeeded' as const),
+          }
+        : { basis: 'native-edit' as const }),
+      path: fileLabel(r.file!),
+      ...(r.sha256 ? { sha256: r.sha256 } : {}),
+      ...(r.diff ? { diff: r.diff } : {}),
+      observedAt: r.ts,
+    })),
     coverage: auditHistory(store, selection).coverage,
     unattributedWork,
     project: project?.displayName ?? null,

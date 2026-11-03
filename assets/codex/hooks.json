@@ -12,7 +12,7 @@
     ],
     "PostToolUse": [
       {
-        "matcher": "apply_patch|shell_command",
+        "matcher": "^(apply_patch|shell_command|Bash)$",
         "hooks": [
           {
             "type": "command",

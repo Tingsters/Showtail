@@ -78,6 +78,12 @@ body {
   border-radius: 0.25rem;
   background: #fff;
   color: #1b1b1f;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+.st-tzlabel {
+  min-width: 0;
+  max-width: 100%;
 }
 /* Exchanges toolbar: a sticky controls bar scoped to the prompts list. Rendered
    hidden until report-controls.js enables it, so a no-JS reader never sees dead
@@ -302,6 +308,7 @@ blockquote {
 }
 .turn .prompt-text {
   font-weight: 600;
+  overflow-wrap: anywhere;
 }
 /* The caret sits on the prompt (not the row) now that the row is a block, so it
    stays glued to the first word instead of floating in the margin. */
@@ -431,6 +438,7 @@ blockquote {
   margin: 0 0 0.5rem;
   padding-bottom: 0.4rem;
   border-bottom: 1px solid var(--st-border);
+  overflow-wrap: anywhere;
 }
 .turn-body h4 {
   margin: 0.8rem 0 0.3rem;
@@ -439,6 +447,10 @@ blockquote {
 }
 .ai-text {
   margin: 0.2rem 0 0.6rem;
+  overflow-wrap: anywhere;
+}
+.file-observations {
+  overflow-wrap: anywhere;
 }
 .ai-text p {
   margin: 0.4rem 0;
@@ -825,11 +837,13 @@ blockquote {
   cursor: pointer;
   font-size: 0.85rem;
   color: #3a3f6b;
+  overflow-wrap: anywhere;
 }
 /* A code change with no captured diff: a plain file row, no disclosure arrow. */
 .code-file {
   font-size: 0.85rem;
   color: #3a3f6b;
+  overflow-wrap: anywhere;
 }
 .file-link {
   color: #3a3f6b;
@@ -1222,6 +1236,12 @@ pre.codeblock code {
 @media (max-width: 40rem) {
   body {
     padding: 0 1rem 3rem;
+  }
+  .st-tzbar {
+    margin-left: -1rem;
+    margin-right: -1rem;
+    padding-left: 1rem;
+    padding-right: 1rem;
   }
   .turn .meta {
     float: none;

@@ -61,6 +61,12 @@ export interface ConnectStatus {
   updateAvailable?: boolean;
 }
 
+/** Read-only host verification, separate from installed callback configuration. */
+export interface ConnectCaptureHealth {
+  hooksActive: boolean;
+  issues: { code: string; message: string }[];
+}
+
 /** Superset of options the `connect` command may pass; each plugin uses a subset. */
 export interface ConnectInstallOptions {
   user?: boolean;
@@ -126,6 +132,8 @@ export interface ConnectCapability {
   uninstall(opts: ConnectUninstallOptions): Promise<ConnectUninstallResult | void>;
   /** Current installed state for `status`. */
   status(cwd?: string): ConnectStatus;
+  /** Inspect host prerequisites without ingesting or starting a conversation. */
+  inspectCapture?(cwd?: string): Promise<ConnectCaptureHealth>;
   /**
    * Runtime capture adapter. Present only for tools with auto-capture hooks
    * (Copilot, which captures via its VS Code extension, has none). This is the
@@ -186,6 +194,9 @@ export interface MigrationTranscriptCandidate {
   mtimeMs: number;
   /** Provider-recorded workspace, when the transcript format carries one. */
   cwd?: string;
+  /** Authoritative native parent and delegated-input provenance, when available. */
+  parentNativeSessionId?: string;
+  inputOrigin?: 'agent';
 }
 
 export interface MigrationCapability {

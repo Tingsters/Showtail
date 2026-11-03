@@ -14,6 +14,18 @@ import {
 const EMOJIS = new Set(Object.values(STATUS_EMOJI));
 
 describe('capability matrix invariants', () => {
+  test('the stable installation capability describes user-level CLI and editor setup', () => {
+    const capability = CAPABILITIES.find((entry) => entry.id === 'multi-scope-install')!;
+    expect(capability.label).toBe('User-level setup');
+    expect(capability.note).toContain('Installation does not certify live capture');
+    for (const integration of INTEGRATIONS.filter(
+      (entry) => entry.pluginId && entry.surface.local,
+    ))
+      expect(cellFor(capability, integration).status).toBe('full');
+    expect(capability.description).not.toContain('per-project');
+    expect(capability.note).not.toContain('.github/');
+  });
+
   test('integration ids and capability ids are unique', () => {
     expect(new Set(INTEGRATION_IDS).size).toBe(INTEGRATIONS.length);
     const capIds = CAPABILITIES.map((c) => c.id);
@@ -89,8 +101,8 @@ describe('capability matrix invariants', () => {
     expect(status('live-capture-hooks', 'zed')).toBe('unsupported'); // Zed has no hooks
     // A tool with all surfaces but no plugin yet reads as planned, never unsupported.
     expect(status('live-capture-hooks', 'copilot-desktop')).toBe('planned');
-    // Codex capture is live-certified (full); the CLI plugins are built but their
-    // live capture isn't certified on this machine, so they read partial.
+    // These are implementation/recorded-contract statuses. Version-specific
+    // live acceptance receipts separately establish actual host delivery.
     expect(status('live-capture-hooks', 'codex')).toBe('full');
     expect(status('live-capture-hooks', 'copilot-cli')).toBe('partial');
     expect(status('session-import', 'antigravity-cli')).toBe('planned');
@@ -123,15 +135,15 @@ describe('capability matrix invariants', () => {
     expect(status('copilot-cli')).toBe('unsupported');
   });
 
-  test('plan-capture full claims are structural and certified by contract test (not the headless live run)', () => {
+  test('plan-capture implementation claims are structural and do not claim live certification', () => {
     const claims = fullClaims().filter((c) => c.capabilityId === 'plan-capture');
     expect(claims.map((c) => c.integration).sort()).toEqual([
       'antigravity-cli',
       'claude-code',
       'codex',
     ]);
-    // Reconciled on the Stop hook (not raised by headless print mode), so — like
-    // auto-ai-output-capture — it is not in the live-certified set.
+    // Plan content has recorded contract coverage; an automatic-delivery
+    // requirement on other rows is not evidence that live plan mode passed.
     expect(claims.every((c) => !c.liveRequired)).toBe(true);
   });
 });

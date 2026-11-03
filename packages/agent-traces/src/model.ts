@@ -113,6 +113,9 @@ export interface HookTranscriptEvent extends ConversationEvent {
 /** A normalized conversation transcript, in order. */
 export interface HookTranscript {
   sessionId?: string;
+  /** Provider evidence that this session was delegated by another native thread. */
+  parentNativeSessionId?: string;
+  inputOrigin?: 'agent';
   /**
    * Set for a transcript assembled from the hook payload alone (no provider history
    * to read): it has no prompt message to anchor on, so its messages attach to the
@@ -128,6 +131,19 @@ export interface HookTranscript {
   messages: HookTranscriptMessage[];
   /** Lossless visible conversation events. Absent only for legacy/text-only adapters. */
   events?: HookTranscriptEvent[];
+  /** Literal shell write hints paired with a persisted result; not applied edits. */
+  fileObservationCandidates?: {
+    sourceId: string;
+    toolName: string;
+    startedAt?: string;
+    timestamp?: string;
+    files: string[];
+    toolOutcome: 'succeeded' | 'failed';
+    /** A persisted workspace delta is not proof this command authored it. */
+    basis?: 'workspace-delta';
+    diff?: string;
+    deleted?: boolean;
+  }[];
 }
 
 /**

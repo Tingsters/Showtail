@@ -42,6 +42,29 @@ jobs:
       - name: Run tests
         run: bun test
 
+      - name: Check acceptance harness
+        if: matrix.os == 'ubuntu-latest'
+        run: bun x tsc --project scripts/acceptance/tsconfig.json
+
+      - name: Run compiled CLI and browser acceptance tests
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          bun build --compile ./src/cli.ts --outfile dist/acceptance/showtail
+          bun x playwright install --with-deps chromium
+          bun run test:acceptance --binary "$PWD/dist/acceptance/showtail"
+
+      - name: Retain failed acceptance evidence
+        if: failure() && matrix.os == 'ubuntu-latest'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: acceptance-evidence
+          path: |
+            dist/acceptance/**/*.json
+            dist/acceptance/**/*.md
+            dist/acceptance/**/*.html
+            dist/acceptance/**/*.png
+          if-no-files-found: ignore
+
       - name: Install VS Code extension dependencies
         if: matrix.os == 'ubuntu-latest'
         working-directory: integrations/vscode
@@ -54,7 +77,7 @@ jobs:
           bun run typecheck
           bun run test
 
-      - name: Run VS Code 1.95 extension-host smoke test
+      - name: Run VS Code 1.95 extension-host acceptance tests
         if: matrix.os == 'ubuntu-latest'
         working-directory: integrations/vscode
         run: xvfb-run -a bun run test:extension-host

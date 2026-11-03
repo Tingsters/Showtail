@@ -28,16 +28,35 @@ the editor is running. Showtail never resumes a model conversation to collect it
 
 Prompts, replies, tool calls/results, and available plans/decisions come from native
 history. Hook text never becomes a second prompt source. Claude's persisted tool
-results supply actual patches, Bash changes, approved plan content and answers.
+results supply structured edit patches, workspace deltas, approved plan content and
+answers.
 Failed or unfinished Claude edit calls remain tool attempts, not applied edits.
 Native Claude subagent files are collected with their parent session identity.
 Delegated inputs are labeled as agent input and never become student prompt cards.
+
+Claude's `bashEditDiff` can include changes made by another session in the same
+workspace, even when the observed command only reads files. Showtail attributes a
+Bash diff to that command only when its path matches a conservatively parsed
+literal write target. Other persisted deltas remain separate **File observations**
+with **unverified authorship**, rather than applied edits or revisions. Their
+captured diff remains reviewable even if the file later disappears.
+Matching a literal target associates the command's intent with the observed delta;
+it cannot distinguish concurrent writers to that same path or prove a conditional
+write executed. Structured file-edit results provide stronger attribution.
 
 Where complete file state is unavailable, Showtail may read a file after a provider
 edit. These hashes record the time of observation; they do not prove the exact
 contents at the instant the tool finished. They neither duplicate the native edit
 in the report nor turn unrelated manual saves into AI-authored work. Structured
-reports expose these supplements as `fileObservations`.
+reports expose these hashes and unverified workspace deltas as `fileObservations`.
+
+Shell commands can change files before a later command fails. Where Bash or
+PowerShell persisted no structured diff, Showtail uses literal write-path hints from
+the native command and its completed result to observe current file hashes. Reports
+show these separately as **File observations**, including the tool outcome and the
+actual observation time. They do not count as applied revisions or prove that the
+command changed the file. Quoted command examples, here-document bodies, unresolved
+variables, sensitive paths and unfinished calls do not supply file observations.
 
 Unchanged sources are skipped. Claude append cursors replay the open turn, falling
 back to the whole source when earlier context is required. Sources with journal or
@@ -59,6 +78,10 @@ Status JSON version 3 separates `assistant` discovery from capture `mode` and
 `transport`, and reports `lastIngestedAt`, queued work and issues. Modes are
 `automatic`, `on-demand`, `paused` and `unavailable`. An installed callback describes
 configuration; ingestion timestamps and coverage describe observed collection.
+For Codex, `hooksConfigured` records installation while `hooksActive` also requires
+the host to confirm its callbacks are enabled and trusted. Status uses the read-only
+`hooks/list` API and never grants trust. Review required callbacks in Codex `/hooks`;
+until review or host verification succeeds, native collection remains on-demand.
 
 ## Upgrading
 

@@ -10,14 +10,14 @@
  * equal, so upgraders kept their old capture wiring) — the bump is easy to forget
  * and nothing caught it.
  */
-export const SHOWTAIL_VERSION = '0.23.0';
+export const SHOWTAIL_VERSION = '0.24.0';
 
 /**
  * Bump whenever bundled managed instructions or capture wiring changes. This is
  * deliberately independent of package semver so an asset-only fix refreshes an
  * existing integration even while development builds share the same version.
  */
-export const MANAGED_INSTRUCTION_REVISION = 5;
+export const MANAGED_INSTRUCTION_REVISION = 6;
 
 /** Generation of transcript detail stored in project trails. */
 export const HISTORY_GENERATION = 2;

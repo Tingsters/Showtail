@@ -1,6 +1,6 @@
 {
   "name": "showtail",
-  "version": "0.23.0",
+  "version": "0.24.0",
   "description": "Show your work: one private, local history of your AI prompts and file changes, without modifying project folders.",
   "type": "module",
   "license": "Apache-2.0",
@@ -18,14 +18,17 @@
     "start": "bun run src/cli.ts",
     "test": "bun test",
     "typecheck": "bun x tsc --noEmit",
-    "format": "bun x prettier --write \"src/**/*.ts\" \"tests/**/*.ts\"",
-    "format:check": "bun x prettier --check \"src/**/*.ts\" \"tests/**/*.ts\"",
+    "format": "bun x prettier --write \"src/**/*.ts\" \"tests/**/*.ts\" \"scripts/acceptance/**/*.{ts,json}\"",
+    "format:check": "bun x prettier --check \"src/**/*.ts\" \"tests/**/*.ts\" \"scripts/acceptance/**/*.{ts,json}\"",
     "license:check": "bun run scripts/verify-licenses.ts",
     "verify:matrix": "bun run scripts/verify-changed.ts",
     "verify:integrations": "bun run scripts/verify-changed.ts",
     "build": "bun build --compile ./src/cli.ts --outfile dist/showtail",
     "build:all": "bash scripts/build-all.sh",
-    "build:release:non-windows": "bash scripts/build-non-windows.sh"
+    "build:release:non-windows": "bash scripts/build-non-windows.sh",
+    "test:acceptance": "bun run scripts/acceptance/run.ts",
+    "test:acceptance:live": "bun run scripts/acceptance/run.ts --live",
+    "typecheck:acceptance": "bun x tsc -p scripts/acceptance/tsconfig.json --noEmit"
   },
   "keywords": [
     "education",
@@ -43,6 +46,7 @@
   "devDependencies": {
     "@types/node": "^22.0.0",
     "bun-types": "^1.1.0",
+    "playwright": "^1.64.1",
     "prettier": "^3.3.0",
     "typescript": "^5.5.0"
   },

@@ -12,19 +12,19 @@ integration can do today.
 
 Showtail works with many AI coding tools, and support depth varies by tool. This table shows what each integration can do today — support is checked with recorded provider fixtures and central-store tests. Live host behavior can vary by version.
 
-<!-- showtail:start sha=d1e8f2adf197 -->
+<!-- showtail:start sha=b5ccb70ac449 -->
 | Capability | Claude Code | OpenAI Codex | ChatGPT | Copilot (VS Code) | Copilot CLI | Copilot Desktop | Antigravity CLI | Antigravity IDE | Google Gemini | Zed | Notes |
 | --- | :-: | :-: | :-: | :-: | :-: | :-: | :-: | :-: | :-: | :-: | --- |
-| **Live-capture hooks** | ✅ | ✅ | ⛔ | 🚧 | 🚧 | 🗺️ | ✅ | 🚧 | ⛔ | ⛔ | Live-certified for Claude Code, Codex, and Antigravity CLI. Copilot CLI fires no lifecycle hooks in headless `-p` mode, so it can’t be live-certified here; Copilot (VS Code) uses its extension; Zed has no hooks. |
-| **Auto prompt capture** | ✅ | ✅ | ⛔ | 🚧 | 🚧 | 🗺️ | 🚧 | 🚧 | ⛔ | ⛔ | Live-certified for Claude Code + Codex; the CLI plugins are built but their live capture isn’t certified here. Copilot (VS Code) reads native chat prompts from the on-disk session JSON (contract-tested), not via hooks. |
-| **Auto file/edit capture** | ✅ | 🚧 | ⛔ | 🚧 | 🚧 | 🗺️ | ✅ | 🚧 | ⛔ | ⛔ | Live-certified for Claude Code + Antigravity CLI. Codex captures edits in real interactive sessions — the edited file is snapshotted and its AI diff (plus deletions) is reconciled at Stop from Codex’s app-server, with the documented hook payload as the always-on baseline (contract-tested against recorded Codex 0.141 and 0.163 data) — but the headless harness can’t certify a live Codex edit. Copilot CLI fires no hooks in headless mode; Copilot (VS Code) snapshots on save with no AI diff. |
+| **Live-capture hooks** | ✅ | ✅ | ⛔ | 🚧 | 🚧 | 🗺️ | ✅ | 🚧 | ⛔ | ⛔ | Callback configuration is contract-tested. Actual delivery depends on host version, mode and hook trust; live acceptance receipts record observed behavior. Editors watch native history; Zed has no hooks. |
+| **Auto prompt capture** | ✅ | ✅ | ⛔ | 🚧 | 🚧 | 🗺️ | 🚧 | 🚧 | ⛔ | ⛔ | Native-history parsing and replay are contract-tested. Missing callbacks catch up through sync/report; a live-host claim requires a provider-version-specific acceptance receipt. |
+| **Auto file/edit capture** | ✅ | 🚧 | ⛔ | 🚧 | 🚧 | 🗺️ | ✅ | 🚧 | ⛔ | ⛔ | Applied edits come from native history. Timestamped file observations supplement incomplete sources; ordinary editor saves are excluded. Coverage depends on persisted provider evidence and is checked by live acceptance runs. |
 | **Auto AI-reply capture** | ✅ | ✅ | ⛔ | 🚧 | 🗺️ | 🗺️ | 🗺️ | 🗺️ | ⛔ | ⛔ | Needs the tool’s stop-hook plus a readable transcript; planned wherever both exist. |
-| **Decision capture** | ✅ | ✅ | ⛔ | 🗺️ | 🗺️ | 🗺️ | 🗺️ | 🗺️ | ⛔ | ⛔ | Reconciled from the tool’s transcript on the Stop hook, so — like AI-reply capture — it is certified by its contract test, not the headless live run. Planned wherever a tool has hooks + a transcript but no ask-the-user construct yet. |
-| **Plan capture** | ✅ | ✅ | ⛔ | ⛔ | ⛔ | ⛔ | ✅ | 🗺️ | ⛔ | ⛔ | Full for Claude Code, Codex, and Antigravity CLI. Antigravity links its real plan.md; Claude Code and Codex materialize the transcript plan into a browsable, linkable file (Codex writes no native plan file). Antigravity IDE writes implementation_plan.md but has no plugin yet. Reconciled on the Stop hook — certified by its contract test, not the headless live run (print mode never raises Stop). |
+| **Decision capture** | ✅ | ✅ | ⛔ | 🗺️ | 🗺️ | 🗺️ | 🗺️ | 🗺️ | ⛔ | ⛔ | Available questions and answers are recovered from native transcripts. Recorded contract coverage is separate from live-session coverage; absent provider evidence is not invented. |
+| **Plan capture** | ✅ | ✅ | ⛔ | ⛔ | ⛔ | ⛔ | ✅ | 🗺️ | ⛔ | ⛔ | Native plan content is recovered where the provider persists it and is rendered inside the central report. Recorded parser coverage does not imply that a live session exercised plan mode. |
 | **Session import / backfill** | ✅ | ✅ | ✅ | 🗺️ | 🗺️ | 🗺️ | 🗺️ | ✅ | ✅ | 🗺️ | Planned wherever the tool writes a readable transcript (Zed: only via manual Markdown export). |
 | **On-request reporting skill** | ✅ | ✅ | ⛔ | ✅ | ✅ | 🗺️ | ✅ | ✅ | ⛔ | 🗺️ | Uses native skill discovery where available; never adds standing project rules. |
 | **Reporting skill updates** | ✅ | ✅ | ⛔ | ✅ | ✅ | 🗺️ | ✅ | ✅ | ⛔ | 🗺️ | Detected via a managed-block fingerprint in each tool’s instructions/skill file. |
-| **User + project install** | ✅ | ✅ | ⛔ | 🚧 | ✅ | 🗺️ | ✅ | 🚧 | ⛔ | 🗺️ | Copilot (VS Code) is project-scoped only (.github/). |
+| **User-level setup** | ✅ | ✅ | ⛔ | ✅ | ✅ | 🗺️ | ✅ | ✅ | ⛔ | 🗺️ | Setup installs user-level callbacks or an editor extension; project folders stay unchanged. Installation does not certify live capture. |
 | **Host detection (setup)** | ✅ | ✅ | ⛔ | ✅ | ✅ | 🗺️ | ✅ | ✅ | ⛔ | 🗺️ | Hosted web apps have nothing local to detect. |
 | **Connection status** | ✅ | ✅ | ⛔ | ✅ | ✅ | 🗺️ | ✅ | ✅ | ⛔ | 🗺️ | Needs a local footprint to inspect; web apps have none. |
 | **Secret/PII redaction** | ✅ | ✅ | ✅ | ✅ | ✅ | 🗺️ | ✅ | ✅ | ✅ | 🗺️ | Applies automatically once any capture or import path for the tool exists. |

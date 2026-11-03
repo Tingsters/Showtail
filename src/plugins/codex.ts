@@ -8,10 +8,13 @@ import {
   rolloutFormatWarning,
   type CodexRolloutInfo,
 } from '@showtail/agent-traces/codex/transcript';
+import { applyCodexLineage } from '@showtail/agent-traces/codex/lineage';
 import { existsSync, readFileSync } from 'node:fs';
 import { runCodexInstall, runCodexUninstall } from '../commands/codex.ts';
 import {
   codexAutoCaptureActive,
+  codexHookHealth,
+  codexHookHealthUnavailable,
   codexHooksFeatureEnabled,
   codexInstructionsState,
   enableCodexHooksFeature,
@@ -23,6 +26,7 @@ import {
   listThreads,
   openCodexRpc,
   readThreadTranscript,
+  type CodexRpc,
 } from '../core/codexAppServer.ts';
 import { commandOnPath, homeDirExists } from '../core/detect.ts';
 import {
@@ -42,6 +46,56 @@ import type {
 } from './types.ts';
 
 type CodexEditTool = 'apply_patch' | 'shell_command';
+
+/** Read-only prerequisite check; no session start/resume or model request. */
+export async function inspectCodexCapture(
+  cwd = process.cwd(),
+  open: () => Promise<CodexRpc> = () => openCodexRpc({ requestTimeoutMs: 2500 }),
+) {
+  let rpc: CodexRpc | undefined;
+  try {
+    rpc = await open();
+    return codexHookHealth(await rpc.request('hooks/list', { cwds: [cwd] }));
+  } catch {
+    return codexHookHealthUnavailable();
+  } finally {
+    rpc?.close();
+  }
+}
+
+/** Supplement a child API read only with that exact rollout's delegated inputs. */
+export function supplementDelegatedCodexInputs(
+  preferred: HookTranscript,
+  fallback: HookTranscript,
+): void {
+  if (
+    preferred.sessionId !== fallback.sessionId ||
+    !(preferred.inputOrigin === 'agent' || preferred.parentNativeSessionId)
+  )
+    return;
+  for (const message of fallback.messages)
+    if (
+      message.role === 'user' &&
+      message.origin === 'agent' &&
+      !preferred.messages.some((existing) => existing.sourceId === message.sourceId)
+    )
+      preferred.messages.push(message);
+  preferred.messages.sort((left, right) =>
+    (left.timestamp ?? '').localeCompare(right.timestamp ?? ''),
+  );
+  preferred.events ??= [];
+  for (const event of fallback.events ?? [])
+    if (
+      event.type === 'user_text' &&
+      event.origin === 'agent' &&
+      !preferred.events.some((existing) => existing.sourceId === event.sourceId)
+    )
+      preferred.events.push(event);
+  preferred.events.sort((left, right) =>
+    (left.timestamp ?? '').localeCompare(right.timestamp ?? ''),
+  );
+  preferred.events = preferred.events.map((event, sequence) => ({ ...event, sequence }));
+}
 
 function codexEditTool(payload: HookPayload): CodexEditTool | undefined {
   const names = [payload.tool_name, payload.name]
@@ -289,6 +343,8 @@ export const codexPlugin: EnvironmentPlugin = {
       };
     },
 
+    inspectCapture: inspectCodexCapture,
+
     hooks: {
       parse(raw) {
         const p = raw as HookPayload;
@@ -344,6 +400,8 @@ export const codexPlugin: EnvironmentPlugin = {
           path: '',
           providerSessionId: t.id,
           cwd: t.cwd,
+          parentNativeSessionId: t.parentNativeSessionId,
+          inputOrigin: t.inputOrigin,
           mtimeMs: t.updatedAt ? t.updatedAt * 1000 : 0,
         }));
       } finally {
@@ -355,7 +413,9 @@ export const codexPlugin: EnvironmentPlugin = {
         path: info.path,
         providerSessionId: info.sessionId,
         mtimeMs: info.mtimeMs,
-        cwd: rolloutCwdFromFile(info.path),
+        cwd: info.cwd,
+        parentNativeSessionId: info.parentNativeSessionId,
+        inputOrigin: info.inputOrigin,
       })),
     async read(candidate, root) {
       const fallback = parseCodexRollout(
@@ -372,6 +432,19 @@ export const codexPlugin: EnvironmentPlugin = {
           openRpc: () => openCodexRpc({ requestTimeoutMs: 5000 }),
         });
         const preferred = codexToHookTranscript(read.transcript);
+        applyCodexLineage(preferred, {
+          ...(fallback.parentNativeSessionId || candidate.parentNativeSessionId
+            ? {
+                parentNativeSessionId:
+                  fallback.parentNativeSessionId ?? candidate.parentNativeSessionId,
+              }
+            : {}),
+          ...(fallback.inputOrigin || candidate.inputOrigin
+            ? {
+                inputOrigin: fallback.inputOrigin ?? candidate.inputOrigin,
+              }
+            : {}),
+        });
         // Per-turn rollout context is more precise than a thread's current model.
         const nativeModels = new Map(
           fallback.messages
@@ -385,10 +458,19 @@ export const codexPlugin: EnvironmentPlugin = {
         );
         for (const m of preferred.messages)
           if (nativeContexts.has(m.sourceId)) m.context = nativeContexts.get(m.sourceId);
+        supplementDelegatedCodexInputs(preferred, fallback);
+        const isDelegated =
+          preferred.inputOrigin === 'agent' || !!preferred.parentNativeSessionId;
+        const nativeWorkIds = new Set(
+          preferred.messages.map((message) => message.sourceId),
+        );
         if (
-          preferred.messages.some((m) => m.role === 'user') &&
-          preferred.messages.filter((m) => m.role === 'user').length >=
-            fallback.messages.filter((m) => m.role === 'user').length
+          (isDelegated &&
+            preferred.messages.length > 0 &&
+            fallback.messages.every((message) => nativeWorkIds.has(message.sourceId))) ||
+          (preferred.messages.some((m) => m.role === 'user') &&
+            preferred.messages.filter((m) => m.role === 'user').length >=
+              fallback.messages.filter((m) => m.role === 'user').length)
         )
           return preferred;
       } catch {

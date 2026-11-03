@@ -62,6 +62,11 @@ import type {
   JsonValue,
 } from '../model.ts';
 import { hostHome } from '../paths/hostHome.ts';
+import {
+  applyCodexLineage,
+  codexSessionLineage,
+  type CodexSessionLineage,
+} from './lineage.ts';
 import { toRepoRelative } from '../paths/pathUtil.ts';
 import {
   answeredAsyncQuestions,
@@ -115,15 +120,16 @@ export interface CodexMessage {
 }
 
 /** A normalized rollout: the messages we care about, in order. */
-export interface CodexTranscript {
+export interface CodexTranscript extends CodexSessionLineage {
   sessionId?: string;
   title: string;
   messages: CodexMessage[];
   events: HookTranscriptEvent[];
+  fileObservationCandidates?: HookTranscript['fileObservationCandidates'];
 }
 
 /** A rollout file found on disk. */
-export interface CodexRolloutInfo {
+export interface CodexRolloutInfo extends CodexSessionLineage {
   path: string;
   /** The Codex session id (from the session_meta line, or parsed from the name). */
   sessionId: string;
@@ -215,10 +221,12 @@ export function findRollouts(): CodexRolloutInfo[] {
         continue;
       }
       if (!st.isFile()) continue;
+      const metadata = rolloutMetadataFromFile(full);
       out.push({
         path: full,
-        sessionId: sessionIdFromName(entry),
         mtimeMs: st.mtimeMs,
+        ...metadata,
+        sessionId: metadata.sessionId ?? sessionIdFromName(entry),
       });
     }
   };
@@ -229,7 +237,9 @@ export function findRollouts(): CodexRolloutInfo[] {
 }
 
 /** Read the recorded `cwd` from a rollout's `session_meta` line, if present. */
-function rolloutCwd(content: string): string | null {
+function rolloutMetadata(
+  content: string,
+): { sessionId?: string; cwd?: string } & CodexSessionLineage {
   for (const rawLine of content.split(/\r?\n/)) {
     const line = rawLine.trim();
     if (!line) continue;
@@ -240,26 +250,37 @@ function rolloutCwd(content: string): string | null {
       continue;
     }
     if (prop(obj, 'type') !== 'session_meta') continue;
-    const cwd = asString(prop(prop(obj, 'payload'), 'cwd'));
-    return cwd ?? null;
+    const payload = prop(obj, 'payload');
+    return {
+      sessionId: asString(prop(payload, 'id')),
+      cwd: asString(prop(payload, 'cwd')),
+      ...codexSessionLineage(prop(payload, 'source'), prop(payload, 'parent_thread_id')),
+    };
     // session_meta is the first line, so we never scan the whole file.
   }
-  return null;
+  return {};
 }
 
 /** Read only the rollout head and return its recorded workspace. */
 export function rolloutCwdFromFile(path: string): string | undefined {
+  return rolloutMetadataFromFile(path).cwd;
+}
+
+/** Read native identity, workspace and delegated-session evidence from the head. */
+export function rolloutMetadataFromFile(
+  path: string,
+): { sessionId?: string; cwd?: string } & CodexSessionLineage {
   try {
     const fd = openSync(path, 'r');
     try {
       const buffer = Buffer.alloc(131072);
       const bytes = readSync(fd, buffer, 0, buffer.length, 0);
-      return rolloutCwd(buffer.toString('utf8', 0, bytes)) ?? undefined;
+      return rolloutMetadata(buffer.toString('utf8', 0, bytes));
     } finally {
       closeSync(fd);
     }
   } catch {
-    return undefined;
+    return {};
   }
 }
 
@@ -274,9 +295,9 @@ function normPath(p: string): string {
  * head of each file (the `session_meta` line is first) to keep this cheap.
  */
 export function findProjectRollouts(root: string): CodexRolloutInfo[] {
-  return findRollouts()
-    .map((info) => ({ ...info, cwd: rolloutCwdFromFile(info.path) }))
-    .filter((info) => info.cwd !== undefined && normPath(info.cwd) === normPath(root));
+  return findRollouts().filter(
+    (info) => info.cwd !== undefined && normPath(info.cwd) === normPath(root),
+  );
 }
 
 // --- Parsing ---------------------------------------------------------------
@@ -382,10 +403,22 @@ export function parseCodexTranscript(
       prop(o, 'type') === 'event_msg' &&
       prop(prop(o, 'payload'), 'type') === 'item_completed',
   );
+  const nativeMeta = objs.find((obj) => prop(obj, 'type') === 'session_meta');
+  const lineage = codexSessionLineage(
+    prop(prop(nativeMeta, 'payload'), 'source'),
+    prop(prop(nativeMeta, 'payload'), 'parent_thread_id'),
+  );
+  const typedUser = completed.some(
+    (obj) => prop(prop(prop(obj, 'payload'), 'item'), 'type') === 'UserMessage',
+  );
   if (
-    completed.some(
-      (o) => prop(prop(prop(o, 'payload'), 'item'), 'type') === 'UserMessage',
-    )
+    typedUser ||
+    (lineage.inputOrigin === 'agent' &&
+      completed.some((obj) =>
+        ['AgentMessage', 'CommandExecution', 'FileChange', 'Plan'].includes(
+          String(prop(prop(prop(obj, 'payload'), 'item'), 'type')),
+        ),
+      ))
   ) {
     const meta = objs.find((o) => prop(o, 'type') === 'session_meta');
     const sid = asString(prop(prop(meta, 'payload'), 'id')) ?? '?';
@@ -418,6 +451,12 @@ export function parseCodexTranscript(
       if (raw.type === 'CommandExecution') {
         item.aggregatedOutput = raw.aggregated_output;
         item.exitCode = raw.exit_code;
+        item.commandActions = (raw.parsed_cmd ?? raw.commandActions ?? []).map(
+          (action: Record<string, unknown>) => ({
+            ...action,
+            command: action.cmd ?? action.command,
+          }),
+        );
       }
       if (raw.type === 'FileChange' && raw.changes && !Array.isArray(raw.changes)) {
         item.changes = Object.entries(raw.changes).map(([path, value]) => {
@@ -439,11 +478,49 @@ export function parseCodexTranscript(
           p.completed_at_ms ?? Date.parse(asString(prop(o, 'timestamp')) ?? ''),
       };
     });
+    // Delegated Codex threads omit typed UserMessage items. Their native
+    // response_item inputs are agent instructions, so preserving them cannot
+    // create a human prompt or use the root-session chrome as a prompt fallback.
+    if (lineage.inputOrigin === 'agent' && !typedUser) {
+      let inputSequence = 0;
+      for (const frame of objs) {
+        const payload = prop(frame, 'payload');
+        if (
+          prop(frame, 'type') !== 'response_item' ||
+          prop(payload, 'type') !== 'message' ||
+          prop(payload, 'role') !== 'user'
+        )
+          continue;
+        const content = (asArray(prop(payload, 'content')) ?? []).flatMap((part) =>
+          ['input_text', 'text'].includes(String(prop(part, 'type'))) &&
+          asString(prop(part, 'text'))
+            ? [{ type: 'text', text: asString(prop(part, 'text'))! }]
+            : [],
+        );
+        if (!content.length) continue;
+        const at = Date.parse(asString(prop(frame, 'timestamp')) ?? '');
+        entries.push({
+          item: {
+            type: 'userMessage',
+            id: asString(prop(payload, 'id')) ?? `delegated-input:${inputSequence++}`,
+            content,
+          },
+          startedAtMs: Number.isFinite(at) ? at : undefined,
+          completedAtMs: Number.isFinite(at) ? at : undefined,
+        });
+      }
+      entries.sort(
+        (left, right) =>
+          (left.completedAtMs ?? left.startedAtMs ?? 0) -
+          (right.completedAtMs ?? right.startedAtMs ?? 0),
+      );
+    }
     const context = objs.find((o) => prop(o, 'type') === 'turn_context');
     return threadToTranscript(sid, entries, {
       root,
       includeOutsideEdits: options.includeOutsideEdits,
       model: asString(prop(prop(context, 'payload'), 'model')),
+      ...lineage,
     });
   }
 
@@ -746,12 +823,19 @@ export function parseCodexTranscript(
     }
   }
 
-  return {
-    sessionId,
-    title: sessionId ? `Codex session ${sessionId.slice(0, 8)}` : 'Codex session',
-    messages,
-    events,
-  };
+  const meta = objs.find((obj) => prop(obj, 'type') === 'session_meta');
+  return applyCodexLineage(
+    {
+      sessionId,
+      title: sessionId ? `Codex session ${sessionId.slice(0, 8)}` : 'Codex session',
+      messages,
+      events,
+    },
+    codexSessionLineage(
+      prop(prop(meta, 'payload'), 'source'),
+      prop(prop(meta, 'payload'), 'parent_thread_id'),
+    ),
+  );
 }
 
 /**
@@ -934,5 +1018,16 @@ export function codexToHookTranscript(parsed: CodexTranscript): HookTranscript {
       ...(m.role === 'edit' ? { edits: m.edits } : {}),
     });
   }
-  return { sessionId: parsed.sessionId, messages, events: parsed.events };
+  return {
+    sessionId: parsed.sessionId,
+    ...(parsed.parentNativeSessionId
+      ? { parentNativeSessionId: parsed.parentNativeSessionId }
+      : {}),
+    ...(parsed.inputOrigin ? { inputOrigin: parsed.inputOrigin } : {}),
+    messages,
+    events: parsed.events,
+    ...(parsed.fileObservationCandidates
+      ? { fileObservationCandidates: parsed.fileObservationCandidates }
+      : {}),
+  };
 }

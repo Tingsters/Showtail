@@ -1,6 +1,15 @@
 # Changelog
 
-## Unreleased
+## 0.24.0 — Reliable passive capture and reports
+
+- Add repeatable real-agent, compiled-CLI, browser, and editor-watcher acceptance tests with retained evidence.
+- Recover genuine Claude headless SDK prompts and filter host interruption messages without rewriting history.
+- Preserve resumed work when native trace modification times remain unchanged; keep paused and pre-consent work excluded.
+- Capture Codex child sessions with parent lineage and keep delegated inputs out of human prompt cards.
+- Recover structured shell commands and show timestamped file-state observations separately from applied edits.
+- Prevent Claude shell commands from claiming another session's shared-workspace edits; retain unmatched deltas as reviewable observations with unverified authorship, even after files disappear.
+- Report Codex hook trust accurately and match current shell tool names without adding model instructions.
+- Capture the first editor chat in a fresh profile and fix narrow-screen report overflow and clipped prose.
 
 ## 0.23.0 — Passive native-history capture
 

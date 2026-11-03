@@ -50,13 +50,28 @@ test('connect installs passive callbacks without a reporting skill or standing r
     const hooks = readFileSync(join(host, 'hooks.json'), 'utf8');
     expect(hooks).toContain('showtail hook stop');
     expect(hooks).not.toContain('UserPromptSubmit');
+    // A previous successful ingestion must not erase newly unmet host trust.
+    using store = new HistoryStore();
+    store.setMeta(
+      'capture-health:codex',
+      JSON.stringify({ lastIngestedAt: at, issues: [] }),
+    );
     const status = JSON.parse(cli(['status', '--json', '--tool', 'codex']).stdout);
     expect(status.schemaVersion).toBe(3);
     expect(status.capture).toMatchObject({
-      mode: 'automatic',
+      // The test provider binary is deliberately unavailable. Registered hooks
+      // cannot prove the actual host has enabled and trusted them.
+      mode: 'on-demand',
       transport: 'hooks',
+      hooksConfigured: true,
+      hooksActive: false,
       assistant: { installed: false },
+      lastIngestedAt: at,
     });
+    expect(status.capture.issues).toContainEqual(
+      expect.objectContaining({ code: 'HOOK_STATE_UNAVAILABLE' }),
+    );
+    expect(store.records()).toHaveLength(0);
   }));
 
 test('upgrading paused capture retires old instructions without resuming capture', () =>
@@ -332,7 +347,12 @@ test('Claude recovers structured Bash diffs rather than requiring shell-edit hoo
       timestamp: at,
       message: {
         content: [
-          { type: 'tool_use', id: 'bash', name: 'Bash', input: { command: 'edit file' } },
+          {
+            type: 'tool_use',
+            id: 'bash',
+            name: 'Bash',
+            input: { command: 'printf new > index.ts' },
+          },
         ],
       },
     },

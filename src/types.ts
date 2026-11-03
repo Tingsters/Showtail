@@ -409,12 +409,17 @@ export interface Contributor {
 export interface ReportData {
   /** Structured JSON export contract. Existing summary fields remain backward compatible. */
   schemaVersion: 2 | 3;
-  /** File state read asynchronously after an edit; not an exact edit-time snapshot. */
+  /** File state or workspace deltas observed around tool activity; not causal edits. */
   fileObservations?: {
     recordId: string;
-    editId: string;
+    editId?: string;
+    toolCallId?: string;
+    basis?: 'native-edit' | 'shell-write-attempt' | 'workspace-delta';
+    toolOutcome?: 'succeeded' | 'failed';
     path: string;
-    sha256: string;
+    sha256?: string;
+    /** Persisted provider workspace delta with unverified authorship. */
+    diff?: string;
     observedAt: string;
   }[];
   coverage?: import('./core/historyAudit.ts').HistoryCoverage;

@@ -32,7 +32,7 @@ export const HOOK_EVENTS: HookEvents = {
   ],
   PostToolUse: [
     {
-      matcher: 'Edit|Write|MultiEdit',
+      matcher: '^(Edit|Write|MultiEdit|Bash|PowerShell)$',
       hooks: [{ type: 'command', command: 'showtail hook post-edit', async: true }],
     },
   ],

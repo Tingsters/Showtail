@@ -188,43 +188,52 @@ function currentStore(): HistoryStore {
   return store;
 }
 
-function status(opts: Options): Record<string, any> {
-  const tools = connectPlugins()
-    .filter((p) => !opts.tool || p.id === getPlugin(opts.tool)?.id)
-    .map((p) => {
-      let state: ReturnType<typeof p.connect.status> = { connected: false };
-      try {
-        state = p.connect.status();
-      } catch {
-        /* An unavailable host is reported disconnected. */
-      }
-      const active =
-        automaticCaptureEnabled(p.id) &&
-        (state.hooksActive === true || state.captureActive === true);
-      const eligible = active || !!toolCaptureEnabledAt(p.cliName);
-      return {
-        tool: p.id,
-        label: p.label,
-        ...state,
-        mode: !automaticCaptureEnabled(p.id)
-          ? 'paused'
-          : active
-            ? 'automatic'
-            : eligible && p.migration
-              ? 'on-demand'
-              : 'unavailable',
-        transport: state.captureActive
-          ? 'editor'
-          : state.hooksActive
-            ? 'hooks'
-            : eligible && p.migration
-              ? 'on-demand'
-              : null,
-        assistant: reportSkillState(p.cliName),
-        lastIngestedAt: null as string | null,
-        issues: [] as { code: string; tool: string }[],
-      };
-    });
+async function status(opts: Options): Promise<Record<string, any>> {
+  const tools = await Promise.all(
+    connectPlugins()
+      .filter((p) => !opts.tool || p.id === getPlugin(opts.tool)?.id)
+      .map(async (p) => {
+        let state: ReturnType<typeof p.connect.status> = { connected: false };
+        try {
+          state = p.connect.status();
+        } catch {
+          /* An unavailable host is reported disconnected. */
+        }
+        const hooksConfigured = state.hooksActive === true;
+        const inspected =
+          hooksConfigured && automaticCaptureEnabled(p.id) && p.connect.inspectCapture
+            ? await p.connect.inspectCapture()
+            : undefined;
+        if (inspected) state = { ...state, hooksActive: inspected.hooksActive };
+        const active =
+          automaticCaptureEnabled(p.id) &&
+          (state.hooksActive === true || state.captureActive === true);
+        const eligible = active || hooksConfigured || !!toolCaptureEnabledAt(p.cliName);
+        return {
+          tool: p.id,
+          label: p.label,
+          ...state,
+          hooksConfigured,
+          mode: !automaticCaptureEnabled(p.id)
+            ? 'paused'
+            : active
+              ? 'automatic'
+              : eligible && p.migration
+                ? 'on-demand'
+                : 'unavailable',
+          transport: state.captureActive
+            ? 'editor'
+            : hooksConfigured
+              ? 'hooks'
+              : eligible && p.migration
+                ? 'on-demand'
+                : null,
+          assistant: reportSkillState(p.cliName),
+          lastIngestedAt: null as string | null,
+          issues: (inspected?.issues ?? []).map((issue) => ({ ...issue, tool: p.id })),
+        };
+      }),
+  );
   let selected: HistorySelection | undefined;
   let sessions = 0;
   let projects: unknown[] = [];
@@ -238,10 +247,12 @@ function status(opts: Options): Record<string, any> {
     using healthStore = new HistoryStore({ readonly: true });
     for (const tool of tools) {
       const saved = healthStore.meta(`capture-health:${tool.tool}`);
+      const configurationIssues = tool.issues;
       Object.assign(
         tool,
         saved ? JSON.parse(saved) : { lastIngestedAt: null, issues: [] },
       );
+      tool.issues = [...configurationIssues, ...tool.issues];
     }
   }
   const selectedTool = opts.tool ? tools[0] : undefined;
@@ -286,6 +297,7 @@ function status(opts: Options): Record<string, any> {
           tool: selectedTool.tool,
           connected: selectedTool.connected,
           hooksActive: selectedTool.hooksActive ?? false,
+          hooksConfigured: selectedTool.hooksConfigured,
           mode: selectedTool.mode,
           transport: selectedTool.transport,
           assistant: selectedTool.assistant,
@@ -334,7 +346,11 @@ async function setup(opts: Options): Promise<object> {
       if (result) writeReportSkill(plugin.cliName);
       if (result) {
         enableToolCapture(plugin.cliName, consentAt);
-        results.push({ tool: plugin.id, connected: true });
+        const inspected =
+          result.hooks && plugin.connect.inspectCapture
+            ? await plugin.connect.inspectCapture()
+            : undefined;
+        results.push({ tool: plugin.id, connected: true, ...(inspected ?? {}) });
       }
     } catch {
       results.push({ tool: plugin.id, connected: false });
@@ -415,6 +431,8 @@ export async function runHistoryCli(argv = process.argv): Promise<void> {
           );
         for (const warning of migration?.warnings ?? [])
           console.log(`Review ${warning.file}: ${warning.code}`);
+        for (const tool of (result as Options).tools ?? [])
+          for (const issue of tool.issues ?? []) console.log(issue.message);
       }
     });
   program
@@ -440,13 +458,17 @@ export async function runHistoryCli(argv = process.argv): Promise<void> {
       .option('--project <selector>')
       .option('--json')
       .option('--verbose-json')
-      .action((opts) => {
-        const result = status(opts);
+      .action(async (opts) => {
+        const result = await status(opts);
         if (opts.json || opts.verboseJson) print(result);
-        else
+        else {
           console.log(
             `Storage: ${result.home}\nConversations: ${result.sessions}\nAutomatic capture: ${result.captureEnabled ? 'enabled' : 'paused'}\n${result.tools.map((t: any) => `${t.label}: ${t.mode}`).join('\n')}`,
           );
+          for (const tool of result.tools)
+            for (const issue of tool.issues)
+              if (issue.message) console.log(issue.message);
+        }
       });
   const projects = program
     .command('projects [selector]')
@@ -774,6 +796,10 @@ export async function runHistoryCli(argv = process.argv): Promise<void> {
         captureEnabled: config.captureEnabled ?? true,
         captureSince: config.captureSince ?? new Date().toISOString(),
       });
+      if (opts.hooks !== false && plugin.connect.inspectCapture) {
+        const inspected = await plugin.connect.inspectCapture();
+        for (const issue of inspected.issues) console.log(issue.message);
+      }
       console.log(`History: ${dataHome()}`);
     });
   program

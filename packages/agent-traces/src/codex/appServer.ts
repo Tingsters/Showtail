@@ -25,7 +25,9 @@
 import { spawn } from 'node:child_process';
 import { resolve } from 'node:path';
 import type { EditedFile } from '../hooks/payload.ts';
-import type { HookTranscriptEvent } from '../model.ts';
+import type { HookTranscript, HookTranscriptEvent } from '../model.ts';
+import { shellWritePaths } from '../hooks/shellWrites.ts';
+import { codexCommandEvidence } from './commands.ts';
 import { toRepoRelative } from '../paths/pathUtil.ts';
 import {
   answeredAsyncQuestions,
@@ -37,6 +39,11 @@ import {
 } from '../transcript/decisions.ts';
 import { asArray, asString, prop } from '../util/parse.ts';
 import type { CodexMessage, CodexTranscript } from './transcript.ts';
+import {
+  applyCodexLineage,
+  codexSessionLineage,
+  type CodexSessionLineage,
+} from './lineage.ts';
 
 // --- JSON-RPC transport ------------------------------------------------------
 
@@ -190,7 +197,7 @@ export interface ThreadEntry {
   completedAtMs?: number;
 }
 
-export interface ThreadRead {
+export interface ThreadRead extends CodexSessionLineage {
   entries: ThreadEntry[];
   /** Which API produced them: the paginated item store, or the legacy turn listing. */
   via: 'items' | 'turns';
@@ -206,8 +213,12 @@ const MAX_PAGES = 400;
 /** Discover persisted threads without starting or resuming any conversation. */
 export async function listThreads(
   rpc: CodexRpc,
-): Promise<{ id: string; cwd?: string; updatedAt?: number }[]> {
-  const threads: { id: string; cwd?: string; updatedAt?: number }[] = [];
+): Promise<({ id: string; cwd?: string; updatedAt?: number } & CodexSessionLineage)[]> {
+  const threads: ({
+    id: string;
+    cwd?: string;
+    updatedAt?: number;
+  } & CodexSessionLineage)[] = [];
   for (const archived of [false, true]) {
     let cursor: string | undefined;
     const seen = new Set<string>();
@@ -238,6 +249,7 @@ export async function listThreads(
             id,
             cwd: asString(prop(entry, 'cwd')),
             updatedAt: asNumber(prop(entry, 'updatedAt')),
+            ...codexSessionLineage(prop(entry, 'source'), prop(entry, 'parentThreadId')),
           });
       }
       const next = asString(prop(result, 'nextCursor'));
@@ -312,6 +324,10 @@ export async function readThread(rpc: CodexRpc, threadId: string): Promise<Threa
     out.model = asString(prop(thread, 'model'));
     out.cwd = asString(prop(thread, 'cwd'));
     out.cliVersion = asString(prop(thread, 'cliVersion'));
+    Object.assign(
+      out,
+      codexSessionLineage(prop(thread, 'source'), prop(thread, 'parentThreadId')),
+    );
   } catch {
     // Metadata is a nicety; the items are what matter.
   }
@@ -357,7 +373,7 @@ function userText(item: unknown): string {
     .trim();
 }
 
-export interface MapOptions {
+export interface MapOptions extends CodexSessionLineage {
   /** Preserve absolute edits across project boundaries for a central history. */
   includeOutsideEdits?: boolean;
   /** The project root: edits outside it, or in `.showtail`/`.codex`, are dropped. */
@@ -379,6 +395,9 @@ export function threadToTranscript(
 ): CodexTranscript & { events: HookTranscriptEvent[] } {
   const messages: CodexMessage[] = [];
   const events: HookTranscriptEvent[] = [];
+  const fileObservationCandidates: NonNullable<
+    HookTranscript['fileObservationCandidates']
+  > = [];
   let userSeq = 0;
   let asstSeq = 0;
   let eventSeq = 0;
@@ -591,6 +610,44 @@ export function threadToTranscript(
       const status = asString(prop(item, 'status'));
       const exitCode = asNumber(prop(item, 'exitCode'));
       const output = asString(prop(item, 'aggregatedOutput'));
+      const evidence = codexCommandEvidence(item);
+      const completed = status === 'completed' || status === 'failed';
+      const failed = status === 'failed' || (exitCode !== undefined && exitCode !== 0);
+      const sourceId = `codex:shell:${id}`;
+      messages.push({
+        role: 'tool_call',
+        toolName: 'shell',
+        sourceId,
+        text: evidence.command,
+        timestamp: iso(entry.startedAtMs) ?? timestamp,
+        ...(completed ? { isError: failed } : {}),
+      });
+      if (completed) {
+        const files = [
+          ...new Set(
+            evidence.shellCommands
+              .flatMap((command) => shellWritePaths(command))
+              .flatMap((path) => {
+                const absolute = resolve(evidence.cwd ?? entry.cwd ?? opts.root, path);
+                const file = opts.includeOutsideEdits
+                  ? absolute
+                  : toRepoRelative(opts.root, absolute);
+                return file && !file.startsWith('..') && !INTERNAL_PATH_RE.test(file)
+                  ? [file]
+                  : [];
+              }),
+          ),
+        ];
+        if (files.length)
+          fileObservationCandidates.push({
+            sourceId,
+            toolName: 'shell',
+            startedAt: iso(entry.startedAtMs),
+            timestamp,
+            files,
+            toolOutcome: failed ? 'failed' : 'succeeded',
+          });
+      }
       events.push(
         {
           sequence: eventSeq++,
@@ -600,8 +657,8 @@ export function threadToTranscript(
           toolUseId: id,
           toolName: 'shell',
           input: {
-            command: asString(prop(item, 'command')) ?? '',
-            cwd: asString(prop(item, 'cwd')) ?? '',
+            command: evidence.command,
+            cwd: evidence.cwd ?? '',
           },
         },
         {
@@ -622,12 +679,16 @@ export function threadToTranscript(
     // the student's visible work, exactly as the file parser ignored them.
   }
 
-  return {
-    sessionId: threadId,
-    title: `Codex session ${threadId.slice(0, 8)}`,
-    messages,
-    events,
-  };
+  return applyCodexLineage(
+    {
+      sessionId: threadId,
+      title: `Codex session ${threadId.slice(0, 8)}`,
+      messages,
+      events,
+      ...(fileObservationCandidates.length ? { fileObservationCandidates } : {}),
+    },
+    opts,
+  );
 }
 
 // --- One-call convenience -----------------------------------------------------
@@ -657,6 +718,15 @@ export async function readThreadTranscript(
       root: opts.root,
       includeOutsideEdits: opts.includeOutsideEdits,
       model: opts.model ?? thread.model,
+      ...(opts.parentNativeSessionId || thread.parentNativeSessionId
+        ? {
+            parentNativeSessionId:
+              opts.parentNativeSessionId ?? thread.parentNativeSessionId,
+          }
+        : {}),
+      ...(opts.inputOrigin || thread.inputOrigin
+        ? { inputOrigin: opts.inputOrigin ?? thread.inputOrigin }
+        : {}),
     });
     return { transcript, via: thread.via, cliVersion: thread.cliVersion };
   } finally {

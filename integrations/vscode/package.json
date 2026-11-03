@@ -2,7 +2,7 @@
   "name": "showtail",
   "displayName": "Showtail",
   "description": "Show your work: capture your AI coding prompts and edits (GitHub Copilot, Antigravity IDE) into a local provenance trail.",
-  "version": "0.9.0",
+  "version": "0.9.1",
   "publisher": "Tingsters",
   "license": "Apache-2.0",
   "repository": {
@@ -24,7 +24,7 @@
   "capabilities": {
     "untrustedWorkspaces": {
       "supported": "limited",
-      "description": "Showtail runs the showtail program on file saves, so it does nothing in a workspace you have not trusted.",
+      "description": "Showtail reads native conversation history in trusted workspaces. It does not run the Showtail program in untrusted workspaces.",
       "restrictedConfigurations": [
         "showtail.binaryPath"
       ]

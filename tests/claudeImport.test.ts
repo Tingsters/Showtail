@@ -204,7 +204,7 @@ describe('parseClaudeTranscript', () => {
       cleanup(dir);
     }
   });
-  test('keeps queued and suggestion_accepted prompts; drops system and sdk', () => {
+  test('keeps queued, accepted suggestions and SDK submissions; drops system context', () => {
     const dir = makeTempDir();
     try {
       const line = (uuid: string, source: string, content: string) =>
@@ -236,10 +236,11 @@ describe('parseClaudeTranscript', () => {
       expect(userTexts).toContain('queued user prompt');
       expect(userTexts).toContain('accepted suggestion prompt');
       expect(userTexts).toContain('legacy prompt without a source');
-      // ...tooling/programmatic sources are dropped (they must not open a turn).
+      // SDK is also the transport for a user's headless CLI submission.
+      expect(userTexts).toContain('sdk programmatic prompt');
+      // Injected system context still must not open a turn.
       expect(userTexts).not.toContain('system injected prompt');
-      expect(userTexts).not.toContain('sdk programmatic prompt');
-      expect(userTexts.length).toBe(3);
+      expect(userTexts.length).toBe(4);
     } finally {
       cleanup(dir);
     }

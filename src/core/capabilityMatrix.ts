@@ -3,7 +3,7 @@
  * "what works where" across the AI coding tools students use.
  *
  * Every cell is one of four states:
- *   ✅ full        — implemented and verified end-to-end (live where possible).
+ *   ✅ full        — implemented and covered by recorded contract tests.
  *   🚧 partial     — implemented with a known gap.
  *   🗺️ planned     — the tool exposes a surface for it, Showtail just hasn't built it.
  *   ⛔ unsupported  — the tool exposes no surface for it.
@@ -12,8 +12,9 @@
  * derived from each tool's {@link Surface} (does it expose hooks? an instructions
  * file? a readable transcript? a marketplace?). Only `full`/`partial` are
  * hand-authored, and only for tools Showtail actually has a plugin for — those
- * claims are then backed by tests (a `full` cell requires a passing test, and the
- * hook-capture ones require an LLM-driven live run; see tests/capability-*).
+ * claims describe implementation coverage, not a live-host certification. Real
+ * provider behavior is established separately by version-specific acceptance
+ * receipts, including hook trust, host mode and observed collection.
  *
  * The matrix lists every major vendor tool, including ones with no Showtail
  * plugin yet — those read as 🗺️ planned and double as the roadmap.
@@ -198,69 +199,70 @@ export const CAPABILITIES: Capability[] = [
     id: 'live-capture-hooks',
     label: 'Live-capture hooks',
     description: 'Automatic capture wired into the tool’s lifecycle hooks.',
-    note: 'Live-certified for Claude Code, Codex, and Antigravity CLI. Copilot CLI fires no lifecycle hooks in headless `-p` mode, so it can’t be live-certified here; Copilot (VS Code) uses its extension; Zed has no hooks.',
+    note: 'Callback configuration is contract-tested. Actual delivery depends on host version, mode and hook trust; live acceptance receipts record observed behavior. Editors watch native history; Zed has no hooks.',
     requires: hasHooks,
     surfaceRule: needHooks,
     overrides: {
       'claude-code': full(),
       codex: full(),
       'copilot-cli': partial(
-        'Hooks wired + contract-tested, but Copilot CLI fires no lifecycle hooks in headless `-p` mode (verified with a valid token at user + project scope), so live capture can’t be certified by the headless harness.',
+        'Callbacks are configured and contract-tested; callback delivery in headless modes is not assumed. Native history can catch up through sync/report.',
       ),
       'antigravity-cli': full(),
       'antigravity-ide': partial(
-        'Hooks wired to the IDE’s global ~/.gemini/config/hooks.json + contract-tested; not certified live (the IDE can’t be driven headlessly here).',
+        'The extension watches native IDE transcripts; real model-session behavior requires separate live evidence.',
       ),
       'copilot-vscode': partial(
-        'Captured by the VS Code extension — saves are snapshotted, and native Copilot Chat is read from its on-disk session JSON (watched live, plus `import copilot`). File-based, not lifecycle hooks.',
+        'The extension watches native Copilot Chat history. Ordinary file saves are not captured or attributed to AI.',
       ),
     },
   },
   {
     id: 'auto-prompt-capture',
     label: 'Auto prompt capture',
-    description: 'Your prompts are recorded automatically as you submit them.',
-    note: 'Live-certified for Claude Code + Codex; the CLI plugins are built but their live capture isn’t certified here. Copilot (VS Code) reads native chat prompts from the on-disk session JSON (contract-tested), not via hooks.',
+    description: 'Persisted human prompts are read from native conversation history.',
+    note: 'Native-history parsing and replay are contract-tested. Missing callbacks catch up through sync/report; a live-host claim requires a provider-version-specific acceptance receipt.',
     requires: hasHooks,
     surfaceRule: needHooks,
     overrides: {
       'claude-code': full(),
       codex: full(),
       'copilot-cli': partial(
-        'Hooks wired + contract-tested, but Copilot CLI fires no hooks in headless `-p` mode (verified with a token), so prompt capture can’t be certified here.',
+        'Native parsing is contract-tested; automatic callback delivery varies by host mode.',
       ),
       'antigravity-cli': partial(
-        'agy fires its prompt hook (PreInvocation) in interactive sessions; headless `agy -p` only fires PostToolUse, so prompt capture isn’t certified here.',
+        'Native prompt collection is available where the CLI persists readable history; callback availability varies by host mode.',
       ),
       'antigravity-ide': partial(
-        'Hooks wired + contract-tested; live capture not certified (the IDE can’t be driven headlessly here).',
+        'Native transcript parsing and editor transport are tested independently of authenticated model-session behavior.',
       ),
       'copilot-vscode': partial(
-        'Native Copilot Chat prompts are read from the on-disk chat-session JSON (extension watcher + `import copilot`); contract-tested, but file-based rather than a certified live hook.',
+        'Native Copilot Chat prompts are read from on-disk session history through the extension watcher or explicit import.',
       ),
     },
   },
   {
     id: 'auto-file-capture',
     label: 'Auto file/edit capture',
-    description: 'Files the tool edits are snapshotted as artifacts automatically.',
-    note: 'Live-certified for Claude Code + Antigravity CLI. Codex captures edits in real interactive sessions — the edited file is snapshotted and its AI diff (plus deletions) is reconciled at Stop from Codex’s app-server, with the documented hook payload as the always-on baseline (contract-tested against recorded Codex 0.141 and 0.163 data) — but the headless harness can’t certify a live Codex edit. Copilot CLI fires no hooks in headless mode; Copilot (VS Code) snapshots on save with no AI diff.',
+    description:
+      'Applied native edits and available file observations are collected automatically.',
+    note: 'Applied edits come from native history. Timestamped file observations supplement incomplete sources; ordinary editor saves are excluded. Coverage depends on persisted provider evidence and is checked by live acceptance runs.',
     requires: hasHooks,
     surfaceRule: needHooks,
     overrides: {
       'claude-code': full(),
       codex: partial(
-        'Works in real interactive sessions (file snapshotted; AI diff + deletions reconciled at Stop from Codex’s app-server, not its rollout file) and contract-tested; headless `codex exec` doesn’t snapshot a live edit here, so it can’t be live-certified.',
+        'Read-only app-server history and local rollouts provide applied diffs and deletions where persisted; incomplete native evidence is reported explicitly.',
       ),
       'copilot-cli': partial(
-        'Hooks wired + contract-tested, but Copilot CLI fires no hooks in headless `-p` mode (verified with a token), so file capture can’t be certified here.',
+        'Native edit parsing is contract-tested; available edit evidence and callbacks vary by host mode.',
       ),
       'antigravity-cli': full(),
       'antigravity-ide': partial(
-        'Hooks wired + contract-tested; live capture not certified (the IDE can’t be driven headlessly here).',
+        'The extension collects native transcript edits; it does not capture unrelated manual saves.',
       ),
       'copilot-vscode': partial(
-        'The extension snapshots on save; no AI-suggested diff and non-VS-Code edits are missed.',
+        'The extension reads edits from native chat-session history; it does not infer AI authorship from file saves.',
       ),
     },
   },
@@ -276,7 +278,7 @@ export const CAPABILITIES: Capability[] = [
       'claude-code': full(),
       codex: full(),
       'copilot-vscode': partial(
-        'Copilot Chat replies are read from the on-disk session JSON (extension watcher + `import copilot`); contract-tested via the transcript parser, not a certified live run.',
+        'Copilot Chat replies are read from native session history. Recorded parser and watcher coverage is separate from live model-session evidence.',
       ),
     },
   },
@@ -285,7 +287,7 @@ export const CAPABILITIES: Capability[] = [
     label: 'Decision capture',
     description:
       'Choices you make when the AI pauses to ask (AskUserQuestion-style) are captured as decisions.',
-    note: 'Reconciled from the tool’s transcript on the Stop hook, so — like AI-reply capture — it is certified by its contract test, not the headless live run. Planned wherever a tool has hooks + a transcript but no ask-the-user construct yet.',
+    note: 'Available questions and answers are recovered from native transcripts. Recorded contract coverage is separate from live-session coverage; absent provider evidence is not invented.',
     requires: hasTranscript,
     surfaceRule: needReplyPath,
     overrides: {
@@ -298,8 +300,8 @@ export const CAPABILITIES: Capability[] = [
     id: 'plan-capture',
     label: 'Plan capture',
     description:
-      'Plans the AI proposes are captured as a first-class item, with a saved, linkable plan file.',
-    note: 'Full for Claude Code, Codex, and Antigravity CLI. Antigravity links its real plan.md; Claude Code and Codex materialize the transcript plan into a browsable, linkable file (Codex writes no native plan file). Antigravity IDE writes implementation_plan.md but has no plugin yet. Reconciled on the Stop hook — certified by its contract test, not the headless live run (print mode never raises Stop).',
+      'Available native plans are captured and rendered as first-class report items.',
+    note: 'Native plan content is recovered where the provider persists it and is rendered inside the central report. Recorded parser coverage does not imply that a live session exercised plan mode.',
     // A plan rides in on the same stop transcript path, so a real claim needs one.
     requires: hasTranscript,
     surfaceRule: needPlanFiles,
@@ -361,19 +363,19 @@ export const CAPABILITIES: Capability[] = [
   },
   {
     id: 'multi-scope-install',
-    label: 'User + project install',
-    description: 'Connect per-user (all projects) or per-project.',
-    note: 'Copilot (VS Code) is project-scoped only (.github/).',
-    surfaceRule: needInstructions,
+    label: 'User-level setup',
+    description:
+      'Connect for your user across projects without installing project configuration.',
+    note: 'Setup installs user-level callbacks or an editor extension; project folders stay unchanged. Installation does not certify live capture.',
+    requires: hasConnect,
+    surfaceRule: needLocal,
     overrides: {
       'claude-code': full(),
       codex: full(),
       'copilot-cli': full(),
       'antigravity-cli': full(),
-      'antigravity-ide': partial(
-        'Instructions install per-user or per-project; capture hooks are global-only (the IDE loads only ~/.gemini/config/hooks.json).',
-      ),
-      'copilot-vscode': partial('Project-scoped only (.github/); no user-scope install.'),
+      'antigravity-ide': full('The Showtail extension is installed for the IDE user.'),
+      'copilot-vscode': full('The Showtail extension is installed for the VS Code user.'),
     },
   },
   {
@@ -473,13 +475,12 @@ export function testIdFor(capabilityId: string, integrationId: string): string {
 }
 
 /**
- * Capabilities whose `full` claim must be certified by an LLM-driven live run
- * (Tier B) — the edit-driven hook-capture capabilities. `auto-ai-output-capture`
- * is excluded: it fires on the host Stop hook, which headless print mode never
- * raises, so it stands on its contract E2E. Import/redaction/timeline are
- * certified by contract tests against real recorded payloads.
+ * Capabilities that need an actual host run to establish automatic delivery.
+ * This is a coverage requirement, never proof that any current version passed.
+ * Other capabilities have recorded contract coverage and may additionally be
+ * exercised by live acceptance scenarios.
  */
-export const LIVE_CERTIFIED_CAPABILITIES = new Set([
+export const LIVE_REQUIRED_CAPABILITIES = new Set([
   'live-capture-hooks',
   'auto-prompt-capture',
   'auto-file-capture',
@@ -505,7 +506,7 @@ export function fullClaims(): Array<{
         capabilityId: cap.id,
         integration: integ.id,
         testId: testIdFor(cap.id, integ.id),
-        liveRequired: LIVE_CERTIFIED_CAPABILITIES.has(cap.id),
+        liveRequired: LIVE_REQUIRED_CAPABILITIES.has(cap.id),
       });
     }
   }

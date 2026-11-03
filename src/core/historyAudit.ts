@@ -102,7 +102,9 @@ export function auditHistory(store: HistoryStore, selection: HistorySelection) {
       unverifiedLegacyRecords: records.filter(
         (r) => r.provenance?.legacyIntegrity === 'unverified',
       ).length,
-      capturedEdits: work.filter((r) => r.kind === 'edit').length,
+      capturedEdits: work.filter(
+        (r) => r.kind === 'edit' && !r.tags?.includes('observed-file-state'),
+      ).length,
     },
   };
 }

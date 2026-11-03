@@ -55,6 +55,31 @@ function oldPrompt(store: HistoryStore, sid: string, text: string, ts = at) {
   return store.record(record.id)!;
 }
 
+test('legacy interruption markers disappear from prompt cards without rewriting raw captures', () =>
+  fixture(() => {
+    using store = new HistoryStore();
+    const session = store.ensureSession({
+      tool: 'claude-code',
+      nativeSessionId: 'legacy-interrupted',
+    });
+    store.append(session.id, {
+      kind: 'prompt',
+      text: 'Create the requested file.',
+      origin: 'human',
+      ts: at,
+    });
+    const control = oldPrompt(store, session.id, '[Request interrupted by user]');
+    const before = store.query('SELECT * FROM records ORDER BY seq').all();
+    expect(store.verify().ok).toBe(true);
+    const report = buildHistoryReport(store, { kind: 'all' });
+    expect(report.turns.map((turn) => turn.prompt.text)).toEqual([
+      'Create the requested file.',
+    ]);
+    expect(store.query('SELECT * FROM records ORDER BY seq').all()).toEqual(before);
+    expect(store.record(control.id)?.kind).toBe('prompt');
+    expect(store.verify().ok).toBe(true);
+  }));
+
 test('Claude preserves image/text prompts and explicit human quotations; drops provider envelopes', () =>
   fixture(() => {
     const rows = [

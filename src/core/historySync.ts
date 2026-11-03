@@ -5,13 +5,14 @@ import { getPlugin, migrationPlugins } from '../plugins/registry.ts';
 import type { HookTranscript, MigrationTranscriptCandidate } from '../plugins/types.ts';
 import { parseClaudeTranscript } from './claudeCode.ts';
 import { dataHome } from './dataHome.ts';
+import { captureNativeFileObservations } from './fileObservations.ts';
 import { readGlobalConfig, toolCaptureEnabledAt } from './globalConfig.ts';
 import { HistoryStore, digest } from './history.ts';
 import { automaticCaptureEnabled, captureTranscript } from './historyCapture.ts';
 import { readClaudeSource } from './nativeSourceCursor.ts';
 import type { Observation } from './passiveObserver.ts';
 
-const READER_VERSION = 1;
+const READER_VERSION = 6;
 export async function syncHistory(
   store: HistoryStore,
   options: { tool?: string; observation?: Observation; cutoff?: string } = {},
@@ -61,13 +62,19 @@ export async function syncHistory(
     try {
       candidates = plugin.migration.discover();
       const o = options.observation;
-      if (!o && plugin.migration.discoverNative) {
+      if (
+        plugin.migration.discoverNative &&
+        (!o || (plugin.id === 'codex' && ['stop', 'session-end'].includes(o.event)))
+      ) {
         try {
           for (const candidate of await plugin.migration.discoverNative()) {
-            if (
-              !candidates.some((c) => c.providerSessionId === candidate.providerSessionId)
-            )
-              candidates.push(candidate);
+            const existing = candidates.find(
+              (c) => c.providerSessionId === candidate.providerSessionId,
+            );
+            if (existing) {
+              existing.parentNativeSessionId ??= candidate.parentNativeSessionId;
+              existing.inputOrigin ??= candidate.inputOrigin;
+            } else candidates.push(candidate);
           }
         } catch {
           issues.push({ tool: plugin.id, code: 'NATIVE_HISTORY_API_UNAVAILABLE' });
@@ -92,15 +99,29 @@ export async function syncHistory(
           cwd: o.cwd ?? undefined,
           mtimeMs: 0,
         });
-      if (o && (o.transcriptPath || o.nativeSessionId))
-        candidates = candidates.filter(
-          (c) =>
-            c.path === o.transcriptPath ||
-            c.providerSessionId === o.nativeSessionId ||
-            (plugin.id === 'claude-code' &&
-              !!o.nativeSessionId &&
-              c.providerSessionId.startsWith(`${o.nativeSessionId}:agent:`)),
+      if (o && (o.transcriptPath || o.nativeSessionId)) {
+        const selected = new Set<string>();
+        if (o.nativeSessionId) selected.add(o.nativeSessionId);
+        for (const candidate of candidates)
+          if (candidate.path === o.transcriptPath)
+            selected.add(candidate.providerSessionId);
+        let previousSize = -1;
+        while (previousSize !== selected.size) {
+          previousSize = selected.size;
+          for (const candidate of candidates)
+            if (
+              (candidate.parentNativeSessionId &&
+                selected.has(candidate.parentNativeSessionId)) ||
+              (plugin.id === 'claude-code' &&
+                o.nativeSessionId &&
+                candidate.providerSessionId.startsWith(`${o.nativeSessionId}:agent:`))
+            )
+              selected.add(candidate.providerSessionId);
+        }
+        candidates = candidates.filter((candidate) =>
+          selected.has(candidate.providerSessionId),
         );
+      }
     } catch {
       issues.push({ tool: plugin.id, code: 'SOURCE_DISCOVERY_FAILED' });
       continue;
@@ -109,11 +130,9 @@ export async function syncHistory(
       if (!consent()) break;
       try {
         const st = candidate.path ? statSync(candidate.path) : undefined;
-        if (
-          (st?.mtimeMs ?? candidate.mtimeMs ?? Infinity) < Date.parse(since) &&
-          (st?.mtimeMs ?? candidate.mtimeMs) !== 0
-        )
-          continue;
+        // A provider can keep a writer open across consent epochs. Windows may
+        // retain the source's creation-era mtime while newly appended items have
+        // eligible timestamps. Only native item timestamps decide consent.
         const key = `source-cursor:${plugin.id}:${digest(candidate.path || candidate.providerSessionId)}`;
         // Cursor commits only after reconciliation. A changed/rotated source is
         // safely replayed through the reader: cross-line tool results and
@@ -125,16 +144,26 @@ export async function syncHistory(
           ino: st?.ino,
           since,
         });
-        if (st && store.meta(key) === fingerprint) {
+        const previousFingerprint = store.meta(key);
+        if (st && previousFingerprint === fingerprint) {
           skipped++;
           continue;
         }
         const tailKey = `${key}:tail`;
+        let reusableTail = false;
+        try {
+          const previous = JSON.parse(previousFingerprint ?? 'null');
+          reusableTail =
+            previous?.version === READER_VERSION && previous?.since === since;
+        } catch {}
         const tail =
           plugin.id === 'claude-code' &&
           candidate.path &&
           !/[\\/]subagents[\\/]/.test(candidate.path)
-            ? readClaudeSource(candidate.path, store.meta(tailKey))
+            ? readClaudeSource(
+                candidate.path,
+                reusableTail ? store.meta(tailKey) : undefined,
+              )
             : undefined;
         const transcript: HookTranscript = tail
           ? parseClaudeTranscript(tail.content, candidate.cwd ?? dataHome(), {
@@ -156,6 +185,21 @@ export async function syncHistory(
         transcript.events = transcript.events?.filter(
           (e) => !e.timestamp || Date.parse(e.timestamp) <= cutoffMs,
         );
+        const commitSourceCursor = () => {
+          const after = candidate.path ? statSync(candidate.path) : undefined;
+          if (
+            consent() &&
+            !beyondCutoff &&
+            !transcript.warnings?.length &&
+            st &&
+            after &&
+            st.size === after.size &&
+            st.mtimeMs === after.mtimeMs
+          ) {
+            store.setMeta(key, fingerprint);
+            if (tail) store.setMeta(tailKey, tail.checkpoint);
+          }
+        };
         for (const plan of plugin.migration.planFiles?.(candidate) ?? []) {
           const p = statSync(plan.absPath);
           if (p.mtimeMs >= Date.parse(since) && p.mtimeMs <= Date.parse(cutoff))
@@ -176,11 +220,16 @@ export async function syncHistory(
           )
         ) {
           skipped++;
+          // Validated excluded sources get only a content-free fingerprint. A
+          // changed size, cutoff epoch or reader version forces reevaluation.
+          commitSourceCursor();
           continue;
         }
         const session = store.ensureSession({
           tool: plugin.id,
           nativeSessionId: transcript.sessionId ?? candidate.providerSessionId,
+          parentNativeSessionId:
+            transcript.parentNativeSessionId ?? candidate.parentNativeSessionId,
           cwd: candidate.cwd ?? null,
           workspacePaths: options.observation?.workspacePaths,
           transcriptPath: candidate.path || undefined,
@@ -192,6 +241,16 @@ export async function syncHistory(
           since,
           continueCapture: consent,
         });
+        imported += captureNativeFileObservations(
+          store,
+          session,
+          transcript.fileObservationCandidates,
+          {
+            since,
+            cutoff,
+            continueCapture: consent,
+          },
+        );
         if (options.observation) {
           const eventAt = Date.parse(options.observation.observedAt);
           const files = transcript.messages.flatMap((m) => {
@@ -216,19 +275,7 @@ export async function syncHistory(
             files: [...new Set(files)],
           });
         }
-        const after = candidate.path ? statSync(candidate.path) : undefined;
-        if (
-          consent() &&
-          !beyondCutoff &&
-          !transcript.warnings?.length &&
-          st &&
-          after &&
-          st.size === after.size &&
-          st.mtimeMs === after.mtimeMs
-        ) {
-          store.setMeta(key, fingerprint);
-          if (tail) store.setMeta(tailKey, tail.checkpoint);
-        }
+        commitSourceCursor();
         sources++;
       } catch {
         issues.push({ tool: plugin.id, code: 'SOURCE_READ_FAILED' });

@@ -54,7 +54,8 @@ export function renderHtml(data: ReportData, opts?: ReportRenderOptions): string
     // regex after the splice would match and corrupt that content.
     .replace(TIME_TOKEN, (_m, iso: string) => timeTag(iso))
     .replace(`<p>${TURNS_PLACEHOLDER}</p>`, turnsHtml(data, mode))
-    .replace('<p>SHOWTAIL_UNATTRIBUTED_WORK</p>', unattributedHtml(data, mode));
+    .replace('<p>SHOWTAIL_UNATTRIBUTED_WORK</p>', unattributedHtml(data, mode))
+    .replace('<p>SHOWTAIL_FILE_OBSERVATIONS</p>', fileObservationsHtml(data));
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -270,6 +271,7 @@ function renderToolRun(events: Event[]): string {
 function renderToolRow(event: Event, clickable: boolean): string {
   const name = escapeHtml(event.toolName ?? 'Tool');
   const cls = event.isError ? 'tool-row is-error' : 'tool-row';
+  const id = `id="${escapeHtml('st-tool-' + event.id)}"`;
   // `text` is the rendered invocation plus, when captured, a fenced result block.
   // Split them so the invocation leads and the output follows.
   const text = event.text;
@@ -279,18 +281,60 @@ function renderToolRow(event: Event, clickable: boolean): string {
   const label = `<span class="tool-row-name">${name}</span>`;
   const invocation = `<span class="tool-row-cmd">${escapeHtml(truncate(head, 160))}</span>`;
   if (!body) {
-    return `<div class="${cls}">${label}${invocation}</div>`;
+    return `<div ${id} class="${cls}">${label}${invocation}</div>`;
   }
   const output = `<div class="ai-text tool-row-out">${renderRichText(body)}</div>`;
   if (!clickable) {
-    return `<div class="${cls}">${label}${invocation}${output}</div>`;
+    return `<div ${id} class="${cls}">${label}${invocation}${output}</div>`;
   }
   return [
-    `<details class="${cls}">`,
+    `<details ${id} class="${cls}">`,
     `<summary>${label}${invocation}</summary>`,
     output,
     '</details>',
   ].join('\n');
+}
+
+function fileObservationsHtml(data: ReportData): string {
+  const observations =
+    data.fileObservations?.filter((observation) => !observation.editId) ?? [];
+  if (!observations.length) return '';
+  const tools = new Set([
+    ...data.turns.flatMap((turn) => turn.toolCalls.map((event) => event.id)),
+    ...(data.unattributedWork ?? []).flatMap((work) =>
+      work.toolCalls.map((event) => event.id),
+    ),
+  ]);
+  const items = observations.map((observation) => {
+    const workspaceDelta = observation.basis === 'workspace-delta';
+    const outcome = workspaceDelta
+      ? 'shell activity'
+      : observation.basis === 'shell-write-attempt'
+        ? observation.toolOutcome === 'failed'
+          ? 'a failed shell attempt'
+          : observation.toolOutcome === 'succeeded'
+            ? 'a successful shell attempt'
+            : 'a shell attempt'
+        : 'tool activity';
+    const source =
+      observation.toolCallId && tools.has(observation.toolCallId)
+        ? `<a href="#${encodeURIComponent('st-tool-' + observation.toolCallId)}">${escapeHtml(outcome)}</a>`
+        : escapeHtml(outcome);
+    const evidence = workspaceDelta
+      ? ' · author unverified' +
+        (observation.diff
+          ? `<details><summary>Observed workspace diff</summary>${diffHtml(observation.diff)}</details>`
+          : '')
+      : observation.sha256
+        ? `<br>SHA-256: <code>${escapeHtml(observation.sha256)}</code>`
+        : '';
+    return `<li><code>${escapeHtml(observation.path)}</code> · ${timeTag(observation.observedAt)} · ${workspaceDelta ? 'during' : 'after'} ${source}${evidence}</li>`;
+  });
+  return (
+    '<h2>File observations</h2><p>These observations may include later or manual changes and work from other processes. File hashes describe state when observed. Persisted workspace diffs show changes seen during a shell command, with unverified authorship.</p><ul class="file-observations">' +
+    items.join('') +
+    '</ul>'
+  );
 }
 
 /** One interleaved item (AI reply, decision, or code change) inside a turn body. */

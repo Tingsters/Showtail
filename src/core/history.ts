@@ -61,6 +61,7 @@ export interface SessionInput {
   endedAt?: string;
   tool: string;
   nativeSessionId?: string;
+  parentNativeSessionId?: string;
   cwd?: string | null;
   workspacePaths?: string[];
   startedAt?: string;
@@ -473,6 +474,8 @@ export class HistoryStore {
 
   ensureSession(input: SessionInput): HistorySession {
     const nativeId = input.nativeSessionId || `synthetic:${randomUUID()}`;
+    if (input.parentNativeSessionId === nativeId)
+      throw new Error('INVALID_SESSION_LINEAGE');
     const id = 'ses_' + digest(`${input.tool}\0${nativeId}`).slice(0, 24);
     const author = this.localAuthor();
     const authorId = input.authorId ?? author.id;
@@ -506,6 +509,8 @@ export class HistoryStore {
         input.automaticSince ?? null,
         input.cwd !== undefined ? 1 : 0,
       );
+      if (input.parentNativeSessionId)
+        this.setMeta(`session-parent:${id}`, input.parentNativeSessionId);
     }).immediate();
     return this.session(id)!;
   }
@@ -515,13 +520,16 @@ export class HistoryStore {
     return row ? this.sessionFromRow(row) : undefined;
   }
   private sessionFromRow(r: Row): HistorySession {
+    const parentNativeSessionId =
+      this.meta(`session-parent:${r.id}`) ??
+      (r.tool === 'claude-code' && r.native_id.includes(':agent:')
+        ? r.native_id.split(':agent:')[0]
+        : undefined);
     return {
       id: r.id,
       tool: r.tool,
       nativeSessionId: r.native_id,
-      ...(r.tool === 'claude-code' && r.native_id.includes(':agent:')
-        ? { parentNativeSessionId: r.native_id.split(':agent:')[0] }
-        : {}),
+      ...(parentNativeSessionId ? { parentNativeSessionId } : {}),
       authorId: this.effectiveAuthor(r.author_id),
       cwd: r.cwd && isUsableWorkspacePath(r.cwd) ? r.cwd : null,
       workspacePaths: JSON.parse(r.workspaces).filter(isUsableWorkspacePath),

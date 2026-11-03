@@ -3,6 +3,7 @@ import { execFile, spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import {
+  basename,
   delimiter,
   dirname,
   isAbsolute,
@@ -379,7 +380,13 @@ function registerCopilotChatCapture(context: vscode.ExtensionContext): void {
   ): void => {
     try {
       const watcher = vscode.workspace.createFileSystemWatcher(
-        new vscode.RelativePattern(vscode.Uri.file(dir), '*.{json,jsonl}'),
+        // A fresh editor profile has no chatSessions directory yet. Watching
+        // that missing base misses its first creation on Windows. The storage
+        // parent already exists; keep the glob restricted to native chat files.
+        new vscode.RelativePattern(
+          vscode.Uri.file(dirname(dir)),
+          `${basename(dir)}/*.{json,jsonl}`,
+        ),
       );
       watcher.onDidChange(onChange);
       watcher.onDidCreate(onChange);
