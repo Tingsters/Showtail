@@ -109,40 +109,50 @@ test('report discovers an unknown native session before resolving its project', 
     expect(readFileSync(report.reportPath, 'utf8')).toContain('Build this project');
   }));
 
-test('real hook process is silent and its detached worker drains and exits', () =>
-  fixture(async ({ dir, project, cli }) => {
-    writeGlobalConfig({ version: 2, captureEnabled: true, captureSince: before });
-    const path = join(dir, 'native.jsonl');
-    writeFileSync(path, prompt('first', 'Collect native history', project));
-    const started = Date.now();
-    const result = cli(
-      ['hook', 'stop', '--tool', 'claude'],
-      JSON.stringify({ session_id: 'thread', transcript_path: path, cwd: project }),
-    );
-    expect(result).toMatchObject({ code: 0, stdout: '', stderr: '' });
-    expect(Date.now() - started).toBeLessThan(2000);
-    let done = false;
-    for (let i = 0; i < 200; i++) {
-      const status = JSON.parse(cli(['status', '--json', '--tool', 'claude']).stdout);
-      if (
-        status.sessions === 1 &&
-        status.pendingCaptures === 0 &&
-        !existsSync(join(status.home, 'observations', 'worker.lock'))
-      ) {
-        done = true;
-        break;
+test(
+  'real hook process is silent and its detached worker drains and exits',
+  () =>
+    fixture(async ({ dir, home, project, cli }) => {
+      writeGlobalConfig({ version: 2, captureEnabled: true, captureSince: before });
+      const path = join(dir, 'native.jsonl');
+      writeFileSync(path, prompt('first', 'Collect native history', project));
+      const started = Date.now();
+      const result = cli(
+        ['hook', 'stop', '--tool', 'claude'],
+        JSON.stringify({ session_id: 'thread', transcript_path: path, cwd: project }),
+      );
+      expect(result).toMatchObject({ code: 0, stdout: '', stderr: '' });
+      expect(Date.now() - started).toBeLessThan(2000);
+      let done = false;
+      const queue = join(home, 'observations');
+      const deadline = Date.now() + 15_000;
+      while (Date.now() < deadline) {
+        // Poll the queue rather than repeatedly starting the full CLI. Windows
+        // cold startup can exceed a unit test's default five-second budget.
+        if (
+          existsSync(queue) &&
+          !readdirSync(queue).some((name) => name.endsWith('.json')) &&
+          !existsSync(join(queue, 'worker.lock'))
+        ) {
+          done = true;
+          break;
+        }
+        await Bun.sleep(50);
       }
-      await Bun.sleep(25);
-    }
-    expect(done).toBe(true);
-    using store = new HistoryStore({ readonly: true });
-    expect(
-      store
-        .records()
-        .filter((r) => r.kind === 'prompt')
-        .map((r) => r.text),
-    ).toEqual(['Collect native history']);
-  }));
+      expect({
+        done,
+        pending: readdirSync(queue).filter((name) => name.endsWith('.json')).length,
+      }).toMatchObject({ done: true });
+      using store = new HistoryStore({ readonly: true });
+      expect(
+        store
+          .records()
+          .filter((r) => r.kind === 'prompt')
+          .map((r) => r.text),
+      ).toEqual(['Collect native history']);
+    }),
+  20_000,
+);
 
 test('append cursors replay the current turn and recover from truncation and cross-turn results', () =>
   fixture(({ dir }) => {
