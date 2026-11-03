@@ -148,27 +148,29 @@ export function launchCollector(): void {
     ? [resolve(import.meta.dir, '..', 'cli.ts'), '_collect']
     : ['_collect'];
   if (process.platform === 'win32') {
-    // Windows hook hosts can tear down their process tree on return. The same
-    // independent Start-Process launcher used by self-update survives that exit.
-    const literal = (value: string) => `'${value.replace(/'/g, "''")}'`;
-    const quoteArg = (value: string) =>
-      `"${value.replace(/(\\*)"/g, '$1$1\\"').replace(/(\\+)$/, '$1$1')}"`;
-    const script = `$ErrorActionPreference = 'Stop'; Start-Process -FilePath ${literal(process.execPath)} -ArgumentList ${literal(args.map(quoteArg).join(' '))} -WindowStyle Hidden | Out-Null`;
+    // START creates the child before returning, without PowerShell's cold-start
+    // delay. Pass paths through quoted environment references: expansion is one
+    // pass, so percent signs, ampersands and spaces in paths remain literal.
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      SHOWTAIL_COLLECTOR_EXE: process.execPath,
+    };
+    args.forEach((arg, i) => {
+      env[`SHOWTAIL_COLLECTOR_ARG_${i}`] = arg;
+    });
+    const command =
+      'start "" /b "%SHOWTAIL_COLLECTOR_EXE%" ' +
+      args.map((_, i) => `"%SHOWTAIL_COLLECTOR_ARG_${i}%"`).join(' ');
     spawnSync(
-      join(
-        process.env.SystemRoot ?? 'C:\\Windows',
-        'System32',
-        'WindowsPowerShell',
-        'v1.0',
-        'powershell.exe',
-      ),
-      [
-        '-NoProfile',
-        '-NonInteractive',
-        '-EncodedCommand',
-        Buffer.from(script, 'utf16le').toString('base64'),
-      ],
-      { stdio: 'ignore', windowsHide: true, timeout: 1500 },
+      join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'cmd.exe'),
+      ['/d', '/v:off', '/s', '/c', command],
+      {
+        env,
+        stdio: 'ignore',
+        windowsHide: true,
+        windowsVerbatimArguments: true,
+        timeout: 1500,
+      },
     );
     return;
   }
