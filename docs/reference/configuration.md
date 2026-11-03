@@ -26,3 +26,10 @@ Capture redaction accepts `custom` regular-expression strings and literal `allow
 Sharing always applies its own sanitization and independent scan, regardless of capture
 settings. `captureToolOutput` is off by default; answers to student-choice tools are retained.
 Project settings and the `commitTrail` option no longer exist.
+
+Assistant discovery is independent of capture. `setup --no-assistant` or
+`connect <tool> --no-assistant` removes the deferred reporting skill; capture continues.
+Use `connect <tool> --assistant` to restore it. Native skills shared by a host (Copilot
+CLI/editor and Antigravity CLI/IDE) share this preference. Status JSON version 3 reports
+discovery separately from capture mode, transport, last ingestion and collection issues.
+See [passive capture](../concepts/passive-capture.md) for the collection model and limits.

@@ -5,15 +5,15 @@
     "url": "https://github.com/Tingsters"
   },
   "metadata": {
-    "description": "Showtail â€” show your work. Claude Code integration that captures a local provenance trail.",
-    "version": "0.6.0"
+    "description": "Showtail: passive local history and on-request reports.",
+    "version": "0.7.0"
   },
   "plugins": [
     {
       "name": "showtail",
       "source": "./assets/claude-code/plugin",
-      "description": "Auto-capture prompts, edits, decisions, and reflections into Showtail's local .showtail/ trail while pairing with Claude.",
-      "version": "0.6.0",
+      "description": "Read native Claude history without standing capture instructions or model-driven logging.",
+      "version": "0.7.0",
       "homepage": "https://github.com/Tingsters/Showtail"
     }
   ]

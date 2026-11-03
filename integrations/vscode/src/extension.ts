@@ -1,6 +1,5 @@
 import * as vscode from 'vscode';
 import { execFile, spawn } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import {
@@ -18,18 +17,14 @@ import {
   type ProjectControlExecution,
 } from './projectControl';
 import {
-  antigravitySaveReconcileInput,
-  automaticCaptureSucceeded,
   captureConsentFromStatus,
   captureStatusArgs,
   chatCommandRequiresProject,
   chatSessionId,
-  copilotImportArgs,
   extensionHookArgs,
   extensionHookPayload,
   latestProjectControlClaimId,
   latestReportProjectControlClaimId,
-  type AssistantCapture,
   type CliResult,
   type CaptureConsent,
   type ExtensionHookContext,
@@ -40,8 +35,6 @@ import {
 const execFileAsync = promisify(execFile);
 
 let output: vscode.OutputChannel;
-let extensionSessionId = `vscode-extension-${randomUUID()}`;
-let antigravitySaveContext: ExtensionHookContext | undefined;
 
 /**
  * Find `name` on PATH, skipping any directory inside an open workspace. A plain
@@ -246,9 +239,8 @@ async function runExtensionHook(
     cwd: string;
     projectCwd: string | null;
     workspacePaths: string[];
-    prompt?: string;
     editedFiles?: string[];
-    assistant?: AssistantCapture;
+    transcriptPath?: string;
   },
 ): Promise<string | undefined> {
   if ((await captureConsent(tool, input.cwd)) !== 'enabled') return undefined;
@@ -257,17 +249,6 @@ async function runExtensionHook(
     input.cwd,
     JSON.stringify(extensionHookPayload(input)),
   );
-}
-
-/** Skip Showtail/Git/dependency bookkeeping files. */
-function isInternalPath(p: string): boolean {
-  const setting = process.env.SHOWTAIL_HOME;
-  const home = resolvePath(
-    setting?.replace(/^~[\\/]/, homedir() + '/') || join(homedir(), '.showtail'),
-  ).toLowerCase();
-  const path = resolvePath(p).toLowerCase();
-  if (path === home || path.startsWith(home + sep)) return true;
-  return /(^|[\\/])(\.showtail|\.git|\.claude|node_modules)([\\/]|$)/.test(p);
 }
 
 /**
@@ -290,66 +271,37 @@ function captureTool(): ExtensionHookTool {
  * own file paths into one project, leaving unresolved or mixed-project work in
  * the local inbox. This needs no open folder, and repeated imports are idempotent.
  */
-let importTimer: NodeJS.Timeout | undefined;
-let importScheduleGeneration = 0;
-async function scheduleAntigravityImport(): Promise<void> {
-  const generation = ++importScheduleGeneration;
-  if (importTimer) clearTimeout(importTimer);
-  importTimer = undefined;
+const importTimers = new Map<string, NodeJS.Timeout>();
+async function scheduleAntigravityImport(file?: string): Promise<void> {
   const cwd = homedir();
   if ((await captureConsent('antigravity-ide', cwd)) !== 'enabled') return;
-  if (generation !== importScheduleGeneration) return;
-
-  importTimer = setTimeout(() => {
-    importTimer = undefined;
-    if (generation !== importScheduleGeneration) return;
-    void (async () => {
-      if ((await captureConsent('antigravity-ide', cwd)) !== 'enabled') return;
-      const imported = await runShowtailResult(
-        ['import', 'antigravity-ide', '--auto'],
-        cwd,
-      );
-      const consentAfter =
-        imported.exitCode === 0
-          ? await captureConsent('antigravity-ide', cwd)
-          : 'unknown';
-      if (!automaticCaptureSucceeded(imported, consentAfter)) return;
-
-      output.appendLine(
-        'Captured the Antigravity conversation (auto-routed by edit paths).',
-      );
-
-      // The transcript and editor-save watchers use different native session IDs.
-      // Re-opening the save ledger after import lets it discover the trail the
-      // transcript prompt just created and project any earlier saved files there.
-      const reconcile = antigravitySaveReconcileInput(
-        extensionSessionId,
-        antigravitySaveContext,
-      );
-      if (!reconcile) return;
-      const captured = await runExtensionHook(
-        'antigravity-ide',
-        'session-start',
-        reconcile,
-      );
-      if (captured !== undefined) {
-        output.appendLine('Reconciled saved files with the Antigravity conversation.');
-      }
-    })();
-  }, 3000);
+  if (!file) {
+    await runShowtailResult(['sync', '--tool', 'antigravity-ide', '--json'], cwd);
+    return;
+  }
+  const sessionId = /[\\/]brain[\\/]([^\\/]+)[\\/]/i.exec(file)?.[1];
+  if (!sessionId) return;
+  const prior = importTimers.get(file);
+  if (prior) clearTimeout(prior);
+  importTimers.set(
+    file,
+    setTimeout(() => {
+      importTimers.delete(file);
+      void runExtensionHook('antigravity-ide', 'stop', {
+        sessionId,
+        ...hookContext(),
+        transcriptPath: file,
+      });
+    }, 300),
+  );
 }
 
 export function activate(context: vscode.ExtensionContext): void {
-  extensionSessionId = `vscode-extension-${randomUUID()}`;
-  antigravitySaveContext = undefined;
-  importScheduleGeneration = 0;
   output = vscode.window.createOutputChannel('Showtail');
   context.subscriptions.push(output, {
     dispose: () => {
-      if (importTimer) clearTimeout(importTimer);
-      importTimer = undefined;
-      importScheduleGeneration += 1;
-      antigravitySaveContext = undefined;
+      for (const timer of importTimers.values()) clearTimeout(timer);
+      importTimers.clear();
     },
   });
   const host = isAntigravityHost() ? 'Antigravity IDE' : 'GitHub Copilot';
@@ -363,7 +315,6 @@ export function activate(context: vscode.ExtensionContext): void {
   );
   registerProjectControlTool(context, projectControl, output);
   registerChatParticipant(context, projectControl);
-  registerSaveCapture(context, projectControl);
   registerCommands(context, projectControl);
   if (isAntigravityHost()) {
     registerAntigravity(context);
@@ -402,42 +353,24 @@ function registerCopilotChatCapture(context: vscode.ExtensionContext): void {
   // Debounced import of one changed chat-session file. The session-start hook is
   // ledger-only: it carries all workspace roots but cannot initialize a trail.
   const scheduleImport = (file: string): void => {
-    const generation = (scheduleGenerations.get(file) ?? 0) + 1;
-    scheduleGenerations.set(file, generation);
     const existing = timers.get(file);
     if (existing) clearTimeout(existing);
-    timers.delete(file);
-    const capture = hookContext();
-    void (async () => {
-      if ((await captureConsent('github-copilot', capture.cwd)) !== 'enabled') return;
-      if (scheduleGenerations.get(file) !== generation) return;
-      timers.set(
-        file,
-        setTimeout(() => {
-          timers.delete(file);
-          if (scheduleGenerations.get(file) !== generation) return;
-          const sessionId = chatSessionId(file);
-          void (async () => {
-            const seeded = await runExtensionHook('github-copilot', 'session-start', {
-              sessionId,
-              ...capture,
-            });
-            if (seeded === undefined) return;
-            const imported = await runShowtailResult(
-              copilotImportArgs(file),
-              capture.cwd,
-            );
-            const consentAfter =
-              imported.exitCode === 0
-                ? await captureConsent('github-copilot', capture.cwd)
-                : 'unknown';
-            if (!automaticCaptureSucceeded(imported, consentAfter)) return;
-            output.appendLine(`Captured native Copilot Chat from ${file}`);
-          })();
-        }, 2000),
-      );
-    })();
+    timers.set(
+      file,
+      setTimeout(() => {
+        timers.delete(file);
+        void runExtensionHook('github-copilot', 'stop', {
+          sessionId: chatSessionId(file),
+          ...hookContext(),
+          transcriptPath: file,
+        });
+      }, 300),
+    );
   };
+  void (async () => {
+    if ((await captureConsent('github-copilot', homedir())) === 'enabled')
+      await runShowtailResult(['sync', '--tool', 'copilot', '--json'], homedir());
+  })();
 
   const watch = (
     dir: string,
@@ -495,8 +428,8 @@ function registerAntigravity(context: vscode.ExtensionContext): void {
     const watcher = vscode.workspace.createFileSystemWatcher(
       new vscode.RelativePattern(vscode.Uri.file(brain), '**/transcript*.jsonl'),
     );
-    watcher.onDidChange(() => void scheduleAntigravityImport());
-    watcher.onDidCreate(() => void scheduleAntigravityImport());
+    watcher.onDidChange((uri) => void scheduleAntigravityImport(uri.fsPath));
+    watcher.onDidCreate((uri) => void scheduleAntigravityImport(uri.fsPath));
     context.subscriptions.push(watcher);
     output.appendLine(`Watching Antigravity transcripts under ${brain}`);
   } catch (err) {
@@ -557,16 +490,12 @@ function registerChatParticipant(
     output.appendLine('Chat API unavailable here — skipping the @showtail participant.');
     return;
   }
-  const tool = captureTool();
   const handler: vscode.ChatRequestHandler = async (
     request,
     chatContext,
     stream,
     token,
   ) => {
-    const implicit = implicitProjectFolder();
-    let promptCaptured = false;
-
     if (
       request.command === 'report' ||
       request.command === 'open_report' ||
@@ -610,125 +539,13 @@ function registerChatParticipant(
       return;
     }
 
-    // Plain text: capture the prompt through the same durable hook ledger, then
-    // give a quick answer. This also works before a project trail exists.
-    if (request.prompt.trim().length > 0) {
-      const capture = hookContext(implicit);
-      const captured = await runExtensionHook(tool, 'user-prompt', {
-        sessionId: extensionSessionId,
-        ...capture,
-        prompt: request.prompt,
-      });
-      if (captured !== undefined) {
-        promptCaptured = true;
-        if (tool === 'github-copilot') {
-        }
-        stream.markdown('_Captured your prompt with Showtail._\n\n');
-      }
-    }
-
-    try {
-      const model =
-        request.model ?? (await vscode.lm.selectChatModels({ vendor: 'copilot' }))[0];
-      if (model) {
-        const messages = [vscode.LanguageModelChatMessage.User(request.prompt)];
-        const response = await model.sendRequest(messages, {}, token);
-        let full = '';
-        for await (const chunk of response.text) {
-          stream.markdown(chunk);
-          full += chunk;
-        }
-        // Capture the model's reply as ai_output, linked to the prompt's turn.
-        if (promptCaptured && full.trim().length > 0) {
-          const modelId = model.family ?? model.id;
-          const capture = hookContext(implicit);
-          await runExtensionHook(tool, 'stop', {
-            sessionId: extensionSessionId,
-            ...capture,
-            assistant: {
-              text: full,
-              sourceId: `vscode-participant:${extensionSessionId}:${randomUUID()}`,
-              ...(modelId ? { model: modelId } : {}),
-            },
-          });
-        }
-      }
-    } catch (err) {
-      output.appendLine(`model request failed: ${(err as Error).message}`);
-    }
-
     stream.markdown(
-      '\n\n_For hands-on file edits, use Copilot agent mode — Showtail can capture saved ' +
-        'edits when connected. Try `@showtail /report` or `/verify` anytime._',
+      'Use `/report`, `/open_report`, `/verify`, `/status`, or `/trace` to review Showtail history.',
     );
   };
 
   const participant = vscode.chat.createChatParticipant('showtail.chat', handler);
   context.subscriptions.push(participant);
-}
-
-/** Send saved files through the ledger-first hook path (debounced per file). */
-function registerSaveCapture(
-  context: vscode.ExtensionContext,
-  projectControl: ProjectControlController,
-): void {
-  const timers = new Map<string, NodeJS.Timeout>();
-  const scheduleGenerations = new Map<string, number>();
-
-  const sub = vscode.workspace.onDidSaveTextDocument((doc) => {
-    const captureOnSave = vscode.workspace
-      .getConfiguration('showtail')
-      .get<boolean>('captureOnSave', true);
-    if (!captureOnSave) return;
-
-    const file = doc.uri.fsPath;
-    if (isInternalPath(file)) return;
-    const preferredCwd = folderFor(doc.uri) ?? dirname(file);
-    const tool = captureTool();
-    const capture = hookContext(preferredCwd);
-    const generation = (scheduleGenerations.get(file) ?? 0) + 1;
-    scheduleGenerations.set(file, generation);
-
-    // Collapse rapid saves of the same file into one hook event.
-    const existing = timers.get(file);
-    if (existing) clearTimeout(existing);
-    timers.delete(file);
-    void (async () => {
-      // Snapshot consent when the save occurs. A file saved while capture is
-      // stopped must not be queued and then picked up by a quick reconnect.
-      if ((await captureConsent(tool, capture.cwd)) !== 'enabled') return;
-      if (scheduleGenerations.get(file) !== generation) return;
-      timers.set(
-        file,
-        setTimeout(() => {
-          timers.delete(file);
-          if (scheduleGenerations.get(file) !== generation) return;
-          void runExtensionHook(tool, 'post-edit', {
-            sessionId: extensionSessionId,
-            ...capture,
-            editedFiles: [file],
-          }).then(async (captured) => {
-            if (captured === undefined) return;
-            output.appendLine(`Captured saved file ${file}`);
-            await projectControl.noteEditProject(file);
-            if (tool === 'antigravity-ide') {
-              antigravitySaveContext = capture;
-              void scheduleAntigravityImport();
-            } else {
-            }
-          });
-        }, 1500),
-      );
-    })();
-  });
-
-  context.subscriptions.push(sub, {
-    dispose: () => {
-      for (const t of timers.values()) clearTimeout(t);
-      timers.clear();
-      scheduleGenerations.clear();
-    },
-  });
 }
 
 async function runProjectControlCommand(

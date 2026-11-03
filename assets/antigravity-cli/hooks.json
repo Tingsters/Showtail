@@ -1,0 +1,22 @@
+{
+  "showtail-cli": {
+    "enabled": true,
+    "SessionStart": [
+      {
+        "type": "command",
+        "command": "showtail hook session-start --tool antigravity-cli"
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "write_to_file|replace_file_content|multi_replace_file_content|edit|create_file",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "showtail hook post-edit --tool antigravity-cli"
+          }
+        ]
+      }
+    ]
+  }
+}

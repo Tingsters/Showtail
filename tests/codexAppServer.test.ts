@@ -164,6 +164,12 @@ describe('threadToTranscript: Codex 0.163 (real recorded thread)', () => {
       expect(t.messages.filter((m) => m.role === 'edit').map((m) => m.files)).toEqual([
         ['src/keep.ts'],
       ]);
+      expect(t.messages.filter((m) => m.role === 'tool_call' && m.isError)).toHaveLength(
+        2,
+      );
+      expect(t.events?.filter((e) => e.type === 'tool_result' && e.isError)).toHaveLength(
+        2,
+      );
     } finally {
       cleanup(root);
     }

@@ -1,17 +1,14 @@
-import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
-// Single source of truth: committed under assets/ AND embedded into the binary,
-// so `showtail connect antigravity-cli` is fully self-contained (no files to ship).
-import AGY_BODY from '../../assets/antigravity-cli/AGY.showtail.md' with { type: 'text' };
+import {
+  removeReportSkill,
+  reportSkillState,
+  retireInstructions,
+  writeReportSkill,
+} from './reportDiscovery.ts';
+import { REPORT_SKILL as AGY_BODY } from './reportDiscovery.ts';
 import { geminiHome } from './antigravityCliTranscript.ts';
 import type { AntigravityHookEvents } from './hookMerge.ts';
-import {
-  applyManagedBlock,
-  classify,
-  parseBlock,
-  shortHash,
-  stripManagedBlock,
-} from './managedBlock.ts';
 import { findRoot, readJson, writeJson } from './storage.ts';
 import { dirOf } from './text.ts';
 
@@ -38,9 +35,8 @@ export type InstallScope = 'user' | 'project';
 // on a shared `showtail` key, so disconnecting one silently killed the other).
 // Its lifecycle events differ too — there is NO `UserPromptSubmit`. We use:
 //   * SessionStart  → session-start
-//   * PreInvocation → user-prompt (fires before inference; carries the prompt)
 //   * PostToolUse   → post-edit   (matched to the file-writing tools)
-//   * Stop          → stop        (reconcile the transcript)
+// Prompt and Stop handlers are deliberately absent; native history is read in the worker.
 // agy runs a hook's `command` through cmd.exe and execs the FIRST token, so the
 // command must be a BARE `showtail` on PATH (no quotes/paths) — quoted paths fail.
 // agy's PostToolUse payload is `{ toolCall:{name,args:{TargetFile,CodeContent,…}},
@@ -53,9 +49,6 @@ export const ANTIGRAVITY_CLI_HOOK_EVENTS: AntigravityHookEvents = {
   SessionStart: [
     { type: 'command', command: 'showtail hook session-start --tool antigravity-cli' },
   ],
-  PreInvocation: [
-    { type: 'command', command: 'showtail hook user-prompt --tool antigravity-cli' },
-  ],
   PostToolUse: [
     {
       matcher:
@@ -65,7 +58,6 @@ export const ANTIGRAVITY_CLI_HOOK_EVENTS: AntigravityHookEvents = {
       ],
     },
   ],
-  Stop: [{ type: 'command', command: 'showtail hook stop --tool antigravity-cli' }],
 };
 
 /** The `showtail` block exactly as it appears inside agy's hooks.json. */
@@ -125,52 +117,14 @@ export function writeAntigravityCliInstructions(
   target: AntigravityCliTarget,
   options: WriteOptions = {},
 ): void {
-  mkdirSync(dirOf(target.contextFile), { recursive: true });
-  // The instructions file has no frontmatter, so the preamble is empty.
-  applyManagedBlock(target.contextFile, AGY_BODY, '', options.force ?? false);
+  writeReportSkill('antigravity-cli', [target.contextFile], options.force);
 }
-
-export interface AntigravityCliInstructionsState {
-  installed: boolean;
-  upToDate: boolean;
-  userEdited: boolean;
-  updateAvailable: boolean;
+export function antigravityCliInstructionsState(_target: AntigravityCliTarget) {
+  return reportSkillState('antigravity-cli');
 }
-
-const ABSENT: AntigravityCliInstructionsState = {
-  installed: false,
-  upToDate: false,
-  userEdited: false,
-  updateAvailable: false,
-};
-
-/** Inspect the instructions managed block and classify it for status/refresh. */
-export function antigravityCliInstructionsState(
-  target: AntigravityCliTarget,
-): AntigravityCliInstructionsState {
-  if (!existsSync(target.contextFile)) return ABSENT;
-  const parsed = parseBlock(readFileSync(target.contextFile, 'utf8'));
-  if (!parsed) return ABSENT;
-  const cls = classify(parsed, AGY_BODY);
-  if (cls === 'edited') {
-    return {
-      installed: true,
-      upToDate: false,
-      userEdited: true,
-      updateAvailable: parsed.sha !== shortHash(AGY_BODY),
-    };
-  }
-  if (cls === 'stale') {
-    return { installed: true, upToDate: false, userEdited: false, updateAvailable: true };
-  }
-  return { installed: true, upToDate: true, userEdited: false, updateAvailable: false };
-}
-
-/** Remove the Showtail block from the instructions file (deletes it if it empties). */
 export function removeAntigravityCliInstructions(target: AntigravityCliTarget): boolean {
-  return stripManagedBlock(target.contextFile, () =>
-    rmSync(target.contextFile, { force: true }),
-  );
+  const retired = retireInstructions(target.contextFile);
+  return removeReportSkill('antigravity-cli') || retired;
 }
 
 // --- Hooks (our named block inside agy's hooks.json) -----------------------
@@ -181,7 +135,9 @@ function readBlocks(hooksFile: string): Record<string, unknown> {
   try {
     return readJson<Record<string, unknown>>(hooksFile);
   } catch {
-    return {};
+    throw new Error(
+      'HOOK_CONFIG_INVALID: repair the existing hook configuration before reconnecting.',
+    );
   }
 }
 

@@ -46,6 +46,7 @@ export interface HistorySession {
   id: string;
   tool: string;
   nativeSessionId: string;
+  parentNativeSessionId?: string;
   authorId: string;
   cwd: string | null;
   workspacePaths: string[];
@@ -518,6 +519,9 @@ export class HistoryStore {
       id: r.id,
       tool: r.tool,
       nativeSessionId: r.native_id,
+      ...(r.tool === 'claude-code' && r.native_id.includes(':agent:')
+        ? { parentNativeSessionId: r.native_id.split(':agent:')[0] }
+        : {}),
       authorId: this.effectiveAuthor(r.author_id),
       cwd: r.cwd && isUsableWorkspacePath(r.cwd) ? r.cwd : null,
       workspacePaths: JSON.parse(r.workspaces).filter(isUsableWorkspacePath),
@@ -716,7 +720,21 @@ export class HistoryStore {
                 : v;
         clean.conversationRef = this.putObject(canonical(visit(safe)));
       }
-      const prior = sourceId ? this.bySource(sessionId, sourceId) : undefined;
+      // Supplemental observations point at a native edit. Replaying the
+      // supplement must supersede its own row, never the edit it points to.
+      const observationRow =
+        sourceId && input.duplicateOf
+          ? (this.query(
+              'SELECT * FROM records WHERE session_id=? AND source_id=? ORDER BY seq DESC LIMIT 1',
+            ).get(sessionId, sourceId) as Row | null)
+          : undefined;
+      const prior = sourceId
+        ? input.duplicateOf
+          ? observationRow
+            ? this.hydrate(observationRow)
+            : undefined
+          : this.bySource(sessionId, sourceId)
+        : undefined;
       // A transcript enriches the same captured event; it must retain the original
       // import provenance and metadata the provider does not repeat.
       if (prior)
@@ -819,8 +837,12 @@ export class HistoryStore {
     const turn = this.repairSchema
       ? "COALESCE(json_extract(o.patch,'$.turnId'),r.turn_id,r.id)"
       : 'COALESCE(r.turn_id,r.id)';
-    if (this.repairSchema && !options.includeSuperseded)
-      where.push("json_extract(o.patch,'$.duplicateOf') IS NULL");
+    if (!options.includeSuperseded)
+      where.push(
+        this.repairSchema
+          ? "COALESCE(json_extract(o.patch,'$.duplicateOf'),json_extract(r.payload,'$.duplicateOf')) IS NULL"
+          : "json_extract(r.payload,'$.duplicateOf') IS NULL",
+      );
     if (!options.includeSuperseded)
       where.push(
         'NOT EXISTS (SELECT 1 FROM records newer WHERE newer.supersedes_id=r.id)',

@@ -15,8 +15,9 @@
  *    transcript (share link, saved page, pasted text) into the trail.
  * Most plugins have one; Claude Code has both.
  */
+import type { DiscoveredPlanFile, HookTranscript } from '@showtail/agent-traces/model';
 import type { EditedFile } from '../core/hookInput.ts';
-import type { ConversationEvent, Tool } from '../types.ts';
+import type { Tool } from '../types.ts';
 
 export type { EditedFile };
 
@@ -175,7 +176,6 @@ export type {
   HookTranscriptEvent,
   HookTranscriptMessage,
 } from '@showtail/agent-traces/model';
-import type { DiscoveredPlanFile, HookTranscript } from '@showtail/agent-traces/model';
 
 // --- Legacy transcript migration -----------------------------------------
 
@@ -191,6 +191,8 @@ export interface MigrationTranscriptCandidate {
 export interface MigrationCapability {
   /** Discover every local transcript for this provider, newest first. */
   discover(): MigrationTranscriptCandidate[];
+  /** Optional documented history API for sessions without an on-disk transcript. */
+  discoverNative?(): Promise<MigrationTranscriptCandidate[]>;
   /** Parse one candidate into the provider-neutral transcript model. */
   read(
     candidate: MigrationTranscriptCandidate,

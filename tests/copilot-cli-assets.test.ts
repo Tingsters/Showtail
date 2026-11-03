@@ -1,58 +1,18 @@
-import { describe, expect, test } from 'bun:test';
+import { expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import {
-  COPILOT_BODY,
-  COPILOT_CLI_HOOK_EVENTS,
-  copilotCliHooksJson,
-} from '../src/core/copilotCli.ts';
-import { PROJECT_TARGETING_INSTRUCTIONS } from '../src/core/projectTargetingInstructions.ts';
-
-const REPO = join(import.meta.dir, '..');
-
-function readAsset(...parts: string[]): string {
-  return readFileSync(join(REPO, ...parts), 'utf8').replace(/\r\n/g, '\n');
-}
-
-describe('copilot-cli assets stay in sync with the single source of truth', () => {
-  test('embedded instructions body includes the shared targeting policy', () => {
-    expect(COPILOT_BODY.replace(/\r\n/g, '\n')).toBe(
-      `${readAsset('assets', 'copilot-cli', 'showtail.showtail.md').trimEnd()}\n\n${PROJECT_TARGETING_INSTRUCTIONS.trim()}\n`,
-    );
-  });
-
-  test('hook config carries the version envelope and tags every command --tool copilot-cli', () => {
-    const json = copilotCliHooksJson();
-    // Copilot CLI expects a top-level version field on hook files.
-    expect(json).toContain('"version": 1');
-    // postToolUse is matched to the edit tools, including apply_patch.
-    expect(json).toContain('"matcher"');
-    expect(json).toContain('apply_patch');
-
-    const commands = Object.values(COPILOT_CLI_HOOK_EVENTS).flatMap((groups) =>
-      groups.flatMap((g) => g.hooks.map((h) => h.command)),
-    );
-    // sessionStart, userPromptSubmitted, postToolUse, agentStop, sessionEnd.
-    expect(commands.length).toBe(5);
-    for (const c of commands) {
-      expect(c).toContain('showtail hook');
-      expect(c).toContain('--tool copilot-cli');
-    }
-  });
-
-  test('instructions rely on hooks instead of model-driven routine capture', () => {
-    expect(COPILOT_BODY).not.toContain('showtail log');
-    expect(COPILOT_BODY).not.toContain('showtail artifact');
-    expect(COPILOT_BODY).toContain('lifecycle hooks own routine capture');
-    expect(COPILOT_BODY).toContain(
-      'showtail projects "<student-project-wording>" --json',
-    );
-    expect(COPILOT_BODY).toContain('--project "<project-id>"');
-    expect(COPILOT_BODY).toContain('Never choose from the terminal working directory');
-    expect(COPILOT_BODY).toContain('returned `projectId`');
-    expect(COPILOT_BODY).not.toMatch(
-      /^\s*showtail (?:report|verify|status)(?:\s+#.*)?\s*$/m,
-    );
-    expect(COPILOT_BODY).not.toMatch(/`showtail (?:report|verify|status)`/);
-  });
+import { COPILOT_BODY, copilotCliHooksJson } from '../src/core/copilotCli.ts';
+import { REPORT_SKILL } from '../src/core/reportDiscovery.ts';
+const asset = (file: string) =>
+  readFileSync(join(import.meta.dir, '../assets', file), 'utf8').replace(/\r\n/g, '\n');
+test('copilotCli: embedded skill and hook assets match the binary', () => {
+  expect(COPILOT_BODY.replace(/\r\n/g, '\n')).toBe(asset('shared/report-skill.md'));
+  expect(COPILOT_BODY.replace(/\r\n/g, '\n')).toBe(REPORT_SKILL);
+  expect(asset('copilot-cli/hooks.json')).toBe(copilotCliHooksJson());
+});
+test('copilotCli: callbacks never capture prompts or run before invocation', () => {
+  const hooks = copilotCliHooksJson();
+  expect(hooks).not.toContain('user-prompt');
+  expect(hooks).not.toContain('PreInvocation');
+  expect(hooks).not.toContain('UserPromptSubmit');
 });

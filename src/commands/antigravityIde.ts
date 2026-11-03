@@ -11,8 +11,9 @@ import {
   installAntigravityIdeExtension,
   uninstallAntigravityIdeExtension,
 } from '../core/antigravityIdeExtension.ts';
-import { printInstallHeader, printUninstallResult, scopeOf } from './installBase.ts';
+import { reportSkillFile } from '../core/reportDiscovery.ts';
 import type { ConnectUninstallResult } from '../plugins/types.ts';
+import { printInstallHeader, printUninstallResult, scopeOf } from './installBase.ts';
 
 export interface AntigravityIdeInstallOptions {
   user?: boolean;
@@ -36,9 +37,14 @@ export async function runAntigravityIdeInstall(
   const scope = scopeOf(options);
   const target = resolveAntigravityIdeTarget(scope, options.cwd);
 
-  const existed = existsSync(target.contextFile);
+  const existed = existsSync(reportSkillFile('antigravity-ide'));
   writeAntigravityIdeInstructions(target, { force: options.force });
-  printInstallHeader('Antigravity IDE instructions', target.contextFile, scope, existed);
+  printInstallHeader(
+    'Antigravity IDE instructions',
+    reportSkillFile('antigravity-ide'),
+    scope,
+    existed,
+  );
 
   // The capture path: the Showtail VS Code extension, installed via the IDE's CLI.
   const ext = installAntigravityIdeExtension();

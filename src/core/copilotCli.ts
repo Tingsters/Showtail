@@ -1,3 +1,9 @@
+import {
+  removeReportSkill,
+  reportSkillState,
+  retireInstructions,
+  writeReportSkill,
+} from './reportDiscovery.ts';
 /**
  * GitHub Copilot CLI — the `copilot` command (github-copilot-sdk). A live-capture
  * connect plugin, mirroring Codex/Gemini CLI: lifecycle hooks plus a custom
@@ -33,32 +39,21 @@
  * below are the names Copilot actually reads; the `command` strings are unchanged
  * (`showtail hook <subcommand>`), since those drive Showtail's own dispatch.
  */
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { homedir, platform } from 'node:os';
 import { join } from 'node:path';
-// Host guidance plus the shared project-targeting policy are embedded, so
-// `showtail connect copilot-cli` remains fully self-contained.
-import COPILOT_HOST_BODY from '../../assets/copilot-cli/showtail.showtail.md' with { type: 'text' };
-import { hostHome } from './hostHome.ts';
+import { REPORT_SKILL as COPILOT_HOST_BODY } from './reportDiscovery.ts';
+import { commandOnPath } from './detect.ts';
 import {
   hasOurHooks,
   mergeHookEvents,
   unmergeHookEvents,
   type HookEvents,
 } from './hookMerge.ts';
-import {
-  applyManagedBlock,
-  classify,
-  parseBlock,
-  shortHash,
-  stripManagedBlock,
-} from './managedBlock.ts';
+import { hostHome } from './hostHome.ts';
 import { findRoot, readJson, writeJson } from './storage.ts';
-import { dirOf } from './text.ts';
-import { commandOnPath } from './detect.ts';
-import { withProjectTargetingInstructions } from './projectTargetingInstructions.ts';
 
-export const COPILOT_BODY = withProjectTargetingInstructions(COPILOT_HOST_BODY);
+export const COPILOT_BODY = COPILOT_HOST_BODY;
 
 export type InstallScope = 'user' | 'project';
 
@@ -131,13 +126,6 @@ export const COPILOT_CLI_HOOK_EVENTS: HookEvents = {
       ],
     },
   ],
-  userPromptSubmitted: [
-    {
-      hooks: [
-        { type: 'command', command: 'showtail hook user-prompt --tool copilot-cli' },
-      ],
-    },
-  ],
   postToolUse: [
     {
       matcher: 'edit|create|write|str_replace_editor|apply_patch',
@@ -206,10 +194,7 @@ export function resolveCopilotCliTarget(
 
 // --- Instructions (managed block in a dedicated .instructions.md) -----------
 
-// Copilot's path-specific instruction files require an `applyTo` frontmatter
-// directive (glob syntax); `**` applies to every file. It sits OUTSIDE the
-// managed block as a small preamble (the body is what Showtail fingerprints).
-const INSTRUCTIONS_PREAMBLE = "---\napplyTo: '**'\n---";
+// Legacy instruction paths above are retained only for migration cleanup.
 
 export interface WriteOptions {
   /** Overwrite even a user-edited block (take the latest). */
@@ -221,72 +206,14 @@ export function writeCopilotCliInstructions(
   target: CopilotCliTarget,
   options: WriteOptions = {},
 ): void {
-  mkdirSync(dirOf(target.instructionsFile), { recursive: true });
-  applyManagedBlock(
-    target.instructionsFile,
-    COPILOT_BODY,
-    INSTRUCTIONS_PREAMBLE,
-    options.force ?? false,
-  );
+  writeReportSkill('copilot-cli', [target.instructionsFile], options.force);
 }
-
-export interface CopilotCliInstructionsState {
-  installed: boolean;
-  upToDate: boolean;
-  userEdited: boolean;
-  updateAvailable: boolean;
+export function copilotCliInstructionsState(_target: CopilotCliTarget) {
+  return reportSkillState('copilot-cli');
 }
-
-const ABSENT: CopilotCliInstructionsState = {
-  installed: false,
-  upToDate: false,
-  userEdited: false,
-  updateAvailable: false,
-};
-
-/** Inspect the instructions file's managed block and classify it for status/refresh. */
-export function copilotCliInstructionsState(
-  target: CopilotCliTarget,
-): CopilotCliInstructionsState {
-  if (!existsSync(target.instructionsFile)) return ABSENT;
-  const parsed = parseBlock(readFileSync(target.instructionsFile, 'utf8'));
-  if (!parsed) return ABSENT;
-  const cls = classify(parsed, COPILOT_BODY);
-  if (cls === 'edited') {
-    return {
-      installed: true,
-      upToDate: false,
-      userEdited: true,
-      updateAvailable: parsed.sha !== shortHash(COPILOT_BODY),
-    };
-  }
-  if (cls === 'stale') {
-    return { installed: true, upToDate: false, userEdited: false, updateAvailable: true };
-  }
-  return { installed: true, upToDate: true, userEdited: false, updateAvailable: false };
-}
-
-/**
- * Remove the Showtail block from the instructions file. The file is a dedicated,
- * Showtail-created `.instructions.md` whose only non-block content is the
- * `applyTo` frontmatter we wrote to satisfy Copilot's path-specific format — so
- * if stripping our block leaves only that frontmatter (or nothing), delete the
- * whole file. Any *other* user content outside the block is preserved.
- */
 export function removeCopilotCliInstructions(target: CopilotCliTarget): boolean {
-  if (!existsSync(target.instructionsFile)) return false;
-  const removed = stripManagedBlock(target.instructionsFile, () =>
-    rmSync(target.instructionsFile, { force: true }),
-  );
-  if (!removed) return false;
-  // If the remainder is just our own frontmatter preamble, drop the orphan file.
-  if (
-    existsSync(target.instructionsFile) &&
-    readFileSync(target.instructionsFile, 'utf8').trim() === INSTRUCTIONS_PREAMBLE.trim()
-  ) {
-    rmSync(target.instructionsFile, { force: true });
-  }
-  return true;
+  const retired = retireInstructions(target.instructionsFile);
+  return removeReportSkill('copilot-cli') || retired;
 }
 
 // --- Hooks (.github/hooks/showtail.json | ~/.copilot/hooks/showtail.json) ----
@@ -303,7 +230,9 @@ function readHooksFile(hooksFile: string): Record<string, unknown> {
     if (obj.version === undefined) obj.version = 1;
     return obj;
   } catch {
-    return { version: 1 };
+    throw new Error(
+      'HOOK_CONFIG_INVALID: repair the existing hook configuration before reconnecting.',
+    );
   }
 }
 

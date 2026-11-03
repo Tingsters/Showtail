@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import {
   appendFileSync,
   existsSync,
@@ -10,8 +10,18 @@ import {
   unlinkSync,
   writeFileSync,
 } from 'node:fs';
-import { dirname, isAbsolute, join, resolve } from 'node:path';
+import { isAbsolute, join, resolve } from 'node:path';
+import { getPlugin, getPluginById } from '../plugins/registry.ts';
+import type { HookTranscript, NormalizedHookEvent } from '../plugins/types.ts';
+import { ALWAYS_CAPTURE_TOOLS, withholdSensitiveParts } from './conversationPrivacy.ts';
 import { dataHome, dataPath, ensureDataHome } from './dataHome.ts';
+import { asyncReplyDecision } from './decisions.ts';
+import { changedFiles, maybeCurrentCommit } from './git.ts';
+import {
+  readGlobalConfig,
+  toolCaptureEnabledAt,
+  toolCaptureGloballyDisabled,
+} from './globalConfig.ts';
 import {
   HistoryStore,
   canonical,
@@ -22,24 +32,10 @@ import {
   type RecordInput,
   type SessionInput,
 } from './history.ts';
-import { getPlugin, getPluginById } from '../plugins/registry.ts';
-import type {
-  HookTranscript,
-  HookTranscriptMessage,
-  NormalizedHookEvent,
-} from '../plugins/types.ts';
 import { extractPrompt, extractSessionId, type HookPayload } from './hookInput.ts';
-import {
-  readGlobalConfig,
-  toolCaptureEnabledAt,
-  toolCaptureGloballyDisabled,
-} from './globalConfig.ts';
-import { isSyntheticPrompt } from './syntheticPrompt.ts';
-import { asyncReplyDecision } from './decisions.ts';
 import { redact } from './redact.ts';
-import { withholdSensitiveParts, ALWAYS_CAPTURE_TOOLS } from './conversationPrivacy.ts';
 import { isSensitivePath } from './sensitivePaths.ts';
-import { changedFiles, maybeCurrentCommit } from './git.ts';
+import { isSyntheticPrompt } from './syntheticPrompt.ts';
 
 export type CaptureEvent =
   | 'session-start'
@@ -394,7 +390,7 @@ export function captureTranscript(
           eventTurn =
             promptAliases.get(event.sourceId) ??
             store.bySource(session.id, event.sourceId)?.turnId;
-        if (!eventTurn || !inWindow(event.timestamp, options.since)) continue;
+        if (!inWindow(event.timestamp, options.since)) continue;
         append({
           kind: 'conversation_event',
           sourceId: `conversation:${event.sourceId}`,
@@ -414,6 +410,8 @@ export function captureTranscript(
         const prompts = transcript.messages.filter(
           (m) =>
             m.role === 'user' &&
+            m.origin !== 'agent' &&
+            m.origin !== 'harness' &&
             (m.origin === 'human' || !isSyntheticPrompt(m.text)) &&
             !asyncReplyDecision(m.text),
         );
@@ -432,7 +430,9 @@ export function captureTranscript(
         store.noteSourceRead(session.id, {
           ...sourceStat,
           status:
-            prompts.length && matched === prompts.length && !transcript.warnings?.length
+            (prompts.length || session.parentNativeSessionId) &&
+            matched === prompts.length &&
+            !transcript.warnings?.length
               ? 'reconciled'
               : 'partial',
           prompts: prompts.length,
@@ -524,6 +524,7 @@ export function commitCapture(batch: CaptureBatch): number {
   }
 }
 
+/** @deprecated Compatibility reconciler for historical capture fixtures. Runtime hooks use passiveObserver. */
 export async function runHistoryHook(
   event: CaptureEvent,
   raw: unknown,
@@ -736,7 +737,6 @@ function createFileHash(path: string): string {
   // Hashes are evidence only; the captured diff supplies the reviewable content.
   return digestBytes(readFileSync(path));
 }
-import { createHash } from 'node:crypto';
 function digestBytes(bytes: Buffer): string {
   return createHash('sha256').update(bytes).digest('hex');
 }

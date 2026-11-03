@@ -1,9 +1,4 @@
-/**
- * Claude Code — the only environment with both capabilities: live capture
- * (skill + hooks in `.claude/`) and transcript import (`.jsonl` sessions on
- * disk). All Claude-specific install/state logic stays in core/skill.ts and
- * commands/skill.ts; this module just exposes it through the plugin contract.
- */
+/** Claude Code native-history reader and user-level observer registration. */
 import { existsSync } from 'node:fs';
 import { runSkillInstall, runSkillUninstall } from '../commands/skill.ts';
 import {

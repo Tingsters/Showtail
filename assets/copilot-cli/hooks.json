@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "hooks": {
+    "sessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "showtail hook session-start --tool copilot-cli"
+          }
+        ]
+      }
+    ],
+    "postToolUse": [
+      {
+        "matcher": "edit|create|write|str_replace_editor|apply_patch",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "showtail hook post-edit --tool copilot-cli"
+          }
+        ]
+      }
+    ],
+    "agentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "showtail hook stop --tool copilot-cli"
+          }
+        ]
+      }
+    ],
+    "sessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "showtail hook stop --tool copilot-cli"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -5,12 +5,7 @@ export const SHOWTAIL_VSCODE_HOOK_PROTOCOL = 'showtail-vscode-extension-hook/v1'
 export const SHOWTAIL_PROJECT_CONTROL_PROTOCOL = 'showtail-project-control/v2';
 
 export type ExtensionHookTool = 'github-copilot' | 'antigravity-ide';
-export type ExtensionHookEvent =
-  | 'session-start'
-  | 'user-prompt'
-  | 'post-edit'
-  | 'stop'
-  | 'session-end';
+export type ExtensionHookEvent = 'session-start' | 'post-edit' | 'stop' | 'session-end';
 
 export function extensionHookArgs(
   tool: ExtensionHookTool,
@@ -26,17 +21,6 @@ export function captureStatusArgs(tool: ExtensionHookTool): string[] {
 
 export function copilotImportArgs(file: string): string[] {
   return ['import', 'copilot', '--file', file, '--auto', '--quiet'];
-}
-
-/** Refresh project instructions without treating the editor as an explicit reconnect. */
-export function copilotManagedRefreshArgs(force = false): string[] {
-  return [
-    'connect',
-    'copilot',
-    '--no-extension',
-    '--managed-refresh',
-    ...(force ? ['--force'] : []),
-  ];
 }
 
 export function projectsArgs(selector?: string): string[] {
@@ -55,12 +39,6 @@ export function statusArgs(projectSelector: string, tool: ExtensionHookTool): st
   return ['status', '--project', projectSelector, '--json', '--tool', tool];
 }
 
-export interface AssistantCapture {
-  text: string;
-  sourceId: string;
-  model?: string;
-}
-
 export interface ExtensionHookContext {
   projectCwd: string | null;
   cwd: string;
@@ -74,16 +52,15 @@ export interface ExtensionHookPayload {
   cwd: string;
   workspacePaths: string[];
   timestamp: string;
-  prompt?: string;
+  transcript_path?: string;
   editedFiles?: string[];
-  assistant?: AssistantCapture;
+  transcriptPath?: string;
 }
 
 export interface HookPayloadInput extends ExtensionHookContext {
   sessionId: string;
-  prompt?: string;
   editedFiles?: string[];
-  assistant?: AssistantCapture;
+  transcriptPath?: string;
   timestamp?: string;
 }
 
@@ -95,9 +72,8 @@ export function extensionHookPayload(input: HookPayloadInput): ExtensionHookPayl
     cwd: input.cwd,
     workspacePaths: input.workspacePaths,
     timestamp: input.timestamp ?? new Date().toISOString(),
-    ...(input.prompt !== undefined ? { prompt: input.prompt } : {}),
+    ...(input.transcriptPath ? { transcript_path: input.transcriptPath } : {}),
     ...(input.editedFiles !== undefined ? { editedFiles: input.editedFiles } : {}),
-    ...(input.assistant !== undefined ? { assistant: input.assistant } : {}),
   };
 }
 
@@ -279,12 +255,6 @@ export function selectProjectPath(
 }
 
 /** Re-open the save ledger after an Antigravity transcript creates its trail. */
-export function antigravitySaveReconcileInput(
-  sessionId: string,
-  context: ExtensionHookContext | undefined,
-): HookPayloadInput | undefined {
-  return context ? { sessionId, ...context } : undefined;
-}
 
 export interface CliResult {
   stdout: string;
@@ -362,15 +332,6 @@ export function automaticCaptureSucceeded(
   consentAfter: CaptureConsent,
 ): boolean {
   return result.exitCode === 0 && consentAfter === 'enabled';
-}
-
-/** A managed refresh counts only when its file exists and consent stayed enabled. */
-export function managedRefreshSucceeded(
-  result: CliResult,
-  sentinelPresent: boolean,
-  consentAfter: CaptureConsent,
-): boolean {
-  return result.exitCode === 0 && sentinelPresent && consentAfter === 'enabled';
 }
 
 export interface RelocatedSession {

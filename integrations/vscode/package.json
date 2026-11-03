@@ -2,7 +2,7 @@
   "name": "showtail",
   "displayName": "Showtail",
   "description": "Show your work: capture your AI coding prompts and edits (GitHub Copilot, Antigravity IDE) into a local provenance trail.",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "publisher": "Tingsters",
   "license": "Apache-2.0",
   "repository": {
@@ -25,7 +25,9 @@
     "untrustedWorkspaces": {
       "supported": "limited",
       "description": "Showtail runs the showtail program on file saves, so it does nothing in a workspace you have not trusted.",
-      "restrictedConfigurations": ["showtail.binaryPath"]
+      "restrictedConfigurations": [
+        "showtail.binaryPath"
+      ]
     }
   },
   "contributes": {
@@ -34,8 +36,8 @@
         "id": "showtail.chat",
         "name": "showtail",
         "fullName": "Showtail",
-        "description": "Record your prompt and drive Showtail (report, verify, status, trace)",
-        "isSticky": true,
+        "description": "Review Showtail history with report, verification, and status commands",
+        "isSticky": false,
         "commands": [
           {
             "name": "report",
@@ -83,7 +85,7 @@
         "name": "showtail_project_control",
         "displayName": "Showtail Project Control",
         "userDescription": "Resolve the intended local project and run a Showtail report, open, status, or verify action.",
-        "modelDescription": "Use this tool for Showtail report, open report, status, and verify requests. Pass selector only when it copies the student's project wording or an explicitly supplied trail ID/path. Never invent a filesystem path from the open workspace. The tool resolves locally, asks the student when evidence is ambiguous, and runs the control by stable trail ID or a validated explicit path when copied trail IDs require disambiguation.",
+        "modelDescription": "Use only when the user explicitly requests a Showtail report, open report, verification, or status. Copy their project wording into selector; the tool resolves ambiguity locally.",
         "toolReferenceName": "showtailProjectControl",
         "tags": [
           "showtail",
@@ -128,13 +130,8 @@
           "type": "string",
           "default": "showtail",
           "scope": "machine",
-          "markdownDescription": "Path to the showtail CLI (on PATH by default). Machine/user setting only: a project's own `.vscode/settings.json` cannot change it, because the extension runs this program on every save.",
+          "markdownDescription": "Path to the showtail CLI (on PATH by default). Machine/user setting only: a project's own `.vscode/settings.json` cannot change it, because the extension runs this program when native history changes.",
           "description": "Path to the showtail CLI (on PATH by default)."
-        },
-        "showtail.captureOnSave": {
-          "type": "boolean",
-          "default": true,
-          "description": "Capture saved files through Showtail's local work ledger."
         }
       }
     }

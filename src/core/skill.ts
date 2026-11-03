@@ -1,5 +1,10 @@
-import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import {
+  removeReportSkill,
+  retireInstructions,
+  writeReportSkill,
+} from './reportDiscovery.ts';
 // The skill markdown is the single source of truth: it is committed under
 // assets/ AND embedded into the compiled binary via this text import, so
 // `showtail connect claude` is fully self-contained (no files to ship).
@@ -11,13 +16,7 @@ import {
   type HookEvents,
 } from './hookMerge.ts';
 import { hostHome } from './hostHome.ts';
-import {
-  applyManagedBlock,
-  classify,
-  parseBlock,
-  shortHash,
-  splitFrontmatter,
-} from './managedBlock.ts';
+import { classify, parseBlock, shortHash, splitFrontmatter } from './managedBlock.ts';
 import { findRoot, readJson, writeJson } from './storage.ts';
 
 export { SKILL_MD };
@@ -31,13 +30,10 @@ export const HOOK_EVENTS: HookEvents = {
   SessionStart: [
     { hooks: [{ type: 'command', command: 'showtail hook session-start' }] },
   ],
-  UserPromptSubmit: [
-    { hooks: [{ type: 'command', command: 'showtail hook user-prompt' }] },
-  ],
   PostToolUse: [
     {
       matcher: 'Edit|Write|MultiEdit',
-      hooks: [{ type: 'command', command: 'showtail hook post-edit' }],
+      hooks: [{ type: 'command', command: 'showtail hook post-edit', async: true }],
     },
   ],
   Stop: [{ hooks: [{ type: 'command', command: 'showtail hook stop' }] }],
@@ -95,10 +91,11 @@ export interface WriteSkillOptions {
  * later tell an untouched (possibly stale) install from a user-edited one.
  */
 export function writeSkill(target: SkillTarget, opts: WriteSkillOptions = {}): string {
-  mkdirSync(dirname(target.skillFile), { recursive: true });
-  const { preamble, body } = splitFrontmatter(SKILL_MD);
-  applyManagedBlock(target.skillFile, body, preamble, opts.force ?? false);
-  return target.skillFile;
+  return writeReportSkill(
+    'claude',
+    target.scope === 'project' ? [target.skillFile] : [],
+    opts.force,
+  );
 }
 
 export interface SkillState {
@@ -168,9 +165,9 @@ export function uninstallHooks(target: SkillTarget): boolean {
 
 /** Remove the installed skill directory (if present). */
 export function removeSkill(target: SkillTarget): boolean {
-  if (!existsSync(target.skillDir)) return false;
-  rmSync(target.skillDir, { recursive: true, force: true });
-  return true;
+  return target.scope === 'user'
+    ? removeReportSkill('claude')
+    : retireInstructions(target.skillFile);
 }
 
 /** Does this settings.json contain our auto-capture hooks? */

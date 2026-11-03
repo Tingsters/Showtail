@@ -2,6 +2,15 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
+  runAntigravityIdeInstall,
+  runAntigravityIdeUninstall,
+} from '../src/commands/antigravityIde.ts';
+import {
+  ANTIGRAVITY_BLOCK_NAME,
+  installAntigravityCliHooks,
+  uninstallAntigravityCliHooks,
+} from '../src/core/antigravityCli.ts';
+import {
   AGY_IDE_BODY,
   ANTIGRAVITY_IDE_HOOK_EVENTS,
   ANTIGRAVITY_IDE_HOOK_NAMESPACE,
@@ -14,18 +23,10 @@ import {
   uninstallAntigravityIdeHooks,
   writeAntigravityIdeInstructions,
 } from '../src/core/antigravityIde.ts';
-import { antigravityIdePlugin } from '../src/plugins/antigravity-ide.ts';
-import {
-  ANTIGRAVITY_BLOCK_NAME,
-  installAntigravityCliHooks,
-  uninstallAntigravityCliHooks,
-} from '../src/core/antigravityCli.ts';
 import { mergeNamedHooks } from '../src/core/namedHooks.ts';
+import { reportSkillFile } from '../src/core/reportDiscovery.ts';
 import { writeJson } from '../src/core/storage.ts';
-import {
-  runAntigravityIdeInstall,
-  runAntigravityIdeUninstall,
-} from '../src/commands/antigravityIde.ts';
+import { antigravityIdePlugin } from '../src/plugins/antigravity-ide.ts';
 import { cleanup, makeTempDir, stubInstalledExtensionCli } from './helpers.ts';
 
 /**
@@ -54,15 +55,17 @@ describe('antigravity-ide install / uninstall', () => {
       await runAntigravityIdeInstall({ user: true, cwd: dir });
       const target = resolveAntigravityIdeTarget('user', dir);
 
-      expect(existsSync(target.contextFile)).toBe(true);
-      expect(readFileSync(target.contextFile, 'utf8')).toContain('showtail:start');
+      expect(existsSync(reportSkillFile('antigravity-ide'))).toBe(true);
+      expect(readFileSync(reportSkillFile('antigravity-ide'), 'utf8')).toContain(
+        'showtail:start',
+      );
       // The IDE's lifecycle hooks are dead (only PostToolUse fires); connect must
       // NOT write the global hooks.json — capture rides on the VS Code extension.
       expect(existsSync(target.hooksFile)).toBe(false);
       expect(antigravityIdeAutoCaptureActive(dir)).toBe(false);
 
       await runAntigravityIdeUninstall({ cwd: dir });
-      expect(existsSync(target.contextFile)).toBe(false);
+      expect(existsSync(reportSkillFile('antigravity-ide'))).toBe(false);
     } finally {
       cleanup(dir);
     }
@@ -75,7 +78,7 @@ describe('antigravity-ide install / uninstall', () => {
       await runAntigravityIdeInstall({ user: true, cwd: dir });
       await runAntigravityIdeInstall({ user: true, cwd: dir });
       const target = resolveAntigravityIdeTarget('user', dir);
-      const context = readFileSync(target.contextFile, 'utf8');
+      const context = readFileSync(reportSkillFile('antigravity-ide'), 'utf8');
       expect(context.match(/showtail:start/g)?.length).toBe(1);
     } finally {
       cleanup(dir);
@@ -96,7 +99,7 @@ describe('antigravity-ide install / uninstall', () => {
       const settings = JSON.parse(readFileSync(target.hooksFile, 'utf8'));
       const bundle = settings[ANTIGRAVITY_IDE_HOOK_NAMESPACE];
       expect(bundle.enabled).toBe(true);
-      for (const event of ['PreInvocation', 'PostToolUse', 'Stop']) {
+      for (const event of ['PostToolUse']) {
         expect(Array.isArray(bundle[event])).toBe(true);
       }
     } finally {
@@ -295,7 +298,7 @@ describe('antigravity-ide install / uninstall', () => {
 
   test('the instructions body is non-empty and mentions the tool', () => {
     expect(AGY_IDE_BODY.length).toBeGreaterThan(0);
-    expect(AGY_IDE_BODY).toContain('Antigravity IDE');
+    expect(AGY_IDE_BODY).toContain('explicitly requests Showtail');
   });
 });
 

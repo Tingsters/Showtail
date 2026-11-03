@@ -20,7 +20,7 @@ Before running the installer, note the user-level changes it makes:
   Showtail installation directory;
 - adds that directory to your user `PATH`;
 - creates machine-local state under `~/.showtail/`;
-- enables automatic local capture and may add Showtail hooks, instructions, or
+- enables automatic local capture and may add Showtail observer hooks, a deferred reporting skill, or
   an extension to detected AI tools.
 
 Set the `SHOWTAIL_DISABLE_FIRST_RUN` environment variable to `1` before

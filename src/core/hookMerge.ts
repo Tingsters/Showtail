@@ -11,6 +11,8 @@
 export interface HookCommand {
   type: 'command';
   command: string;
+  /** Supported observer-only background command execution in Claude/Codex. */
+  async?: boolean;
   /** Per-command timeout in seconds. Used by hosts that support it (Antigravity IDE). */
   timeout?: number;
 }
@@ -69,11 +71,14 @@ export function mergeHookEvents(
   settings: Record<string, unknown>,
   events: HookEvents,
 ): Record<string, unknown> {
-  const next = { ...settings };
+  // Remove obsolete events too (e.g. prompt capture retired in passive mode).
+  const next = unmergeHookEvents(settings);
   const hooks: HookEvents =
     next.hooks && typeof next.hooks === 'object' ? { ...(next.hooks as HookEvents) } : {};
 
   for (const [event, groups] of Object.entries(events)) {
+    if (hooks[event] !== undefined && !Array.isArray(hooks[event]))
+      throw new Error('HOOK_CONFIG_INVALID: refusing to replace an unknown hook format.');
     const existing = Array.isArray(hooks[event]) ? hooks[event]! : [];
     // Drop any prior Showtail entries so re-running install never duplicates.
     const preserved = existing.filter((g) => !isOurGroup(g));
@@ -93,8 +98,13 @@ export function unmergeHookEvents(
   const hooks: HookEvents = { ...(next.hooks as HookEvents) };
 
   for (const event of Object.keys(hooks)) {
+    if (!Array.isArray(hooks[event])) continue;
     const groups = Array.isArray(hooks[event]) ? hooks[event]! : [];
-    const kept = groups.filter((g) => !isOurGroup(g));
+    const kept = groups.flatMap((g) => {
+      if (!isOurGroup(g)) return [g];
+      const remaining = g.hooks.filter((h) => !h.command.includes(HOOK_MARKER));
+      return remaining.length ? [{ ...g, hooks: remaining }] : [];
+    });
     if (kept.length === 0) {
       delete hooks[event];
     } else {

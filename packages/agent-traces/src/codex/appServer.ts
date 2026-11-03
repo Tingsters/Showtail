@@ -24,19 +24,19 @@
  */
 import { spawn } from 'node:child_process';
 import { resolve } from 'node:path';
+import type { EditedFile } from '../hooks/payload.ts';
+import type { HookTranscriptEvent } from '../model.ts';
+import { toRepoRelative } from '../paths/pathUtil.ts';
 import {
   answeredAsyncQuestions,
   asyncQuestionsFrom,
-  asyncReplyDecision,
   asyncReplyCallId,
+  asyncReplyDecision,
   parseAsyncQuestionReply,
   renderDecisionText,
 } from '../transcript/decisions.ts';
-import type { EditedFile } from '../hooks/payload.ts';
 import { asArray, asString, prop } from '../util/parse.ts';
-import { toRepoRelative } from '../paths/pathUtil.ts';
 import type { CodexMessage, CodexTranscript } from './transcript.ts';
-import type { HookTranscriptEvent } from '../model.ts';
 
 // --- JSON-RPC transport ------------------------------------------------------
 
@@ -202,6 +202,54 @@ export interface ThreadRead {
 
 const PAGE_LIMIT = 500;
 const MAX_PAGES = 400;
+
+/** Discover persisted threads without starting or resuming any conversation. */
+export async function listThreads(
+  rpc: CodexRpc,
+): Promise<{ id: string; cwd?: string; updatedAt?: number }[]> {
+  const threads: { id: string; cwd?: string; updatedAt?: number }[] = [];
+  for (const archived of [false, true]) {
+    let cursor: string | undefined;
+    const seen = new Set<string>();
+    for (let page = 0; page < MAX_PAGES; page++) {
+      const result = await rpc.request('thread/list', {
+        limit: 100,
+        archived,
+        useStateDbOnly: true,
+        modelProviders: [],
+        sourceKinds: [
+          'cli',
+          'vscode',
+          'exec',
+          'appServer',
+          'subAgent',
+          'subAgentReview',
+          'subAgentCompact',
+          'subAgentThreadSpawn',
+          'subAgentOther',
+          'unknown',
+        ],
+        ...(cursor ? { cursor } : {}),
+      });
+      for (const entry of asArray(prop(result, 'data')) ?? []) {
+        const id = asString(prop(entry, 'id'));
+        if (id)
+          threads.push({
+            id,
+            cwd: asString(prop(entry, 'cwd')),
+            updatedAt: asNumber(prop(entry, 'updatedAt')),
+          });
+      }
+      const next = asString(prop(result, 'nextCursor'));
+      if (!next) break;
+      if (seen.has(next)) throw new Error('CODEX_HISTORY_CURSOR_REPEATED');
+      seen.add(next);
+      cursor = next;
+      if (page === MAX_PAGES - 1) throw new Error('CODEX_HISTORY_PAGE_LIMIT');
+    }
+  }
+  return [...new Map(threads.map((t) => [t.id, t])).values()];
+}
 
 /** Page every item of a thread, preferring `thread/items/list`. */
 export async function readThread(rpc: CodexRpc, threadId: string): Promise<ThreadRead> {
@@ -433,8 +481,44 @@ export function threadToTranscript(
         text,
       });
     } else if (type === 'fileChange') {
-      if (!id || (asString(prop(item, 'status')) ?? 'completed') !== 'completed')
+      if (!id) continue;
+      const status = asString(prop(item, 'status')) ?? 'completed';
+      if (status !== 'completed') {
+        const failed = status === 'failed' || status === 'declined';
+        messages.push({
+          role: 'tool_call',
+          sourceId: `codex:file-attempt:${id}`,
+          timestamp,
+          text: `Codex file change (${status})`,
+          toolName: 'apply_patch',
+          ...(failed ? { isError: true } : {}),
+        });
+        events.push({
+          sequence: eventSeq++,
+          type: 'tool_use',
+          sourceId: `codex:tool:${id}:use`,
+          timestamp,
+          toolUseId: id,
+          toolName: 'apply_patch',
+          input: {
+            files: (asArray(prop(item, 'changes')) ?? []).flatMap(
+              (c) => asString(prop(c, 'path')) ?? [],
+            ),
+          },
+        });
+        if (failed)
+          events.push({
+            sequence: eventSeq++,
+            type: 'tool_result',
+            sourceId: `codex:tool:${id}:result`,
+            timestamp,
+            toolUseId: id,
+            toolName: 'apply_patch',
+            isError: true,
+            content: status,
+          });
         continue;
+      }
       const edits: EditedFile[] = [];
       for (const change of asArray(prop(item, 'changes')) ?? []) {
         const path = asString(prop(change, 'path'));

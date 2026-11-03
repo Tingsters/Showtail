@@ -1,0 +1,17 @@
+{
+  "showtail-ide": {
+    "enabled": true,
+    "PostToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "showtail hook post-edit --tool antigravity-ide",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}

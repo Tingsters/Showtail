@@ -12,20 +12,17 @@ import { join } from 'node:path';
 import {
   SHOWTAIL_PROJECT_CONTROL_PROTOCOL,
   SHOWTAIL_VSCODE_HOOK_PROTOCOL,
-  antigravitySaveReconcileInput,
   automaticCaptureSucceeded,
   captureConsentFromStatus,
   captureStatusArgs,
   chatCommandRequiresProject,
   chatSessionId,
   copilotImportArgs,
-  copilotManagedRefreshArgs,
   createProjectControlMarker,
   extensionHookArgs,
   extensionHookPayload,
   latestProjectControlClaimId,
   latestReportProjectControlClaimId,
-  managedRefreshSucceeded,
   parseOptionalProjectPath,
   parseProjectCommandResult,
   parseProjectControlMarker,
@@ -76,7 +73,7 @@ describe('VS Code extension hook protocol', () => {
       cwd: 'C:\\Users\\student',
       projectCwd: null,
       workspacePaths: [],
-      prompt: 'Plan the project.',
+      transcriptPath: 'C:/native/chat-1.jsonl',
       timestamp: '2026-09-10T12:00:00.000Z',
     });
 
@@ -86,7 +83,7 @@ describe('VS Code extension hook protocol', () => {
       cwd: 'C:\\Users\\student',
       projectCwd: null,
       workspacePaths: [],
-      prompt: 'Plan the project.',
+      transcript_path: 'C:/native/chat-1.jsonl',
       timestamp: '2026-09-10T12:00:00.000Z',
     });
   });
@@ -103,22 +100,6 @@ describe('VS Code extension hook protocol', () => {
     expect(chatCommandRequiresProject('open_report')).toBe(true);
     expect(chatCommandRequiresProject('verify')).toBe(true);
     expect(chatCommandRequiresProject('trace')).toBe(true);
-  });
-
-  test('reconciles Antigravity saves only after a save context exists', () => {
-    expect(antigravitySaveReconcileInput('extension-session', undefined)).toBeUndefined();
-    expect(
-      antigravitySaveReconcileInput('extension-session', {
-        cwd: '/project',
-        projectCwd: '/project',
-        workspacePaths: ['/project'],
-      }),
-    ).toEqual({
-      sessionId: 'extension-session',
-      cwd: '/project',
-      projectCwd: '/project',
-      workspacePaths: ['/project'],
-    });
   });
 
   test('uses ledger-first hook/import commands and explicit project paths', () => {
@@ -153,19 +134,6 @@ describe('VS Code extension hook protocol', () => {
       '/tmp/session.jsonl',
       '--auto',
       '--quiet',
-    ]);
-    expect(copilotManagedRefreshArgs()).toEqual([
-      'connect',
-      'copilot',
-      '--no-extension',
-      '--managed-refresh',
-    ]);
-    expect(copilotManagedRefreshArgs(true)).toEqual([
-      'connect',
-      'copilot',
-      '--no-extension',
-      '--managed-refresh',
-      '--force',
     ]);
     expect(projectsArgs()).toEqual(['projects', '--json']);
     expect(projectsArgs('sparkle word game')).toEqual([
@@ -250,11 +218,6 @@ describe('VS Code extension hook protocol', () => {
     expect(automaticCaptureSucceeded(ok, 'disabled')).toBe(false);
     expect(automaticCaptureSucceeded(ok, 'unknown')).toBe(false);
     expect(automaticCaptureSucceeded(refused, 'enabled')).toBe(false);
-
-    expect(managedRefreshSucceeded(ok, true, 'enabled')).toBe(true);
-    expect(managedRefreshSucceeded(ok, false, 'enabled')).toBe(false);
-    expect(managedRefreshSucceeded(ok, true, 'disabled')).toBe(false);
-    expect(managedRefreshSucceeded(refused, true, 'enabled')).toBe(false);
   });
 });
 

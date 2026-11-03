@@ -1,16 +1,16 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { createInterface } from 'node:readline/promises';
-import { getPlugin, migrationPlugins } from '../plugins/registry.ts';
-import type { HookTranscript, MigrationTranscriptCandidate } from '../plugins/types.ts';
-import { HistoryStore, digest } from '../core/history.ts';
-import { captureTranscript, automaticCaptureEnabled } from '../core/historyCapture.ts';
-import { readGlobalConfig, toolCaptureEnabledAt } from '../core/globalConfig.ts';
 import * as chatgpt from '../core/chatgpt.ts';
-import * as gemini from '../core/gemini.ts';
-import { CHATGPT_HTML, GEMINI_HTML, parseConversationHtml } from '../core/pasteHtml.ts';
 import { readClipboard, readClipboardHtml } from '../core/clipboard.ts';
+import * as gemini from '../core/gemini.ts';
+import { readGlobalConfig, toolCaptureEnabledAt } from '../core/globalConfig.ts';
+import { HistoryStore, digest } from '../core/history.ts';
+import { automaticCaptureEnabled, captureTranscript } from '../core/historyCapture.ts';
+import { CHATGPT_HTML, GEMINI_HTML, parseConversationHtml } from '../core/pasteHtml.ts';
 import { redact } from '../core/redact.ts';
+import { getPlugin } from '../plugins/registry.ts';
+import type { HookTranscript } from '../plugins/types.ts';
 
 export interface HistoryImportOptions {
   file?: string;
@@ -226,72 +226,8 @@ export async function runHistoryImport(
 /** Catch up only known sessions; never scan project folders to find storage. */
 export async function catchUpHistory(
   store: HistoryStore,
-  selection?: import('../core/history.ts').HistorySelection,
+  _selection?: import('../core/history.ts').HistorySelection,
 ): Promise<number> {
-  let captured = 0;
-  const selected =
-    selection && selection.kind !== 'all'
-      ? new Set(
-          store
-            .records(selection)
-            .filter((r) => r.kind !== 'audit')
-            .map((r) => r.sessionId),
-        )
-      : undefined;
-  const candidatesByTool = new Map<string, MigrationTranscriptCandidate[]>();
-  for (const session of store.sessions()) {
-    if (selected && !selected.has(session.id)) continue;
-    if (!automaticCaptureEnabled(session.tool)) continue;
-    const plugin = migrationPlugins().find((p) => p.id === session.tool);
-    if (!plugin) continue;
-    try {
-      if (!session.transcriptPath && !candidatesByTool.has(plugin.id))
-        candidatesByTool.set(plugin.id, plugin.migration.discover());
-      const candidate = session.transcriptPath
-        ? {
-            path: session.transcriptPath,
-            providerSessionId: session.nativeSessionId,
-            mtimeMs: 0,
-            cwd: session.cwd ?? undefined,
-          }
-        : candidatesByTool
-            .get(plugin.id)
-            ?.find((c) => c.providerSessionId === session.nativeSessionId);
-      if (!candidate) continue;
-      const transcript = await plugin.migration.read(
-        candidate,
-        session.cwd ?? store.home,
-      );
-      const config = readGlobalConfig();
-      const enabledAt = toolCaptureEnabledAt(plugin.cliName);
-      const epoch = config.captureResumedAt ?? config.captureSince;
-      const since = [
-        enabledAt,
-        session.automaticSince,
-        config.captureSince,
-        config.captureResumedAt,
-      ]
-        .filter((v): v is string => !!v)
-        .sort()
-        .at(-1);
-      captured += captureTranscript(store, session, transcript, {
-        since,
-        continueCapture: () => {
-          const latest = readGlobalConfig();
-          return (
-            automaticCaptureEnabled(session.tool) &&
-            enabledAt === toolCaptureEnabledAt(plugin.cliName) &&
-            epoch === (latest.captureResumedAt ?? latest.captureSince)
-          );
-        },
-      });
-    } catch {
-      store.noteSourceRead(session.id, {
-        status: 'unavailable',
-        warningCodes: ['SOURCE_READ_FAILED'],
-        readAt: new Date().toISOString(),
-      });
-    }
-  }
-  return captured;
+  const { syncHistory } = await import('../core/historySync.ts');
+  return (await syncHistory(store)).imported;
 }

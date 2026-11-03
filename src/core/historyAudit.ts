@@ -4,6 +4,7 @@ import { isSyntheticPrompt } from './syntheticPrompt.ts';
 
 export interface SourceCoverage {
   sessionId: string;
+  parentNativeSessionId?: string;
   status: 'reconciled' | 'partial' | 'unavailable' | 'unchecked';
   prompts?: number;
   matched?: number;
@@ -41,6 +42,9 @@ export function auditHistory(store: HistoryStore, selection: HistorySelection) {
       );
       return {
         sessionId: s.id,
+        ...(s.parentNativeSessionId
+          ? { parentNativeSessionId: s.parentNativeSessionId }
+          : {}),
         status:
           s.transcriptPath && !available
             ? 'unavailable'

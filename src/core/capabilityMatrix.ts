@@ -18,9 +18,9 @@
  * The matrix lists every major vendor tool, including ones with no Showtail
  * plugin yet — those read as 🗺️ planned and double as the roadmap.
  */
-import type { Tool } from '../types.ts';
 import { getPluginById } from '../plugins/registry.ts';
 import type { EnvironmentPlugin } from '../plugins/types.ts';
+import type { Tool } from '../types.ts';
 
 export type CapStatus = 'full' | 'partial' | 'planned' | 'unsupported';
 
@@ -328,9 +328,10 @@ export const CAPABILITIES: Capability[] = [
   },
   {
     id: 'managed-instructions',
-    label: 'Managed instructions',
-    description: 'Installs and maintains Showtail instructions/skill inside the tool.',
-    note: 'Planned wherever the tool reads an instructions/rules file.',
+    label: 'On-request reporting skill',
+    description:
+      'Installs a deferred reporting skill; routine capture needs no model instructions.',
+    note: 'Uses native skill discovery where available; never adds standing project rules.',
     requires: hasConnect,
     surfaceRule: needInstructions,
     overrides: {
@@ -344,9 +345,9 @@ export const CAPABILITIES: Capability[] = [
   },
   {
     id: 'update-detection',
-    label: 'Instruction update detection',
+    label: 'Reporting skill updates',
     description:
-      'Detects stale or user-edited managed instructions and offers to refresh them.',
+      'Reports reporting-skill updates only when setup or status is requested.',
     note: 'Detected via a managed-block fingerprint in each tool’s instructions/skill file.',
     surfaceRule: needInstructions,
     overrides: {

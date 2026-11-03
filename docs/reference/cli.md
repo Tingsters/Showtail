@@ -6,10 +6,11 @@ registration is the exception: it must live in each host tool's own settings.
 | Command | Purpose |
 | --- | --- |
 | `home [--open]` | Print or open the storage folder |
-| `setup [--off]` | Enable or pause automatic capture; connect detected tools for this user |
-| `connect <tool> [--no-hooks]` | Connect a tool; instructions-only mode disables its automatic capture |
+| `setup [--off] [--no-assistant]` | Enable or pause capture; optionally omit assistant reporting discovery |
+| `connect <tool> [--no-hooks] [--no-assistant]` | Connect native collection; optionally omit callbacks or reporting discovery |
 | `disconnect <tool>` | Stop automatic capture and remove user-level registration; keep history |
 | `status [--tool <tool>]` | Show capture state, storage location, pending captures, and issues |
+| `sync [--tool <tool>]` | Discover and ingest eligible native history through the current cutoff |
 | `sessions [--project <id>] [--unassigned]` | List central conversations |
 | `projects [selector]` | List or resolve project views |
 | `projects add <path> [--name <name>]` | Register a view without changing its folder |

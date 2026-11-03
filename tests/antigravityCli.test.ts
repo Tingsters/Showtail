@@ -2,6 +2,10 @@ import { describe, expect, test } from 'bun:test';
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
+  runAntigravityCliInstall,
+  runAntigravityCliUninstall,
+} from '../src/commands/antigravityCli.ts';
+import {
   AGY_BODY,
   ANTIGRAVITY_BLOCK_NAME,
   antigravityCliHooksInstalledAt,
@@ -11,13 +15,10 @@ import {
   uninstallAntigravityCliHooks,
   writeAntigravityCliInstructions,
 } from '../src/core/antigravityCli.ts';
+import { reportSkillFile } from '../src/core/reportDiscovery.ts';
 import { writeJson } from '../src/core/storage.ts';
-import {
-  runAntigravityCliInstall,
-  runAntigravityCliUninstall,
-} from '../src/commands/antigravityCli.ts';
-import { cleanup, makeTempDir } from './helpers.ts';
 import { antigravityCliPlugin } from '../src/plugins/antigravity-cli.ts';
+import { cleanup, makeTempDir } from './helpers.ts';
 
 describe('antigravity-cli install / uninstall', () => {
   test('install writes instructions block + hooks.json', async () => {
@@ -28,20 +29,22 @@ describe('antigravity-cli install / uninstall', () => {
       await runAntigravityCliInstall({ user: true, cwd: dir });
       const target = resolveAntigravityCliTarget('user', dir);
 
-      expect(existsSync(target.contextFile)).toBe(true);
-      expect(readFileSync(target.contextFile, 'utf8')).toContain('showtail:start');
+      expect(existsSync(reportSkillFile('antigravity-cli'))).toBe(true);
+      expect(readFileSync(reportSkillFile('antigravity-cli'), 'utf8')).toContain(
+        'showtail:start',
+      );
       expect(antigravityCliHooksInstalledAt(target.hooksFile)).toBe(true);
 
       // agy's real schema: a `showtail-cli` named block with `enabled` + its real events.
       const settings = JSON.parse(readFileSync(target.hooksFile, 'utf8'));
       expect(settings[ANTIGRAVITY_BLOCK_NAME].enabled).toBe(true);
-      for (const event of ['SessionStart', 'PreInvocation', 'PostToolUse', 'Stop']) {
+      for (const event of ['SessionStart', 'PostToolUse']) {
         expect(Array.isArray(settings[ANTIGRAVITY_BLOCK_NAME][event])).toBe(true);
       }
 
       await runAntigravityCliUninstall({ cwd: dir });
       // Block was the only content, so the instructions file is removed; hooks emptied.
-      expect(existsSync(target.contextFile)).toBe(false);
+      expect(existsSync(reportSkillFile('antigravity-cli'))).toBe(false);
       expect(antigravityCliHooksInstalledAt(target.hooksFile)).toBe(false);
     } finally {
       cleanup(dir);
@@ -56,7 +59,7 @@ describe('antigravity-cli install / uninstall', () => {
       await runAntigravityCliInstall({ user: true, cwd: dir });
       const target = resolveAntigravityCliTarget('user', dir);
 
-      const context = readFileSync(target.contextFile, 'utf8');
+      const context = readFileSync(reportSkillFile('antigravity-cli'), 'utf8');
       expect(context.match(/showtail:start/g)?.length).toBe(1);
 
       const settings = JSON.parse(readFileSync(target.hooksFile, 'utf8'));
@@ -79,12 +82,12 @@ describe('antigravity-cli install / uninstall', () => {
       console.log = (...args: unknown[]) => void lines.push(args.join(' '));
       await runAntigravityCliInstall({ user: true, hooks: false, cwd: dir });
       const target = resolveAntigravityCliTarget('user', dir);
-      expect(existsSync(target.contextFile)).toBe(true);
+      expect(existsSync(reportSkillFile('antigravity-cli'))).toBe(true);
       expect(existsSync(target.hooksFile)).toBe(false);
       expect(antigravityCliHooksInstalledAt(target.hooksFile)).toBe(false);
 
       const output = lines.join('\n');
-      expect(output).toContain('routine prompts');
+      expect(output).toContain('reporting skill');
       expect(output).toContain('will not be captured automatically');
       expect(output).toContain('restore hands-free capture');
       expect(output).not.toContain('teach Antigravity CLI to log prompts');
@@ -104,7 +107,7 @@ describe('antigravity-cli install / uninstall', () => {
 
       await runAntigravityCliInstall({ user: true, hooks: false, cwd: dir });
 
-      expect(existsSync(target.contextFile)).toBe(true);
+      expect(existsSync(reportSkillFile('antigravity-cli'))).toBe(true);
       expect(antigravityCliHooksInstalledAt(target.hooksFile)).toBe(false);
     } finally {
       cleanup(dir);
@@ -193,6 +196,6 @@ describe('antigravity-cli install / uninstall', () => {
 
   test('the instructions body is non-empty and mentions the tool', () => {
     expect(AGY_BODY.length).toBeGreaterThan(0);
-    expect(AGY_BODY).toContain('Antigravity CLI');
+    expect(AGY_BODY).toContain('explicitly requests Showtail');
   });
 });

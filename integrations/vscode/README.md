@@ -1,7 +1,7 @@
 # Showtail for VS Code
 
-Capture supported GitHub Copilot Chat and Antigravity IDE conversations and saved
-files into one private Showtail home (`~/.showtail`, or absolute `SHOWTAIL_HOME`).
+Capture supported native GitHub Copilot Chat and Antigravity IDE history into one
+private Showtail home (`~/.showtail`, or absolute `SHOWTAIL_HOME`).
 Projects are views of that history. The extension does not install project
 instructions, create project storage, or change Git configuration.
 
@@ -10,6 +10,10 @@ Use `@showtail /report`, `/open_report`, `/status`, or `/verify` to select a pro
 view. Reports open from Showtail's central `reports/` directory; moving a project
 does not move or invalidate its reports. The project-control tool checks identities
 and storage paths before opening a report.
+
+The participant handles review commands only and never sends its own model requests.
+Unrelated manual file saves are not recorded. Native transcript changes trigger a
+short-lived collector; no service remains running after collection.
 
 Capture requires a trusted workspace. `showtail.binaryPath` is machine/user scoped.
 `showtail setup --off` pauses capture; `showtail disconnect copilot` or

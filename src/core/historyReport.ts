@@ -2,13 +2,15 @@ import { randomUUID } from 'node:crypto';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { basename, join, normalize, relative, sep } from 'node:path';
 import type { Artifact, ConversationEvent, Event, ReportData } from '../types.ts';
+import { dataPath } from './dataHome.ts';
 import {
   HistoryStore,
   digest,
   isUsableWorkspacePath,
-  type HistoryRecord,
   type HistorySelection,
 } from './history.ts';
+import { auditHistory } from './historyAudit.ts';
+import { PLAN_APPROVED_TAG, PLAN_REVISED_TAG } from './plans.ts';
 import {
   buildAuthorshipStatement,
   buildModelUsage,
@@ -20,12 +22,9 @@ import {
 } from './report/data.ts';
 import { renderHtml } from './report/html.ts';
 import { renderMarkdown, type ReportRenderOptions } from './report/markdown.ts';
-import { PLAN_APPROVED_TAG, PLAN_REVISED_TAG } from './plans.ts';
+import { scanResidual } from './sanitize.ts';
 import { sanitizeReportData } from './shareReport.ts';
 import { buildManifest, verifySubmission } from './submission.ts';
-import { scanResidual } from './sanitize.ts';
-import { dataPath } from './dataHome.ts';
-import { auditHistory } from './historyAudit.ts';
 import { isSyntheticPrompt } from './syntheticPrompt.ts';
 
 export interface HistoryReportOptions extends ReportRenderOptions {
@@ -279,6 +278,19 @@ export function buildHistoryReport(
     (selection.kind === 'sessions' ? 'Selected conversations' : 'My work');
   return {
     schemaVersion: 3,
+    fileObservations: store
+      .records(selection, { includeSuperseded: true })
+      .filter(
+        (r) =>
+          r.tags?.includes('observed-file-state') && r.duplicateOf && r.file && r.sha256,
+      )
+      .map((r) => ({
+        recordId: r.id,
+        editId: r.duplicateOf!,
+        path: fileLabel(r.file!),
+        sha256: r.sha256!,
+        observedAt: r.ts,
+      })),
     coverage: auditHistory(store, selection).coverage,
     unattributedWork,
     project: project?.displayName ?? null,

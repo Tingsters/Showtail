@@ -1,9 +1,17 @@
 import { Command, CommanderError, Option } from 'commander';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
-import { basename, join, resolve } from 'node:path';
+import { join, resolve } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { dataHome, ensureDataHome } from '../core/dataHome.ts';
+import {
+  disableToolAutoConnect,
+  disableToolCapture,
+  enableToolAutoConnect,
+  enableToolCapture,
+  readGlobalConfig,
+  writeGlobalConfig,
+} from '../core/globalConfig.ts';
 import {
   CONTROL_VERSION,
   HistoryStore,
@@ -11,53 +19,51 @@ import {
   pendingCount,
   workspaceRoot,
   type HistorySelection,
-  type RecordInput,
 } from '../core/history.ts';
-import {
-  automaticCaptureEnabled,
-  captureIssue,
-  drainPending,
-  runHistoryHook,
-  type CaptureEvent,
-} from '../core/historyCapture.ts';
-import { exportHistory, writeHistoryReport } from '../core/historyReport.ts';
-import { importLegacy } from '../core/legacyImport.ts';
 import { auditHistory } from '../core/historyAudit.ts';
+import { automaticCaptureEnabled, drainPending } from '../core/historyCapture.ts';
 import {
-  prepareRepair,
-  applyRepair,
-  repairPreview,
-  backupHistory,
-} from '../core/historyRepair.ts';
-import {
-  readGlobalConfig,
-  writeGlobalConfig,
-  disableToolCapture,
-  enableToolCapture,
-  disableToolAutoConnect,
-  enableToolAutoConnect,
+  toolCaptureEnabledAt,
+  toolCaptureGloballyDisabled,
 } from '../core/globalConfig.ts';
-import {
-  PLUGINS,
-  connectPluginOrThrow,
-  connectPlugins,
-  getPlugin,
-} from '../plugins/registry.ts';
-import { SHOWTAIL_VERSION } from '../core/version.ts';
-import { openInDefaultApp } from '../core/terminal.ts';
-import { verifySubmission } from '../core/submission.ts';
-import { runUpdate } from './update.ts';
-import { catchUpHistory, runHistoryImport } from './historyImport.ts';
-import { approvePr, previewPr } from './historySubmit.ts';
-import { isEventType } from '../core/schema.ts';
 import { redactHistory } from '../core/historyRedact.ts';
-import { createHash } from 'node:crypto';
+import {
+  applyRepair,
+  backupHistory,
+  prepareRepair,
+  repairPreview,
+} from '../core/historyRepair.ts';
+import { exportHistory, writeHistoryReport } from '../core/historyReport.ts';
+import { syncHistory } from '../core/historySync.ts';
 import {
   readMachineIdentity,
   resolveIdentity,
   slugifyEmail,
   writeMachineIdentity,
 } from '../core/identity.ts';
+import { importLegacy } from '../core/legacyImport.ts';
+import { collectObservations } from '../core/passiveCollector.ts';
+import { migratePassiveIntegration } from '../core/passiveMigration.ts';
+import { observationCount } from '../core/passiveObserver.ts';
+import {
+  removeReportSkill,
+  reportSkillState,
+  setReportDiscovery,
+  writeReportSkill,
+} from '../core/reportDiscovery.ts';
+import { isEventType } from '../core/schema.ts';
+import { verifySubmission } from '../core/submission.ts';
+import { openInDefaultApp } from '../core/terminal.ts';
+import { SHOWTAIL_VERSION } from '../core/version.ts';
+import {
+  PLUGINS,
+  connectPluginOrThrow,
+  connectPlugins,
+  getPlugin,
+} from '../plugins/registry.ts';
+import { catchUpHistory, runHistoryImport } from './historyImport.ts';
+import { approvePr, previewPr } from './historySubmit.ts';
+import { runUpdate } from './update.ts';
 
 type Options = Record<string, any>;
 const print = (value: unknown): void => console.log(JSON.stringify(value, null, 2));
@@ -195,11 +201,28 @@ function status(opts: Options): Record<string, any> {
       const active =
         automaticCaptureEnabled(p.id) &&
         (state.hooksActive === true || state.captureActive === true);
+      const eligible = active || !!toolCaptureEnabledAt(p.cliName);
       return {
         tool: p.id,
         label: p.label,
         ...state,
-        mode: active ? 'automatic' : state.connected ? 'manual' : 'disconnected',
+        mode: !automaticCaptureEnabled(p.id)
+          ? 'paused'
+          : active
+            ? 'automatic'
+            : eligible && p.migration
+              ? 'on-demand'
+              : 'unavailable',
+        transport: state.captureActive
+          ? 'editor'
+          : state.hooksActive
+            ? 'hooks'
+            : eligible && p.migration
+              ? 'on-demand'
+              : null,
+        assistant: reportSkillState(p.cliName),
+        lastIngestedAt: null as string | null,
+        issues: [] as { code: string; tool: string }[],
       };
     });
   let selected: HistorySelection | undefined;
@@ -210,6 +233,16 @@ function status(opts: Options): Record<string, any> {
     selected = opts.project ? selection(store, opts) : undefined;
     sessions = store.workSessions(selected).length;
     projects = store.projects();
+  }
+  if (historyExists()) {
+    using healthStore = new HistoryStore({ readonly: true });
+    for (const tool of tools) {
+      const saved = healthStore.meta(`capture-health:${tool.tool}`);
+      Object.assign(
+        tool,
+        saved ? JSON.parse(saved) : { lastIngestedAt: null, issues: [] },
+      );
+    }
   }
   const selectedTool = opts.tool ? tools[0] : undefined;
   const config = readGlobalConfig() as Options;
@@ -233,7 +266,7 @@ function status(opts: Options): Record<string, any> {
       ? (projects as any[]).find((p) => p.projectId === selected.projectId)
       : undefined;
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     home: dataHome(),
     historyExists: historyExists(),
     captureEnabled: config.captureEnabled ?? false,
@@ -246,7 +279,7 @@ function status(opts: Options): Record<string, any> {
     projectCount: projects.length,
     ...(opts.verboseJson ? { projects } : {}),
     selection: selected ?? null,
-    pendingCaptures: pendingCount(),
+    pendingCaptures: pendingCount() + observationCount(),
     issues,
     capture: selectedTool
       ? {
@@ -254,6 +287,10 @@ function status(opts: Options): Record<string, any> {
           connected: selectedTool.connected,
           hooksActive: selectedTool.hooksActive ?? false,
           mode: selectedTool.mode,
+          transport: selectedTool.transport,
+          assistant: selectedTool.assistant,
+          lastIngestedAt: selectedTool.lastIngestedAt,
+          issues: selectedTool.issues,
         }
       : null,
     tools,
@@ -263,21 +300,40 @@ function status(opts: Options): Record<string, any> {
 async function setup(opts: Options): Promise<object> {
   ensureDataHome();
   const config = readGlobalConfig() as Options;
+  for (const plugin of connectPlugins()) {
+    if (opts.assistant === false) {
+      setReportDiscovery(plugin.cliName, false);
+      removeReportSkill(plugin.cliName);
+    } else if (opts.assistant === true) setReportDiscovery(plugin.cliName, true);
+  }
+  const migration = migratePassiveIntegration();
   if (opts.firstRun && config.captureEnabled === false)
-    return envelope({ captureEnabled: false, skipped: 'capture-paused' });
+    return envelope({ captureEnabled: false, skipped: 'capture-paused', migration });
   if (opts.off) {
-    writeGlobalConfig({ ...config, version: 2, captureEnabled: false });
-    return envelope({ captureEnabled: false });
+    writeGlobalConfig({ ...readGlobalConfig(), version: 2, captureEnabled: false });
+    return envelope({ captureEnabled: false, migration });
   }
   const now = new Date().toISOString();
   const results: object[] = [];
   for (const plugin of connectPlugins()) {
     if (!plugin.connect.detect() && !plugin.connect.prewireSafe) continue;
-    if (config.autoConnectDisabledTools?.includes(plugin.cliName)) continue;
+    if (
+      config.autoConnectDisabledTools?.includes(plugin.cliName) ||
+      toolCaptureGloballyDisabled(plugin.cliName)
+    )
+      continue;
     try {
+      const previous = plugin.connect.status();
+      const consentAt =
+        config.captureEnabled === true && (previous.hooksActive || previous.captureActive)
+          ? (config.captureResumedAt ?? config.captureSince ?? now)
+          : now;
+      if (opts.assistant === false) setReportDiscovery(plugin.cliName, false);
+      else if (opts.assistant === true) setReportDiscovery(plugin.cliName, true);
       const result = plugin.connect.autoConnect?.();
+      if (result) writeReportSkill(plugin.cliName);
       if (result) {
-        enableToolCapture(plugin.cliName, now);
+        enableToolCapture(plugin.cliName, consentAt);
         results.push({ tool: plugin.id, connected: true });
       }
     } catch {
@@ -291,7 +347,9 @@ async function setup(opts: Options): Promise<object> {
     captureEnabled: true,
     captureSince: latest.captureSince ?? now,
     captureResumedAt:
-      config.captureEnabled === false ? now : (latest.captureResumedAt ?? now),
+      config.captureEnabled === false
+        ? now
+        : (latest.captureResumedAt ?? latest.captureSince ?? now),
     setupCompletedAt: now,
   });
   const identity = await resolveIdentity({
@@ -306,7 +364,7 @@ async function setup(opts: Options): Promise<object> {
       machineId: readMachineIdentity()?.machineId ?? randomUUID(),
     });
   using store = new HistoryStore();
-  return envelope({ captureEnabled: true, tools: results });
+  return envelope({ captureEnabled: true, tools: results, migration });
 }
 
 export async function runHistoryCli(argv = process.argv): Promise<void> {
@@ -338,15 +396,40 @@ export async function runHistoryCli(argv = process.argv): Promise<void> {
     .command('setup')
     .description('Connect detected tools at user scope and enable capture')
     .option('--off', 'pause automatic capture globally')
+    .option('--assistant', 'enable on-request report discovery')
+    .option('--no-assistant', 'collect without an assistant reporting skill')
     .addOption(new Option('--first-run').hideHelp())
     .option('--yes', 'run without prompts')
     .option('--json')
     .action(async (opts) => {
       const result = await setup(opts);
       if (opts.json) print(result);
+      else {
+        console.log(
+          `${(result as Options).captureEnabled ? 'Automatic capture enabled.' : 'Automatic capture paused.'}\nStorage: ${dataHome()}\nCapture registrations are user-level.`,
+        );
+        const migration = (result as Options).migration;
+        if (migration?.restartRequired)
+          console.log(
+            'Retired legacy Showtail instructions. Start a new agent session to clear previously loaded context.',
+          );
+        for (const warning of migration?.warnings ?? [])
+          console.log(`Review ${warning.file}: ${warning.code}`);
+      }
+    });
+  program
+    .command('sync')
+    .description('Import enabled native history through the current capture cutoff')
+    .option('--tool <tool>')
+    .option('--json')
+    .action(async (opts) => {
+      await collectObservations();
+      using store = new HistoryStore();
+      const result = await syncHistory(store, { tool: opts.tool });
+      if (opts.json) print(envelope(result));
       else
         console.log(
-          `${(result as Options).captureEnabled ? 'Automatic capture enabled.' : 'Automatic capture paused.'}\nStorage: ${dataHome()}\nProject folders are untouched.`,
+          `Imported ${result.imported} records from ${result.sources} sources.`,
         );
     });
   for (const name of ['status', 'capabilities'])
@@ -463,9 +546,13 @@ export async function runHistoryCli(argv = process.argv): Promise<void> {
     .option('--ai <mode>', 'full, collapsed, or off', 'collapsed')
     .option('--no-ai')
     .action(async (path, opts) => {
-      using store = currentStore();
+      using store = new HistoryStore();
+      drainPending(store);
+      if (opts.sync !== false) {
+        await collectObservations();
+        await catchUpHistory(store);
+      }
       const scoped = await requireSelection(store, opts, path);
-      if (opts.sync !== false) await catchUpHistory(store, scoped);
       if (!['html', 'md', 'json'].includes(opts.format))
         throw new Error('INVALID_REPORT_FORMAT');
       const result = writeHistoryReport(store, scoped, {
@@ -506,15 +593,19 @@ export async function runHistoryCli(argv = process.argv): Promise<void> {
     .option('--preview')
     .option('--approve <code>')
     .action(async (path, opts) => {
-      using store = currentStore();
+      using store = new HistoryStore();
+      drainPending(store);
       if (opts.approve) {
         const result = approvePr(store, opts.approve);
         if (opts.json) print(result);
         else console.log(`Posted: ${(result as any).url}`);
         return;
       }
+      if (opts.sync !== false) {
+        await collectObservations();
+        await catchUpHistory(store);
+      }
       const scoped = await requireSelection(store, opts, path);
-      if (opts.sync !== false) await catchUpHistory(store, scoped);
       if (opts.pr) {
         const result = previewPr(store, scoped, opts);
         if (opts.json) print(result);
@@ -655,12 +746,22 @@ export async function runHistoryCli(argv = process.argv): Promise<void> {
     .option('--no-extension')
     .option('--yes')
     .option('--force')
-    .option('--managed-refresh')
+    .option('--assistant', 'enable on-request report discovery')
+    .option('--no-assistant', 'collect without an assistant reporting skill')
     .action(async (name, opts) => {
       const plugin = connectPluginOrThrow(name);
+      if (opts.assistant === false) setReportDiscovery(plugin.cliName, false);
+      else if (opts.assistant === true) setReportDiscovery(plugin.cliName, true);
+      const migration = migratePassiveIntegration(plugin.cliName);
       await plugin.connect.install({ ...opts, user: true, project: false });
+      writeReportSkill(plugin.cliName);
+      for (const warning of migration.warnings)
+        console.log(`Review ${warning.file}: ${warning.code}`);
+      console.log(
+        'Reporting instructions apply on request. Start a new session to clear previously loaded Showtail instructions.',
+      );
       if (opts.hooks === false) {
-        disableToolCapture(plugin.cliName);
+        enableToolCapture(plugin.cliName);
         disableToolAutoConnect(plugin.cliName);
       } else {
         enableToolCapture(plugin.cliName);
@@ -682,6 +783,8 @@ export async function runHistoryCli(argv = process.argv): Promise<void> {
     .action(async (name) => {
       const plugin = connectPluginOrThrow(name);
       disableToolCapture(plugin.cliName);
+      migratePassiveIntegration(plugin.cliName);
+      removeReportSkill(plugin.cliName);
       disableToolAutoConnect(plugin.cliName);
       await plugin.connect.uninstall({ user: true, all: false });
       console.log(`Capture stopped. History remains in ${dataHome()}.`);
@@ -869,29 +972,8 @@ export async function runHistoryCli(argv = process.argv): Promise<void> {
     .command('hook <event>', { hidden: true })
     .option('--tool <tool>', 'provider', 'claude-code')
     .action(async (event, opts) => {
-      try {
-        if (
-          !['session-start', 'user-prompt', 'post-edit', 'stop', 'session-end'].includes(
-            event,
-          )
-        )
-          return;
-        const raw = await Bun.stdin.text();
-        await runHistoryHook(
-          event as CaptureEvent,
-          raw.trim() ? JSON.parse(raw) : {},
-          opts.tool,
-        );
-      } catch {
-        captureIssue('CAPTURE_FAILED', opts.tool);
-      } finally {
-        if (['antigravity-cli', 'antigravity-ide'].includes(opts.tool))
-          console.log(
-            event === 'stop' || opts.tool === 'antigravity-ide'
-              ? '{"decision":"allow"}'
-              : '{}',
-          );
-      }
+      const { observerMain } = await import('../core/passiveObserver.ts');
+      await observerMain([event, '--tool', opts.tool]);
     });
   try {
     await program.parseAsync(argv);

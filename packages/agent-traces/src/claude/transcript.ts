@@ -17,19 +17,12 @@ import {
   statSync,
 } from 'node:fs';
 import { join, resolve } from 'node:path';
+import type { EditedFile } from '../hooks/payload.ts';
+import type { HookTranscriptEvent, JsonValue } from '../model.ts';
 import { hostHome } from '../paths/hostHome.ts';
 import { isPathUnder, toRepoRelative } from '../paths/pathUtil.ts';
 import { redact } from '../privacy/redact.ts';
 import { isSyntheticPrompt } from '../prompts/synthetic.ts';
-import {
-  asArray,
-  asNumber,
-  asString,
-  collectToolResults,
-  isObject,
-  prop,
-  type ToolResult,
-} from '../util/parse.ts';
 import {
   collectDecisionAnswers,
   parseDecisionQuestions,
@@ -42,8 +35,6 @@ import {
   parsePlanInput,
   renderPlanText,
   resolvePlanResult,
-  PLAN_APPROVED_TAG,
-  PLAN_REVISED_TAG,
 } from '../transcript/plans.ts';
 import {
   BACKGROUND_TASK_LABEL,
@@ -52,7 +43,15 @@ import {
   renderToolCallInput,
   renderToolCallText,
 } from '../transcript/toolCalls.ts';
-import type { HookTranscriptEvent, JsonValue } from '../model.ts';
+import {
+  asArray,
+  asNumber,
+  asString,
+  collectToolResults,
+  isObject,
+  prop,
+  type ToolResult,
+} from '../util/parse.ts';
 
 // The decision types are part of this module's public surface (they appear on
 // ClaudeMessage); re-export them so any importer keeps its existing path.
@@ -88,6 +87,7 @@ export interface ClaudeMessage {
   sourceId: string;
   /** For edits: the repo-relative file path(s) the AI touched. */
   files?: string[];
+  edits?: EditedFile[];
   /**
    * For decisions: the parsed questions + options. The answer is filled in a
    * second pass (the student's reply is a later transcript line), after which
@@ -122,6 +122,7 @@ export interface ClaudeTranscript {
   title: string;
   messages: ClaudeMessage[];
   events: HookTranscriptEvent[];
+  warnings?: string[];
 }
 
 /** A transcript file found on disk for a given project. */
@@ -247,7 +248,16 @@ export function findTranscripts(): TranscriptInfo[] {
   for (const projectDir of safeReaddir(dir)) {
     const full = join(dir, projectDir);
     if (!isDir(full)) continue;
-    for (const file of safeReaddir(full)) {
+    const files = safeReaddir(full).flatMap((file) => {
+      if (file.endsWith('.jsonl')) return [file];
+      const agents = join(full, file, 'subagents');
+      return isDir(agents)
+        ? safeReaddir(agents)
+            .filter((name) => /^agent-.+\.jsonl$/.test(name))
+            .map((name) => join(file, 'subagents', name))
+        : [];
+    });
+    for (const file of files) {
       if (!file.endsWith('.jsonl')) continue;
       const fp = join(full, file);
       let st: ReturnType<typeof statSync>;
@@ -264,13 +274,16 @@ export function findTranscripts(): TranscriptInfo[] {
       } catch {
         continue;
       }
-      if (!cwd) continue;
-
       out.push({
         path: fp,
-        sessionId: file.replace(/\.jsonl$/, ''),
+        sessionId: /[\\/]subagents[\\/]/.test(file)
+          ? `${file.split(/[\\/]/)[0]}:agent:${file
+              .split(/[\\/]/)
+              .at(-1)!
+              .replace(/^agent-|\.jsonl$/g, '')}`
+          : file.replace(/\.jsonl$/, ''),
         mtimeMs: st.mtimeMs,
-        cwd,
+        cwd: cwd ?? undefined,
       });
     }
   }
@@ -330,6 +343,8 @@ function isDir(path: string): boolean {
 export interface ClaudeTranscriptOptions {
   /** Return absolute edit paths across workspace boundaries for central capture. */
   includeOutsideEdits?: boolean;
+  /** Native subagent files contain delegated inputs, never student prompts. */
+  includeSidechains?: boolean;
 }
 
 /** Read a transcript file from disk and parse it. */
@@ -341,7 +356,13 @@ export function readTranscriptFile(
   if (!existsSync(path)) {
     throw new Error(`Transcript not found: ${path}`);
   }
-  return parseClaudeTranscript(readFileSync(path, 'utf8'), root, options);
+  const agent = /[\\/]([^\\/]+)[\\/]subagents[\\/]agent-([^\\/]+)\.jsonl$/.exec(path);
+  const result = parseClaudeTranscript(readFileSync(path, 'utf8'), root, {
+    ...options,
+    ...(agent ? { includeSidechains: true } : {}),
+  });
+  if (agent) result.sessionId = `${result.sessionId ?? agent[1]}:agent:${agent[2]}`;
+  return result;
 }
 
 /** A `turn_duration` system line seen but not yet paired with an `away_summary`. */
@@ -431,6 +452,7 @@ export function parseClaudeTranscript(
 ): ClaudeTranscript {
   const messages: ClaudeMessage[] = [];
   const events: HookTranscriptEvent[] = [];
+  const warnings = new Set<string>();
   let eventSequence = 0;
   let sessionId: string | undefined;
   // The student's answers to AskUserQuestion arrive on *later* user lines, keyed
@@ -440,6 +462,11 @@ export function parseClaudeTranscript(
   // Generic tool_use results (Bash output, Read content, ...) arrive the same
   // way — resolved for `tool_call` messages in the same second pass.
   const toolResultsByToolId = new Map<string, ToolResult>();
+  const nativeResults = new Map<string, unknown>();
+  const nativeTools = new Map<
+    string,
+    { name?: string; input: unknown; timestamp?: string }
+  >();
 
   // Per-turn token accumulation (reset each time a genuine user prompt opens a
   // new turn, or a recap closes one out) and the most recently seen
@@ -497,7 +524,7 @@ export function parseClaudeTranscript(
     // of turns already captured, never a real prompt (robust flag; the text-level
     // fallback in isSyntheticPrompt covers the live-hook/legacy paths).
     if (
-      prop(obj, 'isSidechain') === true ||
+      (prop(obj, 'isSidechain') === true && !options.includeSidechains) ||
       prop(obj, 'isMeta') === true ||
       prop(obj, 'isApiErrorMessage') === true ||
       prop(obj, 'isCompactSummary') === true
@@ -524,6 +551,47 @@ export function parseClaudeTranscript(
         const raw = rawToolResult(obj, part, eventSequence++, timestamp);
         if (!raw) continue;
         events.push(raw);
+        if (raw.toolUseId) {
+          const structured = prop(obj, 'toolUseResult');
+          nativeResults.set(raw.toolUseId, structured);
+          const call = nativeTools.get(raw.toolUseId);
+          const plan = asString(prop(structured, 'plan'));
+          if (call?.name === 'ExitPlanMode' && plan) {
+            const existing = messages.find(
+              (m) => m.role === 'plan' && m.sourceId === raw.toolUseId,
+            );
+            if (existing) existing.text = plan;
+            else
+              messages.push({
+                role: 'plan',
+                text: plan,
+                sourceId: raw.toolUseId,
+                timestamp: call.timestamp ?? timestamp,
+              });
+            events.push({
+              sequence: eventSequence++,
+              type: 'plan_snapshot',
+              sourceId: `${raw.toolUseId}:plan`,
+              timestamp,
+              plan,
+            });
+          }
+          const bashDiff = prop(structured, 'bashEditDiff');
+          if (call?.name === 'Bash' && raw.isError !== true && bashDiff) {
+            const edits = nativeBashEdits(bashDiff, root, options);
+            if (edits.length)
+              messages.push({
+                role: 'edit',
+                text: 'Changes recorded by Bash',
+                edits,
+                files: edits.map((e) => e.file),
+                timestamp,
+                sourceId: `${raw.toolUseId}:edits`,
+              });
+            if (prop(bashDiff, 'moreFiles') || prop(bashDiff, 'unavailable'))
+              warnings.add('BASH_DIFF_PARTIAL');
+          }
+        }
         if (raw.toolUseId && planToolIds.has(raw.toolUseId)) {
           const blob = asString(prop(part, 'content'));
           if (resolvePlanResult(blob).approved) {
@@ -560,7 +628,7 @@ export function parseClaudeTranscript(
       // nor closes out the turn's pending duration/token accounting.
       const note = handleTaskNotification(obj);
       if (note) messages.push(note);
-      const msg = handleUser(obj);
+      const msg = handleUser(obj, options.includeSidechains);
       if (msg) {
         if (prop(obj, 'promptSource') === 'queued')
           msg.submittedAt = queuedSubmissions.get(msg.text)?.shift();
@@ -574,6 +642,7 @@ export function parseClaudeTranscript(
         events.push({
           sequence: eventSequence++,
           type: 'user_text',
+          ...(msg.origin ? { origin: msg.origin } : {}),
           sourceId: msg.sourceId,
           timestamp: msg.timestamp,
           text: msg.text,
@@ -603,6 +672,11 @@ export function parseClaudeTranscript(
         const toolUseId = asString(prop(part, 'id')) ?? `${uuid}:tool:${index}`;
         const toolName = asString(prop(part, 'name'));
         const input = jsonValue(prop(part, 'input'));
+        nativeTools.set(toolUseId, {
+          name: toolName,
+          input: prop(part, 'input'),
+          timestamp,
+        });
         events.push({
           sequence: eventSequence++,
           type: 'tool_use',
@@ -675,7 +749,59 @@ export function parseClaudeTranscript(
 
   // Second pass: pair each decision/tool_call with its later result and re-render.
   for (const m of messages) {
-    if (m.role === 'decision' && m.questions) {
+    if (m.role === 'edit' && nativeTools.has(m.sourceId)) {
+      const result = toolResultsByToolId.get(m.sourceId);
+      const call = nativeTools.get(m.sourceId)!;
+      if (!result || result.isError) {
+        m.role = 'tool_call';
+        m.toolName = call.name;
+        m.isError = result?.isError;
+        m.text = renderToolCallText(
+          renderToolCallInput(call.name ?? 'Edit', call.input),
+          result,
+        );
+        m.files = undefined;
+      } else {
+        const native = nativeResults.get(m.sourceId);
+        const file = relForEdit(
+          prop(native, 'filePath') ?? prop(call.input, 'file_path'),
+          root,
+          options.includeOutsideEdits === true,
+        );
+        if (file) {
+          const patch = nativePatch(prop(native, 'structuredPatch'), file);
+          const original = asString(prop(native, 'originalFile'));
+          const content = asString(prop(native, 'content'));
+          const oldText = asString(
+            prop(native, 'oldString') ?? prop(call.input, 'old_string'),
+          );
+          const newText = asString(
+            prop(native, 'newString') ?? prop(call.input, 'new_string'),
+          );
+          const diff =
+            patch ??
+            (content !== undefined
+              ? `--- ${file}\n+++ ${file}\n${(original ?? '')
+                  .split('\n')
+                  .map((l) => '-' + l)
+                  .join('\n')}\n${content
+                  .split('\n')
+                  .map((l) => '+' + l)
+                  .join('\n')}`
+              : oldText !== undefined && newText !== undefined
+                ? `--- ${file}\n+++ ${file}\n${oldText
+                    .split('\n')
+                    .map((l) => '-' + l)
+                    .join('\n')}\n${newText
+                    .split('\n')
+                    .map((l) => '+' + l)
+                    .join('\n')}`
+                : undefined);
+          m.edits = [{ file, diff }];
+          m.files = [file];
+        }
+      }
+    } else if (m.role === 'decision' && m.questions) {
       const rec = answersByToolId.get(m.sourceId);
       if (rec) resolveDecisionAnswers(m.questions, rec);
       m.text = renderDecisionText(m.questions);
@@ -703,7 +829,57 @@ export function parseClaudeTranscript(
       : 'Claude Code session',
     messages,
     events,
+    ...(warnings.size ? { warnings: [...warnings] } : {}),
   };
+}
+
+function nativePatch(value: unknown, file: string): string | undefined {
+  if (typeof value === 'string') return value;
+  const hunks = asArray(value);
+  if (!hunks?.length) return undefined;
+  return (
+    `--- ${file}\n+++ ${file}\n` +
+    hunks
+      .map(
+        (h) =>
+          `@@ -${prop(h, 'oldStart')},${prop(h, 'oldLines')} +${prop(h, 'newStart')},${prop(h, 'newLines')} @@\n${(asArray(prop(h, 'lines')) ?? []).filter((l) => typeof l === 'string').join('\n')}`,
+      )
+      .join('\n')
+  );
+}
+function nativeBashEdits(
+  diff: unknown,
+  root: string,
+  options: ClaudeTranscriptOptions,
+): EditedFile[] {
+  if (typeof diff !== 'string')
+    return (asArray(prop(diff, 'files')) ?? []).flatMap((entry) => {
+      const file = relForEdit(
+        prop(entry, 'filePath'),
+        root,
+        options.includeOutsideEdits === true,
+      );
+      return file
+        ? [
+            {
+              file,
+              diff: nativePatch(prop(entry, 'hunks'), file),
+              ...(prop(entry, 'deleted') === true ? { deleted: true } : {}),
+            },
+          ]
+        : [];
+    });
+  return diff.split(/(?=^diff --git )/m).flatMap((part) => {
+    const path = /^\+\+\+ (?:b\/)?(.+)$/m.exec(part)?.[1];
+    const old = /^--- (?:a\/)?(.+)$/m.exec(part)?.[1];
+    const deleted = path === '/dev/null';
+    const file = relForEdit(
+      deleted ? old : path,
+      root,
+      options.includeOutsideEdits === true,
+    );
+    return file ? [{ file, diff: part, ...(deleted ? { deleted: true } : {}) }] : [];
+  });
 }
 
 interface TurnTokens {
@@ -786,7 +962,7 @@ function handleTaskNotification(obj: unknown): ClaudeMessage | null {
 }
 
 /** A real typed prompt: string content, not a tool result or a tooling wrapper. */
-function handleUser(obj: unknown): ClaudeMessage | null {
+function handleUser(obj: unknown, includeSidechains = false): ClaudeMessage | null {
   const raw = prop(prop(obj, 'message'), 'content');
   const content =
     asString(raw) ??
@@ -797,18 +973,28 @@ function handleUser(obj: unknown): ClaudeMessage | null {
 
   const source = prop(obj, 'promptSource');
   // Keep every genuine user prompt; drop only tooling/programmatic sources.
-  if (typeof source === 'string' && NON_USER_PROMPT_SOURCES.has(source)) return null;
+  if (
+    typeof source === 'string' &&
+    NON_USER_PROMPT_SOURCES.has(source) &&
+    !includeSidechains
+  )
+    return null;
 
   const text = content.trim();
   const human = prop(prop(obj, 'origin'), 'kind') === 'human';
-  if (!text || (!human && isSyntheticPrompt(text))) return null;
+  if (!text || (!includeSidechains && !human && isSyntheticPrompt(text))) return null;
 
   return {
     role: 'user',
     text,
     timestamp: asString(prop(obj, 'timestamp')),
     sourceId: asString(prop(obj, 'uuid')) ?? `cc:user:${idSnippet(text)}`,
-    origin: human ? 'human' : undefined,
+    origin:
+      includeSidechains && prop(obj, 'isSidechain') === true
+        ? 'agent'
+        : human
+          ? 'human'
+          : undefined,
     ...(asString(prop(obj, 'cwd'))
       ? { context: { cwd: asString(prop(obj, 'cwd')) } }
       : {}),

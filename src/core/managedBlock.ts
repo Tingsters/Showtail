@@ -64,6 +64,7 @@ export function classify(parsed: ParsedBlock, latestBody: string): BlockClass {
 // is what Showtail manages/fingerprints. Files without frontmatter pass ''.
 
 export function splitFrontmatter(text: string): { preamble: string; body: string } {
+  text = text.replace(/\r\n/g, '\n');
   const m = text.match(/^---\n[\s\S]*?\n---\n/);
   if (m) return { preamble: m[0].trimEnd(), body: text.slice(m[0].length).trim() };
   return { preamble: '', body: text.trim() };

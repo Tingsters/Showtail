@@ -1,18 +1,17 @@
 /** User-wide preferences and capture consent, stored beside the central history. */
+import { randomUUID } from 'node:crypto';
 import {
   closeSync,
   existsSync,
-  mkdirSync,
   openSync,
   readFileSync,
   statSync,
   unlinkSync,
   writeFileSync,
 } from 'node:fs';
-import { randomUUID } from 'node:crypto';
 import { dataHome, dataPath, ensureDataHome } from './dataHome.ts';
-import { readJson, writeJson } from './storage.ts';
 import type { HistorySettings } from './history.ts';
+import { readJson, writeJson } from './storage.ts';
 
 export interface GlobalConfig {
   version: number;
@@ -21,6 +20,7 @@ export interface GlobalConfig {
   captureResumedAt?: string;
   setupCompletedAt?: string;
   autoConnectDisabledTools?: string[];
+  assistantDisabledTools?: string[];
   settings?: HistorySettings;
   autoOpenReport?: 'always' | 'never' | 'ask';
   update?: {

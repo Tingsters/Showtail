@@ -2,23 +2,24 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { platform } from 'node:os';
 import { dirname, join } from 'node:path';
+import { runCopilotInstall } from '../src/commands/copilot.ts';
+import {
+  runCopilotCliInstall,
+  runCopilotCliUninstall,
+} from '../src/commands/copilotCli.ts';
 import {
   COPILOT_BODY,
   COPILOT_CLI_HOOK_EVENTS,
   copilotCliAutoCaptureActive,
   copilotCliHooksInstalledAt,
-  findCopilotCliExecutable,
   copilotCliInstructionsState,
+  findCopilotCliExecutable,
   resolveCopilotCliTarget,
   writeCopilotCliInstructions,
 } from '../src/core/copilotCli.ts';
 import { mergeHookEvents } from '../src/core/hookMerge.ts';
 import { blockFor, parseBlock } from '../src/core/managedBlock.ts';
-import {
-  runCopilotCliInstall,
-  runCopilotCliUninstall,
-} from '../src/commands/copilotCli.ts';
-import { runCopilotInstall } from '../src/commands/copilot.ts';
+import { reportSkillFile } from '../src/core/reportDiscovery.ts';
 import { copilotCliPlugin } from '../src/plugins/copilot-cli.ts';
 import { cleanup, makeTempDir } from './helpers.ts';
 
@@ -31,11 +32,11 @@ describe('copilot-cli install / uninstall', () => {
       await runCopilotCliInstall({ user: true, cwd: dir });
       const target = resolveCopilotCliTarget('user', dir);
 
-      expect(existsSync(target.instructionsFile)).toBe(true);
-      const body = readFileSync(target.instructionsFile, 'utf8');
+      expect(existsSync(reportSkillFile('copilot-cli'))).toBe(true);
+      const body = readFileSync(reportSkillFile('copilot-cli'), 'utf8');
       expect(body).toContain('showtail:start');
       // The required Copilot `applyTo` frontmatter sits above the managed block.
-      expect(body).toContain("applyTo: '**'");
+      expect(body).not.toContain('applyTo:');
       expect(copilotCliHooksInstalledAt(target.hooksFile)).toBe(true);
 
       // The Copilot lifecycle events are present (Copilot's real camelCase event
@@ -43,19 +44,13 @@ describe('copilot-cli install / uninstall', () => {
       // per-turn reply signal; sessionEnd is the end-of-session backstop.
       const hooks = JSON.parse(readFileSync(target.hooksFile, 'utf8'));
       expect(hooks.version).toBe(1);
-      for (const event of [
-        'sessionStart',
-        'userPromptSubmitted',
-        'postToolUse',
-        'agentStop',
-        'sessionEnd',
-      ]) {
+      for (const event of ['sessionStart', 'postToolUse', 'agentStop', 'sessionEnd']) {
         expect(Array.isArray(hooks.hooks[event])).toBe(true);
       }
 
       await runCopilotCliUninstall({ cwd: dir });
       // Block was the only content, so the instructions file is removed; hooks emptied.
-      expect(existsSync(target.instructionsFile)).toBe(false);
+      expect(existsSync(reportSkillFile('copilot-cli'))).toBe(false);
       expect(copilotCliHooksInstalledAt(target.hooksFile)).toBe(false);
     } finally {
       cleanup(dir);
@@ -70,7 +65,7 @@ describe('copilot-cli install / uninstall', () => {
       await runCopilotCliInstall({ user: true, cwd: dir });
       const target = resolveCopilotCliTarget('user', dir);
 
-      const body = readFileSync(target.instructionsFile, 'utf8');
+      const body = readFileSync(reportSkillFile('copilot-cli'), 'utf8');
       expect(body.match(/showtail:start/g)?.length).toBe(1);
 
       const hooks = JSON.parse(readFileSync(target.hooksFile, 'utf8'));
@@ -91,7 +86,7 @@ describe('copilot-cli install / uninstall', () => {
       expect(copilotCliHooksInstalledAt(target.hooksFile)).toBe(true);
 
       await runCopilotCliInstall({ user: true, hooks: false, cwd: dir });
-      expect(existsSync(target.instructionsFile)).toBe(true);
+      expect(existsSync(reportSkillFile('copilot-cli'))).toBe(true);
       expect(copilotCliHooksInstalledAt(target.hooksFile)).toBe(false);
     } finally {
       cleanup(dir);
@@ -130,11 +125,13 @@ describe('copilot-cli install / uninstall', () => {
       const target = resolveCopilotCliTarget('user', dir);
 
       await runCopilotCliInstall({ user: true, cwd: dir });
-      expect(existsSync(target.instructionsFile)).toBe(true);
-      expect(readFileSync(target.instructionsFile, 'utf8')).toContain('showtail:start');
+      expect(existsSync(reportSkillFile('copilot-cli'))).toBe(true);
+      expect(readFileSync(reportSkillFile('copilot-cli'), 'utf8')).toContain(
+        'showtail:start',
+      );
 
       await runCopilotCliUninstall({ cwd: dir });
-      expect(existsSync(target.instructionsFile)).toBe(false);
+      expect(existsSync(reportSkillFile('copilot-cli'))).toBe(false);
     } finally {
       cleanup(dir);
     }
@@ -149,12 +146,13 @@ describe('copilot-cli install / uninstall', () => {
 
       // The student appends their own notes after our block.
       const withNotes =
-        readFileSync(target.instructionsFile, 'utf8') + '\n# My own rules\n\nUse tabs.\n';
-      writeFileSync(target.instructionsFile, withNotes);
+        readFileSync(reportSkillFile('copilot-cli'), 'utf8') +
+        '\n# My own rules\n\nUse tabs.\n';
+      writeFileSync(reportSkillFile('copilot-cli'), withNotes);
 
       await runCopilotCliUninstall({ cwd: dir });
       // The file is kept (it has user content) and our block is gone.
-      const cleaned = readFileSync(target.instructionsFile, 'utf8');
+      const cleaned = readFileSync(reportSkillFile('copilot-cli'), 'utf8');
       expect(cleaned).toContain('# My own rules');
       expect(cleaned).toContain('Use tabs.');
       expect(cleaned).not.toContain('showtail:start');
@@ -190,7 +188,7 @@ describe('copilot-cli install / uninstall', () => {
 
   test('the instructions body is non-empty and mentions the tool', () => {
     expect(COPILOT_BODY.length).toBeGreaterThan(0);
-    expect(COPILOT_BODY).toContain('Copilot CLI');
+    expect(COPILOT_BODY).toContain('explicitly requests Showtail');
   });
 
   test('VS Code-only setup does not create Copilot CLI assets', async () => {
@@ -201,7 +199,7 @@ describe('copilot-cli install / uninstall', () => {
 
       for (const scope of ['user', 'project'] as const) {
         const target = resolveCopilotCliTarget(scope, dir);
-        expect(existsSync(target.instructionsFile)).toBe(false);
+        expect(existsSync(reportSkillFile('copilot-cli'))).toBe(false);
         expect(copilotCliHooksInstalledAt(target.hooksFile)).toBe(false);
       }
     } finally {
@@ -215,10 +213,10 @@ describe('copilot-cli install / uninstall', () => {
       mkdirSync(join(dir, '.showtail'), { recursive: true });
       await runCopilotCliInstall({ user: true, hooks: false, cwd: dir });
       const target = resolveCopilotCliTarget('user', dir);
-      const current = readFileSync(target.instructionsFile, 'utf8');
+      const current = readFileSync(reportSkillFile('copilot-cli'), 'utf8');
       const parsed = parseBlock(current)!;
       writeFileSync(
-        target.instructionsFile,
+        reportSkillFile('copilot-cli'),
         current.slice(0, parsed.startIndex) +
           blockFor('# Old Showtail CLI instructions') +
           current.slice(parsed.endIndex),

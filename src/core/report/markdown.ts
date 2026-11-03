@@ -431,7 +431,12 @@ function unattributedSection(data: ReportData, html: boolean, ai: AiMode): strin
   for (const work of data.unattributedWork) {
     lines.push(`### ${toolLabel(work.tool)} · ${work.sessionId}`, '');
     for (const e of work.events.filter((e) => e.type === 'user_text'))
-      lines.push('Unlinked provider user message:', '', e.text ?? '', '');
+      lines.push(
+        e.origin === 'agent' ? 'Agent input:' : 'Unlinked provider user message:',
+        '',
+        e.text ?? '',
+        '',
+      );
     for (const c of work.codeChanges) {
       lines.push('Captured file: ' + c.path.replace(/`/g, ''), '');
       for (const r of c.revisions ?? [{ timestamp: c.timestamp, diff: c.diff }])

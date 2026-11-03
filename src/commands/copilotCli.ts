@@ -10,6 +10,7 @@ import {
   uninstallCopilotCliHooks,
   writeCopilotCliInstructions,
 } from '../core/copilotCli.ts';
+import { reportSkillFile } from '../core/reportDiscovery.ts';
 import type { ConnectUninstallResult } from '../plugins/types.ts';
 import {
   printHooksEnabled,
@@ -36,12 +37,12 @@ export async function runCopilotCliInstall(
   const target = resolveCopilotCliTarget(scope, options.cwd);
   const withHooks = options.hooks !== false; // default ON; --no-hooks opts out
 
-  const existed = existsSync(target.instructionsFile);
+  const existed = existsSync(reportSkillFile('copilot-cli'));
   writeCopilotCliInstructions(target, { force: options.force });
   const instructionState = copilotCliInstructionsState(target);
   printInstallHeader(
     'GitHub Copilot CLI instructions',
-    target.instructionsFile,
+    reportSkillFile('copilot-cli'),
     scope,
     existed,
   );

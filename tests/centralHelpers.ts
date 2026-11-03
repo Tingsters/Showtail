@@ -31,21 +31,26 @@ export async function fixture(
   const prior = process.env.SHOWTAIL_HOME;
   process.env.SHOWTAIL_HOME = home;
   const cli = (args: string[], input?: string, cwd = project) => {
-    const r = spawnSync(process.execPath, ['run', CLI, ...args], {
-      cwd,
-      input,
-      env: {
-        ...process.env,
-        SHOWTAIL_HOME: home,
-        SHOWTAIL_DISABLE_UPDATE_CHECK: '1',
-        CODEX_HOME: join(dir, 'tool-codex'),
-        CLAUDE_CONFIG_DIR: join(dir, 'tool-claude'),
-        COPILOT_HOME: join(dir, 'tool-copilot'),
-        GEMINI_HOME: join(dir, 'tool-gemini'),
+    const binary = process.env.SHOWTAIL_TEST_BINARY;
+    const r = spawnSync(
+      binary ?? process.execPath,
+      binary ? args : ['run', CLI, ...args],
+      {
+        cwd,
+        input,
+        env: {
+          ...process.env,
+          SHOWTAIL_HOME: home,
+          SHOWTAIL_DISABLE_UPDATE_CHECK: '1',
+          CODEX_HOME: join(dir, 'tool-codex'),
+          CLAUDE_CONFIG_DIR: join(dir, 'tool-claude'),
+          COPILOT_HOME: join(dir, 'tool-copilot'),
+          GEMINI_HOME: join(dir, 'tool-gemini'),
+        },
+        encoding: 'utf8',
+        windowsHide: true,
       },
-      encoding: 'utf8',
-      windowsHide: true,
-    });
+    );
     return { code: r.status, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
   };
   try {

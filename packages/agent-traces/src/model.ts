@@ -17,6 +17,7 @@ export type JsonValue =
  * educator-facing Event model remains the human-readable projection.
  */
 export interface ConversationEvent {
+  origin?: 'human' | 'agent' | 'harness';
   sequence: number;
   timestamp?: string;
   type:

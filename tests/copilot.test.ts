@@ -1,103 +1,68 @@
 import { describe, expect, test } from 'bun:test';
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { runCopilotUninstall } from '../src/commands/copilot.ts';
 import {
-  COPILOT_INSTRUCTIONS,
-  SHOWTAIL_PATH_INSTRUCTIONS,
   copilotInstalled,
-  copilotState,
-  copilotUpToDate,
   removeCopilotInstructions,
   resolveCopilotTarget,
   writeCopilotInstructions,
 } from '../src/core/copilot.ts';
-import { sha256OfString } from '../src/core/hash.ts';
-import { runCopilotInstall, runCopilotUninstall } from '../src/commands/copilot.ts';
-import { cleanup, makeTempDir, stubInstalledExtensionCli } from './helpers.ts';
+import { blockFor } from '../src/core/managedBlock.ts';
+import { reportSkillFile } from '../src/core/reportDiscovery.ts';
 import { VSCODE_EXTENSION_ID } from '../src/core/vscodeExtension.ts';
+import { cleanup, makeTempDir, stubInstalledExtensionCli } from './helpers.ts';
 
-/** Mirror the core's fingerprint so tests can craft blocks with a chosen stamp. */
-const shortHash = (t: string): string => sha256OfString(t.trim()).slice(0, 12);
-const blockOf = (sha: string, inner: string): string =>
-  `<!-- showtail:start sha=${sha} -->\n${inner}\n<!-- showtail:end -->\n`;
-
-describe('copilot integration', () => {
-  test('legacy instruction helper preserves both instruction file formats', async () => {
-    const dir = makeTempDir();
-    try {
-      writeCopilotInstructions(resolveCopilotTarget(dir));
-      const target = resolveCopilotTarget(dir);
-      expect(existsSync(target.instructionsFile)).toBe(true);
-      expect(existsSync(target.pathInstructionsFile)).toBe(true);
-      expect(readFileSync(target.pathInstructionsFile, 'utf8')).toContain('applyTo:');
-      expect(copilotInstalled(target)).toBe(true);
-    } finally {
-      cleanup(dir);
-    }
-  });
-
-  test('install preserves a pre-existing copilot-instructions.md', () => {
-    const dir = makeTempDir();
-    try {
-      const target = resolveCopilotTarget(dir);
-      mkdirSync(target.githubDir, { recursive: true });
-      writeFileSync(target.instructionsFile, '# My own rules\nUse tabs.\n', 'utf8');
-
-      writeCopilotInstructions(target);
-      const content = readFileSync(target.instructionsFile, 'utf8');
-      expect(content).toContain('# My own rules');
-      expect(content).toContain('Use tabs.');
-      expect(content).toContain('showtail:start');
-    } finally {
-      cleanup(dir);
-    }
-  });
-
-  test('install is idempotent (no duplicate Showtail blocks)', () => {
+describe('Copilot passive reporting integration', () => {
+  test('installs a deferred user skill without creating project instructions', () => {
     const dir = makeTempDir();
     try {
       const target = resolveCopilotTarget(dir);
       writeCopilotInstructions(target);
-      writeCopilotInstructions(target);
-      const content = readFileSync(target.instructionsFile, 'utf8');
-      const starts = content.split('showtail:start').length - 1;
-      expect(starts).toBe(1);
-    } finally {
-      cleanup(dir);
-    }
-  });
-
-  test('uninstall removes our block but keeps the user content', () => {
-    const dir = makeTempDir();
-    try {
-      const target = resolveCopilotTarget(dir);
-      mkdirSync(target.githubDir, { recursive: true });
-      writeFileSync(target.instructionsFile, '# My own rules\nUse tabs.\n', 'utf8');
-      writeCopilotInstructions(target);
-
-      removeCopilotInstructions(target);
-      const content = readFileSync(target.instructionsFile, 'utf8');
-      expect(content).toContain('# My own rules');
-      expect(content).not.toContain('showtail:start');
-      expect(existsSync(target.pathInstructionsFile)).toBe(false);
-    } finally {
-      cleanup(dir);
-    }
-  });
-
-  test('uninstall deletes copilot-instructions.md when only our block was there', async () => {
-    const dir = makeTempDir();
-    try {
-      writeCopilotInstructions(resolveCopilotTarget(dir));
-      const target = resolveCopilotTarget(dir);
-      removeCopilotInstructions(target);
+      expect(existsSync(reportSkillFile('copilot'))).toBe(true);
       expect(existsSync(target.instructionsFile)).toBe(false);
-      expect(copilotInstalled(target)).toBe(false);
+      expect(existsSync(target.pathInstructionsFile)).toBe(false);
+      expect(copilotInstalled(target)).toBe(true);
+      const first = readFileSync(reportSkillFile('copilot'), 'utf8');
+      const mtime = statSync(reportSkillFile('copilot')).mtimeMs;
+      writeCopilotInstructions(target);
+      expect(readFileSync(reportSkillFile('copilot'), 'utf8')).toBe(first);
+      expect(statSync(reportSkillFile('copilot')).mtimeMs).toBe(mtime);
     } finally {
       cleanup(dir);
     }
   });
-
+  test('retires old managed project instructions while preserving user content', () => {
+    const dir = makeTempDir();
+    try {
+      const target = resolveCopilotTarget(dir);
+      mkdirSync(target.githubDir, { recursive: true });
+      writeFileSync(
+        target.instructionsFile,
+        'User rules\n' + blockFor('old instructions') + '\n',
+      );
+      writeCopilotInstructions(target);
+      expect(readFileSync(target.instructionsFile, 'utf8')).toBe('User rules\n\n');
+      removeCopilotInstructions(target);
+      expect(readFileSync(target.instructionsFile, 'utf8')).toBe('User rules\n\n');
+    } finally {
+      cleanup(dir);
+    }
+  });
+  test('preserves unmarked user instructions byte for byte', () => {
+    const dir = makeTempDir();
+    try {
+      const target = resolveCopilotTarget(dir);
+      mkdirSync(dirname(target.pathInstructionsFile), { recursive: true });
+      const text = '---\napplyTo: "**"\n---\nCustom rules.\n';
+      writeFileSync(target.pathInstructionsFile, text);
+      writeCopilotInstructions(target);
+      removeCopilotInstructions(target);
+      expect(readFileSync(target.pathInstructionsFile, 'utf8')).toBe(text);
+    } finally {
+      cleanup(dir);
+    }
+  });
   test('a full uninstall removes the native capture extension too', async () => {
     const dir = makeTempDir();
     const previousCli = process.env.SHOWTAIL_VSCODE_CLI;
@@ -118,215 +83,6 @@ describe('copilot integration', () => {
     } finally {
       if (previousCli === undefined) delete process.env.SHOWTAIL_VSCODE_CLI;
       else process.env.SHOWTAIL_VSCODE_CLI = previousCli;
-      cleanup(dir);
-    }
-  });
-
-  test('refresh replaces a stale Showtail block with the current instructions', () => {
-    const dir = makeTempDir();
-    try {
-      const target = resolveCopilotTarget(dir);
-      mkdirSync(target.githubDir, { recursive: true });
-      // Simulate an outdated installed block.
-      writeFileSync(
-        target.instructionsFile,
-        '<!-- showtail:start -->\nOLD CONTENT\n<!-- showtail:end -->\n',
-        'utf8',
-      );
-      writeCopilotInstructions(target);
-      const content = readFileSync(target.instructionsFile, 'utf8');
-      expect(content).not.toContain('OLD CONTENT');
-      expect(content).toContain('Capture is automatic in VS Code');
-      expect(content).toContain('do not run any prompt-logging');
-      expect(copilotUpToDate(target)).toBe(true);
-    } finally {
-      cleanup(dir);
-    }
-  });
-
-  test('copilotUpToDate is false before install, true after, and a no-op write keeps mtime', () => {
-    const dir = makeTempDir();
-    try {
-      const target = resolveCopilotTarget(dir);
-      expect(copilotUpToDate(target)).toBe(false);
-      writeCopilotInstructions(target);
-      expect(copilotUpToDate(target)).toBe(true);
-
-      // A refresh when already current must not rewrite the file.
-      const before = statSync(target.instructionsFile).mtimeMs;
-      writeCopilotInstructions(target);
-      const after = statSync(target.instructionsFile).mtimeMs;
-      expect(after).toBe(before);
-    } finally {
-      cleanup(dir);
-    }
-  });
-
-  test('embedded instruction assets are non-empty', () => {
-    expect(COPILOT_INSTRUCTIONS).toContain('Showtail');
-    expect(SHOWTAIL_PATH_INSTRUCTIONS).toContain('applyTo:');
-  });
-
-  test('instructions leave routine VS Code capture to the extension', () => {
-    expect(COPILOT_INSTRUCTIONS).toContain('extension imports native Copilot Chat');
-    expect(COPILOT_INSTRUCTIONS).toContain('do not run any prompt-logging');
-    expect(COPILOT_INSTRUCTIONS).toContain('per-message permission');
-    expect(SHOWTAIL_PATH_INSTRUCTIONS).toContain(
-      'automatically imports native Copilot Chat',
-    );
-    expect(SHOWTAIL_PATH_INSTRUCTIONS).toContain('never run manual');
-    for (const instructions of [COPILOT_INSTRUCTIONS, SHOWTAIL_PATH_INSTRUCTIONS]) {
-      expect(instructions).toContain('showtail_project_control');
-      expect(instructions).toContain('student-project-wording');
-      expect(instructions).toContain('--project <project-id>');
-      expect(instructions).toContain('stable project ID');
-      expect(instructions).toContain('returned `projectId`');
-      expect(instructions).not.toMatch(
-        /^\s*showtail (?:report|verify|status)(?:\s+#.*)?\s*$/m,
-      );
-      expect(instructions).not.toMatch(/`showtail (?:report|verify|status)`/);
-    }
-  });
-});
-
-describe('copilot instructions respect user edits (fingerprint)', () => {
-  test('an in-block user edit is detected and NOT overwritten on refresh', () => {
-    const dir = makeTempDir();
-    try {
-      const target = resolveCopilotTarget(dir);
-      writeCopilotInstructions(target);
-      expect(copilotState(target).userEdited).toBe(false);
-
-      // Edit a line inside the managed block of the path-specific file.
-      const file = target.pathInstructionsFile;
-      const edited = readFileSync(file, 'utf8').replace(
-        'Showtail: help the student',
-        'MY OWN instructions',
-      );
-      writeFileSync(file, edited, 'utf8');
-
-      // A normal refresh (no --force) must keep the edit.
-      writeCopilotInstructions(target);
-      expect(readFileSync(file, 'utf8')).toContain('MY OWN instructions');
-
-      const state = copilotState(target);
-      expect(state.userEdited).toBe(true);
-      // Forked from the current version, so no nag.
-      expect(state.updateAvailable).toBe(false);
-    } finally {
-      cleanup(dir);
-    }
-  });
-
-  test('--force overwrites a user-edited block back to the latest', () => {
-    const dir = makeTempDir();
-    try {
-      const target = resolveCopilotTarget(dir);
-      writeCopilotInstructions(target);
-      const file = target.pathInstructionsFile;
-      writeFileSync(
-        file,
-        readFileSync(file, 'utf8').replace(
-          'Showtail: help the student',
-          'MY OWN instructions',
-        ),
-        'utf8',
-      );
-
-      writeCopilotInstructions(target, { force: true });
-      const after = readFileSync(file, 'utf8');
-      expect(after).not.toContain('MY OWN instructions');
-      expect(after).toContain('Showtail: help the student');
-      expect(copilotState(target).userEdited).toBe(false);
-    } finally {
-      cleanup(dir);
-    }
-  });
-
-  test('content outside the block survives even when the block is edited', () => {
-    const dir = makeTempDir();
-    try {
-      const target = resolveCopilotTarget(dir);
-      writeCopilotInstructions(target);
-      const file = target.pathInstructionsFile;
-      // Add user content after the end marker, and edit inside the block.
-      let content = readFileSync(file, 'utf8');
-      content = content.replace('Showtail: help the student', 'MY OWN instructions');
-      content = content.trimEnd() + '\n\n## My extra rules\nAlways add a test.\n';
-      writeFileSync(file, content, 'utf8');
-
-      writeCopilotInstructions(target);
-      const after = readFileSync(file, 'utf8');
-      expect(after).toContain('## My extra rules');
-      expect(after).toContain('MY OWN instructions'); // edit kept too
-    } finally {
-      cleanup(dir);
-    }
-  });
-
-  test('updateAvailable is true only when forked from an OLDER version', () => {
-    const dir = makeTempDir();
-    try {
-      const target = resolveCopilotTarget(dir);
-      mkdirSync(target.githubDir, { recursive: true });
-
-      // Forked from an older version, then edited -> update available.
-      const oldBody = COPILOT_INSTRUCTIONS.trim() + '\n\n(older version)';
-      writeFileSync(
-        target.instructionsFile,
-        blockOf(shortHash(oldBody), oldBody + '\nEDITED BY USER'),
-        'utf8',
-      );
-      // Path file: forked from the CURRENT version, then edited -> no nag.
-      mkdirSync(dirname(target.pathInstructionsFile), { recursive: true });
-      const curBody = SHOWTAIL_PATH_INSTRUCTIONS.replace(
-        /^---\n[\s\S]*?\n---\n/,
-        '',
-      ).trim();
-      writeFileSync(
-        target.pathInstructionsFile,
-        blockOf(shortHash(curBody), curBody + '\nEDITED'),
-        'utf8',
-      );
-
-      const state = copilotState(target);
-      expect(state.userEdited).toBe(true);
-      expect(state.updateAvailable).toBe(true); // because of the older-forked one
-    } finally {
-      cleanup(dir);
-    }
-  });
-
-  test('legacy markerless showtail.instructions.md migrates to block form', () => {
-    const dir = makeTempDir();
-    try {
-      const target = resolveCopilotTarget(dir);
-      mkdirSync(dirname(target.pathInstructionsFile), { recursive: true });
-      writeFileSync(target.pathInstructionsFile, SHOWTAIL_PATH_INSTRUCTIONS, 'utf8');
-
-      writeCopilotInstructions(target);
-      const after = readFileSync(target.pathInstructionsFile, 'utf8');
-      expect(after).toContain('<!-- showtail:start sha=');
-      expect(after).toContain('applyTo:'); // frontmatter preserved
-      expect(copilotState(target).userEdited).toBe(false);
-    } finally {
-      cleanup(dir);
-    }
-  });
-
-  test('a fully custom markerless showtail.instructions.md is respected', () => {
-    const dir = makeTempDir();
-    try {
-      const target = resolveCopilotTarget(dir);
-      mkdirSync(dirname(target.pathInstructionsFile), { recursive: true });
-      const custom = '---\napplyTo: "**"\n---\n\n# Totally my own instructions\n';
-      writeFileSync(target.pathInstructionsFile, custom, 'utf8');
-
-      writeCopilotInstructions(target);
-      const after = readFileSync(target.pathInstructionsFile, 'utf8');
-      expect(after).toContain('# Totally my own instructions');
-      expect(after).not.toContain('<!-- showtail:start'); // not force-injected
-    } finally {
       cleanup(dir);
     }
   });

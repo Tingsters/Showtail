@@ -49,11 +49,7 @@ export type {
   JsonValue,
   RedactConfig,
 } from '@showtail/agent-traces/model';
-import type {
-  ConversationEvent,
-  JsonValue,
-  RedactConfig,
-} from '@showtail/agent-traces/model';
+import type { ConversationEvent, RedactConfig } from '@showtail/agent-traces/model';
 
 /** A single recorded event in a work session. One JSONL line = one Event. */
 export interface Event {
@@ -413,6 +409,14 @@ export interface Contributor {
 export interface ReportData {
   /** Structured JSON export contract. Existing summary fields remain backward compatible. */
   schemaVersion: 2 | 3;
+  /** File state read asynchronously after an edit; not an exact edit-time snapshot. */
+  fileObservations?: {
+    recordId: string;
+    editId: string;
+    path: string;
+    sha256: string;
+    observedAt: string;
+  }[];
   coverage?: import('./core/historyAudit.ts').HistoryCoverage;
   unattributedWork?: Omit<Turn, 'prompt'>[];
   /** The *configured* project name (from `config.project`), or null if unset. */

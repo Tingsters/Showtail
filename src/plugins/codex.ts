@@ -1,8 +1,13 @@
-/**
- * OpenAI Codex — AGENTS.md instructions + lifecycle hooks in `.codex/`, with a
- * `config.toml` `features.hooks` toggle. All of that lives in core/codex.ts and
- * commands/codex.ts; this module exposes it through the plugin contract.
- */
+/** Codex native-history reader and user-level observer registration. */
+import {
+  codexToHookTranscript,
+  findRollouts,
+  parseCodexRollout,
+  parseCodexTranscript,
+  rolloutCwdFromFile,
+  rolloutFormatWarning,
+  type CodexRolloutInfo,
+} from '@showtail/agent-traces/codex/transcript';
 import { existsSync, readFileSync } from 'node:fs';
 import { runCodexInstall, runCodexUninstall } from '../commands/codex.ts';
 import {
@@ -14,17 +19,11 @@ import {
   resolveCodexTarget,
   writeCodexInstructions,
 } from '../core/codex.ts';
-import { readThreadTranscript, openCodexRpc } from '../core/codexAppServer.ts';
 import {
-  codexToHookTranscript,
-  findRollouts,
-  parseCodexRollout,
-  parseCodexTranscript,
-  rolloutCwdFromFile,
-  rolloutFormatWarning,
-  type CodexRolloutInfo,
-} from '@showtail/agent-traces/codex/transcript';
-import { asString, prop } from '../core/parse.ts';
+  listThreads,
+  openCodexRpc,
+  readThreadTranscript,
+} from '../core/codexAppServer.ts';
 import { commandOnPath, homeDirExists } from '../core/detect.ts';
 import {
   applyPatchEdits,
@@ -35,6 +34,7 @@ import {
   extractSuggestedCode,
   type HookPayload,
 } from '../core/hookInput.ts';
+import { asString, prop } from '../core/parse.ts';
 import type {
   EnvironmentPlugin,
   HookTranscript,
@@ -337,6 +337,19 @@ export const codexPlugin: EnvironmentPlugin = {
   },
 
   migration: {
+    async discoverNative() {
+      const rpc = await openCodexRpc({ requestTimeoutMs: 5000 });
+      try {
+        return (await listThreads(rpc)).map((t) => ({
+          path: '',
+          providerSessionId: t.id,
+          cwd: t.cwd,
+          mtimeMs: t.updatedAt ? t.updatedAt * 1000 : 0,
+        }));
+      } finally {
+        rpc.close();
+      }
+    },
     discover: () =>
       findRollouts().map((info) => ({
         path: info.path,
@@ -345,9 +358,13 @@ export const codexPlugin: EnvironmentPlugin = {
         cwd: rolloutCwdFromFile(info.path),
       })),
     async read(candidate, root) {
-      const fallback = parseCodexRollout(readFileSync(candidate.path, 'utf8'), root, {
-        includeOutsideEdits: true,
-      });
+      const fallback = parseCodexRollout(
+        candidate.path ? readFileSync(candidate.path, 'utf8') : '',
+        root,
+        {
+          includeOutsideEdits: true,
+        },
+      );
       try {
         const read = await readThreadTranscript(candidate.providerSessionId, {
           root,

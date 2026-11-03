@@ -1,0 +1,36 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "showtail hook session-start --tool codex"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "apply_patch|shell_command",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "showtail hook post-edit --tool codex",
+            "async": true
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "showtail hook stop --tool codex"
+          }
+        ]
+      }
+    ]
+  }
+}

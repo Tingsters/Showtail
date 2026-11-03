@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+## 0.23.0 — Passive native-history capture
+
+- Read native provider history without standing model instructions or LLM-driven capture.
+- Add silent, short-lived collection workers, explicit `sync`, and independent `--no-assistant` reporting discovery.
+- Retire the VS Code model proxy and blanket save logging; preserve native edit evidence and timestamped file observations.
+- Discover archived/API-only Codex threads and recover Claude's persisted edit results, Bash diffs and plan content.
+- Preserve Claude subagent lineage and failed Codex tool attempts without turning delegated inputs into student prompt cards.
+- Back up and retire owned legacy instructions and callbacks while preserving user rules, other hooks and capture consent.
+- Breaking: status JSON v3 separates capture mode, transport, reporting discovery, and ingestion health.
+
 ## 0.22.0 — Capture recovery and accurate reports
 
 - Capture Claude text/image prompts and current Codex typed rollout items; share

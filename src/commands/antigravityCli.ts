@@ -7,6 +7,7 @@ import {
   uninstallAntigravityCliHooks,
   writeAntigravityCliInstructions,
 } from '../core/antigravityCli.ts';
+import { reportSkillFile } from '../core/reportDiscovery.ts';
 import type { ConnectUninstallResult } from '../plugins/types.ts';
 import {
   printHooksEnabled,
@@ -33,9 +34,14 @@ export async function runAntigravityCliInstall(
   const target = resolveAntigravityCliTarget(scope, options.cwd);
   const withHooks = options.hooks !== false; // default ON; --no-hooks opts out
 
-  const existed = existsSync(target.contextFile);
+  const existed = existsSync(reportSkillFile('antigravity-cli'));
   writeAntigravityCliInstructions(target, { force: options.force });
-  printInstallHeader('Antigravity CLI instructions', target.contextFile, scope, existed);
+  printInstallHeader(
+    'Antigravity CLI instructions',
+    reportSkillFile('antigravity-cli'),
+    scope,
+    existed,
+  );
 
   if (withHooks) {
     installAntigravityCliHooks(target);
@@ -51,7 +57,7 @@ export async function runAntigravityCliInstall(
       `Auto-capture hooks are OFF at ${scope} scope${removed ? ' (existing Showtail hooks removed)' : ''}.`,
     );
     console.log(
-      '  The current managed instructions remain installed, but routine prompts',
+      '  The reporting skill remains available; native history can be imported with sync.',
     );
     console.log(
       '  and edits will not be captured automatically. Re-run without --no-hooks',

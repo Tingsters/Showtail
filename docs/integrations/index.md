@@ -12,7 +12,7 @@ integration can do today.
 
 Showtail works with many AI coding tools, and support depth varies by tool. This table shows what each integration can do today — support is checked with recorded provider fixtures and central-store tests. Live host behavior can vary by version.
 
-<!-- showtail:start sha=d9d2769ee079 -->
+<!-- showtail:start sha=d1e8f2adf197 -->
 | Capability | Claude Code | OpenAI Codex | ChatGPT | Copilot (VS Code) | Copilot CLI | Copilot Desktop | Antigravity CLI | Antigravity IDE | Google Gemini | Zed | Notes |
 | --- | :-: | :-: | :-: | :-: | :-: | :-: | :-: | :-: | :-: | :-: | --- |
 | **Live-capture hooks** | ✅ | ✅ | ⛔ | 🚧 | 🚧 | 🗺️ | ✅ | 🚧 | ⛔ | ⛔ | Live-certified for Claude Code, Codex, and Antigravity CLI. Copilot CLI fires no lifecycle hooks in headless `-p` mode, so it can’t be live-certified here; Copilot (VS Code) uses its extension; Zed has no hooks. |
@@ -22,8 +22,8 @@ Showtail works with many AI coding tools, and support depth varies by tool. This
 | **Decision capture** | ✅ | ✅ | ⛔ | 🗺️ | 🗺️ | 🗺️ | 🗺️ | 🗺️ | ⛔ | ⛔ | Reconciled from the tool’s transcript on the Stop hook, so — like AI-reply capture — it is certified by its contract test, not the headless live run. Planned wherever a tool has hooks + a transcript but no ask-the-user construct yet. |
 | **Plan capture** | ✅ | ✅ | ⛔ | ⛔ | ⛔ | ⛔ | ✅ | 🗺️ | ⛔ | ⛔ | Full for Claude Code, Codex, and Antigravity CLI. Antigravity links its real plan.md; Claude Code and Codex materialize the transcript plan into a browsable, linkable file (Codex writes no native plan file). Antigravity IDE writes implementation_plan.md but has no plugin yet. Reconciled on the Stop hook — certified by its contract test, not the headless live run (print mode never raises Stop). |
 | **Session import / backfill** | ✅ | ✅ | ✅ | 🗺️ | 🗺️ | 🗺️ | 🗺️ | ✅ | ✅ | 🗺️ | Planned wherever the tool writes a readable transcript (Zed: only via manual Markdown export). |
-| **Managed instructions** | ✅ | ✅ | ⛔ | ✅ | ✅ | 🗺️ | ✅ | ✅ | ⛔ | 🗺️ | Planned wherever the tool reads an instructions/rules file. |
-| **Instruction update detection** | ✅ | ✅ | ⛔ | ✅ | ✅ | 🗺️ | ✅ | ✅ | ⛔ | 🗺️ | Detected via a managed-block fingerprint in each tool’s instructions/skill file. |
+| **On-request reporting skill** | ✅ | ✅ | ⛔ | ✅ | ✅ | 🗺️ | ✅ | ✅ | ⛔ | 🗺️ | Uses native skill discovery where available; never adds standing project rules. |
+| **Reporting skill updates** | ✅ | ✅ | ⛔ | ✅ | ✅ | 🗺️ | ✅ | ✅ | ⛔ | 🗺️ | Detected via a managed-block fingerprint in each tool’s instructions/skill file. |
 | **User + project install** | ✅ | ✅ | ⛔ | 🚧 | ✅ | 🗺️ | ✅ | 🚧 | ⛔ | 🗺️ | Copilot (VS Code) is project-scoped only (.github/). |
 | **Host detection (setup)** | ✅ | ✅ | ⛔ | ✅ | ✅ | 🗺️ | ✅ | ✅ | ⛔ | 🗺️ | Hosted web apps have nothing local to detect. |
 | **Connection status** | ✅ | ✅ | ⛔ | ✅ | ✅ | 🗺️ | ✅ | ✅ | ⛔ | 🗺️ | Needs a local footprint to inspect; web apps have none. |
@@ -52,7 +52,7 @@ Showtail works with many AI coding tools, and support depth varies by tool. This
 
     ---
 
-    `AGENTS.md` instructions + lifecycle hooks via `config.toml`.
+    Native history collection with silent observer hooks and a deferred reporting skill.
 
     [:octicons-arrow-right-24: Set up Codex](codex.md)
 
@@ -60,7 +60,7 @@ Showtail works with many AI coding tools, and support depth varies by tool. This
 
     ---
 
-    VS Code extension: managed instructions, save-time edit snapshots, `@showtail`.
+    VS Code extension: native history watching and on-request report commands.
 
     [:octicons-arrow-right-24: Set up Copilot](copilot.md)
 

@@ -2,11 +2,11 @@ import { expect, test } from 'bun:test';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { fixture } from './centralHelpers.ts';
-import { getPlugin } from '../src/plugins/registry.ts';
+import { threadToTranscript } from '../src/core/codexAppServer.ts';
 import { HistoryStore } from '../src/core/history.ts';
 import { captureTranscript } from '../src/core/historyCapture.ts';
-import { threadToTranscript } from '../src/core/codexAppServer.ts';
+import { getPlugin } from '../src/plugins/registry.ts';
+import { fixture } from './centralHelpers.ts';
 
 const timestamp = '2026-11-01T12:00:00.000Z';
 for (const tool of [
@@ -49,6 +49,16 @@ for (const tool of [
               })),
             },
           },
+          ...files.map((file, i) => ({
+            type: 'user',
+            timestamp,
+            toolUseResult: { filePath: file, content: 'export {};' },
+            message: {
+              content: [
+                { type: 'tool_result', tool_use_id: `edit-${i}`, content: 'success' },
+              ],
+            },
+          })),
         ];
       else if (tool === 'codex')
         records = [

@@ -1,9 +1,13 @@
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
-// Single source of truth: committed under assets/ AND embedded into the binary,
-// so `showtail connect codex` is fully self-contained (no files to ship).
-import AGENTS_BODY from '../../assets/codex/AGENTS.showtail.md' with { type: 'text' };
+import {
+  removeReportSkill,
+  reportSkillState,
+  retireInstructions,
+  writeReportSkill,
+} from './reportDiscovery.ts';
+import { REPORT_SKILL as AGENTS_BODY } from './reportDiscovery.ts';
 import {
   hasOurHooks,
   mergeHookEvents,
@@ -11,13 +15,6 @@ import {
   type HookEvents,
 } from './hookMerge.ts';
 import { hostHome } from './hostHome.ts';
-import {
-  applyManagedBlock,
-  classify,
-  parseBlock,
-  shortHash,
-  stripManagedBlock,
-} from './managedBlock.ts';
 import { findRoot, readJson, writeJson } from './storage.ts';
 import { dirOf } from './text.ts';
 
@@ -35,9 +32,6 @@ export const CODEX_HOOK_EVENTS: HookEvents = {
   SessionStart: [
     { hooks: [{ type: 'command', command: 'showtail hook session-start --tool codex' }] },
   ],
-  UserPromptSubmit: [
-    { hooks: [{ type: 'command', command: 'showtail hook user-prompt --tool codex' }] },
-  ],
   PostToolUse: [
     {
       // `apply_patch` is Codex's structured edit tool; `shell_command` covers
@@ -45,7 +39,9 @@ export const CODEX_HOOK_EVENTS: HookEvents = {
       // redirects, `sed -i`) — common on Windows. Both fire `post-edit`; the
       // hook then recovers the touched files from the payload or via git.
       matcher: 'apply_patch|shell_command',
-      hooks: [{ type: 'command', command: 'showtail hook post-edit --tool codex' }],
+      hooks: [
+        { type: 'command', command: 'showtail hook post-edit --tool codex', async: true },
+      ],
     },
   ],
   Stop: [{ hooks: [{ type: 'command', command: 'showtail hook stop --tool codex' }] }],
@@ -120,57 +116,18 @@ export function writeCodexInstructions(
   target: CodexTarget,
   options: WriteOptions = {},
 ): void {
-  mkdirSync(dirOf(target.agentsFile), { recursive: true });
-  // AGENTS.md has no frontmatter, so the preamble is empty.
-  applyManagedBlock(target.agentsFile, AGENTS_BODY, '', options.force ?? false);
-}
-
-export interface CodexInstructionsState {
-  installed: boolean;
-  upToDate: boolean;
-  userEdited: boolean;
-  updateAvailable: boolean;
-}
-
-/** Inspect the AGENTS.md managed block and classify it for status/refresh. */
-export function codexInstructionsState(target: CodexTarget): CodexInstructionsState {
-  if (!existsSync(target.agentsFile)) {
-    return {
-      installed: false,
-      upToDate: false,
-      userEdited: false,
-      updateAvailable: false,
-    };
-  }
-  const parsed = parseBlock(readFileSync(target.agentsFile, 'utf8'));
-  if (!parsed) {
-    return {
-      installed: false,
-      upToDate: false,
-      userEdited: false,
-      updateAvailable: false,
-    };
-  }
-  const cls = classify(parsed, AGENTS_BODY);
-  if (cls === 'edited') {
-    return {
-      installed: true,
-      upToDate: false,
-      userEdited: true,
-      updateAvailable: parsed.sha !== shortHash(AGENTS_BODY),
-    };
-  }
-  if (cls === 'stale') {
-    return { installed: true, upToDate: false, userEdited: false, updateAvailable: true };
-  }
-  return { installed: true, upToDate: true, userEdited: false, updateAvailable: false };
-}
-
-/** Remove the Showtail block from AGENTS.md (deletes the file if it empties). */
-export function removeCodexInstructions(target: CodexTarget): boolean {
-  return stripManagedBlock(target.agentsFile, () =>
-    rmSync(target.agentsFile, { force: true }),
+  writeReportSkill(
+    'codex',
+    [target.agentsFile, ...(target.legacyAgentsFile ? [target.legacyAgentsFile] : [])],
+    options.force,
   );
+}
+export function codexInstructionsState(_target: CodexTarget) {
+  return reportSkillState('codex');
+}
+export function removeCodexInstructions(target: CodexTarget): boolean {
+  const retired = retireInstructions(target.agentsFile);
+  return removeReportSkill('codex') || retired;
 }
 
 // --- Hooks (.codex/hooks.json) ---------------------------------------------
@@ -181,7 +138,9 @@ function readHooksFile(hooksFile: string): Record<string, unknown> {
   try {
     return readJson<Record<string, unknown>>(hooksFile);
   } catch {
-    return {};
+    throw new Error(
+      'HOOK_CONFIG_INVALID: repair the existing hook configuration before reconnecting.',
+    );
   }
 }
 

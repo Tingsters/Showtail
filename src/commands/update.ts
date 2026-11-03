@@ -1,6 +1,6 @@
 /** Explicit `showtail update` command. */
-import { emitJson } from '../core/output.ts';
 import { ShowtailError } from '../core/errors.ts';
+import { emitJson } from '../core/output.ts';
 import {
   fetchLatestRelease,
   isNewerVersion,
@@ -180,7 +180,7 @@ function printResult(json: boolean | undefined, result: UpdateCommandResult): vo
   if (result.warning) console.log(`Note: ${result.warning}`);
   if (result.status === 'updated' || result.status === 'pending') {
     console.log(
-      'Capture integrations will refresh automatically the next time Showtail runs.',
+      'Run `showtail setup --first-run` to migrate capture integrations; paused capture stays paused. Start a new agent session to clear previously loaded instructions.',
     );
   }
 }

@@ -598,7 +598,10 @@ function unattributedHtml(data: ReportData, mode: AiMode): string {
             .filter((e) => e.type === 'user_text')
             .map(
               (e) =>
-                '<p>Unlinked provider user message</p>' + renderRichText(e.text ?? ''),
+                (e.origin === 'agent'
+                  ? '<p>Agent input</p>'
+                  : '<p>Unlinked provider user message</p>') +
+                renderRichText(e.text ?? ''),
             )
             .join('') +
           work.codeChanges

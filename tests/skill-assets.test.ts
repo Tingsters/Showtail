@@ -1,47 +1,20 @@
-import { describe, expect, test } from 'bun:test';
+import { expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { REPORT_SKILL } from '../src/core/reportDiscovery.ts';
 import { SKILL_MD, pluginHooksJson } from '../src/core/skill.ts';
-
-const REPO = join(import.meta.dir, '..');
-
-/** Read a committed asset file with normalized (LF) line endings. */
-function readAsset(...parts: string[]): string {
-  return readFileSync(join(REPO, ...parts), 'utf8').replace(/\r\n/g, '\n');
-}
-
-describe('claude-code assets stay in sync with the single source of truth', () => {
-  test('embedded SKILL.md matches the committed plugin skill file', () => {
-    const committed = readAsset(
-      'assets',
-      'claude-code',
-      'plugin',
-      'skills',
-      'showtail',
-      'SKILL.md',
-    );
-    expect(SKILL_MD.replace(/\r\n/g, '\n')).toBe(committed);
-    expect(SKILL_MD).toContain('showtail status --json --tool claude');
-    expect(SKILL_MD).toContain('"mode": "automatic"');
-    expect(SKILL_MD).not.toContain('"hooksActive"');
-    expect(SKILL_MD).not.toContain('showtail ensure');
-    expect(SKILL_MD).not.toContain('showtail log --type prompt');
-    expect(SKILL_MD).not.toContain('showtail artifact');
-    expect(SKILL_MD).toContain('showtail log --type decision');
-    expect(SKILL_MD).toContain('showtail projects "<student-project-wording>" --json');
-    expect(SKILL_MD).toContain(
-      'showtail report --project "<project-id>" --json --no-open',
-    );
-    expect(SKILL_MD).toContain('showtail verify --project "<project-id>" --json');
-    expect(SKILL_MD).toContain('showtail status --json --tool claude');
-    expect(SKILL_MD).toContain("Claude's terminal working directory");
-    expect(SKILL_MD).toContain('returned `projectId` and `projectRoot`');
-    expect(SKILL_MD).not.toMatch(/^\s*showtail (?:report|verify|status)(?:\s+#.*)?\s*$/m);
-    expect(SKILL_MD).not.toMatch(/`showtail (?:report|verify|status)`/);
-  });
-
-  test('committed plugin hooks.json matches the generated hook config', () => {
-    const committed = readAsset('assets', 'claude-code', 'plugin', 'hooks', 'hooks.json');
-    expect(committed).toBe(pluginHooksJson());
-  });
+const asset = (file: string) =>
+  readFileSync(join(import.meta.dir, '../assets', file), 'utf8').replace(/\r\n/g, '\n');
+test('skill: embedded skill and hook assets match the binary', () => {
+  expect(SKILL_MD.replace(/\r\n/g, '\n')).toBe(
+    asset('claude-code/plugin/skills/showtail/SKILL.md'),
+  );
+  expect(SKILL_MD.replace(/\r\n/g, '\n')).toBe(REPORT_SKILL);
+  expect(asset('claude-code/plugin/hooks/hooks.json')).toBe(pluginHooksJson());
+});
+test('skill: callbacks never capture prompts or run before invocation', () => {
+  const hooks = pluginHooksJson();
+  expect(hooks).not.toContain('user-prompt');
+  expect(hooks).not.toContain('PreInvocation');
+  expect(hooks).not.toContain('UserPromptSubmit');
 });

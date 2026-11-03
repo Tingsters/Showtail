@@ -54,11 +54,13 @@ import {
   statSync,
 } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
-import {
-  readThreadTranscript,
-  threadToTranscript,
-  type ThreadEntry,
-} from './appServer.ts';
+import { editsFromEnvelope, type EditedFile } from '../hooks/payload.ts';
+import type {
+  HookTranscript,
+  HookTranscriptEvent,
+  HookTranscriptMessage,
+  JsonValue,
+} from '../model.ts';
 import { hostHome } from '../paths/hostHome.ts';
 import { toRepoRelative } from '../paths/pathUtil.ts';
 import {
@@ -71,14 +73,12 @@ import {
   renderDecisionText,
   type DecisionQuestion,
 } from '../transcript/decisions.ts';
-import { editsFromEnvelope, type EditedFile } from '../hooks/payload.ts';
 import { asArray, asNumber, asString, prop } from '../util/parse.ts';
-import type {
-  HookTranscript,
-  HookTranscriptEvent,
-  HookTranscriptMessage,
-  JsonValue,
-} from '../model.ts';
+import {
+  readThreadTranscript,
+  threadToTranscript,
+  type ThreadEntry,
+} from './appServer.ts';
 
 /** A normalized message recovered from a Codex rollout. */
 export interface CodexMessage {
@@ -90,7 +90,9 @@ export interface CodexMessage {
    * "plan" (a todo/plan list Codex built via `update_plan`), or "decision" (a
    * choice Codex offered via `request_user_input`).
    */
-  role: 'user' | 'assistant' | 'edit' | 'plan' | 'decision';
+  role: 'user' | 'assistant' | 'edit' | 'plan' | 'decision' | 'tool_call';
+  toolName?: string;
+  isError?: boolean;
   text: string;
   /** ISO-8601 timestamp from the rollout line, if present. */
   timestamp?: string;
@@ -191,8 +193,10 @@ function sessionIdFromName(file: string): string {
  * filter by the rollout's recorded `cwd` (see {@link findProjectRollouts}).
  */
 export function findRollouts(): CodexRolloutInfo[] {
-  const root = codexSessionsDir();
-  if (!existsSync(root)) return [];
+  const roots = [
+    codexSessionsDir(),
+    join(hostHome('CODEX_HOME', '.codex'), 'archived_sessions'),
+  ];
   const out: CodexRolloutInfo[] = [];
 
   // Walk YYYY/MM/DD; tolerate a flat layout too (files directly under a dir).
@@ -218,7 +222,7 @@ export function findRollouts(): CodexRolloutInfo[] {
       });
     }
   };
-  walk(root, 0);
+  for (const root of roots) if (existsSync(root)) walk(root, 0);
 
   out.sort((a, b) => b.mtimeMs - a.mtimeMs);
   return out;
@@ -924,6 +928,8 @@ export function codexToHookTranscript(parsed: CodexTranscript): HookTranscript {
       timestamp: m.timestamp,
       sourceId: m.sourceId,
       model: m.model,
+      ...(m.toolName ? { toolName: m.toolName } : {}),
+      ...(m.isError === undefined ? {} : { isError: m.isError }),
       ...(m.isFinal === undefined ? {} : { isFinal: m.isFinal }),
       ...(m.role === 'edit' ? { edits: m.edits } : {}),
     });

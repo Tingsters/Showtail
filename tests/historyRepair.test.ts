@@ -1,23 +1,25 @@
-import { expect, test } from 'bun:test';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
 import { Database } from 'bun:sqlite';
-import { fixture, tree } from './centralHelpers.ts';
-import { canonical, digest, HistoryStore } from '../src/core/history.ts';
-import {
-  prepareRepair,
-  applyRepair,
-  backupHistory,
-  repairPreview,
-} from '../src/core/historyRepair.ts';
-import { auditHistory } from '../src/core/historyAudit.ts';
-import { buildHistoryReport, exportHistory } from '../src/core/historyReport.ts';
-import { captureTranscript } from '../src/core/historyCapture.ts';
+import { expect, test } from 'bun:test';
+import { cpSync, mkdirSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { parseClaudeTranscript } from '../src/core/claudeCode.ts';
 import { parseCodexRollout } from '../src/core/codexTranscript.ts';
+import { writeGlobalConfig } from '../src/core/globalConfig.ts';
+import { canonical, digest, HistoryStore } from '../src/core/history.ts';
+import { auditHistory } from '../src/core/historyAudit.ts';
+import { captureTranscript, runHistoryHook } from '../src/core/historyCapture.ts';
+import {
+  applyRepair,
+  backupHistory,
+  prepareRepair,
+  repairPreview,
+} from '../src/core/historyRepair.ts';
+import { buildHistoryReport, exportHistory } from '../src/core/historyReport.ts';
+import { importLegacy } from '../src/core/legacyImport.ts';
 import { renderHtml } from '../src/core/report/html.ts';
 import { renderMarkdown } from '../src/core/report/markdown.ts';
 import { verifySubmission } from '../src/core/submission.ts';
+import { fixture, tree } from './centralHelpers.ts';
 const at = '2026-10-23T04:53:11.000Z';
 
 // Reproduce a valid pre-fix capture, whose hook had no origin metadata. Later
@@ -470,8 +472,6 @@ test('ambiguous historical matches remain partial and never collapse genuine rep
     expect(store.sourceReads()[0]!.status).toBe('partial');
     expect(store.verify().ok).toBe(true);
   }));
-import { cpSync } from 'node:fs';
-import { importLegacy } from '../src/core/legacyImport.ts';
 
 test('legacy metadata overlays survive ledger deduplication and can be restored from archived evidence', () =>
   fixture(async ({ dir, home, project }) => {
@@ -634,6 +634,15 @@ test('backfill binds relative and absolute edit aliases without duplicating a ca
             ],
           },
         },
+        {
+          type: 'user',
+          timestamp: at,
+          message: {
+            content: [
+              { type: 'tool_result', tool_use_id: 'native-edit', content: 'success' },
+            ],
+          },
+        },
       ]
         .map((r) => JSON.stringify(r))
         .join('\n'),
@@ -768,8 +777,6 @@ test('repair refuses source aliases changed by concurrent capture', () =>
     expect(() => applyRepair(store, plan)).toThrow('REPAIR_SOURCE_CHANGED');
     expect(store.verify().ok).toBe(true);
   }));
-import { runHistoryHook } from '../src/core/historyCapture.ts';
-import { writeGlobalConfig } from '../src/core/globalConfig.ts';
 
 test('live hooks preserve provider origin and never count plain peer text as student input', () =>
   fixture(async ({ project }) => {
