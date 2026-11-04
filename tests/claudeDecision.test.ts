@@ -6,6 +6,7 @@ import { renderHtml, renderMarkdown } from '../src/core/report.ts';
 import { turnTimeline } from '../src/core/report/data.ts';
 import type { Event, ReportData, Turn } from '../src/types.ts';
 import { cleanup, makeTempDir } from './helpers.ts';
+import { readViewer } from './viewerHelpers.ts';
 /**
  * A transcript where Claude pauses with `AskUserQuestion` (two questions in one
  * call: the first answered by picking an option, the second by typing a custom
@@ -457,7 +458,10 @@ describe('turn timeline (chronological interleaving)', () => {
       '[`src/foo.ts`](../../.claude/worktrees/wt/src/foo.ts)',
     );
     const html = renderHtml(data);
-    expect(html).toContain('href="../../.claude/worktrees/wt/src/foo.ts"');
-    expect(html).toContain('>src/foo.ts</a>');
+    const { index, texts } = readViewer(html);
+    const revision = Object.values(index.items).find((item) => item.kind === 'revision')!;
+    expect(revision.path).toBe('src/foo.ts');
+    expect(revision.linkPath).toBe('.claude/worktrees/wt/src/foo.ts');
+    expect(texts.get(revision.textRef!)).toBe('+x');
   });
 });

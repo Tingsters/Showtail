@@ -3,6 +3,7 @@ import { HistoryStore } from '../src/core/history.ts';
 import { buildHistoryReport } from '../src/core/historyReport.ts';
 import { renderHtml, renderMarkdown } from '../src/core/report.ts';
 import { fixture } from './centralHelpers.ts';
+import { readViewer } from './viewerHelpers.ts';
 
 test('standalone shell observations are reviewable without becoming applied edits', () =>
   fixture(({ project }) => {
@@ -29,12 +30,22 @@ test('standalone shell observations are reviewable without becoming applied edit
     ];
     const html = renderHtml(data);
     const markdown = renderMarkdown(data);
-    expect(html).toContain('<h2>File observations</h2>');
-    expect(html).toContain('parser&lt;script&gt;.ts');
+    const { index, texts } = readViewer(html);
+    const observations = Object.values(index.items).filter(
+      (item) => item.kind === 'observation',
+    );
+    expect(observations).toMatchObject([
+      {
+        path: 'parser<script>.ts',
+        basis: 'shell-write-attempt',
+        sha256: 'a'.repeat(64),
+        toolCallId: call.id,
+        toolOutcome: 'failed',
+      },
+    ]);
     expect(html).not.toContain('parser<script>.ts');
-    expect(html).toContain('failed shell attempt');
-    expect(html).toContain(`href="#st-tool-${call.id}"`);
-    expect(html).toContain(`id="st-tool-${call.id}"`);
+    expect(index.items[call.id]?.isError).toBe(true);
+    expect(texts.get(observations[0]!.textRef!)).toContain('a'.repeat(64));
     expect(markdown).toContain('## File observations');
     expect(markdown).toContain('may include later or manual changes');
     expect(markdown).toContain('SHA-256: `' + 'a'.repeat(64) + '`');
@@ -58,7 +69,7 @@ test('observations already attached to a native edit do not create duplicate vis
         observedAt: '2026-01-01T12:00:00.000Z',
       },
     ];
-    expect(renderHtml(data)).not.toContain('<h2>File observations</h2>');
+    expect(readViewer(renderHtml(data)).index.observations).toEqual([]);
     expect(renderMarkdown(data)).not.toContain('## File observations');
   }));
 
@@ -79,13 +90,23 @@ test('workspace deltas retain reviewable diffs without asserting authorship or a
     ];
     const html = renderHtml(data);
     const markdown = renderMarkdown(data);
-    for (const rendered of [html, markdown]) {
-      expect(rendered).toContain('during shell activity');
-      expect(rendered).toContain('author unverified');
-      expect(rendered).toContain('Observed workspace diff');
-      expect(rendered).not.toContain('SHA-256:');
-    }
-    expect(html).toContain('&lt;script&gt;');
+    const { index, texts } = readViewer(html);
+    expect(index.observations).toMatchObject([
+      {
+        path: 'other-agent.mjs',
+        basis: 'workspace-delta',
+        timestamp: '2026-01-01T12:00:00.000Z',
+      },
+    ]);
+    expect(index.observations[0]!.preview).toContain('author unverified');
+    expect(index.observations[0]!.sha256).toBeUndefined();
+    expect(texts.get(index.observations[0]!.textRef!)).toBe(
+      data.fileObservations[0]!.diff,
+    );
+    expect(markdown).toContain('during shell activity');
+    expect(markdown).toContain('author unverified');
+    expect(markdown).toContain('Observed workspace diff');
+    expect(markdown).not.toContain('SHA-256:');
     expect(html).not.toContain('text = "<script>"');
     expect(markdown).toContain('```diff');
     expect(data.summary.artifacts).toBe(0);
@@ -107,11 +128,12 @@ test('unlinked native observations do not invent shell activity or applied edits
         basis: 'native-edit',
       },
     ];
-    for (const rendered of [renderHtml(data), renderMarkdown(data)]) {
-      expect(rendered).toContain('after tool activity');
-      expect(rendered).not.toContain('shell attempt');
-      expect(rendered).not.toContain('after shell activity');
-    }
+    const { index } = readViewer(renderHtml(data));
+    expect(index.observations[0]!.basis).toBe('native-edit');
+    expect(index.observations[0]!.toolCallId).toBeUndefined();
+    expect(renderMarkdown(data)).toContain('after tool activity');
+    expect(renderMarkdown(data)).not.toContain('shell attempt');
+    expect(renderMarkdown(data)).not.toContain('after shell activity');
     expect(data.summary.artifacts).toBe(0);
     expect(data.turns[0]!.codeChanges).toEqual([]);
     expect(data.turns).toHaveLength(1);

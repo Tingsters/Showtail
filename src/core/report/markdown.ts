@@ -14,6 +14,7 @@ import {
 } from './data.ts';
 import { pluralS } from '../text.ts';
 import { staticUtc, timeToken } from './time.ts';
+import { projectReport } from './projection.ts';
 
 /** A unique token swapped for the interactive turns HTML after Markdown→HTML. */
 export const TURNS_PLACEHOLDER = 'SHOWTAIL_TURNS_PLACEHOLDER';
@@ -333,7 +334,7 @@ function fileObservationsSection(
 
 /** Render a report as student- and educator-friendly Markdown. */
 export function renderMarkdown(data: ReportData, opts?: ReportRenderOptions): string {
-  return buildMarkdown(data, false, opts);
+  return buildMarkdown(projectReport(data).data, false, opts);
 }
 
 /** Append one turn as readable Markdown (used for the canonical text export). */

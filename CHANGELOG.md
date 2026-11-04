@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.25.0 — Scalable reports with reading-first navigation
+
+- Replace eager HTML reports with a paged offline viewer, compressed content, full-history search, and bounded text/diff navigation.
+- Preserve literal replacement sequences and placeholder names without duplicating report sections.
+- Deduplicate equivalent native-event projections while retaining conflicting events, repeated prompts, every revision, and provenance.
+- Verify and scan decoded report payloads, including hidden pages and secrets spanning chunk boundaries.
+- Restore a reading-first report with document scrolling, responsive navigation, a dedicated plans index, session grouping, and report/session/exchange usage statistics.
+- Restore safe Markdown, plan approval and feedback, grouped tool calls, source context, display preferences, and visible feature-parity acceptance checks.
+
 ## 0.24.0 — Reliable passive capture and reports
 
 - Add repeatable real-agent, compiled-CLI, browser, and editor-watcher acceptance tests with retained evidence.

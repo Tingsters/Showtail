@@ -22,6 +22,7 @@ import {
   buildTurns,
 } from './report/data.ts';
 import { renderHtml } from './report/html.ts';
+import { scanViewerHtml } from './report/viewerCodec.ts';
 import { renderMarkdown, type ReportRenderOptions } from './report/markdown.ts';
 import { scanResidual } from './sanitize.ts';
 import { sanitizeReportData } from './shareReport.ts';
@@ -471,10 +472,7 @@ export function exportHistory(
     );
   const markdown = renderMarkdown(result.data, options);
   const html = renderHtml(result.data, options);
-  if (
-    scanResidual(markdown, { structural: true }).length ||
-    scanResidual(html, { structural: true }).length
-  )
+  if (scanResidual(markdown, { structural: true }).length || scanViewerHtml(html).length)
     throw new Error(
       'SUBMISSION_SCAN_BLOCKED: rendered output failed the independent scan.',
     );

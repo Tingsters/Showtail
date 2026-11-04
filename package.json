@@ -1,6 +1,6 @@
 {
   "name": "showtail",
-  "version": "0.24.0",
+  "version": "0.25.0",
   "description": "Show your work: one private, local history of your AI prompts and file changes, without modifying project folders.",
   "type": "module",
   "license": "Apache-2.0",
@@ -18,8 +18,8 @@
     "start": "bun run src/cli.ts",
     "test": "bun test",
     "typecheck": "bun x tsc --noEmit",
-    "format": "bun x prettier --write \"src/**/*.ts\" \"tests/**/*.ts\" \"scripts/acceptance/**/*.{ts,json}\"",
-    "format:check": "bun x prettier --check \"src/**/*.ts\" \"tests/**/*.ts\" \"scripts/acceptance/**/*.{ts,json}\"",
+    "format": "bun x prettier --write \"src/**/*.ts\" \"tests/**/*.ts\" \"scripts/acceptance/**/*.{ts,json}\" \"assets/report/viewer*.{js,css}\"",
+    "format:check": "bun x prettier --check \"src/**/*.ts\" \"tests/**/*.ts\" \"scripts/acceptance/**/*.{ts,json}\" \"assets/report/viewer*.{js,css}\"",
     "license:check": "bun run scripts/verify-licenses.ts",
     "verify:matrix": "bun run scripts/verify-changed.ts",
     "verify:integrations": "bun run scripts/verify-changed.ts",
@@ -28,6 +28,8 @@
     "build:release:non-windows": "bash scripts/build-non-windows.sh",
     "test:acceptance": "bun run scripts/acceptance/run.ts",
     "test:acceptance:live": "bun run scripts/acceptance/run.ts --live",
+    "test:acceptance:large": "bun run scripts/acceptance/report-large.ts",
+    "test:acceptance:parity": "bun run scripts/acceptance/report-parity-run.ts",
     "typecheck:acceptance": "bun x tsc -p scripts/acceptance/tsconfig.json --noEmit"
   },
   "keywords": [
