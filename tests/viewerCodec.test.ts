@@ -120,6 +120,34 @@ describe('standalone viewer text transport', () => {
     );
   });
 
+  test('recognizes payload end tags with ASCII whitespace and mixed case', () => {
+    const f = fixture(['All ordinary text']);
+    for (const closing of ['</SCRIPT>', '</script\t\n\f\r >']) {
+      const html = f.html.replaceAll('</script>', closing);
+      expect(decodeViewerHtml(html)!.texts.get('t0')).toBe('All ordinary text');
+      expect(scanViewerHtml(html)).toEqual([]);
+    }
+  });
+
+  test('rejects browser-tolerated end-tag attributes instead of hiding their contents', () => {
+    const f = fixture(['All ordinary text']);
+    for (const closing of [
+      '</script\t\n bar>',
+      '</ScRiPt data-secret="api_key=deliberatelyFakeCredential123">',
+      '</script/>',
+      '</script / >',
+    ]) {
+      // Exercise both the manifest and chunk delimiter independently.
+      for (const html of [
+        f.html.replace('</script>', closing),
+        f.html.slice(0, -9) + closing,
+      ]) {
+        expect(() => decodeViewerHtml(html)).toThrow('payload script closing tags');
+        expect(() => scanViewerHtml(html)).toThrow('payload script closing tags');
+      }
+    }
+  });
+
   test('scans complete logical texts across page boundaries and late chunks', () => {
     const split =
       'x'.repeat(VIEWER_PAGE_MAX_BYTES - 4) + 'api_key=deliberatelyFakeCredential123';

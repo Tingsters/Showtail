@@ -259,15 +259,20 @@ interface PayloadScript {
 }
 function payloadScripts(html: string): PayloadScript[] {
   const result: PayloadScript[] = [];
-  for (const tag of html.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script\s*>/gi)) {
+  // Recognize browser-tolerated end tags before rejecting noncanonical payload
+  // delimiters. End-tag attributes must never become uninspected transport bytes.
+  for (const tag of html.matchAll(/<script\b([^>]*)>([\s\S]*?)(<\/script\b[^>]*>)/gi)) {
     const attrs = attributes(tag[1]!);
-    if (attrs.get('id') === MANIFEST_ID || attrs.has('data-st-chunk'))
+    if (attrs.get('id') === MANIFEST_ID || attrs.has('data-st-chunk')) {
+      if (!/^[\t\n\f\r ]*$/.test(tag[3]!.slice(8, -1)))
+        fail('payload script closing tags must not have attributes or a slash');
       result.push({
         attributes: attrs,
         body: tag[2]!,
         start: tag.index!,
         end: tag.index! + tag[0].length,
       });
+    }
   }
   // An opening payload tag without a matching close must not silently become legacy HTML.
   let markers = 0;
