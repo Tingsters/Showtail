@@ -18,14 +18,15 @@ test('audit iterations cannot overwrite an existing nonempty artifact directory'
         timeout: 15000,
       },
     );
-    expect(ran.status).not.toBe(0);
+    expect(ran.error).toBeUndefined();
+    expect(ran.status).toBe(1);
     expect(ran.stderr).toContain('previous audit evidence is retained');
     expect(readFileSync(previous, 'utf8')).toBe('Retain this evidence exactly.');
     expect(existsSync(join(dir, 'input'))).toBe(false);
   } finally {
     cleanup(dir);
   }
-});
+}, 20000);
 
 test('private report audits are refused in CI before reading or writing report artifacts', () => {
   const dir = makeTempDir();
@@ -48,13 +49,14 @@ test('private report audits are refused in CI before reading or writing report a
         timeout: 15000,
       },
     );
-    expect(ran.status).not.toBe(0);
+    expect(ran.error).toBeUndefined();
+    expect(ran.status).toBe(1);
     expect(ran.stderr).toContain('Private --report inputs are local-only');
     expect(existsSync(artifacts)).toBe(false);
   } finally {
     cleanup(dir);
   }
-});
+}, 20000);
 
 test('an unavailable browser produces an incomplete audit and a failing exit instead of a pass', () => {
   const dir = makeTempDir();
@@ -76,11 +78,12 @@ test('an unavailable browser produces an incomplete audit and a failing exit ins
         timeout: 30000,
       },
     );
-    expect(ran.status).not.toBe(0);
+    expect(ran.error).toBeUndefined();
+    expect(ran.status).toBe(1);
     const receipt = JSON.parse(readFileSync(join(dir, 'result.json'), 'utf8'));
     expect(receipt.status).toBe('incomplete');
     expect(receipt.visualReview).toBe('pending');
   } finally {
     cleanup(dir);
   }
-});
+}, 35000);

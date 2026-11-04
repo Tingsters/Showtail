@@ -819,13 +819,20 @@
       next.id = prefix + '-next';
       previous.disabled = page <= 0;
       next.disabled = page + 1 >= pages;
+      var compactCount = node(
+        'span',
+        'st-v-page-count-compact',
+        page + 1 + ' / ' + pages,
+      );
+      compactCount.setAttribute('aria-hidden', 'true');
       wrapper.append(
         previous,
         node(
           'span',
-          '',
+          'st-v-page-count',
           'Page ' + (page + 1) + ' of ' + pages + ' · ' + total + ' entries',
         ),
+        compactCount,
         next,
       );
       host.appendChild(wrapper);

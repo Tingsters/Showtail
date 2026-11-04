@@ -282,6 +282,29 @@ export async function auditReport(input: AuditInput): Promise<AuditResult> {
     await capture('phone-exchanges');
     const density = result.states.at(-1)!;
     if (data.turns.length) {
+      const phoneToolbar = await page
+        .locator('.st-v-page-toolbar')
+        .evaluate((toolbar) => {
+          const pager = toolbar.querySelector('.st-v-pager')!;
+          const actions = toolbar.querySelector('.st-v-page-actions')!;
+          const fullCount = pager.querySelector('.st-v-page-count')!;
+          const compactCount = pager.querySelector('.st-v-page-count-compact')!;
+          return {
+            oneRow:
+              actions.getBoundingClientRect().top < pager.getBoundingClientRect().bottom,
+            fullCount: fullCount.textContent,
+            compactVisible: compactCount.getBoundingClientRect().width > 1,
+            compactHiddenFromAssistiveTech:
+              compactCount.getAttribute('aria-hidden') === 'true',
+          };
+        });
+      check('phone page actions share a row with pagination', phoneToolbar.oneRow);
+      check(
+        'phone pagination keeps the full accessible count and a compact visible count',
+        phoneToolbar.compactVisible &&
+          phoneToolbar.compactHiddenFromAssistiveTech &&
+          /Page \d+ of \d+ · \d+ entries/.test(phoneToolbar.fullCount ?? ''),
+      );
       check(
         'first phone exchange starts within sixty percent of the viewport',
         density.firstEntryTop !== null && density.firstEntryTop <= 844 * 0.6,

@@ -294,6 +294,9 @@ summary:hover {
 .st-v-pager button {
   font-size: 0.75rem;
 }
+.st-v-page-count-compact {
+  display: none;
+}
 .st-v-list,
 .st-v-activities,
 .st-v-tool-group ol {
@@ -811,7 +814,8 @@ summary:hover {
     padding-bottom: 0.35rem;
     margin-bottom: 0.35rem;
   }
-  .st-v-search-label {
+  .st-v-search-label,
+  .st-v-page-toolbar .st-v-page-count {
     position: absolute;
     width: 1px;
     height: 1px;
@@ -864,6 +868,12 @@ summary:hover {
   }
   .st-v-pager span {
     font-size: 0.7rem;
+  }
+  .st-v-page-toolbar .st-v-pager {
+    flex-wrap: nowrap;
+  }
+  .st-v-page-toolbar .st-v-page-count-compact {
+    display: inline;
   }
   .st-v-text pre {
     padding: 0.5rem;
