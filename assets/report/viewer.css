@@ -260,6 +260,29 @@ summary:hover {
 .st-v-reader-actions {
   margin: 0.5rem 0 0.8rem;
 }
+.st-v-page-toolbar {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+.st-v-page-actions {
+  margin: 0.65rem 0;
+  font-size: 0.8rem;
+  max-width: 100%;
+}
+.st-v-page-actions > summary {
+  color: var(--st-link);
+  padding: 0.35rem 0;
+}
+.st-v-page-actions[open] {
+  flex-basis: 100%;
+}
+.st-v-tool-breakdown {
+  flex-basis: 100%;
+  font-size: 0.8rem;
+}
 .st-v-reader-actions button {
   font-size: 0.75rem;
 }
@@ -768,8 +791,45 @@ summary:hover {
 @media (max-width: 45rem) {
   body,
   body.st-viewer-page {
-    padding: 1.15rem 0.85rem 3rem;
+    padding: 0.75rem 0.85rem 3rem;
     font-size: 14px;
+  }
+  .report-header {
+    padding-bottom: 0.6rem;
+  }
+  .report-header .eyebrow,
+  .report-secondary-counts {
+    display: none;
+  }
+  .report-header h1 {
+    margin-bottom: 0.2rem;
+  }
+  .st-v-app {
+    margin-top: 0.6rem;
+  }
+  .st-v-menu {
+    padding-bottom: 0.35rem;
+    margin-bottom: 0.35rem;
+  }
+  .st-v-search-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+  .st-v-status {
+    margin-bottom: 0.3rem;
+  }
+  .st-v-section-title {
+    margin-top: 0.4rem;
+  }
+  .st-v-session-group {
+    padding-top: 0.65rem;
+    margin-top: 0.4rem;
   }
   .st-v-exchange {
     padding: 0.8rem 0.7rem;
@@ -807,7 +867,7 @@ summary:hover {
   }
   .st-v-text pre {
     padding: 0.5rem;
-    font-size: 0.73rem;
+    font-size: 0.8125rem;
   }
 }
 @media (prefers-color-scheme: dark) {

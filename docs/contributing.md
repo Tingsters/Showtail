@@ -126,3 +126,57 @@ alone cannot satisfy those checks. It checks mounted-DOM and decoded-cache limit
 browser timing measurements are recorded separately from fixture completeness.
 Private real-project benchmarks
 must remain outside tracked fixtures.
+
+## AI visual review loop
+
+The report audit captures actual reading states and runs browser tasks, layout
+assertions, and axe accessibility checks. It uses the same real-Node transport as
+the other acceptance lanes. The accessibility library is a development dependency;
+it is never loaded by the distributed report or CLI.
+
+```bash
+bun run test:report:audit --fixture parity --artifact-dir dist/acceptance/audit-small-01
+bun run test:report:audit --fixture large --artifact-dir dist/acceptance/audit-large-01
+bun run test:report:audit --fixture empty --artifact-dir dist/acceptance/audit-empty-01
+SHOWTAIL_ACCEPTANCE_BROWSER=webkit bun run test:report:audit --fixture parity --artifact-dir dist/acceptance/audit-webkit-01
+bun run test:report:audit --report /absolute/private/report.html --artifact-dir /absolute/private/audit-01
+```
+
+An existing report requires its adjacent `report.json`. The audit reads the report
+without regenerating it or modifying its source project. Existing-report inputs
+are refused in CI. Keep private screenshots, traces, JSON and HTML outside tracked
+fixtures and public artifact roots. CI uses synthetic fixtures exclusively and
+retains its named public audit artifacts for 14 days.
+
+Choose a new artifact directory for every iteration. `result.json` records the
+input hashes, environment, automated checks, and incomplete runs. `visual/review.html`
+contains viewport screenshots of open plans, session statistics, exchanges, code,
+and diffs as well as navigation and controls. Failed tasks retain a browser trace.
+Missing required screenshots, accessibility violations, browser failures, and
+layout regressions produce a nonzero exit status. Uncertain accessibility findings
+remain visible for review; they are not automatically certified.
+
+During an AI coding session:
+
+1. Freeze the input report JSON and capture a baseline. Use both the synthetic
+   fixtures and a private, representative large report such as Tracetoon.
+2. Open the actual screenshots with the host's image tool. Review desktop, tablet,
+   phone, short-window and dark views, including scrolled reading positions.
+   Exercise visible controls and keyboard tasks; do not bypass navigation by
+   modifying application state.
+3. Record concrete findings in `visual-review.json`, including screenshot names,
+   severity, the observed problem, and the intended improvement. Automated success
+   leaves this review pending; it is not a visual approval.
+4. Fix one coherent problem, add an appropriate regression assertion, and compare
+   matching before/after states using identical input data. Retain failed attempts.
+5. Run all browser lanes and perform two complete visual review passes without
+   new major usability findings. Record the actual reviewer, inspected states,
+   resolved findings and remaining observations against the report hashes.
+
+Preserve the reading-first structure, complete evidence, Plans, session grouping,
+usage statistics, and offline behavior. The reference 390 × 844 unfiltered phone
+view must place its first exchange within 60% of the initial viewport. Keep one
+vertical scroll owner, working keyboard access to overflowing content, readable
+previews, and concise status signals. Screenshot pixel baselines are not used;
+review the images and measured geometry rather than approving a changed picture
+automatically. Scripted click counts describe interactions, not user comprehension.

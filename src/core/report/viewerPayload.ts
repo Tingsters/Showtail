@@ -22,7 +22,26 @@ import type {
   ViewerUsageStats,
 } from './viewerTypes.ts';
 
-const preview = (text: string) => text.replace(/\s+/g, ' ').trim().slice(0, 180);
+const previewSegmenter =
+  typeof Intl.Segmenter === 'function'
+    ? new Intl.Segmenter(undefined, { granularity: 'grapheme' })
+    : undefined;
+/** Shorten display labels only; bound preview allocation even for enormous outputs. */
+export function preview(text: string, limit = 180): string {
+  const normalized = text.replace(/\s+/g, ' ').trim();
+  if (normalized.length <= limit) return normalized;
+  const characters: string[] = [];
+  for (const part of previewSegmenter?.segment(normalized) ?? normalized) {
+    characters.push(typeof part === 'string' ? part : part.segment);
+    if (characters.length > limit) break;
+  }
+  if (characters.length <= limit) return normalized;
+  const prefix = characters.slice(0, limit - 1).join('');
+  const boundary = prefix.lastIndexOf(' ');
+  return (
+    (boundary >= prefix.length * 0.8 ? prefix.slice(0, boundary) : prefix).trimEnd() + '…'
+  );
+}
 const nativeKey = (id: string) =>
   id.replace(/:(?:use|result|snapshot|approved|text:\d+)$/, '');
 
@@ -532,7 +551,7 @@ export function buildViewerPayload(data: ReportData, options?: ReportRenderOptio
       const first = linked[0] ?? rows[0]!;
       return {
         id,
-        label: `${first.tool} · ${(times[0] ?? '').slice(0, 10)} · ${first.preview.slice(0, 90)}`,
+        label: `${first.tool} · ${(times[0] ?? '').slice(0, 10)} · ${preview(first.preview, 90)}`,
         from: times[0] ?? view.generatedAt,
         to: times[times.length - 1] ?? view.generatedAt,
         tool: [...new Set(rows.map((turn) => turn.tool))].join(', '),

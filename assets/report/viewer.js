@@ -116,6 +116,37 @@
       open: [],
       expanded: false,
     };
+    var actionsOpen = false,
+      scrollTimer;
+    function refreshScrollRegions() {
+      if (disposed) return;
+      app
+        .querySelectorAll('.st-v-text pre, .st-v-md-table-wrap')
+        .forEach(function (element) {
+          var overflow =
+            element.clientWidth > 0 && element.scrollWidth > element.clientWidth + 1;
+          if (overflow) {
+            element.tabIndex = 0;
+            element.setAttribute('role', 'region');
+            element.setAttribute(
+              'aria-label',
+              element.classList.contains('st-v-md-table-wrap')
+                ? 'Table; scroll horizontally'
+                : 'Code or captured text; scroll horizontally',
+            );
+            element.dataset.scrollRegion = 'true';
+          } else if (element.dataset.scrollRegion) {
+            element.removeAttribute('tabindex');
+            element.removeAttribute('role');
+            element.removeAttribute('aria-label');
+            delete element.dataset.scrollRegion;
+          }
+        });
+    }
+    function scheduleScrollRegions() {
+      clearTimeout(scrollTimer);
+      scrollTimer = setTimeout(refreshScrollRegions, 50);
+    }
     var preferences = {},
       preferenceKey = 'showtail-reader-preferences-v1';
     try {
@@ -268,6 +299,7 @@
           state.selected = state.item = null;
           state.open = [];
           compact.open = false;
+          actionsOpen = false;
           render();
           writeHash();
         });
@@ -511,6 +543,8 @@
     layout.append(rail, main);
     app.appendChild(layout);
     root.replaceChildren(app);
+    app.addEventListener('toggle', scheduleScrollRegions, true);
+    global.addEventListener('resize', scheduleScrollRegions);
     function setStatus(message, error) {
       status.textContent = message;
       status.classList.toggle('is-error', !!error);
@@ -1191,13 +1225,28 @@
       reader.appendChild(
         node('h2', 'st-v-section-title', title ? title[1] : 'Exchanges'),
       );
-      var toolbar = node('div', 'st-v-reader-actions');
+      var pageToolbar = node('div', 'st-v-page-toolbar'),
+        actions = node('details', 'st-v-page-actions'),
+        toolbar = node('div', 'st-v-reader-actions');
+      actions.id = 'st-viewer-page-actions';
+      actions.open = actionsOpen;
+      actions.appendChild(node('summary', '', 'Page actions'));
+      actions.addEventListener('toggle', function () {
+        if (actions.isConnected) actionsOpen = actions.open;
+      });
       var printNote = node(
         'p',
         'st-v-print-note',
         'Print includes this page and its open disclosures. Other pages and closed content remain in this offline report.',
       );
-      reader.appendChild(printNote);
+      printNote.id = 'st-viewer-print-note';
+      function finishPageAction(id) {
+        actionsOpen = true;
+        render();
+        writeHash();
+        var replacement = document.getElementById(id);
+        if (replacement) replacement.focus({ preventScroll: true });
+      }
       if (hasFilters()) {
         var selectedUsage = node('details', 'st-v-selection-usage');
         selectedUsage.appendChild(
@@ -1214,27 +1263,27 @@
               return row.id;
             });
           state.expanded = true;
-          render();
-          writeHash();
+          finishPageAction('st-viewer-expand-page');
         });
         expand.id = 'st-viewer-expand-page';
         toolbar.appendChild(expand);
-        toolbar.appendChild(
-          button('Collapse current page', '', function () {
-            state.open = [];
-            state.selected = state.item = null;
-            state.expanded = false;
-            render();
-            writeHash();
-          }),
-        );
+        var collapse = button('Collapse current page', '', function () {
+          state.open = [];
+          state.selected = state.item = null;
+          state.expanded = false;
+          finishPageAction('st-viewer-collapse-page');
+        });
+        collapse.id = 'st-viewer-collapse-page';
+        toolbar.appendChild(collapse);
       }
       var print = button('Print current page', 'st-v-print', function () {
         global.print();
       });
       print.id = 'st-viewer-print-page';
+      print.setAttribute('aria-describedby', printNote.id);
       toolbar.appendChild(print);
-      reader.appendChild(toolbar);
+      actions.append(toolbar, printNote);
+      reader.appendChild(pageToolbar);
       function pageChange(value) {
         state.page = value;
         state.open = [];
@@ -1245,13 +1294,14 @@
         reader.scrollIntoView({ block: 'start' });
       }
       pager(
-        reader,
+        pageToolbar,
         currentRows.length,
         state.page,
         perPage,
         pageChange,
         'st-viewer-list',
       );
+      pageToolbar.appendChild(actions);
       var list = node('ol', 'st-v-list');
       list.id = 'st-viewer-list';
       if (state.scope === 'plans') reader.id = 'st-viewer-plans';
@@ -1333,15 +1383,15 @@
         });
         var signals = turn.signals || {};
         [
-          ['decisions', 'decisions'],
-          ['plansProposed', 'plans proposed'],
-          ['plansRevised', 'plans revised'],
-          ['failedTools', 'failed tools'],
+          ['decisions', 'decisions', 'decision'],
+          ['plansProposed', 'plans proposed', 'plan proposed'],
+          ['plansRevised', 'plans revised', 'plan revised'],
+          ['failedTools', 'failed tools', 'failed tool'],
         ].forEach(function (entry) {
           if (signals[entry[0]] > 0)
             badge(
               info,
-              signals[entry[0]] + ' ' + entry[1],
+              signals[entry[0]] + ' ' + (signals[entry[0]] === 1 ? entry[2] : entry[1]),
               entry[0] === 'failedTools' ? 'is-error' : 'is-signal',
             );
         });
@@ -1377,41 +1427,33 @@
       });
       info.appendChild(metrics);
       if (turn.toolSummary) {
+        var toolDetails = node('details', 'st-v-tool-breakdown');
+        toolDetails.appendChild(node('summary', '', 'Tool breakdown'));
+        var breakdown = node('div', 'st-v-turn-summary');
         var summary = turn.toolSummary;
-        if (typeof summary === 'string') badge(info, summary);
+        if (typeof summary === 'string') badge(breakdown, summary);
         else if (Array.isArray(summary))
           summary.forEach(function (entry) {
             badge(
-              info,
+              breakdown,
               typeof entry === 'string'
                 ? entry
                 : (entry.name || entry.tool || 'Tool') + ' × ' + (entry.count || 1),
             );
           });
         else {
-          if (summary.total !== undefined) badge(info, summary.total + ' tool calls');
+          if (summary.total !== undefined)
+            badge(
+              breakdown,
+              summary.total + (summary.total === 1 ? ' tool call' : ' tool calls'),
+            );
           (summary.byTool || []).slice(0, 4).forEach(function (entry) {
-            badge(info, entry.name + ' × ' + entry.count);
+            badge(breakdown, entry.name + ' × ' + entry.count);
           });
-          if (summary.failed !== undefined && summary.failed > 0)
-            badge(info, summary.failed + ' failed', 'is-error');
         }
+        toolDetails.appendChild(breakdown);
+        info.appendChild(toolDetails);
       }
-      if (turn.longTurn) badge(info, 'Long exchange', 'is-signal');
-      var signals = turn.signals || {};
-      [
-        ['decisions', 'decisions'],
-        ['plansProposed', 'plans proposed'],
-        ['plansRevised', 'plans revised'],
-        ['failedTools', 'failed tools'],
-      ].forEach(function (entry) {
-        if (signals[entry[0]] > 0)
-          badge(
-            info,
-            signals[entry[0]] + ' ' + entry[1],
-            entry[0] === 'failedTools' ? 'is-error' : 'is-signal',
-          );
-      });
       host.appendChild(info);
     }
     function renderExchange(turn, list, epoch) {
@@ -2270,7 +2312,9 @@
           var sizeLabel = node(
             'p',
             'st-v-text-size',
-            result.lines + ' lines · ' + size(result.bytes),
+            result.lines +
+              (result.lines === 1 ? ' line · ' : ' lines · ') +
+              size(result.bytes),
           );
           panel.insertBefore(sizeLabel, content);
         }
@@ -2341,6 +2385,7 @@
           content.appendChild(pre);
         }
         content.dataset.loaded = 'true';
+        refreshScrollRegions();
         panel.dataset.textPage = String(result.page);
         content.dataset.textRef = ref;
         content.dataset.textPage = String(result.page);
@@ -2658,6 +2703,9 @@
     function dispose() {
       disposed = true;
       clearTimeout(searchTimer);
+      clearTimeout(scrollTimer);
+      global.removeEventListener('resize', scheduleScrollRegions);
+      app.removeEventListener('toggle', scheduleScrollRegions, true);
       if (channel) channel.close();
       global.removeEventListener('hashchange', onHashChange);
     }

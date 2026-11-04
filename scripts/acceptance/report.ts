@@ -52,26 +52,24 @@ function nativeNode(): string {
   );
 }
 
-async function inspectInNode(
-  reportPath: string,
+export async function runBrowserWorker<T extends { checks: ReportCheck[] }>(
+  entrypoint: string,
+  input: Record<string, unknown>,
   artifactDir: string,
-  expectedPrompts: string[],
-) {
+  timeout = 180_000,
+): Promise<T> {
   mkdirSync(artifactDir, { recursive: true });
   const resultPath = join(artifactDir, 'node-browser-result.json');
   if (existsSync(resultPath)) unlinkSync(resultPath);
   const inputPath = join(artifactDir, 'node-browser-input.json');
-  writeFileSync(
-    inputPath,
-    JSON.stringify({ reportPath, artifactDir, expectedPrompts, resultPath }),
-  );
+  writeFileSync(inputPath, JSON.stringify({ ...input, artifactDir, resultPath }));
   const built = await Bun.build({
-    entrypoints: [join(import.meta.dir, 'browser-worker.ts')],
+    entrypoints: [join(import.meta.dir, entrypoint)],
     outdir: artifactDir,
     naming: 'browser-worker.cjs',
     target: 'node',
     format: 'cjs',
-    external: ['playwright'],
+    external: ['playwright', '@axe-core/playwright'],
   });
   if (!built.success) throw new Error(built.logs.map((x) => x.message).join('\n'));
   const binary = nativeNode();
@@ -85,15 +83,13 @@ async function inspectInNode(
     },
     encoding: 'utf8',
     windowsHide: true,
-    timeout: 180_000,
+    timeout,
     maxBuffer: 2 * 1024 * 1024,
   });
   if (ran.error) throw ran.error;
   if (!existsSync(resultPath))
     throw new Error(`Browser worker exited ${ran.status}: ${ran.stderr}`);
-  const result = JSON.parse(readFileSync(resultPath, 'utf8')) as {
-    checks: ReportCheck[];
-  };
+  const result = JSON.parse(readFileSync(resultPath, 'utf8')) as T;
   if (!Array.isArray(result.checks) || !result.checks.length)
     throw new Error('Browser worker returned no checks');
   if (ran.status !== 0 && result.checks.every((c) => c.ok))
@@ -115,6 +111,10 @@ export async function inspectReport(
   expectedPrompts: string[],
 ): Promise<{ checks: ReportCheck[] }> {
   if (process.versions.bun)
-    return inspectInNode(reportPath, artifactDir, expectedPrompts);
+    return runBrowserWorker(
+      'browser-worker.ts',
+      { reportPath, expectedPrompts },
+      artifactDir,
+    );
   return inspectViewerReport(reportPath, artifactDir, expectedPrompts);
 }
