@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.26.0 — Report usability and visual audits
+
+- Add repeatable report audits with reading-state screenshots, accessibility scans, keyboard tasks, private local inputs, and retained review evidence.
+- Improve mobile reading space with grouped page actions, concise exchange signals, readable shortened titles, and keyboard access to overflowing code and tables.
+- Run synthetic report audits and feature parity in Chromium, Firefox, and WebKit in CI.
+
 ## 0.25.0 — Scalable reports with reading-first navigation
 
 - Replace eager HTML reports with a paged offline viewer, compressed content, full-history search, and bounded text/diff navigation.

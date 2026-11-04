@@ -60,7 +60,7 @@ export function renderViewerHtml(
 <meta http-equiv="Content-Security-Policy" content="${escapeHtml(policy)}">
 <title>${escapeHtml(title)}</title><style>${VIEWER_CSS}</style></head>
 <body><header class="report-header"><p class="eyebrow">Showtail Report</p><h1>${escapeHtml(index.title)}${data.scope ? ' — ' + escapeHtml(data.scope.name) : ''}</h1>
-<p>${index.turns.length} prompts · ${data.summary.sessions} sessions · ${index.uniqueFileCount ?? 0} files · ${data.summary.artifacts} captured revisions · <span class="report-coverage">coverage: <strong>${escapeHtml(coverage)}</strong></span></p>
+<p>${index.turns.length} prompts · ${data.summary.sessions} sessions <span class="report-secondary-counts">· ${index.uniqueFileCount ?? 0} files · ${data.summary.artifacts} captured revisions </span>· <span class="report-coverage">coverage: <strong>${escapeHtml(coverage)}</strong></span></p>
 <details class="report-about"><summary>About this report</summary><p>Generated ${escapeHtml(index.generatedAt)}</p><p>${escapeHtml(index.authorship)}</p>
 <p>${data.summary.decisions} decisions · ${data.summary.plans} captured plan records · ${data.summary.events} event records</p>
 <p>Tools: ${escapeHtml(index.tools.map((tool) => toolLabel(tool.tool)).join(', '))}</p><p>Models: ${escapeHtml(index.models.map((model) => modelLabel(model.model)).join(', '))}</p>

@@ -475,6 +475,9 @@ export async function inspectVisibleParity(
     },
   );
   await step('only the current page expands and prints', async () => {
+    const actions = page.locator('#st-viewer-page-actions');
+    if (!(await actions.evaluate((element) => (element as HTMLDetailsElement).open)))
+      await actions.locator('summary').click();
     const expand = page.locator('#st-viewer-expand-page'),
       print = page.locator('#st-viewer-print-page');
     check(

@@ -134,7 +134,24 @@ export function parityReportFixture(): ReportData {
           }
         : {}),
   }));
-  const approvedLines = ['# Approved storage plan', ''];
+  // A file can contain metadata-only snapshots before an exact persisted diff.
+  turns[0]!.codeChanges[0]!.revisions!.unshift({
+    recordId: 'parity-metadata-only-revision',
+    timestamp: stamp(0, 19),
+    sha256: 'a'.repeat(64),
+  });
+  const approvedLines = [
+    '# Approved storage plan',
+    '',
+    '```typescript',
+    'const wideCapturedLine = "Captured code stays exact and supports keyboard scrolling on phones.";',
+    '```',
+    '',
+    '| Captured field | Recorded value |',
+    '| --- | --- |',
+    '| evidence | A complete retained value |',
+    '',
+  ];
   for (let i = 0; i < 22; i++)
     approvedLines.push(
       `## Step ${i}: Portable local history`,
@@ -220,7 +237,7 @@ export function parityReportFixture(): ReportData {
     summary: {
       sessions: 3,
       events: 41,
-      artifacts: 14,
+      artifacts: 15,
       plans: 3,
       decisions: 1,
       stats: {
@@ -232,7 +249,7 @@ export function parityReportFixture(): ReportData {
       },
     },
     contributors: [
-      { slug: 'alice', name: 'Alice Example', events: 21, artifacts: 7 },
+      { slug: 'alice', name: 'Alice Example', events: 21, artifacts: 8 },
       { slug: 'bob', name: 'Bob Example', events: 20, artifacts: 7 },
     ],
     tools: [
