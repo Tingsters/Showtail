@@ -100,3 +100,29 @@ provider session. Missing authentication and unsupported host modes remain
 explicit incomplete coverage, rather than being counted as passes. Keep failed
 attempts when fixing and rerunning a scenario; do not replace them with later
 successes. A complete claim needs a fresh passing run of the final executable.
+
+For report changes, also run the deterministic report acceptance lanes:
+
+```bash
+bun run test:acceptance:parity dist/acceptance/parity
+bun run test:acceptance:large dist/acceptance/large
+SHOWTAIL_ACCEPTANCE_BROWSER=firefox bun run test:acceptance:large dist/acceptance/large-firefox
+SHOWTAIL_ACCEPTANCE_BROWSER=webkit bun run test:acceptance:large dist/acceptance/large-webkit
+SHOWTAIL_ACCEPTANCE_CPU_RATE=4 bun run test:acceptance:large dist/acceptance/large-throttled
+```
+
+Install those browser engines with `bun x playwright install firefox webkit`.
+The fixture keeps 181 prompts and 4,720 distinct revisions, with long output and
+a search match across text-page boundaries. It also includes approved, revised,
+and unlinked plans; multiple contributors and models; captured zero and missing
+usage; tool failures; and Markdown that crosses text-page boundaries.
+The browser inspector independently decodes every prompt/revision before
+exercising page navigation, late search,
+worker-disabled fallback, keyboard focus, offline copying and mobile layout.
+Visible parity checks open the actual Plans, Sessions, and Overview views, read
+statistics and revision feedback, change grouping and AI display, and exercise
+ordinary document scrolling at phone, tablet, and desktop sizes. Encoded content
+alone cannot satisfy those checks. It checks mounted-DOM and decoded-cache limits;
+browser timing measurements are recorded separately from fixture completeness.
+Private real-project benchmarks
+must remain outside tracked fixtures.

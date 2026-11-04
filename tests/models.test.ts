@@ -2,6 +2,10 @@ import { describe, expect, test } from 'bun:test';
 import { renderHtml, renderMarkdown } from '../src/core/report.ts';
 import { labelForModel } from '../src/plugins/registry.ts';
 import { cleanup, makeTempDir } from './helpers.ts';
+import { HistoryStore } from '../src/core/history.ts';
+import { buildHistoryReport } from '../src/core/historyReport.ts';
+import { fixture } from './centralHelpers.ts';
+import { readViewer } from './viewerHelpers.ts';
 describe('labelForModel', () => {
   test('prettifies the known model families and strips a context suffix', () => {
     expect(labelForModel('claude-opus-4-8')).toBe('Opus 4.8');
@@ -40,4 +44,35 @@ describe('labelForModel', () => {
     expect(labelForModel('some-future-model-9')).toBe('some-future-model-9');
   });
 });
-describe('report — models', () => {});
+describe('report — models', () => {
+  test('the portable viewer retains prompt and response model identities with their content', () =>
+    fixture(({ project }) => {
+      using store = new HistoryStore();
+      const session = store.ensureSession({ tool: 'codex', cwd: project });
+      const prompt = store.append(session.id, {
+        kind: 'prompt',
+        origin: 'human',
+        sourceId: 'native-prompt',
+        text: 'Compare model results.',
+        model: 'gpt-5.5',
+        ts: '2026-01-01T00:00:00.000Z',
+      }).record!;
+      const response = store.append(session.id, {
+        kind: 'ai_output',
+        sourceId: 'native-response',
+        text: 'Captured model answer.',
+        model: 'claude-opus-4-8',
+        turnId: prompt.id,
+        ts: '2026-01-01T00:00:01.000Z',
+      }).record!;
+      const data = buildHistoryReport(store, { kind: 'all' });
+      const { index, texts } = readViewer(renderHtml(data));
+      expect(index.turns[0]!.id).toBe(prompt.id);
+      expect(index.turns[0]!.models).toEqual(['Opus 4.8', 'GPT-5.5']);
+      expect(index.items[response.id]!.sourceId).toBe('native-response');
+      expect(texts.get(index.items[response.id]!.textRef!)).toBe(
+        'Captured model answer.',
+      );
+      expect(data.turns[0]!.aiOutputs[0]!.model).toBe('claude-opus-4-8');
+    }));
+});

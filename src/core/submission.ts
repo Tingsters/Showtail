@@ -28,6 +28,7 @@ import { join } from 'node:path';
 import { showtailHome } from './globalConfig.ts';
 import { dataPath } from './dataHome.ts';
 import { scanResidual } from './sanitize.ts';
+import { scanViewerHtml } from './report/viewerCodec.ts';
 import { SHOWTAIL_VERSION } from './version.ts';
 
 export const MANIFEST_FILE = 'manifest.json';
@@ -129,7 +130,7 @@ export function buildManifest(input: SubmissionInput): {
     },
     summary: input.summary,
     withheld: input.withheld,
-    scan: { scanner: 'showtail-residual-1', findings: input.scanFindings },
+    scan: { scanner: 'showtail-residual-2', findings: input.scanFindings },
     publicKey: key.publicKey,
     keyId: keyIdOf(key.publicKey),
   };
@@ -150,7 +151,9 @@ export interface SubmissionCheck {
 
 /**
  * Check a submission folder: the signature, each file's hash, and a fresh scan of
- * the Markdown for anything that looks like a secret. Integrity only: it shows the
+ * the Markdown and complete decoded HTML for anything that looks like a secret.
+ * Legacy plain HTML is supported. Malformed encoded payloads fail closed.
+ * Integrity only: it shows the
  * files are unchanged since they were signed, not who signed them.
  */
 export function verifySubmission(dir: string): SubmissionCheck {
@@ -208,6 +211,23 @@ export function verifySubmission(dir: string): SubmissionCheck {
         `report.md still contains what looks like a secret (${findings
           .map((f) => `${f.kind} x${f.count}`)
           .join(', ')})`,
+      );
+    }
+  }
+  const htmlFile = join(dir, 'report.html');
+  if (existsSync(htmlFile)) {
+    try {
+      const findings = scanViewerHtml(readFileSync(htmlFile, 'utf8'));
+      if (findings.length > 0) {
+        problems.push(
+          `report.html still contains what looks like a secret (${findings
+            .map((f) => `${f.kind} x${f.count}`)
+            .join(', ')})`,
+        );
+      }
+    } catch (error) {
+      problems.push(
+        `report.html could not be safely inspected (${error instanceof Error ? error.message : 'invalid payload'})`,
       );
     }
   }

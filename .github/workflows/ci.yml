@@ -52,6 +52,8 @@ jobs:
           bun build --compile ./src/cli.ts --outfile dist/acceptance/showtail
           bun x playwright install --with-deps chromium
           bun run test:acceptance --binary "$PWD/dist/acceptance/showtail"
+          bun run test:acceptance:parity dist/acceptance/parity-ci
+          bun run test:acceptance:large dist/acceptance/large-ci
 
       - name: Retain failed acceptance evidence
         if: failure() && matrix.os == 'ubuntu-latest'

@@ -5,6 +5,11 @@ import { parseClaudeTranscript } from '../src/core/claudeCode.ts';
 import { renderPlanText, splitPlanText } from '../src/core/plans.ts';
 import { renderHtml, renderMarkdown } from '../src/core/report.ts';
 import { cleanup, makeTempDir } from './helpers.ts';
+import { HistoryStore } from '../src/core/history.ts';
+import { buildHistoryReport } from '../src/core/historyReport.ts';
+import { PLAN_APPROVED_TAG, PLAN_REVISED_TAG } from '../src/core/plans.ts';
+import { fixture } from './centralHelpers.ts';
+import { readViewer } from './viewerHelpers.ts';
 const APPROVED =
   'User has approved your plan. You can now start coding. Start with updating your todo list.';
 const REJECTED =
@@ -81,7 +86,57 @@ describe('parseClaudeTranscript — plans', () => {
 });
 describe('plan import + report', () => {});
 describe('materializePlan', () => {});
-describe('plans as a first-class report item', () => {});
+describe('plans as a first-class report item', () => {
+  test('the portable viewer retains approved and revised plans with exact feedback and literal code', () =>
+    fixture(({ project }) => {
+      using store = new HistoryStore();
+      const session = store.ensureSession({ tool: 'claude-code', cwd: project });
+      const prompt = store.append(session.id, {
+        kind: 'prompt',
+        text: 'Plan the change.',
+        origin: 'human',
+        ts: '2026-01-01T00:00:00.000Z',
+      }).record!;
+      const body = "# Plan\n\nKeep literal $& $' $` and </script> text.";
+      const approved = store.append(session.id, {
+        kind: 'plan',
+        sourceId: 'approved-plan',
+        text: body,
+        tags: [PLAN_APPROVED_TAG],
+        turnId: prompt.id,
+        ts: '2026-01-01T00:00:01.000Z',
+      }).record!;
+      const revisedBody = renderPlanText(
+        '# Revised plan',
+        false,
+        'Use the smaller approach.',
+      );
+      const revised = store.append(session.id, {
+        kind: 'plan',
+        sourceId: 'revised-plan',
+        text: revisedBody,
+        tags: [PLAN_REVISED_TAG],
+        turnId: prompt.id,
+        ts: '2026-01-01T00:00:02.000Z',
+      }).record!;
+      const data = buildHistoryReport(store, { kind: 'all' });
+      const html = renderHtml(data);
+      const { index, texts } = readViewer(html);
+      expect(
+        index.turns[0]!.itemIds.filter((id) => index.items[id]!.kind === 'plan'),
+      ).toEqual([approved.id, revised.id]);
+      expect(index.items[approved.id]!.tags).toContain(PLAN_APPROVED_TAG);
+      expect(index.items[revised.id]!.tags).toContain(PLAN_REVISED_TAG);
+      expect(texts.get(index.items[approved.id]!.textRef!)).toBe(body);
+      expect(texts.get(index.items[revised.id]!.textRef!)).toBe('# Revised plan');
+      expect(index.items[revised.id]!.feedback).toBe('Use the smaller approach.');
+      expect(index.items[revised.id]!.rawRefs!.map((ref) => texts.get(ref))).toContain(
+        revisedBody,
+      );
+      expect(html).not.toContain('and </script> text.');
+      expect(data.plans).toHaveLength(2);
+    }));
+});
 describe('splitPlanText', () => {
   test('is the inverse of renderPlanText', () => {
     const text = renderPlanText('# Plan body', false, 'change X to Y');

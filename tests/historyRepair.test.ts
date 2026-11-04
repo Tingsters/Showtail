@@ -20,6 +20,9 @@ import { renderHtml } from '../src/core/report/html.ts';
 import { renderMarkdown } from '../src/core/report/markdown.ts';
 import { verifySubmission } from '../src/core/submission.ts';
 import { fixture, tree } from './centralHelpers.ts';
+import { readViewer } from './viewerHelpers.ts';
+import { scanViewerHtml } from '../src/core/report/viewerCodec.ts';
+import { sanitizeReportData } from '../src/core/shareReport.ts';
 const at = '2026-10-23T04:53:11.000Z';
 
 // Reproduce a valid pre-fix capture, whose hook had no origin metadata. Later
@@ -278,9 +281,12 @@ test('repair preserves raw captures while fixing harness turns, attribution, cou
     expect(auditHistory(store, { kind: 'all' }).quality.harnessPrompts).toBe(0);
     const html = renderHtml(report),
       md = renderMarkdown(report);
-    expect(html).toContain('2 captured revisions');
+    const viewer = readViewer(html).index;
+    expect(
+      viewer.turns[0]!.itemIds.filter((id) => viewer.items[id]!.kind === 'revision'),
+    ).toHaveLength(2);
     expect(md).toContain('Revision 2');
-    expect(html).toContain('Work without a linked prompt');
+    expect(viewer.unlinked).toHaveLength(1);
     expect(JSON.stringify(report.unattributedWork)).not.toContain('"prompt":');
     const second = await prepareRepair(
       store,
@@ -294,6 +300,8 @@ test('repair preserves raw captures while fixing harness turns, attribution, cou
     expect(
       (store.query('SELECT count(*) AS n FROM repair_receipts').get() as any).n,
     ).toBe(receiptCount);
+    const sanitized = sanitizeReportData(buildHistoryReport(store, { kind: 'all' }));
+    expect(scanViewerHtml(renderHtml(sanitized.data))).toEqual([]);
     const exported = exportHistory(store, { kind: 'all' });
     expect(verifySubmission(exported.dir).ok).toBe(true);
   }));
@@ -908,6 +916,8 @@ test('unlinked provider user text remains visible without becoming an invented p
     });
     const report = buildHistoryReport(store, { kind: 'all' });
     expect(report.turns).toHaveLength(0);
-    expect(renderHtml(report)).toContain('An unlinked recorded message');
+    expect([...readViewer(renderHtml(report)).texts.values()]).toContain(
+      'An unlinked recorded message',
+    );
     expect(renderMarkdown(report)).toContain('An unlinked recorded message');
   }));

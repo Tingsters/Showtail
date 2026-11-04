@@ -12,6 +12,7 @@ import { enableToolCapture, writeGlobalConfig } from '../src/core/globalConfig.t
 import { digest, HistoryStore } from '../src/core/history.ts';
 import { readClaudeSource } from '../src/core/nativeSourceCursor.ts';
 import { fixture } from './centralHelpers.ts';
+import { readViewer } from './viewerHelpers.ts';
 
 const since = '2026-11-01T00:00:00.000Z';
 const at = '2026-11-01T00:00:01.000Z';
@@ -196,7 +197,9 @@ test('upgrading a cached Claude SDK source recovers its missing prompt without c
     expect(
       data.turns.map((turn: { prompt: { text: string } }) => turn.prompt.text),
     ).toEqual([prompt]);
-    expect(readFileSync(report.reportPath, 'utf8')).toContain('Completed.');
+    expect([
+      ...readViewer(readFileSync(report.reportPath, 'utf8')).texts.values(),
+    ]).toContain('Completed.');
     expect(readFileSync(file, 'utf8')).toBe(original);
     expect(upgraded.verify().ok).toBe(true);
   }));
