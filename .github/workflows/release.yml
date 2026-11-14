@@ -122,7 +122,7 @@ jobs:
           cp "showtail-${extension_version}.vsix" ../../dist/showtail.vsix
 
       - name: Upload non-Windows release artifacts
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: release-non-windows
           path: |
@@ -182,7 +182,7 @@ jobs:
       - name: Upload unsigned executable for origin-verified signing
         if: steps.signing-mode.outputs.signed == 'true'
         id: upload-unsigned
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           path: dist/showtail-windows-x64.exe
           archive: false
@@ -236,7 +236,7 @@ jobs:
           Copy-Item -LiteralPath $signed -Destination dist/showtail-windows-x64.exe -Force
 
       - name: Upload Windows release artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: release-windows
           path: dist/showtail-windows-x64.exe
