@@ -82,6 +82,14 @@ jobs:
         working-directory: integrations/vscode
         run: xvfb-run -a bun run test:extension-host
 
+      - name: Retain failed editor-host evidence
+        if: failure() && matrix.os == 'ubuntu-latest'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: editor-host-evidence
+          path: dist/acceptance/editor-host-*/
+          if-no-files-found: ignore
+
       - name: Build and verify Windows release metadata
         if: matrix.os == 'windows-latest'
         shell: pwsh
