@@ -23,10 +23,12 @@ can lag `origin/main`, so always branch from `origin/main`.
 
     bun install --frozen-lockfile
     bun run typecheck
+    bun run license:check
     bun test                        # zero failures
 
 If a dependency changes, commit `bun.lock` with `package.json`. CI installs with
-`--frozen-lockfile` and fails when the two disagree.
+`--frozen-lockfile` and fails when the two disagree. A runtime dependency's
+version must also match `THIRD_PARTY_NOTICES.md`, or `license:check` fails.
 
 **3. Push the branch and open a PR against `main`.** Never push to `main`
 directly. CI runs `test` on Windows, macOS and Ubuntu, plus CodeQL and the
