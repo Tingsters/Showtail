@@ -51,8 +51,46 @@ export interface DecodedViewerHtml {
   structuredTexts: Map<string, unknown>;
 }
 
+/**
+ * UTF-8 size of `text`, counted the way an encoder writes it.
+ *
+ * `Buffer.byteLength(text, 'utf8')` cannot be used here: on Bun 1.3.x it reports
+ * 2 bytes for an unpaired surrogate while `Buffer.from` writes the 3 bytes of
+ * U+FFFD, and for a long run of them the whole-string answer also stops matching
+ * the sum of its parts. Pages are measured individually and their sizes have to
+ * add up to the size declared for the text they came from, so the two must agree
+ * exactly. Counting from the code units keeps that true on any runtime, and
+ * allocates nothing.
+ *
+ * A surrogate pair is one code point (4 bytes); a surrogate with no partner is
+ * replaced with U+FFFD when encoded (3 bytes), which is what both Bun and Node
+ * actually write.
+ */
+export function utf8ByteLength(text: string): number {
+  let bytes = 0;
+  for (let i = 0; i < text.length; i++) {
+    const code = text.charCodeAt(i);
+    if (code < 0x80) {
+      bytes += 1;
+    } else if (code < 0x800) {
+      bytes += 2;
+    } else if (code >= 0xd800 && code <= 0xdbff) {
+      const next = i + 1 < text.length ? text.charCodeAt(i + 1) : 0;
+      if (next >= 0xdc00 && next <= 0xdfff) {
+        bytes += 4; // a complete pair is a single code point
+        i++;
+      } else {
+        bytes += 3; // lone high surrogate, encoded as U+FFFD
+      }
+    } else {
+      bytes += 3; // includes a lone low surrogate, also U+FFFD
+    }
+  }
+  return bytes;
+}
+
 function byteLength(text: string): number {
-  return Buffer.byteLength(text, 'utf8');
+  return utf8ByteLength(text);
 }
 function lines(text: string): number {
   let count = 1;
