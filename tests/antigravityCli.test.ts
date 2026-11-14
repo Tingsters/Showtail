@@ -194,6 +194,79 @@ describe('antigravity-cli install / uninstall', () => {
     }
   });
 
+  test('installing clears the legacy showtail block that agy rejects', () => {
+    const dir = makeTempDir();
+    try {
+      mkdirSync(join(dir, '.showtail'), { recursive: true });
+      const target = resolveAntigravityCliTarget('user', dir);
+      mkdirSync(join(dir, '.agents'), { recursive: true });
+      // What Showtail wrote before the IDE/CLI split: block name `showtail`, and
+      // SessionStart/Stop nested under `hooks`. agy rejects the whole file for
+      // that, which disables every block in it, ours and other tools' alike.
+      writeJson(target.hooksFile, {
+        showtail: {
+          enabled: true,
+          SessionStart: [
+            {
+              hooks: [
+                {
+                  type: 'command',
+                  command: 'showtail hook session-start --tool antigravity-cli',
+                },
+              ],
+            },
+          ],
+          Stop: [
+            {
+              hooks: [
+                { type: 'command', command: 'showtail hook stop --tool antigravity-cli' },
+              ],
+            },
+          ],
+        },
+        'my-safety-gate': { enabled: true, PreToolUse: [] },
+      });
+
+      installAntigravityCliHooks(target);
+      const blocks = JSON.parse(readFileSync(target.hooksFile, 'utf8'));
+      expect(blocks.showtail).toBeUndefined(); // the legacy block is gone
+      expect(blocks['my-safety-gate']).toBeDefined(); // another tool's block stays
+      // Every event of the block we now write is in a shape agy accepts.
+      for (const [event, list] of Object.entries<any>(blocks[ANTIGRAVITY_BLOCK_NAME])) {
+        if (event === 'enabled') continue;
+        for (const entry of list) {
+          if (event === 'PreToolUse' || event === 'PostToolUse') {
+            expect(Array.isArray(entry.hooks)).toBe(true);
+          } else {
+            expect(typeof entry.command).toBe('string');
+          }
+        }
+      }
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('a third-party block named showtail is left alone', () => {
+    const dir = makeTempDir();
+    try {
+      mkdirSync(join(dir, '.showtail'), { recursive: true });
+      const target = resolveAntigravityCliTarget('user', dir);
+      mkdirSync(join(dir, '.agents'), { recursive: true });
+      writeJson(target.hooksFile, {
+        showtail: {
+          enabled: true,
+          SessionStart: [{ type: 'command', command: 'some-other-tool --go' }],
+        },
+      });
+      installAntigravityCliHooks(target);
+      const blocks = JSON.parse(readFileSync(target.hooksFile, 'utf8'));
+      expect(blocks.showtail).toBeDefined(); // not ours: untouched
+    } finally {
+      cleanup(dir);
+    }
+  });
+
   test('the instructions body is non-empty and mentions the tool', () => {
     expect(AGY_BODY.length).toBeGreaterThan(0);
     expect(AGY_BODY).toContain('explicitly requests Showtail');
