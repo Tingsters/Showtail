@@ -201,11 +201,7 @@ export interface RedactionRecord {
    * value as `redact`.
    */
   reason?:
-    | 'redact'
-    | 'import-undo'
-    | 'migration-undo'
-    | 'routing-reprojection'
-    | 'repair';
+    'redact' | 'import-undo' | 'migration-undo' | 'routing-reprojection' | 'repair';
   /**
    * For a `redact` pass: `rescan` re-ran the configured rules, `pattern`
    * scrubbed one given regex. Absent for other reasons.
@@ -237,10 +233,7 @@ export interface EventEnrichmentOverlay {
 
 /** How a provider transcript was matched to an existing Showtail session. */
 export type MigrationMatchMethod =
-  | 'native-session-id'
-  | 'prompt-sequence'
-  | 'user-confirmed'
-  | 'explicit-file';
+  'native-session-id' | 'prompt-sequence' | 'user-confirmed' | 'explicit-file';
 
 /** Append-only audit payload for one transcript enrichment pass. */
 export interface EnrichmentRecord {

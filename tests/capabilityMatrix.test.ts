@@ -116,7 +116,10 @@ describe('capability matrix invariants', () => {
   test('plan capture: full for the file-backed tools, partial/planned/unsupported otherwise', () => {
     const cap = CAPABILITIES.find((c) => c.id === 'plan-capture')!;
     const status = (intId: string) =>
-      cellFor(cap, INTEGRATIONS.find((i) => i.id === intId)!).status;
+      cellFor(
+        cap,
+        INTEGRATIONS.find((i) => i.id === intId)!,
+      ).status;
     // The capability row exists and every integration carries the planFiles flag.
     expect(cap).toBeDefined();
     expect(INTEGRATIONS.every((i) => typeof i.surface.planFiles === 'boolean')).toBe(

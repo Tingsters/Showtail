@@ -488,8 +488,7 @@ export async function inspectViewerReport(
       await page.locator('#st-viewer-sort').selectOption('oldest');
       // An exact late-body suffix exercises full content, beyond prompt previews and current DOM.
       let lateSearch:
-        | { candidate: (typeof candidates)[number]; query: string }
-        | undefined;
+        { candidate: (typeof candidates)[number]; query: string } | undefined;
       for (const candidate of [...candidates].reverse()) {
         const text = decoded.texts.get(candidate.ref)!;
         if (text.length <= 220) continue;
