@@ -1,19 +1,40 @@
 version: 2
 updates:
-  - package-ecosystem: npm
+  # Both the root and integrations/vscode are Bun-managed (bun.lock). The npm
+  # ecosystem bumped package.json without the lockfile, so CI rejected each PR.
+  - package-ecosystem: bun
     directory: /
     schedule:
       interval: monthly
     open-pull-requests-limit: 5
+    ignore:
+      # TypeScript 7 is the native-port toolchain; migrate deliberately.
+      - dependency-name: typescript
+        update-types: ["version-update:semver-major"]
+      # src/core/chatgpt.ts decodes ChatGPT's payload, which React Router
+      # encodes with turbo-stream v2; the major must match that wire format.
+      - dependency-name: turbo-stream
+        update-types: ["version-update:semver-major"]
 
-  - package-ecosystem: npm
+  - package-ecosystem: bun
     directory: /integrations/vscode
     schedule:
       interval: monthly
     open-pull-requests-limit: 5
+    ignore:
+      - dependency-name: typescript
+        update-types: ["version-update:semver-major"]
+      # The extension runs on VS Code's bundled Node, not the latest Node.
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: monthly
     open-pull-requests-limit: 5
+    groups:
+      # init and analyze must run the same CodeQL version.
+      codeql-action:
+        patterns:
+          - "github/codeql-action/*"

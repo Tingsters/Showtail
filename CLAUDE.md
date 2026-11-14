@@ -1,63 +1,48 @@
-# Working in this repo (Claude-driven, trunk-based)
+# Working in this repo (Claude-driven, PR-based)
 
-This repo is served by a **bare hub** at `~/Nextcloud/Showtail.git`. `main` lives
-only in the hub and is **never checked out anywhere**, so it can never be frozen —
-the "phantom diff" failure mode is *structurally* impossible, not just discouraged.
-The hub mirrors to GitHub (`origin`).
+GitHub (`origin` → https://github.com/Tingsters/Showtail.git) is the source of
+truth. `main` changes only by merging pull requests there. Nobody hand-edits
+code: every change is made by an agent on its own branch, in its own worktree.
 
-Nobody hand-edits code: every change is made by an agent, in a worktree, and lands
-straight on `main` — **there are no pull requests**. You are always in either a
-per-task worktree (Claude Code creates one automatically) or the **desk** worktree
-(the interactive launch pad, permanently on the throwaway `desk` branch).
+The old bare-hub workflow (`~/Nextcloud/Showtail.git`, landing with
+`update-ref` straight onto `main`) is retired. Its `main` stopped tracking
+GitHub in September 2026. Don't land through it, and don't treat the Nextcloud
+copies as current.
 
 ## Rules
 
-**1 — Never check out `main`.** Work on your task branch (your worktree's branch)
-or `desk`. Inspect the trunk without checking it out: `git log main`,
-`git show main:<path>`.
+**1. Start from GitHub's `main`, in a worktree.**
 
-**2 — Land straight to `main` when your work is done and tests pass. No PR.**
+    git fetch origin
+    git worktree add -b <type>/<topic> ../Showtail-<topic> origin/main
 
-    git rebase main                 # replay your work onto the current trunk
-    bun test                        # must pass — zero failures, no exceptions
-    base=$(git rev-parse main)
-    git update-ref refs/heads/main "$(git rev-parse HEAD)" "$base"   # advance trunk
-    git push origin main            # mirror to GitHub
-    git -C ~/Nextcloud/Showtail merge --ff-only main 2>/dev/null || true   # keep the desk's files current
+Never work in, or commit from, a checkout that sits on `main`. A local `main`
+can lag `origin/main`, so always branch from `origin/main`.
 
-The last line fast-forwards the **desk** so its checkout never holds stale files
-(a stale checkout is the tripwire this whole workflow exists to avoid). It's a
-no-op if the desk is absent/busy.
+**2. Verify before opening a PR.**
 
-If `update-ref` fails, `main` moved under you (another agent landed first) —
-re-run `git rebase main` and retry. `update-ref` is safe here (unlike an ordinary
-repo, where it's a footgun) **precisely because `main` is never checked out**: the
-bare hub owns it and no worktree sits on it, so advancing it can't freeze anyone's
-files.
+    bun install --frozen-lockfile
+    bun run typecheck
+    bun run license:check
+    bun test                        # zero failures
 
-**3 — Resolve your own conflicts.** If the rebase conflicts, fix it in your
-worktree and finish the land — never leave a half-integrated branch or a conflict
-for a human. Keep tasks scoped so parallel agents rarely touch the same files.
+If a dependency changes, commit `bun.lock` with `package.json`. CI installs with
+`--frozen-lockfile` and fails when the two disagree. A runtime dependency's
+version must also match `THIRD_PARTY_NOTICES.md`, or `license:check` fails.
 
-**Never**: open a PR, `git push --force`, `git checkout main`, or edit the bare hub
-directly.
+**3. Push the branch and open a PR against `main`.** Never push to `main`
+directly. CI runs `test` on Windows, macOS and Ubuntu, plus CodeQL and the
+report audits.
 
-## Layout
-- **Hub** (bare, source of truth): `~/Nextcloud/Showtail.git` — holds `main` + the
-  object store. Never checked out. Mirrors to `origin` (GitHub).
-- **Desk** (interactive launch pad): `~/Nextcloud/Showtail`, branch `desk`. Where a
-  human opens a terminal and starts Claude. Never on `main`, but kept continuously
-  fast-forwarded to it, so it never shows stale files: the land step above ff's it
-  after every land, and a `SessionStart` hook (in the desk's `.claude/settings.local.json`)
-  ff's it to GitHub's `main` each time Claude launches there.
-- **Task worktrees**: `.../.claude/worktrees/<task>` — Claude Code-managed, one per
-  task, auto-removed when done.
-- **GitHub mirror**: `origin` → https://github.com/Tingsters/Showtail.git.
+**4. Merge once every check is green.** Use a merge commit
+(`gh pr merge <n> --merge`). If `main` moved and the PR conflicts, rebase the
+branch onto `origin/main`, resolve the conflicts yourself, and push again
+(`--force-with-lease` on your own branch only).
 
-## Why it's built this way
-A single long-running agent used to publish to a local `main` via `update-ref`
-while a checkout sat *on* `main` and was never resynced — so `main` advanced under
-frozen files and produced a large phantom reverse-diff. The bare hub removes the
-precondition entirely: with `main` un-checkout-able, the same `update-ref` publish
-is safe, parallel agents land without merge ceremony, and there is nothing for a
-human to babysit.
+**5. Dependabot PRs.** If one fails only because its base is stale, comment
+`@dependabot rebase`. Close any that bump a major version the ignore rules in
+`.github/dependabot.yml` hold back. CodeQL `init` and `analyze` must stay on
+the same version.
+
+**Never**: `git push --force` to `main`, `git checkout main` in a working
+checkout, or commit unrelated files from a dirty tree.

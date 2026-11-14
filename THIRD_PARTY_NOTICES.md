@@ -7,7 +7,7 @@ also contain the following Open Source components.
 
 | Component | Version | License | Source |
 | --- | --- | --- | --- |
-| commander | 14.0.3 | MIT | https://github.com/tj/commander.js |
+| commander | 15.1.0 | MIT | https://github.com/tj/commander.js |
 | turbo-stream | 2.4.1 | ISC | https://github.com/jacob-ebey/turbo-stream |
 
 The exact versions used for a release are also recorded in `bun.lock` and the
