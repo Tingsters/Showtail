@@ -1,7 +1,7 @@
 version: 2
 updates:
-  # The root package is Bun-managed (bun.lock). The npm ecosystem bumped
-  # package.json without the lockfile, so every PR failed --frozen-lockfile.
+  # Both the root and integrations/vscode are Bun-managed (bun.lock). The npm
+  # ecosystem bumped package.json without the lockfile, so CI rejected each PR.
   - package-ecosystem: bun
     directory: /
     schedule:
@@ -16,7 +16,7 @@ updates:
       - dependency-name: turbo-stream
         update-types: ["version-update:semver-major"]
 
-  - package-ecosystem: npm
+  - package-ecosystem: bun
     directory: /integrations/vscode
     schedule:
       interval: monthly
