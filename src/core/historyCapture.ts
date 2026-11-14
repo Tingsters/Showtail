@@ -38,11 +38,7 @@ import { isSensitivePath } from './sensitivePaths.ts';
 import { isSyntheticPrompt } from './syntheticPrompt.ts';
 
 export type CaptureEvent =
-  | 'session-start'
-  | 'user-prompt'
-  | 'post-edit'
-  | 'stop'
-  | 'session-end';
+  'session-start' | 'user-prompt' | 'post-edit' | 'stop' | 'session-end';
 export interface CaptureBatch {
   version: 1;
   id: string;

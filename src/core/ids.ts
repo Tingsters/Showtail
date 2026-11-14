@@ -11,15 +11,7 @@ import { randomBytes } from 'node:crypto';
  *    structured provider conversation events, and `mig` migration batches/audits.
  */
 export type IdPrefix =
-  | 'evt'
-  | 'ses'
-  | 'art'
-  | 'imp'
-  | 'led'
-  | 'trl'
-  | 'red'
-  | 'raw'
-  | 'mig';
+  'evt' | 'ses' | 'art' | 'imp' | 'led' | 'trl' | 'red' | 'raw' | 'mig';
 
 /**
  * Generate a short, sortable-ish, collision-resistant id with a type prefix,
