@@ -13,6 +13,7 @@ import {
   ViewerTextStoreBuilder,
   type ViewerEncodedChunk,
   type ViewerTextStore,
+  utf8ByteLength,
 } from '../src/core/report/viewerCodec.ts';
 import { buildManifest, verifySubmission } from '../src/core/submission.ts';
 import { scanResidual } from '../src/core/sanitize.ts';
@@ -88,6 +89,38 @@ describe('standalone viewer text transport', () => {
         }
       expect(decodeViewerHtml(fixture([text]).html)!.texts.get('t0')).toBe(text);
     }
+  });
+
+  test('utf8ByteLength matches what the encoder actually writes', () => {
+    // Bun 1.3.x's Buffer.byteLength reports 2 bytes for an unpaired surrogate
+    // while Buffer.from writes 3 (the U+FFFD replacement), and the two disagree
+    // again at size. Page sizes and the declared ref size must come from the
+    // same arithmetic as the bytes on the wire, on every runtime.
+    for (const sample of [
+      '',
+      'a',
+      'ascii only',
+      '\u00e9\u00e8\u00ea',
+      '\u6f22\u5b57',
+      '\u{1f600}',
+      'mixed \u{1f600} \u6f22 text',
+      '\uD800',
+      '\uDC00',
+      '\uD800\uD800',
+      'a\uD800b',
+      '\uD83D\uDE00',
+      '\uD800'.repeat(1000),
+    ]) {
+      expect(utf8ByteLength(sample)).toBe(Buffer.from(sample, 'utf8').length);
+    }
+  });
+
+  test('page sizes add up to the whole text, unpaired surrogates included', () => {
+    const text = '\uD800'.repeat(40000);
+    const pages = splitViewerText(text);
+    expect(pages.join('')).toBe(text);
+    const summed = pages.reduce((n, p) => n + utf8ByteLength(p), 0);
+    expect(summed).toBe(utf8ByteLength(text));
   });
 
   test('packs escaped page maps into independently bounded gzip chunks', () => {
