@@ -8,6 +8,7 @@ import {
 } from './reportDiscovery.ts';
 import { REPORT_SKILL as AGY_BODY } from './reportDiscovery.ts';
 import { geminiHome } from './antigravityCliTranscript.ts';
+import { entryCommands, HOOK_MARKER } from './hookMerge.ts';
 import type { AntigravityHookEvents } from './hookMerge.ts';
 import { findRoot, readJson, writeJson } from './storage.ts';
 import { dirOf } from './text.ts';
@@ -141,10 +142,34 @@ function readBlocks(hooksFile: string): Record<string, unknown> {
   }
 }
 
+/**
+ * Block names Showtail wrote before the IDE/CLI split. Their SessionStart, Stop
+ * and PreInvocation entries nested handlers under `hooks`, a shape agy rejects —
+ * and it rejects the whole file for it, disabling every block in there including
+ * the one we write now. Upgrading must clear them, not just stop writing them.
+ */
+const LEGACY_BLOCK_NAMES = ['showtail'];
+
+/** Drop a legacy block, but only when every command in it is one of ours. */
+function removeLegacyBlocks(blocks: Record<string, unknown>): void {
+  for (const name of LEGACY_BLOCK_NAMES) {
+    if (name === ANTIGRAVITY_BLOCK_NAME) continue;
+    const block = blocks[name];
+    if (!block || typeof block !== 'object') continue;
+    const commands = Object.entries(block as Record<string, unknown>)
+      .filter(([event]) => event !== 'enabled')
+      .flatMap(([, list]) => (Array.isArray(list) ? list.flatMap(entryCommands) : []));
+    // No commands at all, or one we did not write: someone else owns this block.
+    if (!commands.length || !commands.every((c) => c.includes(HOOK_MARKER))) continue;
+    delete blocks[name];
+  }
+}
+
 /** Install (or refresh) our `showtail` block, preserving any other user blocks. */
 export function installAntigravityCliHooks(target: AntigravityCliTarget): string {
   mkdirSync(dirOf(target.hooksFile), { recursive: true });
   const blocks = readBlocks(target.hooksFile);
+  removeLegacyBlocks(blocks);
   blocks[ANTIGRAVITY_BLOCK_NAME] = antigravityCliBlock();
   writeJson(target.hooksFile, blocks);
   return target.hooksFile;
@@ -154,7 +179,15 @@ export function installAntigravityCliHooks(target: AntigravityCliTarget): string
 export function uninstallAntigravityCliHooks(target: AntigravityCliTarget): boolean {
   if (!existsSync(target.hooksFile)) return false;
   const blocks = readBlocks(target.hooksFile);
-  if (!(ANTIGRAVITY_BLOCK_NAME in blocks)) return false;
+  const before = Object.keys(blocks).length;
+  removeLegacyBlocks(blocks);
+  const removedLegacy = Object.keys(blocks).length !== before;
+  if (!(ANTIGRAVITY_BLOCK_NAME in blocks)) {
+    if (!removedLegacy) return false;
+    if (Object.keys(blocks).length === 0) rmSync(target.hooksFile, { force: true });
+    else writeJson(target.hooksFile, blocks);
+    return true;
+  }
   delete blocks[ANTIGRAVITY_BLOCK_NAME];
   if (Object.keys(blocks).length === 0) {
     rmSync(target.hooksFile, { force: true });
