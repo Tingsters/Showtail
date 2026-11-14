@@ -8,9 +8,6 @@ updates:
       interval: monthly
     open-pull-requests-limit: 5
     ignore:
-      # TypeScript 7 is the native-port toolchain; migrate deliberately.
-      - dependency-name: typescript
-        update-types: ["version-update:semver-major"]
       # src/core/chatgpt.ts decodes ChatGPT's payload, which React Router
       # encodes with turbo-stream v2; the major must match that wire format.
       - dependency-name: turbo-stream
@@ -22,11 +19,12 @@ updates:
       interval: monthly
     open-pull-requests-limit: 5
     ignore:
-      - dependency-name: typescript
-        update-types: ["version-update:semver-major"]
       # The extension runs on VS Code's bundled Node, not the latest Node.
       - dependency-name: "@types/node"
         update-types: ["version-update:semver-major"]
+      # @types/vscode must not exceed engines.vscode (^1.95.0): vsce refuses to
+      # package otherwise. Move it only together with the engine floor.
+      - dependency-name: "@types/vscode"
 
   - package-ecosystem: github-actions
     directory: /
