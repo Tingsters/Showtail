@@ -9,6 +9,10 @@ if (!existsSync(file)) {
 } else {
   const db = new Database(file, { readonly: true });
   try {
+    // The extension's capture writes this database while the test polls it.
+    // Without a busy timeout a read that lands mid-write throws "database is
+    // locked" at once and fails the whole run; wait for the writer instead.
+    db.exec('PRAGMA busy_timeout = 5000;');
     const records = db
       .query(
         `
