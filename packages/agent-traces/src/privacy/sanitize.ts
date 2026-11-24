@@ -95,11 +95,23 @@ export function isOpaqueRun(run: string, before = ''): boolean {
 /**
  * A piece (split on `. / _ -`) that mixes letters and digits and is long enough
  * that the mix is not an accident (`arm64`, `v2`, `utf8` are too short to count).
+ * A word with a short number after it (`module0`, `step10`, `chapter3`) is a name,
+ * not a key, so a path such as `tests/module0.test.ts` or
+ * `golden/v4-flagship-c70b/README.md` keeps all its segments.
  */
 function hasRandomPiece(run: string): boolean {
-  return run
-    .split(/[._-]+/)
-    .some((p) => p.length >= 6 && /\d/.test(p) && /[A-Za-z]/.test(p));
+  return run.split(/[./_-]+/).some((p) => {
+    if (p.length >= 6 && /\d/.test(p) && /[A-Za-z]/.test(p))
+      return !/^[A-Za-z][a-z]*\d{1,4}$/.test(p);
+    // Splitting on `/` can leave a base64 key's letters on their own; mixed case with
+    // capitals side by side (`PJyTItEUHf`) is random, camelCase and `README` are not.
+    return (
+      p.length >= 12 &&
+      /[a-z]/.test(p) &&
+      (p.match(/[A-Z](?=[A-Z])/g) ?? []).length >= 2 &&
+      /^[A-Za-z]+$/.test(p)
+    );
+  });
 }
 
 /** Withhold every opaque token in `text`; returns the text and how many were withheld. */

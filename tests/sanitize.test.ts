@@ -88,12 +88,29 @@ describe('opaque-token filter leaves ordinary text alone', () => {
     'claude-haiku-4-5-20251001',
     'a_very_long_snake_case_function_name_for_parsing',
     'sha256:' + 'a'.repeat(32) + 'b'.repeat(32),
+    // A word with a number after it is a name (issue #39), and path segments are
+    // judged one at a time.
+    'tests/module0.test.ts',
+    'Edited tests/module0.test.ts and docs/step2.md',
+    'docs/chapter3/section12/overview.md',
+    'golden/v4-flagship-c70b/README.md',
+    'golden/v4-flagship-c70b: a rerun guide anyone can follow',
+    'results/v4/pool61-flagship-c69il/claude-nobg2/manifest.json',
   ];
   for (const sample of ordinary) {
     test(`keeps: ${sample.slice(0, 50)}`, () => {
       expect(withholdOpaqueTokens(sample).text).toBe(sample);
     });
   }
+
+  test('a key with slashes in it is still withheld segment by segment', () => {
+    for (const key of [
+      'Zq8Xk2Lm9P/w4Rt7Vb3Nc6/Hd1Fs5Gj0Ya',
+      'repo/Zq8Xk2Lm9Pw4Rt7Vb3Nc6Hd1Fs5Gj0Ya/file.txt',
+    ]) {
+      expect(withholdOpaqueTokens(`use ${key} now`).hits).toBe(1);
+    }
+  });
 
   test('withholds a pasted key but keeps the sentence around it', () => {
     const key = 'Zq8Xk2Lm9Pw4Rt7Vb3Nc6Hd1Fs5Gj0Ya';
