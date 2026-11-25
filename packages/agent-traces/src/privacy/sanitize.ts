@@ -157,17 +157,26 @@ export interface Finding {
   count: number;
 }
 
-/** Every `/` segment is plain words: lowercase with digits, a leading capital, or ALL CAPS. */
-const WORD_SEGMENT = /^(?:[A-Z]+|[A-Za-z]?[a-z0-9]*)(?:[._-](?:[A-Z]+|[A-Za-z]?[a-z0-9]*))*$/;
+/**
+ * One plain word: lowercase with digits, a leading capital, or ALL CAPS. Words are
+ * tested one at a time (no repeated group), so matching stays linear in the input.
+ */
+const PLAIN_WORD = /^[A-Z]+$|^[A-Za-z]?[a-z0-9]*$/;
+/** Every `/` segment is plain words joined by `.`, `_` or `-`. */
 function isWordPath(run: string): boolean {
   const segments = run.split('/');
   return (
     segments.length > 1 &&
-    segments.every((seg) => seg !== '' && WORD_SEGMENT.test(seg)) &&
+    segments.every(
+      (seg) => seg !== '' && seg.split(/[._-]/).every((w) => PLAIN_WORD.test(w)),
+    ) &&
     run
       .split(/[./_-]+/)
       .every(
-        (p) => p.length < 6 || !(/\d/.test(p) && /[A-Za-z]/.test(p)) || /^[A-Za-z][a-z]*\d{1,4}$/.test(p),
+        (p) =>
+          p.length < 6 ||
+          !(/\d/.test(p) && /[A-Za-z]/.test(p)) ||
+          /^[A-Za-z][a-z]*\d{1,4}$/.test(p),
       )
   );
 }

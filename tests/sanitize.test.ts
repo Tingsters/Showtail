@@ -280,7 +280,10 @@ describe('the independent second scanner', () => {
   });
 
   test('still flags a key with slashes in it', () => {
-    for (const key of ['hv/6PXO/p/crHtYiUlweZt/G7x2', 'repo/Zq8Xk2Lm9Pw4Rt7Vb3Nc6Hd1Fs5Gj0Ya/file.txt'])
+    for (const key of [
+      'hv/6PXO/p/crHtYiUlweZt/G7x2',
+      'repo/Zq8Xk2Lm9Pw4Rt7Vb3Nc6Hd1Fs5Gj0Ya/file.txt',
+    ])
       expect(scanResidual(`use ${key} now`).map((f) => f.kind)).toContain('opaque-token');
   });
 
