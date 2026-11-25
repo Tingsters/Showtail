@@ -269,6 +269,24 @@ describe('the independent second scanner', () => {
     expect(scanResidual('file sha256:' + 'ab12'.repeat(16))).toEqual([]);
   });
 
+  test('is quiet on repository paths made of words and word+number names', () => {
+    for (const path of [
+      'golden/v4-flagship-c70b/README.md',
+      'docs/chapter3/section12/overview.md',
+      'results/v4/pool61-flagship-c69il/claude-nobg2/manifest.json',
+      'Where to start: golden/v4-flagship-c70b/README.md, then skills.json.',
+    ])
+      expect(scanResidual(path)).toEqual([]);
+  });
+
+  test('still flags a key with slashes in it', () => {
+    for (const key of [
+      'hv/6PXO/p/crHtYiUlweZt/G7x2',
+      'repo/Zq8Xk2Lm9Pw4Rt7Vb3Nc6Hd1Fs5Gj0Ya/file.txt',
+    ])
+      expect(scanResidual(`use ${key} now`).map((f) => f.kind)).toContain('opaque-token');
+  });
+
   test('reports labels and counts only, never the value', () => {
     const findings = scanResidual('PASSWORD=hunter22xyz');
     expect(JSON.stringify(findings)).not.toContain('hunter22xyz');

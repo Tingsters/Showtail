@@ -158,6 +158,30 @@ export interface Finding {
 }
 
 /**
+ * One plain word: lowercase with digits, a leading capital, or ALL CAPS. Words are
+ * tested one at a time (no repeated group), so matching stays linear in the input.
+ */
+const PLAIN_WORD = /^[A-Z]+$|^[A-Za-z]?[a-z0-9]*$/;
+/** Every `/` segment is plain words joined by `.`, `_` or `-`. */
+function isWordPath(run: string): boolean {
+  const segments = run.split('/');
+  return (
+    segments.length > 1 &&
+    segments.every(
+      (seg) => seg !== '' && seg.split(/[._-]/).every((w) => PLAIN_WORD.test(w)),
+    ) &&
+    run
+      .split(/[./_-]+/)
+      .every(
+        (p) =>
+          p.length < 6 ||
+          !(/\d/.test(p) && /[A-Za-z]/.test(p)) ||
+          /^[A-Za-z][a-z]*\d{1,4}$/.test(p),
+      )
+  );
+}
+
+/**
  * An independent second opinion over text that has already been sanitised. It
  * shares no code with the layers above on purpose: a bug in one must not be a bug
  * in both. Returns what it still finds (labels and counts only). Any finding means
@@ -217,6 +241,11 @@ export function scanResidual(
     ) {
       continue;
     }
+    // A path whose every segment is made of plain words (`golden/v4-flagship-c70b/
+    // README.md`, `docs/chapter3/overview.md`) is a name too. Segments are judged one
+    // at a time, and a word with a short number after it (`chapter3`, `pool61`) counts
+    // as a word. A key split on `/` keeps mixed-case segments and stays flagged.
+    if (isWordPath(r)) continue;
     // A file/content hash shown as `sha256:<hex>` is ordinary report content.
     const before = stripped.slice(Math.max(0, (m.index ?? 0) - 8), m.index ?? 0);
     if (/^[0-9a-f]{64}$/i.test(r) && /sha(?:256)?:?$/i.test(before)) continue;
